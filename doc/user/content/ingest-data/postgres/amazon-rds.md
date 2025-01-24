@@ -113,19 +113,20 @@ to connect:
     configure your database's security group to allow connections from a set of
     static Materialize IP addresses.
 
-- **Use AWS PrivateLink** or **Use an SSH tunnel:** If your database is running
-    in a private network, you can use either [AWS PrivateLink](https://aws.amazon.com/privatelink/)
-    or an SSH tunnel to connect Materialize to the database.
+- **Use AWS PrivateLink**: If your database is running in a private network, you
+    can use [AWS PrivateLink](/ingest-data/network-security/privatelink/) to
+    connect Materialize to the database. For details, see [AWS PrivateLink](/ingest-data/network-security/privatelink/).
 
-Select the option that works best for you.
+- **Use an SSH tunnel:** If your database is running in a private network, you
+    can use an SSH tunnel to connect Materialize to the database.
 
 {{< tabs >}}
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
-   or your preferred SQL client connected to Materialize, find the static egress
-   IP addresses for the Materialize region you are running in:
+1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+   client connected to Materialize, find the static egress IP addresses for the
+   Materialize region you are running in:
 
     ```mzsql
     SELECT * FROM mz_egress_ips;
@@ -316,7 +317,7 @@ start by selecting the relevant option.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In [Materialize console's SQL Shell](https://console.materialize.com/), or
+1. In the [SQL Shell](https://console.materialize.com/), or
    your preferred SQL client connected to Materialize, use the [`CREATE
    SECRET`](/sql/create-secret/) command to securely store the password for the
    `materialize` PostgreSQL user you created
@@ -373,27 +374,53 @@ start by selecting the relevant option.
 
 {{< tab "Use AWS PrivateLink">}}
 
-1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
-   or your preferred SQL client connected to Materialize, use the [`CREATE
-   CONNECTION`](/sql/create-connection/#aws-privatelink) command to create an
-   AWS PrivateLink connection:
+1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+   client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/#aws-privatelink)
+   command to create an **in-region** or **cross-region** AWS PrivateLink
+   connection.
 
-    ```mzsql
-    CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-      SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0356210a8a432d9e9',
-      AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
-    );
-    ```
+    **In-region connections**
+
+    To connect to an AWS PrivateLink endpoint service in the **same region** as your
+    Materialize environment:
+
+      ```mzsql
+      CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+        SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
+        AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4')
+      );
+      ```
 
     - Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-optional-configure-network-security).
 
     - Replace the `AVAILABILITY ZONES` list with the IDs of the availability
-      zones in your AWS account.
+      zones in your AWS account. For in-region connections the availability
+      zones of the NLB and the consumer VPC **must match**.
 
       To find your availability zone IDs, select your database in the RDS
       Console and click the subnets under **Connectivity & security**. For each
       subnet, look for **Availability Zone ID** (e.g., `use1-az6`),
       not **Availability Zone** (e.g., `us-east-1d`).
+
+    **Cross-region connections**
+
+    To connect to an AWS PrivateLink endpoint service in a **different region** to
+    the one where your Materialize environment is deployed:
+
+      ```mzsql
+      CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+        SERVICE NAME 'com.amazonaws.vpce.us-west-1.vpce-svc-<endpoint_service_id>',
+        -- For now, the AVAILABILITY ZONES clause **is** required, but will be
+        -- made optional in a future release.
+        AVAILABILITY ZONES ()
+      );
+      ```
+
+    - Replace the `SERVICE NAME` value with the service name you noted [earlier](#b-optional-configure-network-security).
+
+    - The service name region refers to where the endpoint service was created.
+      You **do not need** to specify `AVAILABILITY ZONES` manually — these will
+      be optimally auto-assigned when none are provided.
 
 1. Retrieve the AWS principal for the AWS PrivateLink connection you just
    created:
