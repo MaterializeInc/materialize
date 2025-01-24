@@ -13,6 +13,16 @@ menu:
 You can install self-managed Materialize on a Kubernetes cluster running locally
 or on a cloud provider.
 
+For self-managed Materialize, Materialize provides:
+
+{{% self-managed/self-managed-details %}}
+
+{{< callout >}}
+
+{{< self-managed/also-available >}}
+
+{{</ callout >}}
+
 ## Install locally
 
 {{< multilinkbox >}}
