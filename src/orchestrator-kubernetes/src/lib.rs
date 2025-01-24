@@ -1490,6 +1490,11 @@ impl OrchestratorWorker {
                     // comfortable with `prometheus-adapter` in production
                     // (And we run it in ci).
 
+                    tracing::info!(%name,
+                        "disk_usage_fut returned {:?}, disk_capacity_fut returned {:?}",
+                        disk_usage, disk_capacity,
+                    );
+
                     let disk_usage = match disk_usage {
                         Some(Ok(disk_usage)) => Some(disk_usage),
                         Some(Err(e)) if !matches!(&e, K8sError::Api(e) if e.code == 404) => {
@@ -1595,6 +1600,12 @@ impl OrchestratorWorker {
                             }
                         };
 
+                        tracing::info!(
+                            %name,
+                            "parsed disk_usage={:?}, disk_capacity={:?}",
+                            disk_usage, disk_capacity,
+                        );
+
                         // We only populate a `disk_usage` if we have all 5 of of:
                         // - a disk limit (so it must be an actual managed cluster with a real limit)
                         // - a reported disk capacity
@@ -1617,6 +1628,12 @@ impl OrchestratorWorker {
                                 Some(disk_capacity),
                                 Some(DiskLimit(disk_limit)),
                             ) => {
+                                tracing::info!(
+                                    %name,
+                                    "before clamping disk_usage={}, disk_capacity={}, disk_limit={}",
+                                    disk_usage, disk_capacity, disk_limit,
+                                );
+
                                 let disk_capacity = if disk_limit.0 < disk_capacity {
                                     // We issue a debug message instead
                                     // of a warning or error because all the
@@ -1642,7 +1659,10 @@ impl OrchestratorWorker {
                                 // Clamp to the limit. Note that this can be clamped during
                                 // replica resizes of if the disk usage is ABOVE the
                                 // configured limit, as may occur on some instances.
-                                Some(std::cmp::min(disk_usage, disk_limit.0))
+                                let disk_usage = std::cmp::min(disk_usage, disk_limit.0);
+
+                                tracing::info!(%name, "after clamping disk_usage={disk_usage}");
+                                Some(disk_usage)
                             }
                             _ => None,
                         }
