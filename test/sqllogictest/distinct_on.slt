@@ -28,7 +28,7 @@ CREATE TABLE abc (
 )
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT DISTINCT ON (c) a FROM abc
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT DISTINCT ON (c) a FROM abc
 ----
 Explained Query:
   Project (#0) // { arity: 1 }
@@ -43,7 +43,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT DISTINCT ON (c) a FROM abc ORDER BY c, b
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT DISTINCT ON (c) a FROM abc ORDER BY c, b
 ----
 Explained Query:
   Finish order_by=[#2 asc nulls_last, #1 asc nulls_last] output=[#0]

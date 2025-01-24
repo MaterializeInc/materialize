@@ -46,7 +46,7 @@ INSERT INTO t3 VALUES (1), (2), (3)
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT (SELECT * FROM t1), (SELECT * FROM t1) FROM t2
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT (SELECT * FROM t1), (SELECT * FROM t1) FROM t2
 ----
 Explained Query:
   With
@@ -91,7 +91,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2
 ----
 Explained Query:
   With
@@ -156,7 +156,7 @@ SELECT COUNT(*) FROM (SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) , (SELECT * 
 3
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1 UNION ALL SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1 UNION ALL SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) FROM t2
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1 UNION ALL SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1 UNION ALL SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) FROM t2
 ----
 Explained Query:
   With
@@ -224,7 +224,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) FROM t2
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 1) , (SELECT * FROM t1 WHERE t1.f1 = t2.f1 + 2) FROM t2
 ----
 Explained Query:
   With
@@ -320,7 +320,7 @@ NULL NULL
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT (SELECT f1 + 1 FROM t1 WHERE t1.f1 = t2.f1) , (SELECT f1 + 2 FROM t1 WHERE t1.f1 = t2.f1) FROM t2
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT (SELECT f1 + 1 FROM t1 WHERE t1.f1 = t2.f1) , (SELECT f1 + 2 FROM t1 WHERE t1.f1 = t2.f1) FROM t2
 ----
 Explained Query:
   With
@@ -399,7 +399,7 @@ SELECT (SELECT f1 + 1 FROM t1 WHERE t1.f1 = t2.f1) , (SELECT f1 + 2 FROM t1 WHER
 4 5
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT (SELECT MIN(f1) FROM t1 WHERE t1.f1 = t2.f1) , (SELECT MAX(f1) FROM t1 WHERE t1.f1 = t2.f1) FROM t2
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT (SELECT MIN(f1) FROM t1 WHERE t1.f1 = t2.f1) , (SELECT MAX(f1) FROM t1 WHERE t1.f1 = t2.f1) FROM t2
 ----
 Explained Query:
   With
@@ -488,7 +488,7 @@ SELECT (SELECT MIN(f1) FROM t1 WHERE t1.f1 = t2.f1) , (SELECT MAX(f1) FROM t1 WH
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT (SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = t3.f1) FROM t3
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT (SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = t3.f1) FROM t3
 ----
 Explained Query:
   With
@@ -593,7 +593,7 @@ SELECT (SELECT (SELECT * FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = t3.f
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT MIN((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)), MAX((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)) FROM t2;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT MIN((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)), MAX((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)) FROM t2;
 ----
 Explained Query:
   With
@@ -707,7 +707,7 @@ SELECT MIN((SELECT f1 FROM t1 WHERE t1.f1 = t2.f1)), MAX((SELECT f1 FROM t1 WHER
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT
 	(SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t3.f1 AND t2.f1 = t3.f1),
 	(SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t3.f1 AND t2.f1 = t3.f1)
 FROM t3
@@ -785,7 +785,7 @@ FROM t3
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT
 	(SELECT * FROM t1 WHERE t1.f1 = t2.f1 AND t1.f1 = t3.f1),
 	(SELECT * FROM t1 WHERE t1.f1 = t2.f1 AND t1.f1 = t3.f1)
 FROM t2, t3

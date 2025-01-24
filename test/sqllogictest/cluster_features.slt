@@ -95,7 +95,7 @@ where
 
 # EXPLAIN mv1 in c1 (should be running with the feature flag turned on).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(JOIN IMPLEMENTATIONS)
+EXPLAIN OPTIMIZED PLAN WITH(JOIN IMPLEMENTATIONS) FOR
 MATERIALIZED VIEW mv1;
 ----
 materialize.public.mv1:
@@ -129,7 +129,7 @@ EOF
 
 # EXPLAIN mv2 in c2 (should be running with the feature flag turned off).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(JOIN IMPLEMENTATIONS)
+EXPLAIN OPTIMIZED PLAN WITH(JOIN IMPLEMENTATIONS) FOR
 MATERIALIZED VIEW mv2;
 ----
 materialize.public.mv2:
@@ -161,7 +161,7 @@ EOF
 
 # EXPLAIN REPLAN mv1 in c1 (should be running with the feature flag turned on).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(JOIN IMPLEMENTATIONS)
+EXPLAIN OPTIMIZED PLAN WITH(JOIN IMPLEMENTATIONS) FOR
 REPLAN MATERIALIZED VIEW mv1;
 ----
 materialize.public.mv1:
@@ -196,7 +196,7 @@ EOF
 # EXPLAIN REPLAN mv1 in c1 with an explain-level feature override (should be
 # running with the feature flag turned off).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(JOIN IMPLEMENTATIONS, ENABLE EAGER DELTA JOINS = FALSE)
+EXPLAIN OPTIMIZED PLAN WITH(JOIN IMPLEMENTATIONS, ENABLE EAGER DELTA JOINS = FALSE) FOR
 REPLAN MATERIALIZED VIEW mv1;
 ----
 materialize.public.mv1:
@@ -229,7 +229,7 @@ EOF
 # EXPLAIN CREATE in c1 with an explain-level feature override (should be
 # running with the feature flag turned off).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(JOIN IMPLEMENTATIONS, ENABLE EAGER DELTA JOINS = FALSE)
+EXPLAIN OPTIMIZED PLAN WITH(JOIN IMPLEMENTATIONS, ENABLE EAGER DELTA JOINS = FALSE) FOR
 CREATE MATERIALIZED VIEW mv1 IN CLUSTER c1 AS
 SELECT
   t1.y as f1,
@@ -292,7 +292,7 @@ CREATE INDEX v_idx_in_c2 IN CLUSTER c2 ON v(f1);
 
 # EXPLAIN v in c2 (should be running with the feature flag turned on).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(JOIN IMPLEMENTATIONS)
+EXPLAIN OPTIMIZED PLAN WITH(JOIN IMPLEMENTATIONS) FOR
 INDEX v_idx_in_c1;
 ----
 materialize.public.v_idx_in_c1:
@@ -330,7 +330,7 @@ EOF
 
 # EXPLAIN v in c2 (should be running with the feature flag turned off).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(JOIN IMPLEMENTATIONS)
+EXPLAIN OPTIMIZED PLAN WITH(JOIN IMPLEMENTATIONS) FOR
 INDEX v_idx_in_c2;
 ----
 materialize.public.v_idx_in_c2:
@@ -366,7 +366,7 @@ EOF
 
 # EXPLAIN REPLAN v in c1 (should be running with the feature flag turned on).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(JOIN IMPLEMENTATIONS)
+EXPLAIN OPTIMIZED PLAN WITH(JOIN IMPLEMENTATIONS) FOR
 REPLAN INDEX v_idx_in_c1;
 ----
 materialize.public.v_idx_in_c1:
@@ -405,7 +405,7 @@ EOF
 # EXPLAIN REPLAN v in c1 with an explain-level feature override (should be
 # running with the feature flag turned off).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(JOIN IMPLEMENTATIONS, ENABLE EAGER DELTA JOINS = FALSE)
+EXPLAIN OPTIMIZED PLAN WITH(JOIN IMPLEMENTATIONS, ENABLE EAGER DELTA JOINS = FALSE) FOR
 REPLAN INDEX v_idx_in_c1;
 ----
 materialize.public.v_idx_in_c1:
@@ -447,7 +447,7 @@ DROP INDEX v_idx_in_c1;
 # EXPLAIN CREATE in c1 with an explain-level feature override (should be
 # running with the feature flag turned off).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(JOIN IMPLEMENTATIONS, ENABLE EAGER DELTA JOINS = FALSE)
+EXPLAIN OPTIMIZED PLAN WITH(JOIN IMPLEMENTATIONS, ENABLE EAGER DELTA JOINS = FALSE) FOR
 CREATE INDEX v_idx_in_c1 IN CLUSTER c1 ON v(f1);
 ----
 materialize.public.v_idx_in_c1:

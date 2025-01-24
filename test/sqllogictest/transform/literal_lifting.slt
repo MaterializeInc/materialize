@@ -963,7 +963,7 @@ CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
 
 # Single non-recursive binding under `WITH MUTUALLY RECURSIVE`
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 WITH MUTUALLY RECURSIVE
   c0(x INT, y INT) AS (
     SELECT * FROM c0
@@ -997,7 +997,7 @@ EOF
 
 # Multiple bindings under `WITH MUTUALLY RECURSIVE`
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 WITH MUTUALLY RECURSIVE
   c0(x INT, y INT) AS (
     SELECT f1, 42 FROM t1

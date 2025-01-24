@@ -38,7 +38,7 @@ statement ok
 CREATE INDEX t6_idx_x_y ON t6(x,y);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) FOR
 SELECT *
 FROM t6
 WHERE x=5;
@@ -63,7 +63,7 @@ CREATE INDEX t6_idx_x_y_z ON t6(x,y,z);
 
 # 2 notices
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions, redacted)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR
 SELECT *
 FROM t6
 WHERE x=5;
@@ -87,7 +87,7 @@ EOF
 
 # If we manage to use an index, then don't notice that the other couldn't be used.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) FOR
 SELECT *
 FROM t6
 WHERE x=5 AND y=6;
@@ -105,7 +105,7 @@ EOF
 
 # No notice
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions, redacted)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR
 SELECT *
 FROM t6
 WHERE x=5 AND y=6 AND z=7;
@@ -126,7 +126,7 @@ CREATE INDEX t6_idx_x ON t6(x);
 
 # If we manage to use an index, then don't notice that the other couldn't be used.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) FOR
 SELECT *
 FROM t6
 WHERE x=5;
@@ -144,7 +144,7 @@ EOF
 
 # 2 notices. (No notice for the index on x, because it's not a subset).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) FOR
 SELECT *
 FROM t6
 WHERE y=6;
@@ -168,7 +168,7 @@ EOF
 
 # No notice, because we managed to do a lookup with x. (It's debatable whether we'd want a notice in this case.)
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) FOR
 SELECT *
 FROM t6
 WHERE x=5 AND z=7;
@@ -187,7 +187,7 @@ EOF
 
 # Notice only the (x,y,z) index.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) FOR
 SELECT *
 FROM t6
 WHERE z=7;
@@ -215,7 +215,7 @@ FROM t6
 WHERE y=5;
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions) MATERIALIZED VIEW mv1;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) FOR MATERIALIZED VIEW mv1;
 ----
 materialize.notices.mv1:
   Filter (#1{y} = 5)
@@ -242,7 +242,7 @@ FROM t6
 WHERE y=5;
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions) MATERIALIZED VIEW mv2;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) FOR MATERIALIZED VIEW mv2;
 ----
 materialize.notices.mv2:
   Filter (#1{y} = 5)
@@ -337,7 +337,7 @@ CREATE INDEX t6_idx_x_y_z ON t6(x,y,z);
 
 # Test IN printing.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) FOR
 SELECT *
 FROM t6
 WHERE y=4 OR y=8;
@@ -361,7 +361,7 @@ EOF
 
 # Test IN printing with multiple fields.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) FOR
 SELECT *
 FROM t6
 WHERE (y=5 AND z=7) OR (y=2 AND z=3);
@@ -385,7 +385,7 @@ EOF
 
 # Recommended key has a field that is not present in any of the indexes.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) FOR
 SELECT *
 FROM t6
 WHERE z=9 AND w='árvíztűrő tükörfúrógép';
@@ -419,7 +419,7 @@ CREATE INDEX t1i2 ON t1(f2, f1);
 
 # Recommended key has a field that is not present in any of the indexes.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) FOR
 SELECT *
   FROM (SELECT * FROM (VALUES (1, 2))) as t2(f1, f2)
   JOIN (SELECT a1.f2 AS f1, a1.f1 + a1.f2 AS f2 FROM t1 AS a1) AS a2 USING (f1)

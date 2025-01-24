@@ -33,7 +33,7 @@ statement ok
 INSERT INTO t3 VALUES (4, 5), (5, 5), (5, 5), (null, null)
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1
 ----
 Explained Query:
   ReadStorage materialize.public.t1 // { arity: 2 }
@@ -52,7 +52,7 @@ SELECT * FROM t1
 4 5
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT a1.* FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT a1.* FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key)
 ----
 Explained Query:
   ReadStorage materialize.public.t1 // { arity: 2 }
@@ -71,7 +71,7 @@ SELECT a1.* FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key)
 4 5
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key) WHERE a1.nokey = 1
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key) WHERE a1.nokey = 1
 ----
 Explained Query:
   Project (#0, #1, #0, #1) // { arity: 4 }
@@ -91,7 +91,7 @@ SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key) WHERE a1.nokey = 
 1  1  1  1
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 ----
 Explained Query (fast path):
   Constant <empty>
@@ -106,7 +106,7 @@ SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT * FROM t1 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 ----
 Explained Query:
   ReadStorage materialize.public.t1 // { arity: 2 }
@@ -125,7 +125,7 @@ SELECT * FROM t1 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 4  5
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
 ----
 Explained Query:
   ReadStorage materialize.public.t1 // { arity: 2 }
@@ -144,7 +144,7 @@ SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
 4  5
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT * FROM t1 UNION ALL SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 UNION ALL SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1
 ----
 Explained Query:
   ReadStorage materialize.public.t2 // { arity: 2 }
@@ -162,7 +162,7 @@ SELECT * FROM t1 UNION ALL SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1
 5 5
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT * FROM t2 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t2 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 ----
 Explained Query:
   ReadStorage materialize.public.t2 // { arity: 2 }
@@ -180,7 +180,7 @@ SELECT * FROM t2 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 5 5
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations) SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
 ----
 Explained Query:
   Union // { arity: 2 }
@@ -207,7 +207,7 @@ SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
 5  5
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3_with_key AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.key = a2.key)
 ----
@@ -230,7 +230,7 @@ NULL NULL
 5  10
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key);
 ----
@@ -253,7 +253,7 @@ NULL NULL
 5 5
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3 AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.f1 = a2.key or (a1.f1 is null and a2.key is null));
 ----

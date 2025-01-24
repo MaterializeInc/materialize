@@ -41,7 +41,7 @@ CREATE INDEX t_idx_empty_key ON t();
 
 # Verify that the notice is shown in EXPLAIN.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(humanized expressions) INDEX t_idx_empty_key;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) FOR INDEX t_idx_empty_key;
 ----
 materialize.notices.t_idx_empty_key:
   ArrangeBy keys=[[]]

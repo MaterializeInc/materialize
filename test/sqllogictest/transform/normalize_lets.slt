@@ -84,7 +84,7 @@ CREATE TABLE t1(f0 int);
 
 ## Test inlining a cte from a `Let` into a `LetRec`.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH(raw)
+EXPLAIN OPTIMIZED PLAN WITH(raw) FOR
 WITH
   cte0 AS (
     SELECT * from t1 where f0 < 27
