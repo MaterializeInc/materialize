@@ -59,11 +59,11 @@ This stage determines the query optimization stage at which the plan snapshot wi
 
 Plan Stage | Description
 ------|-----
-**RAW PLAN** | Display the raw plan.
-**DECORRELATED PLAN** | Display the decorrelated plan.
+**RAW PLAN** | Display the raw plan; this is closest to the original SQL.
+**DECORRELATED PLAN** | Display the decorrelated but not-yet-optimized plan.
 **LOCALLY OPTIMIZED** | Display the locally optimized plan (before view inlining and access path selection). This is the final stage for regular `CREATE VIEW` optimization.
 **OPTIMIZED PLAN** | _(Default)_ Display the optimized plan.
-**PHYSICAL PLAN** | Display the physical plan.
+**PHYSICAL PLAN** | Display the physical plan; this is close but not identical to the operators shown in [`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping).
 
 ### Output modifiers
 
@@ -240,7 +240,24 @@ Below the plan, a "Used indexes" section indicates which indexes will be used by
 
 ### Reference: Plan operators
 
+Materialize offers several output formats for `EXPLAIN` and debugging.
+LIR plans as rendered in
+[`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping)
+are deliberately succinct, while the plans in other formats give more
+detail.
+
+The decorrelated and optimized plans from `EXPLAIN DECORRELATED PLAN
+FOR ...`, `EXPLAIN LOCALLY OPTIMIZED PLAN FOR ...`, and `EXPLAIN
+OPTIMIZED PLAN FOR ...` are in a mid-level representation that is
+closer to LIR than SQL. The raw plans from `EXPLAIN RAW PLAN FOR ...`
+are closer to SQL (and therefore less indicative of how the query will
+actually run).
+
 {{< tabs >}}
+{{< tab "In fully optimized physical (LIR) plans" >}}
+{{< explain-plans/operator-table data="explain_plan_operators" planType="LIR" >}}
+{{< /tab >}}
+
 {{< tab "In decorrelated and optimized plans" >}}
 {{< explain-plans/operator-table data="explain_plan_operators" planType="optimized" >}}
 {{< /tab >}}
