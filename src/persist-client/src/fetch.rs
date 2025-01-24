@@ -921,6 +921,8 @@ where
             let next = if self.part_cursor < self.timestamps.len() {
                 let next_idx = self.part_cursor;
                 self.part_cursor += 1;
+                // These `to_le_bytes` calls were previously encapsulated by `ColumnarRecords`.
+                // TODO(structured): re-encapsulate these once we've finished the structured migration.
                 let mut t = T::decode(self.timestamps.values()[next_idx].to_le_bytes());
                 if !self.ts_filter.filter_ts(&mut t) {
                     continue;
@@ -932,7 +934,7 @@ where
                 let kv = if result_override.is_none() {
                     self.decode_kv(next_idx, key, val)
                 } else {
-                    // This will be overridden later - just leave a placeholder here for now.
+                    // This will be overridden immediately below - just leave a placeholder here for now.
                     (Err("".to_string()), Err("".to_string()))
                 };
                 (kv, t, d)
@@ -959,6 +961,7 @@ where
 
         let (kv, t, d) = consolidated?;
 
+        // Override the placeholder result we set above with the true value.
         if let Some((key, val)) = result_override {
             return Some(((Ok(key), Ok(val)), t, d));
         }
