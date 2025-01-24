@@ -376,20 +376,10 @@ operators:
     expansive: False
     example: "`ArrangeBy keys=[[#0]]`"
 
-  - operator: ArrangeBy
-    plan_types: "optimized"
-    description: |
-      Indicates a point that will become an arrangement in the dataflow engine (each `keys` element will be a different arrangement). Note that if the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.
-    uses_memory: True
-    memory_details: |
-      Depends. When it does, uses memory proportional to the number of input updates.
-    expansive: False
-    example: "`ArrangeBy keys=[[#0]]`"
-
   - operator: Arrange
     plan_types: "lir"
     description: |
-      Indicates a point that will become an arrangement in the dataflow engine (each `keys` element will be a different arrangement). Note that if the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.
+      Indicates a point that will become an arrangement in the dataflow engine, i.e., it will consume memory to cache results.
     uses_memory: True
     memory_details: |
       Depends. When it does, uses memory proportional to the number of input updates.
