@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: v25.1.0-beta.1](https://img.shields.io/badge/Version-v25.1.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.131.0-dev.0](https://img.shields.io/badge/AppVersion-v0.131.0--dev.0-informational?style=flat-square)
+![Version: v25.1.0-beta.1](https://img.shields.io/badge/Version-v25.1.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.131.0](https://img.shields.io/badge/AppVersion-v0.131.0-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -137,7 +137,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.features.createConsole` | Flag to indicate whether to create console pods for the environments | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
-| `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.131.0-dev.0"`` |
+| `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.131.0"`` |
 | `operator.nodeSelector` |  | ``{}`` |
 | `operator.resources.limits` | Resource limits for the operator's CPU and memory | ``{"memory":"512Mi"}`` |
 | `operator.resources.requests` | Resources requested by the operator for CPU and memory | ``{"cpu":"100m","memory":"512Mi"}`` |
@@ -162,7 +162,7 @@ Specify each parameter using the `--set key=value[,key=value]` argument to `helm
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v0.131.0-dev.0 \
+  --set operator.image.tag=v0.131.0 \
   materialize/materialize-operator
 ```
 
@@ -197,7 +197,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.131.0-dev.0
+  environmentdImageRef: materialize/environmentd:v0.131.0
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:
