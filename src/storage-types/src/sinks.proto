@@ -23,13 +23,12 @@ import "storage-types/src/connections.proto";
 import "storage-types/src/controller.proto";
 
 message ProtoStorageSinkDesc {
-  reserved 5, 8, 9, 10;
+  reserved 5, 7, 8, 9, 10;
   mz_repr.global_id.ProtoGlobalId from = 1;
   mz_repr.relation_and_scalar.ProtoRelationDesc from_desc = 2;
   ProtoStorageSinkConnection connection = 3;
   optional ProtoSinkEnvelope envelope = 4;
   optional mz_storage_types.controller.ProtoCollectionMetadata from_storage_metadata = 6;
-  optional string status_id = 7;
   mz_repr.antichain.ProtoU64Antichain as_of = 11;
   bool with_snapshot = 12;
   uint64 version = 13;

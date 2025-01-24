@@ -101,11 +101,11 @@ use mz_ore::vec::VecExt;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormatType, MetadataFilled, SinkEnvelope, SinkPartitionStrategy,
-    StorageSinkDesc,
+    KafkaSinkConnection, KafkaSinkFormatType, SinkEnvelope, SinkPartitionStrategy, StorageSinkDesc,
 };
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
@@ -147,7 +147,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
     fn render_sink(
         &self,
         storage_state: &mut StorageState,
-        sink: &StorageSinkDesc<MetadataFilled, Timestamp>,
+        sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
         input: Collection<G, (Option<Row>, DiffPair<Row>), Diff>,
         // TODO(benesch): errors should stream out through the sink,
@@ -615,7 +615,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     connection: KafkaSinkConnection,
     partition_strategy: SinkPartitionStrategy,
     storage_configuration: StorageConfiguration,
-    sink: &StorageSinkDesc<MetadataFilled, Timestamp>,
+    sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
     metrics: KafkaSinkMetrics,
     statistics: SinkStatistics,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,

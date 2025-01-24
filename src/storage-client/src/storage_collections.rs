@@ -228,22 +228,6 @@ pub trait StorageCollections: Debug {
     /// but hold off on that initially.) Callers must provide a Some if any of
     /// the collections is a table. A None may be given if none of the
     /// collections are a table (i.e. all materialized views, sources, etc).
-    async fn create_collections(
-        &self,
-        storage_metadata: &StorageMetadata,
-        register_ts: Option<Self::Timestamp>,
-        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
-        self.create_collections_for_bootstrap(
-            storage_metadata,
-            register_ts,
-            collections,
-            &BTreeSet::new(),
-        )
-        .await
-    }
-
-    /// Like [`Self::create_collections`], except used specifically for bootstrap.
     ///
     /// `migrated_storage_collections` is a set of migrated storage collections to be excluded
     /// from the txn-wal sub-system.
@@ -467,7 +451,7 @@ where
     /// reconcile it with the previous state using
     /// [StorageCollections::initialize_state],
     /// [StorageCollections::prepare_state], and
-    /// [StorageCollections::create_collections].
+    /// [StorageCollections::create_collections_for_bootstrap].
     pub async fn new(
         persist_location: PersistLocation,
         persist_clients: Arc<PersistClientCache>,
@@ -1545,7 +1529,7 @@ where
                 snapshot
                     .into_iter()
                     .map(|(row, diff)| {
-                        assert!(diff == 1, "snapshot doesn't accumulate to set");
+                        assert_eq!(diff, 1, "snapshot doesn't accumulate to set");
                         row
                     })
                     .collect()

@@ -21,7 +21,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use futures::stream::FuturesUnordered;
 use futures::FutureExt;
 use futures::StreamExt;
 use itertools::Itertools;
@@ -238,23 +237,27 @@ fn warm_persist_state_in_background(
     client: PersistClient,
     shard_ids: impl Iterator<Item = ShardId> + Send + 'static,
 ) -> mz_ore::task::JoinHandle<Box<dyn Debug + Send>> {
+    /// Bound the number of shards that we warm at a single time, to limit our overall resource use.
+    const MAX_CONCURRENT_WARMS: usize = 16;
     let logic = async move {
-        let fetchers = FuturesUnordered::new();
-        for shard_id in shard_ids {
-            let client = client.clone();
-            fetchers.push(async move {
-                client
-                    .create_batch_fetcher::<SourceData, (), mz_repr::Timestamp, Diff>(
-                        shard_id,
-                        Arc::new(RelationDesc::empty()),
-                        Arc::new(UnitSchema),
-                        true,
-                        Diagnostics::from_purpose("warm persist load state"),
-                    )
-                    .await
+        let fetchers: Vec<_> = tokio_stream::iter(shard_ids)
+            .map(|shard_id| {
+                let client = client.clone();
+                async move {
+                    client
+                        .create_batch_fetcher::<SourceData, (), mz_repr::Timestamp, Diff>(
+                            shard_id,
+                            Arc::new(RelationDesc::empty()),
+                            Arc::new(UnitSchema),
+                            true,
+                            Diagnostics::from_purpose("warm persist load state"),
+                        )
+                        .await
+                }
             })
-        }
-        let fetchers = fetchers.collect::<Vec<_>>().await;
+            .buffer_unordered(MAX_CONCURRENT_WARMS)
+            .collect()
+            .await;
         let fetchers: Box<dyn Debug + Send> = Box::new(fetchers);
         fetchers
     };
@@ -1465,11 +1468,6 @@ where
         };
         *cur_export = new_export;
 
-        let status_id = match new_description.sink.status_id.clone() {
-            Some(id) => Some(self.storage_collections.collection_metadata(id)?.data_shard),
-            None => None,
-        };
-
         let cmd = RunSinkCommand {
             id,
             description: StorageSinkDesc {
@@ -1480,13 +1478,12 @@ where
                 as_of: new_description.sink.as_of,
                 version: new_description.sink.version,
                 partition_strategy: new_description.sink.partition_strategy,
-                status_id,
                 from_storage_metadata,
                 with_snapshot: new_description.sink.with_snapshot,
             },
         };
 
-        // Fetch the client for this exports's cluster.
+        // Fetch the client for this export's cluster.
         let instance = self
             .instances
             .get_mut(&new_description.instance_id)
@@ -1533,17 +1530,6 @@ where
                 .storage_collections
                 .collection_metadata(new_export_description.sink.from)?;
 
-            let status_id =
-                if let Some(status_collection_id) = new_export_description.sink.status_id {
-                    Some(
-                        self.storage_collections
-                            .collection_metadata(status_collection_id)?
-                            .data_shard,
-                    )
-                } else {
-                    None
-                };
-
             let cmd = RunSinkCommand {
                 id,
                 description: StorageSinkDesc {
@@ -1565,7 +1551,6 @@ where
                     // read holds are held for the correct amount of time.
                     // TODO(petrosagg): change the controller to explicitly track dataflow executions
                     as_of: as_of.to_owned(),
-                    status_id,
                     from_storage_metadata,
                 },
             };
@@ -3173,16 +3158,6 @@ where
             .storage_collections
             .collection_metadata(description.sink.from)?;
 
-        let status_id = if let Some(status_collection_id) = description.sink.status_id {
-            Some(
-                self.storage_collections
-                    .collection_metadata(status_collection_id)?
-                    .data_shard,
-            )
-        } else {
-            None
-        };
-
         let cmd = RunSinkCommand {
             id,
             description: StorageSinkDesc {
@@ -3193,7 +3168,6 @@ where
                 as_of: description.sink.as_of.clone(),
                 version: description.sink.version,
                 partition_strategy: description.sink.partition_strategy.clone(),
-                status_id,
                 from_storage_metadata,
                 with_snapshot: description.sink.with_snapshot,
             },

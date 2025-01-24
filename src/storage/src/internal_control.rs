@@ -14,7 +14,7 @@ use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use mz_storage_types::parameters::StorageParameters;
-use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
+use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
 use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
@@ -98,7 +98,7 @@ pub enum InternalStorageCommand {
     /// Render a sink dataflow.
     RunSinkDataflow(
         GlobalId,
-        StorageSinkDesc<MetadataFilled, mz_repr::Timestamp>,
+        StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
     ),
     /// Drop all state and operators for a dataflow. This is a vec because some
     /// dataflows have their state spread over multiple IDs (i.e. sources that

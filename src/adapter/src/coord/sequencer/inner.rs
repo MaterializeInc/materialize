@@ -3559,11 +3559,6 @@ impl Coordinator {
             }
         }
 
-        let status_id = self
-            .catalog()
-            .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SINK_STATUS_HISTORY);
-        let status_id = Some(self.catalog().get_entry(&status_id).latest_global_id());
-
         let from_entry = self.catalog().get_entry_by_global_id(&sink.from);
         let storage_sink_desc = StorageSinkDesc {
             from: sink.from,
@@ -3580,7 +3575,6 @@ impl Coordinator {
             with_snapshot,
             version: sink.version,
             partition_strategy: sink.partition_strategy,
-            status_id,
             from_storage_metadata: (),
         };
 
