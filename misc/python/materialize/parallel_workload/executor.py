@@ -126,7 +126,7 @@ class Executor:
             http == Http.RANDOM and self.rng.choice([True, False])
         ) or http == Http.YES
         if explainable and self.rng.choice([True, False]):
-            query = f"EXPLAIN {query}"
+            query = f"EXPLAIN OPTIMIZED PLAN {query}"
         query += ";"
         extra_info_str = f" ({extra_info})" if extra_info else ""
         use_ws = self.use_ws and http != Http.NO

@@ -37,19 +37,19 @@ SHOW CREATE TABLE bids;
 
 # The mz_support user can execute `EXPLAIN PLAN ... FOR SELECT` commands.
 $ postgres-execute connection=mz_support
-EXPLAIN OPTIMIZED PLAN FOR SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
+> EXPLAIN OPTIMIZED PLAN FOR SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
 
 # The mz_support user can execute `EXPLAIN PLAN ... FOR CREATE MATERIALIZED VIEW` commands.
 $ postgres-execute connection=mz_support
-EXPLAIN OPTIMIZED PLAN FOR CREATE MATERIALIZED VIEW mv AS SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
+> EXPLAIN OPTIMIZED PLAN FOR CREATE MATERIALIZED VIEW mv AS SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
 
 # The mz_support user can execute `EXPLAIN PLAN ... FOR CREATE INDEX` commands.
 $ postgres-execute connection=mz_support
-EXPLAIN OPTIMIZED PLAN FOR CREATE INDEX ON v(auction_id);
+> EXPLAIN OPTIMIZED PLAN FOR CREATE INDEX ON v(auction_id);
 
 # The mz_support user can execute `EXPLAIN TIMESTAMP ...` commands.
 $ postgres-execute connection=mz_support
-EXPLAIN TIMESTAMP FOR SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
+> EXPLAIN TIMESTAMP FOR SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
 
 # The mz_support user can filter SHOW commands on user objects.
 $ postgres-execute connection=mz_support

@@ -45,7 +45,7 @@ row 2
 
 $ set-regex match=u\d+ replacement=UID
 
-EXPLAIN OPTIMIZED PLAN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
+> EXPLAIN OPTIMIZED PLAN SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
 Explained Query:
   CrossJoin type=differential
     ArrangeBy keys=[[]]

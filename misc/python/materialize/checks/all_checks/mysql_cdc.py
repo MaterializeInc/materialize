@@ -221,7 +221,7 @@ class MySqlCdcBase:
             > SELECT key FROM (SHOW INDEXES ON mysql_source_tableA{self.suffix});
             {{f1,f2}}
 
-            ? EXPLAIN SELECT DISTINCT f1, f2 FROM mysql_source_tableA{self.suffix};
+            ? EXPLAIN OPTIMIZED PLAN SELECT DISTINCT f1, f2 FROM mysql_source_tableA{self.suffix};
             Explained Query (fast path):
               Project (#0, #1)
                 ReadIndex on=materialize.public.mysql_source_tablea{self.suffix} mysql_source_tablea{self.suffix}_primary_idx=[*** full scan ***]

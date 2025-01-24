@@ -69,7 +69,7 @@ users                  ""
 > CREATE INDEX wins_by_bidder ON winning_bids (buyer)
 > CREATE INDEX wins_by_seller ON winning_bids (seller)
 
-EXPLAIN OPTIMIZED PLAN SELECT * FROM winning_bids WHERE item = 'Best Pizza in Town' ORDER BY bid_time DESC
+> EXPLAIN OPTIMIZED PLAN SELECT * FROM winning_bids WHERE item = 'Best Pizza in Town' ORDER BY bid_time DESC
 Explained Query (fast path):
   Finish order_by=[#4 desc nulls_first] output=[#0..=#6]
     Project (#1..=#5, #0, #6)
