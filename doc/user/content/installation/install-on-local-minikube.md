@@ -8,13 +8,12 @@ menu:
     parent: "installation"
 ---
 
-The following tutorial deploys Materialize onto a local
-[`minikube`](https://minikube.sigs.k8s.io/docs/start/) cluster. Self-managed Materialize requires:
+Self-managed Materialize requires:
 
 {{% self-managed/materialize-components-list %}}
 
-The tutorial deploys the following components onto your local `minikube`
-cluster:
+The following tutorial deploys the following components onto your local
+[`minikube`](https://minikube.sigs.k8s.io/docs/start/):
 
 - Materialize Operator using Helm into your local `minikube` cluster.
 - MinIO object storage as the blob storage for your Materialize.
