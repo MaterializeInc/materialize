@@ -365,38 +365,26 @@ steps:
     steps:
       - id: limits
         label: "Product limits"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         agents:
-          queue: hetzner-aarch64-16cpu-32gb
+          queue: hetzner-x86-64-dedi-8cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: limits
               run: main
         timeout_in_minutes: 180
         parallelism: 2
-        # TODO(def-) Move to larger agents to prevent flakiness
-        retry:
-          automatic:
-            - exit_status: "*"
-              limit: 1
 
       - id: limits-instance-size
         label: "Instance size limits"
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         agents:
-          # A larger instance is needed due to the
-          # many containers that are being created
-          queue: hetzner-aarch64-16cpu-32gb
+          queue: hetzner-x86-64-dedi-8cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: limits
               run: instance-size
-        timeout_in_minutes: 50
-        # TODO(def-) Move to larger agents to prevent flakiness
-        retry:
-          automatic:
-            - exit_status: "*"
-              limit: 1
+        timeout_in_minutes: 120
 
       - id: bounded-memory
         label: "Bounded Memory"
