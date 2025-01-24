@@ -41,3 +41,6 @@ INSERT INTO bar VALUES (1);
 # Make sure we get the error even if we project away all columns.
 query error division by zero
 SELECT count(*) FROM baz;
+
+query error item doesn't exist
+INSPECT SHARD 'u666'
