@@ -8,12 +8,12 @@ menu:
     parent: "installation"
 ---
 
-The following tutorial deploys self-managed Materialize onto a local
-[`kind`](https://kind.sigs.k8s.io/) cluster. Self-managed Materialize requires:
+Self-managed Materialize requires:
 
 {{% self-managed/materialize-components-list %}}
 
-The tutorial uses a local `kind` cluster and deploys the following components:
+The following tutorial uses a local [`kind`](https://kind.sigs.k8s.io/) cluster
+and deploys the following components:
 
 - Materialize Operator using Helm into your local `kind` cluster.
 - MinIO object storage as the blob storage for your Materialize.
