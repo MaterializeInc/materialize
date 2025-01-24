@@ -936,16 +936,32 @@ pub struct CopyFromPlan {
     pub source: CopyFromSource,
     pub columns: Vec<usize>,
     pub params: CopyFormatParams<'static>,
+    pub filter: Option<CopyFromFilter>,
 }
 
 #[derive(Debug)]
 pub enum CopyFromSource {
     /// Copying from a file local to the user, transmitted via pgwire.
     Stdin,
-    /// A remote resource, e.g. S3.
+    /// A remote resource, e.g. HTTP file.
     ///
     /// The contained [`HirScalarExpr`] evaluates to the Url for the remote resource.
     Url(HirScalarExpr),
+    /// A file in an S3 bucket.
+    AwsS3 {
+        /// Expression that evaluates to the file we want to copy.
+        uri: HirScalarExpr,
+        /// Details for how we connect to AWS S3.
+        connection: AwsConnection,
+        /// ID of the connection object.
+        connection_id: CatalogItemId,
+    },
+}
+
+#[derive(Debug)]
+pub enum CopyFromFilter {
+    Files(Vec<String>),
+    Pattern(String),
 }
 
 #[derive(Debug, Clone)]

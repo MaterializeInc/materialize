@@ -841,6 +841,7 @@ fn generate_rbac_requirements(
             source: _,
             columns: _,
             params: _,
+            filter: _,
         }) => RbacRequirements {
             privileges: vec![
                 (

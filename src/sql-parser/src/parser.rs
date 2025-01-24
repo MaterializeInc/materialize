@@ -6403,9 +6403,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_copy_option(&mut self) -> Result<CopyOption<Raw>, ParserError> {
-        let name = match self
-            .expect_one_of_keywords(&[FORMAT, DELIMITER, NULL, ESCAPE, QUOTE, HEADER, AWS, MAX])?
-        {
+        let name = match self.expect_one_of_keywords(&[
+            FORMAT, DELIMITER, NULL, ESCAPE, QUOTE, HEADER, AWS, MAX, FILES, PATTERN,
+        ])? {
             FORMAT => CopyOptionName::Format,
             DELIMITER => CopyOptionName::Delimiter,
             NULL => CopyOptionName::Null,
@@ -6423,6 +6423,8 @@ impl<'a> Parser<'a> {
                 self.expect_keywords(&[FILE, SIZE])?;
                 CopyOptionName::MaxFileSize
             }
+            FILES => CopyOptionName::Files,
+            PATTERN => CopyOptionName::Pattern,
             _ => unreachable!(),
         };
         Ok(CopyOption {

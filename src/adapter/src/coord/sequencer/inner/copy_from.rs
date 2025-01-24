@@ -7,12 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::str::FromStr;
+
 use mz_adapter_types::connection::ConnectionId;
 use mz_ore::cast::CastInto;
 use mz_persist_client::batch::ProtoBatch;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{CatalogItemId, Datum, RowArena};
-use mz_sql::plan::{self, CopyFromSource, HirScalarExpr};
+use mz_sql::plan::{self, CopyFromFilter, CopyFromSource, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
 use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
@@ -38,16 +40,10 @@ impl Coordinator {
             source,
             columns: _,
             params,
+            filter,
         } = plan;
 
-        let from_expr = match source {
-            CopyFromSource::Url(from_expr) => from_expr,
-            CopyFromSource::Stdin => {
-                unreachable!("COPY FROM STDIN should be handled elsewhere")
-            }
-        };
-
-        let eval_url = |from: HirScalarExpr| -> Result<Url, AdapterError> {
+        let eval_uri = |from: HirScalarExpr| -> Result<String, AdapterError> {
             let style = ExprPrepStyle::OneShot {
                 logical_time: EvalTime::NotAvailable,
                 session: ctx.session(),
@@ -66,10 +62,8 @@ impl Coordinator {
                 other => coord_bail!("programming error! COPY FROM target cannot be {other}"),
             };
 
-            Url::parse(eval_string)
-                .map_err(|err| AdapterError::Unstructured(anyhow::anyhow!("{err}")))
+            Ok(eval_string.to_string())
         };
-        let url = return_if_err!(eval_url(from_expr), ctx);
 
         // We check in planning that we're copying into a Table, but be defensive.
         let Some(dest_table) = self.catalog().get_entry(&id).table() else {
@@ -93,9 +87,70 @@ impl Coordinator {
             }
         };
 
+        let source = match source {
+            CopyFromSource::Url(from_expr) => {
+                let url = return_if_err!(eval_uri(from_expr), ctx);
+                // TODO(cf2): Structured errors.
+                let result = Url::parse(&url)
+                    .map_err(|err| AdapterError::Unstructured(anyhow::anyhow!("{err}")));
+                let url = return_if_err!(result, ctx);
+
+                mz_storage_types::oneshot_sources::ContentSource::Http { url }
+            }
+            CopyFromSource::AwsS3 {
+                uri,
+                connection,
+                connection_id,
+            } => {
+                let uri = return_if_err!(eval_uri(uri), ctx);
+
+                // Validate the URI is an S3 URI, with a bucket name. We rely on validating here
+                // and expect it in clusterd.
+                //
+                // TODO(cf2): Structured errors.
+                let result = http::Uri::from_str(&uri)
+                    .map_err(|err| {
+                        AdapterError::Unstructured(anyhow::anyhow!("expected S3 uri: {err}"))
+                    })
+                    .and_then(|uri| {
+                        if uri.scheme_str() != Some("s3") {
+                            coord_bail!("only 's3://...' urls are supported as COPY FROM target");
+                        }
+                        Ok(uri)
+                    })
+                    .and_then(|uri| {
+                        if uri.host().is_none() {
+                            coord_bail!("missing bucket name from 's3://...' url");
+                        }
+                        Ok(uri)
+                    });
+                let uri = return_if_err!(result, ctx);
+
+                mz_storage_types::oneshot_sources::ContentSource::AwsS3 {
+                    connection,
+                    connection_id,
+                    uri: uri.to_string(),
+                }
+            }
+            CopyFromSource::Stdin => {
+                unreachable!("COPY FROM STDIN should be handled elsewhere")
+            }
+        };
+
+        let filter = match filter {
+            None => mz_storage_types::oneshot_sources::ContentFilter::None,
+            Some(CopyFromFilter::Files(files)) => {
+                mz_storage_types::oneshot_sources::ContentFilter::Files(files)
+            }
+            Some(CopyFromFilter::Pattern(pattern)) => {
+                mz_storage_types::oneshot_sources::ContentFilter::Pattern(pattern)
+            }
+        };
+
         let request = OneshotIngestionRequest {
-            source: mz_storage_types::oneshot_sources::ContentSource::Http { url },
+            source,
             format,
+            filter,
         };
 
         let target_cluster = match self

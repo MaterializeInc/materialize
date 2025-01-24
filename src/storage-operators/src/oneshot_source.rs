@@ -75,8 +75,11 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::oneshot_sources::{ContentFormat, ContentSource, OneshotIngestionRequest};
+use mz_storage_types::oneshot_sources::{
+    ContentFilter, ContentFormat, ContentSource, OneshotIngestionRequest,
+};
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -84,7 +87,7 @@ use mz_timely_util::builder_async::{
 use mz_timely_util::pact::Distribute;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::collections::LinkedList;
+use std::collections::{BTreeSet, LinkedList};
 use std::fmt::{Debug, Display};
 use std::future::Future;
 use timely::container::CapacityContainerBuilder;
@@ -93,10 +96,13 @@ use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::Antichain;
 use tracing::info;
 
+use crate::oneshot_source::aws_source::{AwsS3Source, S3Checksum, S3Object};
 use crate::oneshot_source::csv::{CsvDecoder, CsvRecord, CsvWorkRequest};
 use crate::oneshot_source::http_source::{HttpChecksum, HttpObject, HttpOneshotSource};
 
 pub mod csv;
+
+pub mod aws_source;
 pub mod http_source;
 
 /// Render a dataflow to do a "oneshot" ingestion.
@@ -119,6 +125,7 @@ pub mod http_source;
 pub fn render<G, F>(
     scope: G,
     persist_clients: Arc<PersistClientCache>,
+    connection_context: ConnectionContext,
     collection_id: GlobalId,
     collection_meta: CollectionMetadata,
     request: OneshotIngestionRequest,
@@ -128,14 +135,28 @@ where
     G: Scope<Timestamp = Timestamp>,
     F: FnOnce(Result<Option<ProtoBatch>, String>) -> () + 'static,
 {
-    let OneshotIngestionRequest { source, format } = request;
+    let OneshotIngestionRequest {
+        source,
+        format,
+        filter,
+    } = request;
 
     let source = match source {
         ContentSource::Http { url } => {
             let source = HttpOneshotSource::new(reqwest::Client::default(), url);
             SourceKind::Http(source)
         }
+        ContentSource::AwsS3 {
+            connection,
+            connection_id,
+            uri,
+        } => {
+            let source = AwsS3Source::new(connection, connection_id, connection_context, uri);
+            SourceKind::AwsS3(source)
+        }
     };
+    tracing::info!(?source, "created oneshot source");
+
     let format = match format {
         ContentFormat::Csv(params) => {
             let format = CsvDecoder::new(params, &collection_meta.relation_desc);
@@ -145,7 +166,7 @@ where
 
     // Discover what objects are available to copy.
     let (objects_stream, discover_token) =
-        render_discover_objects(scope.clone(), collection_id, source.clone());
+        render_discover_objects(scope.clone(), collection_id, source.clone(), filter);
     // Split the objects into individual units of work.
     let (work_stream, split_token) = render_split_work(
         scope.clone(),
@@ -194,6 +215,7 @@ pub fn render_discover_objects<G, S>(
     scope: G,
     collection_id: GlobalId,
     source: S,
+    filter: ContentFilter,
 ) -> (
     TimelyStream<G, Result<(S::Object, S::Checksum), StorageErrorX>>,
     PressOnDropButton,
@@ -219,14 +241,38 @@ where
             return;
         }
 
-        info!(%collection_id, %worker_id, "CopyFrom Leader Discover");
+        let filter = match ObjectFilter::try_new(filter) {
+            Ok(filter) => filter,
+            Err(err) => {
+                tracing::warn!(?err, "failed to create filter");
+                start_handle.give(&start_cap, Err(StorageErrorXKind::generic(err).into()));
+                return;
+            }
+        };
 
         let work = source.list().await.context("list");
         match work {
-            Ok(objects) => objects
-                .into_iter()
-                .for_each(|object| start_handle.give(&start_cap, Ok(object))),
-            Err(err) => start_handle.give(&start_cap, Err(err)),
+            Ok(objects) => {
+                let names = objects.iter().map(|(o, _check)| o.name());
+                let found: String = itertools::intersperse(names, ", ").collect();
+                tracing::info!(%worker_id, %found, "listed objects");
+
+                let filtered: Vec<_> = objects
+                    .into_iter()
+                    .filter(|(o, _check)| filter.filter::<S>(o))
+                    .collect();
+                let names = filtered.iter().map(|(o, _check)| o.name());
+                let returning: String = itertools::intersperse(names, ", ").collect();
+                tracing::info!(%worker_id, %returning, "filtered objects");
+
+                filtered
+                    .into_iter()
+                    .for_each(|object| start_handle.give(&start_cap, Ok(object)))
+            }
+            Err(err) => {
+                tracing::warn!(?err, "failed to list oneshot source");
+                start_handle.give(&start_cap, Err(err))
+            }
         }
     });
 
@@ -279,6 +325,7 @@ where
                     let format_ = format.clone();
                     let source_ = source.clone();
                     let work_requests = mz_ore::task::spawn(|| "split-work", async move {
+                        info!(%worker_id, object = %object.name(), "splitting object");
                         format_.split_work(source_.clone(), object, checksum).await
                     })
                     .await
@@ -614,7 +661,7 @@ pub trait OneshotSource: Clone + Send {
         &'s self,
         object: Self::Object,
         checksum: Self::Checksum,
-        range: Option<std::ops::Range<usize>>,
+        range: Option<std::ops::RangeInclusive<usize>>,
     ) -> BoxStream<'s, Result<Bytes, StorageErrorX>>;
 }
 
@@ -624,9 +671,10 @@ pub trait OneshotSource: Clone + Send {
 /// making the trait object safe and it's easier to just wrap it in an enum. Also, this wrapper
 /// provides a convenient place to add [`StorageErrorXContext::context`] for all of our source
 /// types.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum SourceKind {
     Http(HttpOneshotSource),
+    AwsS3(AwsS3Source),
 }
 
 impl OneshotSource for SourceKind {
@@ -645,6 +693,16 @@ impl OneshotSource for SourceKind {
                     .collect();
                 Ok(objects)
             }
+            SourceKind::AwsS3(s3) => {
+                let objects = s3.list().await.context("s3")?;
+                let objects = objects
+                    .into_iter()
+                    .map(|(object, checksum)| {
+                        (ObjectKind::AwsS3(object), ChecksumKind::AwsS3(checksum))
+                    })
+                    .collect();
+                Ok(objects)
+            }
         }
     }
 
@@ -652,13 +710,20 @@ impl OneshotSource for SourceKind {
         &'s self,
         object: Self::Object,
         checksum: Self::Checksum,
-        range: Option<std::ops::Range<usize>>,
+        range: Option<std::ops::RangeInclusive<usize>>,
     ) -> BoxStream<'s, Result<Bytes, StorageErrorX>> {
         match (self, object, checksum) {
             (SourceKind::Http(http), ObjectKind::Http(object), ChecksumKind::Http(checksum)) => {
                 http.get(object, checksum, range)
                     .map(|result| result.context("http"))
                     .boxed()
+            }
+            (SourceKind::AwsS3(s3), ObjectKind::AwsS3(object), ChecksumKind::AwsS3(checksum)) => s3
+                .get(object, checksum, range)
+                .map(|result| result.context("aws_s3"))
+                .boxed(),
+            (SourceKind::AwsS3(_) | SourceKind::Http(_), _, _) => {
+                unreachable!("programming error! wrong source, object, and checksum kind");
             }
         }
     }
@@ -668,18 +733,21 @@ impl OneshotSource for SourceKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum ObjectKind {
     Http(HttpObject),
+    AwsS3(S3Object),
 }
 
 impl OneshotObject for ObjectKind {
     fn name(&self) -> &str {
         match self {
             ObjectKind::Http(object) => object.name(),
+            ObjectKind::AwsS3(object) => object.name(),
         }
     }
 
     fn encodings(&self) -> &[Encoding] {
         match self {
             ObjectKind::Http(object) => object.encodings(),
+            ObjectKind::AwsS3(object) => object.encodings(),
         }
     }
 }
@@ -688,6 +756,7 @@ impl OneshotObject for ObjectKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum ChecksumKind {
     Http(HttpChecksum),
+    AwsS3(S3Checksum),
 }
 
 /// Defines a format that we fetch for a "one time" ingestion.
@@ -801,6 +870,37 @@ pub(crate) enum RecordChunkKind {
     Csv(CsvRecord),
 }
 
+pub(crate) enum ObjectFilter {
+    None,
+    Files(BTreeSet<Box<str>>),
+    Pattern(glob::Pattern),
+}
+
+impl ObjectFilter {
+    pub fn try_new(filter: ContentFilter) -> Result<Self, anyhow::Error> {
+        match filter {
+            ContentFilter::None => Ok(ObjectFilter::None),
+            ContentFilter::Files(files) => {
+                let files = files.into_iter().map(|f| f.into()).collect();
+                Ok(ObjectFilter::Files(files))
+            }
+            ContentFilter::Pattern(pattern) => {
+                let pattern = glob::Pattern::new(&pattern)?;
+                Ok(ObjectFilter::Pattern(pattern))
+            }
+        }
+    }
+
+    /// Returns if the object should be included.
+    pub fn filter<S: OneshotSource>(&self, object: &S::Object) -> bool {
+        match self {
+            ObjectFilter::None => true,
+            ObjectFilter::Files(files) => files.contains(object.name()),
+            ObjectFilter::Pattern(pattern) => pattern.matches(object.name()),
+        }
+    }
+}
+
 /// Experimental Error Type.
 ///
 /// The goal of this type is to combine concepts from both `thiserror` and
@@ -828,12 +928,20 @@ pub enum StorageErrorXKind {
     CsvDecoding(Arc<str>),
     #[error("reqwest error: {0}")]
     Reqwest(Arc<str>),
+    #[error("aws s3 request error: {0}")]
+    AwsS3Request(String),
+    #[error("aws s3 bytestream error: {0}")]
+    AwsS3Bytes(Arc<str>),
     #[error("invalid reqwest header: {0}")]
     InvalidHeader(Arc<str>),
     #[error("failed to decode Row from a record batch: {0}")]
     InvalidRecordBatch(Arc<str>),
     #[error("programming error: {0}")]
     ProgrammingError(Arc<str>),
+    #[error("failed to get the size of an object")]
+    MissingSize,
+    #[error("object is missing the required '{0}' field")]
+    MissingField(Arc<str>),
     #[error("something went wrong: {0}")]
     Generic(String),
 }
@@ -853,6 +961,12 @@ impl From<reqwest::Error> for StorageErrorXKind {
 impl From<reqwest::header::ToStrError> for StorageErrorXKind {
     fn from(err: reqwest::header::ToStrError) -> Self {
         StorageErrorXKind::InvalidHeader(err.to_string().into())
+    }
+}
+
+impl From<aws_smithy_types::byte_stream::error::Error> for StorageErrorXKind {
+    fn from(err: aws_smithy_types::byte_stream::error::Error) -> Self {
+        StorageErrorXKind::AwsS3Request(err.to_string())
     }
 }
 
