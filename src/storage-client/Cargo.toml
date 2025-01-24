@@ -13,7 +13,7 @@ workspace = true
 anyhow = "1.0.66"
 async-trait = "0.1.83"
 chrono = { version = "0.4.35", default-features = false, features = ["std"] }
-differential-dataflow = "0.13.4"
+differential-dataflow = "0.13.5"
 futures = "0.3.25"
 http = "1.1.0"
 itertools = { version = "0.12.1" }
@@ -46,7 +46,7 @@ serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.125" }
 smallvec = { version = "1.10.0", features = ["serde", "union"] }
 static_assertions = "1.1"
-timely = "0.17.0"
+timely = "0.17.1"
 tokio = { version = "1.38.0", features = [
     "fs",
     "rt",

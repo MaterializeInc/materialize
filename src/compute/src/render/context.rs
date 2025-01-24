@@ -14,37 +14,40 @@ use std::collections::BTreeMap;
 use std::rc::Weak;
 use std::sync::mpsc;
 
+use columnar::Columnar;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
-use differential_dataflow::{Collection, Data};
+use differential_dataflow::{AsCollection, Collection, Data};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::{AvailableCollections, LirId};
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
-use mz_repr::fixed_length::{FromDatumIter, ToDatumIter};
+use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::containers::{columnar_exchange, Col2ValBatcher, ColumnBuilder};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::columnation::Columnation;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
+use timely::Container;
 use tracing::error;
 
 use crate::arrangement::manager::SpecializedTraceHandle;
 use crate::compute_state::{ComputeState, HydrationEvent};
-use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
 use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
-use crate::row_spine::{RowRowBatcher, RowRowBuilder};
+use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
 };
@@ -919,10 +922,11 @@ where
 
 impl<S, T> CollectionBundle<S, T>
 where
-    T: timely::progress::Timestamp + Lattice + Columnation,
+    T: Timestamp + Lattice + Columnation,
     S: Scope,
-    S::Timestamp:
-        Refines<T> + Lattice + timely::progress::Timestamp + crate::render::RenderTimestamp,
+    S::Timestamp: Refines<T> + RenderTimestamp,
+    <S::Timestamp as Columnar>::Container: Clone + Send,
+    for<'a> <S::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
 {
     /// Presents `self` as a stream of updates, having been subjected to `mfp`.
     ///
@@ -1046,7 +1050,8 @@ where
                     .collection
                     .clone()
                     .expect("Collection constructed above");
-                let (oks, errs_keyed) = Self::specialized_arrange(&name, oks, &key, &thinning);
+                let (oks, errs_keyed) =
+                    Self::specialized_arrange(&name, oks, key.clone(), thinning.clone());
                 let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
                 let errs = errs.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
                     &format!("{}-errors", name),
@@ -1064,44 +1069,48 @@ where
     fn specialized_arrange(
         name: &String,
         oks: Collection<S, Row, i64>,
-        key: &Vec<MirScalarExpr>,
-        thinning: &Vec<usize>,
+        key: Vec<MirScalarExpr>,
+        thinning: Vec<usize>,
     ) -> (MzArrangement<S>, Collection<S, DataflowError, i64>) {
-        // Catch-all: Just use RowRow.
-        let (oks, errs) = oks
-            .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>(
-                "FormArrangementKey",
-                specialized_arrangement_key(key.clone(), thinning.clone()),
+        let (oks, errs) =
+            oks.inner
+                .unary_fallible::<ColumnBuilder<((Row, Row), S::Timestamp, i64)>, _, _, _>(
+                    Pipeline,
+                    "FormArrangementKey",
+                    move |_, _| {
+                        Box::new(move |input, ok, err| {
+                            let mut key_buf = Row::default();
+                            let mut val_buf = Row::default();
+                            let mut datums = DatumVec::new();
+                            let temp_storage = RowArena::new();
+                            while let Some((time, data)) = input.next() {
+                                let mut ok_session = ok.session_with_builder(&time);
+                                let mut err_session = err.session(&time);
+                                for (row, time, diff) in data.iter() {
+                                    temp_storage.clear();
+                                    let datums = datums.borrow_with(row);
+                                    let val_datum_iter = thinning.iter().map(|c| datums[*c]);
+                                    match key_buf.packer().try_extend(
+                                        key.iter().map(|k| k.eval(&datums, &temp_storage)),
+                                    ) {
+                                        Ok(()) => {
+                                            val_buf.packer().extend(val_datum_iter);
+                                            ok_session.give(((&*key_buf, &*val_buf), time, diff));
+                                        }
+                                        Err(e) => {
+                                            err_session.give((e.into(), time.clone(), *diff));
+                                        }
+                                    }
+                                }
+                            }
+                        })
+                    },
+                );
+        let oks = oks
+            .mz_arrange_core::<_, Col2ValBatcher<_, _,_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, S::Timestamp, Diff>),name
             );
-        let oks =
-            oks.mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name);
-        (MzArrangement::RowRow(oks), errs)
-    }
-}
-
-/// Obtains a function that maps input rows to (key, value) pairs according to
-/// the given key and thinning expressions. This function allows for specialization
-/// of key and value types and is intended to use to form arrangement keys.
-fn specialized_arrangement_key<K, V>(
-    key: Vec<MirScalarExpr>,
-    thinning: Vec<usize>,
-) -> impl FnMut(Row) -> Result<(K, V), DataflowError>
-where
-    K: Columnation + Data + FromDatumIter,
-    V: Columnation + Data + FromDatumIter,
-{
-    let mut key_buf = K::default();
-    let mut val_buf = V::default();
-    let mut datums = DatumVec::new();
-    move |row| {
-        // TODO: Consider reusing the `row` allocation; probably in *next* invocation.
-        let datums = datums.borrow_with(&row);
-        let temp_storage = RowArena::new();
-        let val_datum_iter = thinning.iter().map(|c| datums[*c]);
-        Ok::<(K, V), DataflowError>((
-            key_buf.try_from_datum_iter(key.iter().map(|k| k.eval(&datums, &temp_storage)))?,
-            val_buf.from_datum_iter(val_datum_iter),
-        ))
+        (MzArrangement::RowRow(oks), errs.as_collection())
     }
 }
 

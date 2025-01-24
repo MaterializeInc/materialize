@@ -47,7 +47,7 @@ reqwest = { version = "0.11.13", features = ["stream"] }
 sentry = { version = "0.29.1" }
 serde = { version = "1.0.152", features = ["derive"] }
 smallvec = { version = "1.10.0", features = ["union"] }
-timely = "0.17.0"
+timely = "0.17.1"
 thiserror = "1.0.37"
 tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-stream = "0.1.11"

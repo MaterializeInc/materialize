@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use columnar::Columnar;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_expr::MfpPlan;
 use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
@@ -26,6 +27,7 @@ impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
 {
     /// Applies a `TableFunc` to every row, followed by an `mfp`.
     pub fn render_flat_map(
@@ -130,6 +132,7 @@ fn drain_through_mfp<T>(
     >,
 ) where
     T: crate::render::RenderTimestamp,
+    <T as Columnar>::Container: Clone + Send,
 {
     let temp_storage = RowArena::new();
     let binding = SharedRow::get();

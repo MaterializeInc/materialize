@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use columnar::Columnar;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
@@ -45,7 +46,9 @@ use crate::typedefs::{RowRowAgent, RowRowEnter};
 impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
+    G::Timestamp: RenderTimestamp,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
+    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
 {
     /// Renders `MirRelationExpr:Join` using dogs^3 delta query dataflows.
     ///
@@ -326,7 +329,9 @@ fn dispatch_build_halfjoin_local<G, CF>(
 )
 where
     G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
+    G::Timestamp: RenderTimestamp,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
+    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     match trace {
@@ -358,7 +363,9 @@ fn dispatch_build_halfjoin_trace<G, T, CF>(
 where
     G: Scope,
     T: Timestamp + Lattice + Columnation,
-    G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
+    G::Timestamp: RenderTimestamp + Refines<T>,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
+    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     match trace {
@@ -398,7 +405,9 @@ fn build_halfjoin<G, Tr, K, CF>(
 )
 where
     G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
+    G::Timestamp: RenderTimestamp,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
+    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
     Tr: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
     K: ExchangeData + Hashable + Default + FromDatumIter + ToDatumIter,
     for<'a> Tr::Key<'a>: IntoOwned<'a, Owned = K>,
@@ -531,7 +540,9 @@ fn dispatch_build_update_stream_local<G>(
 ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
+    G::Timestamp: RenderTimestamp,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
+    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
 {
     match trace {
         MzArrangement::RowRow(inner) => build_update_stream::<_, RowRowAgent<_, _>>(
@@ -553,7 +564,9 @@ fn dispatch_build_update_stream_trace<G, T>(
 where
     G: Scope,
     T: Timestamp + Lattice + Columnation,
-    G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
+    G::Timestamp: Lattice + RenderTimestamp + Refines<T>,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
+    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
 {
     match trace {
         MzArrangementImport::RowRow(inner) => build_update_stream::<_, RowRowEnter<_, _, _>>(
@@ -578,7 +591,9 @@ fn build_update_stream<G, Tr>(
 ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
     G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
+    G::Timestamp: RenderTimestamp,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
+    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
     for<'a, 'b> &'a G::Timestamp: PartialEq<Tr::TimeGat<'b>>,
     Tr: for<'a> TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
     for<'a> Tr::Key<'a>: ToDatumIter,
