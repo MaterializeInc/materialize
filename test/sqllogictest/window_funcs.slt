@@ -263,7 +263,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT f1 FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT f1 FROM t1
 WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 ----
 Explained Query:
@@ -6876,7 +6876,7 @@ NULL  11  NULL  22  22  22  {22}
 # TODO: Add an optimization that eliminates a Map-FlatMap pair where the Map is just creating a 1-element list on which
 # the FlatMap is immediately calling `unnest_list`.
 query T multiline
-EXPLAIN WITH(keys)
+EXPLAIN OPTIMIZED PLAN WITH(keys)
 SELECT
   sum(sum(x)) OVER ()
 FROM t7;
@@ -6944,7 +6944,7 @@ INSERT INTO t9 VALUES (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13,
 # Still testing `AggregateExpr::on_unique`. Here, the uniqueness constraint on the table makes `ReduceElision` call
 # `on_unique`. There should be 0 Reduce operations in the plan.
 query T multiline
-EXPLAIN WITH(keys)
+EXPLAIN OPTIMIZED PLAN WITH(keys)
 SELECT
   sum(y) OVER (PARTITION BY x)
 FROM t9

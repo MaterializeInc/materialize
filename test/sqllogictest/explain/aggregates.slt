@@ -20,7 +20,7 @@ statement ok
 INSERT INTO t VALUES (1, '10', 'x'), (2, '20', NULL), (3, '30', NULL), (4, '40', 'x'), (5, '50a', 'x'), (5, '50b', 'y'), (5, '50c', 'z');
 
 query T multiline
-EXPLAIN SELECT a, array_agg(b) FROM t GROUP BY a;
+EXPLAIN OPTIMIZED PLAN SELECT a, array_agg(b) FROM t GROUP BY a;
 ----
 Explained Query:
   Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1]))]
@@ -34,7 +34,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT a, array_agg(b), array_agg(c) FROM t GROUP BY a;
+EXPLAIN OPTIMIZED PLAN SELECT a, array_agg(b), array_agg(c) FROM t GROUP BY a;
 ----
 Explained Query:
   Project (#0, #1, #3)
@@ -55,7 +55,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT a, array_agg(b), string_agg(c, ',') FROM t GROUP BY a;
+EXPLAIN OPTIMIZED PLAN SELECT a, array_agg(b), string_agg(c, ',') FROM t GROUP BY a;
 ----
 Explained Query:
   Project (#0, #1, #3)
@@ -76,7 +76,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT a, array_agg(b), string_agg(c, ',' ORDER BY b DESC) FROM t GROUP BY a;
+EXPLAIN OPTIMIZED PLAN SELECT a, array_agg(b), string_agg(c, ',' ORDER BY b DESC) FROM t GROUP BY a;
 ----
 Explained Query:
   Project (#0, #1, #3)
@@ -96,7 +96,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT a, array_agg(b), max(c) FROM t WHERE c <> 'x' GROUP BY a;
+EXPLAIN OPTIMIZED PLAN SELECT a, array_agg(b), max(c) FROM t WHERE c <> 'x' GROUP BY a;
 ----
 Explained Query:
   With
@@ -123,7 +123,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT a, array_agg(b), max(b) FROM t GROUP BY a HAVING count(a) > 1;
+EXPLAIN OPTIMIZED PLAN SELECT a, array_agg(b), max(b) FROM t GROUP BY a HAVING count(a) > 1;
 ----
 Explained Query:
   With
@@ -152,7 +152,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT a, min(b), max(b) FROM t GROUP BY a;
+EXPLAIN OPTIMIZED PLAN SELECT a, min(b), max(b) FROM t GROUP BY a;
 ----
 Explained Query:
   Reduce group_by=[#0] aggregates=[min(#1), max(#1)]
@@ -166,7 +166,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT a, array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC) FROM t GROUP BY a;
+EXPLAIN OPTIMIZED PLAN SELECT a, array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC) FROM t GROUP BY a;
 ----
 Explained Query:
   With
@@ -190,7 +190,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC), bool_or(b IS NOT NULL) FROM t;
+EXPLAIN OPTIMIZED PLAN SELECT array_agg(b ORDER BY b ASC), array_agg(b ORDER BY b DESC), bool_or(b IS NOT NULL) FROM t;
 ----
 Explained Query:
   With
@@ -230,7 +230,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT t1.a, array_agg(t1.c), array_agg(t2.c) FROM t t1 INNER JOIN t t2 ON t1.c = t2.c WHERE t1.c IS NOT NULL GROUP BY t1.a;
+EXPLAIN OPTIMIZED PLAN SELECT t1.a, array_agg(t1.c), array_agg(t2.c) FROM t t1 INNER JOIN t t2 ON t1.c = t2.c WHERE t1.c IS NOT NULL GROUP BY t1.a;
 ----
 Explained Query:
   With
@@ -257,7 +257,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT sum(a), jsonb_agg(b), array_agg(b), array_agg(b) FROM t;
+EXPLAIN OPTIMIZED PLAN SELECT sum(a), jsonb_agg(b), array_agg(b), array_agg(b) FROM t;
 ----
 Explained Query:
   With
@@ -295,7 +295,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT a, array_agg(b ORDER BY b) FROM t GROUP BY a HAVING array_agg(b ORDER BY b) = array_agg(b ORDER BY b DESC);
+EXPLAIN OPTIMIZED PLAN SELECT a, array_agg(b ORDER BY b) FROM t GROUP BY a HAVING array_agg(b ORDER BY b) = array_agg(b ORDER BY b DESC);
 ----
 Explained Query:
   With
@@ -319,7 +319,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT a, array_agg(b), array_agg(sha256(b::BYTEA)) FROM t GROUP BY a;
+EXPLAIN OPTIMIZED PLAN SELECT a, array_agg(b), array_agg(sha256(b::BYTEA)) FROM t GROUP BY a;
 
 ----
 Explained Query:
@@ -345,7 +345,7 @@ EOF
 
 
 query T multiline
-EXPLAIN SELECT a, array_agg(b), array_agg(CASE WHEN a = 1 THEN 'ooo' ELSE b END) FROM t GROUP BY a;
+EXPLAIN OPTIMIZED PLAN SELECT a, array_agg(b), array_agg(CASE WHEN a = 1 THEN 'ooo' ELSE b END) FROM t GROUP BY a;
 ----
 Explained Query:
   With
@@ -369,7 +369,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT a, dense_rank() OVER (ORDER BY a), array_agg(b) FROM t GROUP BY a;
+EXPLAIN OPTIMIZED PLAN SELECT a, dense_rank() OVER (ORDER BY a), array_agg(b) FROM t GROUP BY a;
 ----
 Explained Query:
   Project (#3, #5, #4)

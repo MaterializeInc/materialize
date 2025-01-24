@@ -118,7 +118,7 @@ EOF
 # Demand creates the `#0 + #0` from `#0 + #2`.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations)
 WITH MUTUALLY RECURSIVE
   c0(key int, a int) AS (
     SELECT * FROM c2

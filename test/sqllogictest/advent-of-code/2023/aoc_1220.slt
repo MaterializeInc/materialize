@@ -17,7 +17,7 @@ CREATE TABLE input (input TEXT);
 # no input data
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE
 
     lines(line TEXT) AS ( SELECT regexp_split_to_table(input, '\n') FROM input ),
     links(name TEXT, link TEXT) AS (

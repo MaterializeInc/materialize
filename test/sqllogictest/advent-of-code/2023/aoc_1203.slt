@@ -128,7 +128,7 @@ SELECT * FROM part1, part2;
 11374  1587570
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE
     -- PART 0
     -- Parse the input as lines of text with line numbers.
     lines(line TEXT, row_idx INT) AS (

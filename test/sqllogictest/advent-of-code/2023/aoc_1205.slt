@@ -465,7 +465,7 @@ FROM
 2364832465
 
 query T multiline
-EXPLAIN WITH seeds AS (
+EXPLAIN OPTIMIZED PLAN WITH seeds AS (
             SELECT
                 regexp_split_to_table(
                     regexp_split_to_array(
@@ -992,7 +992,7 @@ SELECT * FROM part1, part2;
 60602459  5
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE
     blocks(head TEXT, body TEXT) AS (
         SELECT
             split_part(regexp_split_to_table(input, '\n\n'), ':', 1),

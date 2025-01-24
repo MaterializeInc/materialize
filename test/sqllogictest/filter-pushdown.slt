@@ -26,7 +26,7 @@ CREATE TABLE events (
 );
 
 query T multiline
-EXPLAIN WITH(humanized expressions, filter pushdown)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown)
 SELECT count(*)
 FROM events
 WHERE mz_now() >= insert_ms
@@ -59,7 +59,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(humanized expressions, filter pushdown)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown)
 SELECT content, insert_ms
 FROM events
 -- The event should appear in only one interval of duration `10000`.
@@ -84,7 +84,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(humanized expressions, filter pushdown)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown)
 SELECT content, insert_ms
 FROM events
 -- The event should appear in `6` intervals each of width `10000`.
@@ -109,7 +109,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(humanized expressions, filter pushdown)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown)
 SELECT content, insert_ms
 FROM events
 -- The event should appear inside the interval that begins at
@@ -133,7 +133,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(humanized expressions, filter pushdown)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown)
 SELECT content, insert_ms, delete_ms
 FROM events
 WHERE mz_now() >= insert_ms + 60000
@@ -157,7 +157,7 @@ EOF
 # function _does_ report pushdown even when the argument list is long.
 
 query T multiline
-EXPLAIN WITH(humanized expressions, filter pushdown)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown)
 SELECT content, insert_ms, delete_ms
 FROM events
 WHERE COALESCE(delete_ms, insert_ms) < mz_now();
@@ -175,7 +175,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(humanized expressions, filter pushdown)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown)
 SELECT content, insert_ms, delete_ms
 FROM events
 WHERE mz_now() < delete_ms + 10000
@@ -208,7 +208,7 @@ CREATE TABLE events_timestamped (
 );
 
 query T multiline
-EXPLAIN WITH(humanized expressions, filter pushdown)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown)
 SELECT content, inserted_at
 FROM events_timestamped
 WHERE EXTRACT(YEAR FROM inserted_at) = 2021;
@@ -230,7 +230,7 @@ EOF
 # point of that func)
 
 query T multiline
-EXPLAIN WITH(humanized expressions, filter pushdown)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown)
 SELECT content, inserted_at
 FROM events_timestamped
 WHERE mz_now() < try_parse_monotonic_iso8601_timestamp(content);
@@ -335,7 +335,7 @@ statement ok
 CREATE TABLE items(id int, ship_time timestamp);
 
 query T multiline
-EXPLAIN WITH(filter pushdown)
+EXPLAIN OPTIMIZED PLAN WITH(filter pushdown)
 SELECT * from items
 WHERE mz_now() <= date_trunc(
     'month',

@@ -78,7 +78,7 @@ SELECT * FROM part1;
 54
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 50)
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 50)
 
     lines(r INT, line TEXT) AS (
         SELECT r, regexp_split_to_array(input, '\n')[r] as line

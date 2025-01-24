@@ -138,7 +138,7 @@ SELECT * FROM part1, part2;
 129655908  129655908
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE
 
     lines(line TEXT, r INT) AS (
         SELECT regexp_split_to_array(input, '\n')[i], i

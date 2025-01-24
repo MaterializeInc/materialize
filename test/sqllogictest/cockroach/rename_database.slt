@@ -179,7 +179,7 @@ t
 v
 
 query TTT
-EXPLAIN ALTER DATABASE v RENAME TO x
+EXPLAIN OPTIMIZED PLAN ALTER DATABASE v RENAME TO x
 ----
 rename database  ·  ·
 

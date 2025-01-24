@@ -45,7 +45,7 @@ $ set-regex match=u\d+ replacement=UID
 
 > CREATE VIEW v as SELECT * from data where a = 1 and d = 3;
 
-? EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN SELECT * FROM v;
 Explained Query:
   Filter (#0 = 1) AND (#3 = 3)
     ReadStorage materialize.public.data
@@ -65,7 +65,7 @@ Target cluster: quickstart
 
 > CREATE VIEW v as SELECT b from data where b = 1;
 
-? EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN SELECT * FROM v;
 Explained Query:
   Project (#1)
     Filter (#1 = 1)
@@ -90,7 +90,7 @@ Target cluster: quickstart
 
 > CREATE VIEW v as SELECT b from inner_view where a = 1
 
-? EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN SELECT * FROM v;
 Explained Query:
   Project (#1)
     Filter (#0 = 1) AND (#3 = 4)
@@ -111,7 +111,7 @@ Target cluster: quickstart
 
 > CREATE VIEW v as SELECT d from inner_view where a = 1;
 
-? EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN SELECT * FROM v;
 Explained Query:
   Project (#3)
     Filter (#0 = 1) AND (#3 = 4)
@@ -130,7 +130,7 @@ Target cluster: quickstart
 
 > CREATE VIEW v as SELECT s1.a from data s1, data s2 where s1.a = s2.b and s2.d = 4;
 
-? EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN SELECT * FROM v;
 Explained Query:
   Project (#0)
     Join on=(#0 = #1) type=differential
@@ -160,7 +160,7 @@ Target cluster: quickstart
 
 > CREATE VIEW v as SELECT s2.a from data s1, data s2 where s1.a = s2.b and s2.d = 4 and s1.d = 4;
 
-? EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN SELECT * FROM v;
 Explained Query:
   Project (#1)
     Join on=(#0 = #2) type=differential
@@ -187,7 +187,7 @@ Target cluster: quickstart
 
 > CREATE VIEW v as SELECT s2.c from data s1, data s2 where s1.a = s2.a
 
-? EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN SELECT * FROM v;
 Explained Query:
   With
     cte l0 =
@@ -221,7 +221,7 @@ Target cluster: quickstart
 
 > CREATE VIEW v as SELECT * FROM (SELECT a, sum(b) FROM data GROUP BY a UNION ALL SELECT a, (a + c)::numeric FROM data) WHERE a = 1;
 
-? EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN SELECT * FROM v;
 Explained Query:
   Union
     Project (#1, #0)
@@ -263,7 +263,7 @@ $ kafka-ingest format=avro topic=data2 schema=${schema}
 
 > CREATE VIEW v as SELECT a, c FROM data EXCEPT ALL SELECT a, c FROM data2 where d is null
 
-? EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN SELECT * FROM v;
 Explained Query:
   Threshold
     Union

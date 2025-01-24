@@ -39,7 +39,7 @@ aBcDeF
 abcdef
 
 query T multiline
-EXPLAIN SELECT * FROM t_data
+EXPLAIN OPTIMIZED PLAN SELECT * FROM t_data
 WHERE f1 ILIKE (SELECT op_val FROM t_operator);
 ----
 Explained Query:

@@ -16,7 +16,7 @@ statement ok
 SET CLUSTER TO mz_catalog_server
 
 query T multiline
-EXPLAIN SHOW DATABASES
+EXPLAIN OPTIMIZED PLAN SHOW DATABASES
 ----
 Explained Query (fast path):
   ReadIndex on=mz_internal.mz_show_databases mz_show_databases_ind=[*** full scan ***]
@@ -29,7 +29,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW SCHEMAS
+EXPLAIN OPTIMIZED PLAN SHOW SCHEMAS
 ----
 Explained Query (fast path):
   Project (#1, #2)
@@ -44,7 +44,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW CONNECTIONS
+EXPLAIN OPTIMIZED PLAN SHOW CONNECTIONS
 ----
 Explained Query (fast path):
   Project (#1..=#3)
@@ -58,7 +58,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW TABLES
+EXPLAIN OPTIMIZED PLAN SHOW TABLES
 ----
 Explained Query (fast path):
   Project (#1, #2)
@@ -72,7 +72,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW SOURCES
+EXPLAIN OPTIMIZED PLAN SHOW SOURCES
 ----
 Explained Query (fast path):
   Project (#2..=#4, #6)
@@ -86,7 +86,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW VIEWS
+EXPLAIN OPTIMIZED PLAN SHOW VIEWS
 ----
 Explained Query (fast path):
   Project (#1, #2)
@@ -100,7 +100,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW MATERIALIZED VIEWS
+EXPLAIN OPTIMIZED PLAN SHOW MATERIALIZED VIEWS
 ----
 Explained Query (fast path):
   Project (#2, #3, #5)
@@ -114,7 +114,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW MATERIALIZED VIEWS IN CLUSTER quickstart
+EXPLAIN OPTIMIZED PLAN SHOW MATERIALIZED VIEWS IN CLUSTER quickstart
 ----
 Explained Query (fast path):
   Project (#2, #3, #5)
@@ -129,7 +129,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW INDEXES
+EXPLAIN OPTIMIZED PLAN SHOW INDEXES
 ----
 Explained Query (fast path):
   Project (#2..=#5, #8)
@@ -144,7 +144,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW INDEXES IN CLUSTER quickstart
+EXPLAIN OPTIMIZED PLAN SHOW INDEXES IN CLUSTER quickstart
 ----
 Explained Query (fast path):
   Project (#2..=#5, #8)
@@ -159,7 +159,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW SINKS
+EXPLAIN OPTIMIZED PLAN SHOW SINKS
 ----
 Explained Query (fast path):
   Project (#2..=#4, #6)
@@ -173,7 +173,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW TYPES
+EXPLAIN OPTIMIZED PLAN SHOW TYPES
 ----
 Explained Query (fast path):
   Project (#1, #2)
@@ -187,7 +187,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW OBJECTS
+EXPLAIN OPTIMIZED PLAN SHOW OBJECTS
 ----
 Explained Query (fast path):
   Project (#1..=#3)
@@ -204,7 +204,7 @@ statement ok
 CREATE TABLE t (a INT)
 
 query T multiline
-EXPLAIN SHOW COLUMNS IN t
+EXPLAIN OPTIMIZED PLAN SHOW COLUMNS IN t
 ----
 Explained Query (fast path):
   Project (#1..=#3, #5)
@@ -241,7 +241,7 @@ EOF
 # EOF
 
 query T multiline
-EXPLAIN SHOW CLUSTER REPLICAS
+EXPLAIN OPTIMIZED PLAN SHOW CLUSTER REPLICAS
 ----
 Explained Query (fast path):
   Project (#0, #1, #3..=#5)
@@ -255,7 +255,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW CLUSTER REPLICAS WHERE cluster IN ('compute_qck', 'ingest_qck');
+EXPLAIN OPTIMIZED PLAN SHOW CLUSTER REPLICAS WHERE cluster IN ('compute_qck', 'ingest_qck');
 ----
 Explained Query (fast path):
   Project (#0, #1, #3..=#5)
@@ -269,7 +269,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SHOW SECRETS
+EXPLAIN OPTIMIZED PLAN SHOW SECRETS
 ----
 Explained Query (fast path):
   Project (#1, #2)
@@ -283,7 +283,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT id FROM mz_catalog.mz_indexes
+EXPLAIN OPTIMIZED PLAN SELECT id FROM mz_catalog.mz_indexes
 ----
 Explained Query (fast path):
   Project (#0)
@@ -297,7 +297,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT id FROM mz_catalog.mz_roles
+EXPLAIN OPTIMIZED PLAN SELECT id FROM mz_catalog.mz_roles
 ----
 Explained Query (fast path):
   Project (#0)
@@ -311,7 +311,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT id FROM mz_catalog.mz_sources
+EXPLAIN OPTIMIZED PLAN SELECT id FROM mz_catalog.mz_sources
 ----
 Explained Query (fast path):
   Project (#0)
@@ -325,7 +325,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT id FROM mz_catalog.mz_sinks
+EXPLAIN OPTIMIZED PLAN SELECT id FROM mz_catalog.mz_sinks
 ----
 Explained Query (fast path):
   Project (#0)
@@ -339,7 +339,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT id FROM mz_catalog.mz_materialized_views
+EXPLAIN OPTIMIZED PLAN SELECT id FROM mz_catalog.mz_materialized_views
 ----
 Explained Query (fast path):
   Project (#0)
@@ -353,7 +353,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT object_id FROM mz_internal.mz_object_dependencies
+EXPLAIN OPTIMIZED PLAN SELECT object_id FROM mz_internal.mz_object_dependencies
 ----
 Explained Query (fast path):
   Project (#0)
@@ -367,7 +367,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT dependency_id FROM mz_internal.mz_compute_dependencies
+EXPLAIN OPTIMIZED PLAN SELECT dependency_id FROM mz_internal.mz_compute_dependencies
 ----
 Explained Query (fast path):
   Project (#0)
@@ -381,7 +381,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT dropped_at FROM mz_internal.mz_cluster_replica_history
+EXPLAIN OPTIMIZED PLAN SELECT dropped_at FROM mz_internal.mz_cluster_replica_history
 ----
 Explained Query (fast path):
   Project (#0)
@@ -397,7 +397,7 @@ EOF
 # Following are used in the UI
 
 query T multiline
-EXPLAIN SELECT r.id,
+EXPLAIN OPTIMIZED PLAN SELECT r.id,
   r.name as replica_name,
   r.cluster_id,
   r.size,
@@ -438,7 +438,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT s.id, s.oid, s.name, s.type, s.size, st.status, st.error
+EXPLAIN OPTIMIZED PLAN SELECT s.id, s.oid, s.name, s.type, s.size, st.status, st.error
 FROM mz_sources s
 LEFT OUTER JOIN mz_internal.mz_source_statuses st
 ON st.id = s.id
@@ -483,7 +483,7 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT MAX(extract(epoch from h.occurred_at) * 1000) as last_occurred, h.error, COUNT(h.occurred_at)
+EXPLAIN OPTIMIZED PLAN SELECT MAX(extract(epoch from h.occurred_at) * 1000) as last_occurred, h.error, COUNT(h.occurred_at)
 FROM mz_internal.mz_source_status_history h
 WHERE source_id = 'u6'
 AND error IS NOT NULL

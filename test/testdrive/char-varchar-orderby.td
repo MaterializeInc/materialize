@@ -71,7 +71,7 @@
 # Make sure the plan for those queries actually involve the TopK operator
 $ set-regex match=u\d+ replacement=UID
 
-? EXPLAIN SELECT * FROM (SELECT * FROM char_table ORDER BY f1 NULLS FIRST LIMIT 1 OFFSET 0)
+EXPLAIN OPTIMIZED PLAN SELECT * FROM (SELECT * FROM char_table ORDER BY f1 NULLS FIRST LIMIT 1 OFFSET 0)
 Explained Query:
   TopK order_by=[#0 asc nulls_first] limit=1
     ReadStorage materialize.public.char_table

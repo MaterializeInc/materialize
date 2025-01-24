@@ -1760,13 +1760,13 @@ CREATE TABLE t (a ty);
 COMPLETE 0
 
 simple conn=joe,user=joe
-EXPLAIN SELECT a::ty FROM t;
+EXPLAIN OPTIMIZED PLAN SELECT a::ty FROM t;
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 DETAIL: The 'joe' role needs USAGE privileges on SCHEMA "materialize.public"
 
 simple conn=child,user=child
-EXPLAIN SELECT a::ty FROM t;
+EXPLAIN OPTIMIZED PLAN SELECT a::ty FROM t;
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 DETAIL: The 'child' role needs USAGE privileges on SCHEMA "materialize.public"
@@ -1782,7 +1782,7 @@ GRANT USAGE ON TYPE ty TO joe;
 COMPLETE 0
 
 simple multiline,conn=joe,user=joe
-EXPLAIN SELECT a::ty FROM t;
+EXPLAIN OPTIMIZED PLAN SELECT a::ty FROM t;
 ----
 Explained Query:
   ReadStorage materialize.public.t
@@ -1795,7 +1795,7 @@ EOF
 COMPLETE 1
 
 simple multiline,conn=child,user=child
-EXPLAIN SELECT a::ty FROM t;
+EXPLAIN OPTIMIZED PLAN SELECT a::ty FROM t;
 ----
 Explained Query:
   ReadStorage materialize.public.t
@@ -1946,13 +1946,13 @@ CREATE VIEW v AS SELECT * FROM t;
 COMPLETE 0
 
 simple conn=joe,user=joe
-EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN SELECT * FROM v;
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 DETAIL: The 'joe' role needs USAGE privileges on SCHEMA "materialize.public"
 
 simple conn=child,user=child
-EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN SELECT * FROM v;
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 DETAIL: The 'child' role needs USAGE privileges on SCHEMA "materialize.public"
@@ -1963,7 +1963,7 @@ GRANT USAGE ON SCHEMA materialize.public TO joe;
 COMPLETE 0
 
 simple multiline,conn=joe,user=joe
-EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN SELECT * FROM v;
 ----
 Explained Query:
   ReadStorage materialize.public.t
@@ -1976,7 +1976,7 @@ EOF
 COMPLETE 1
 
 simple multiline,conn=child,user=child
-EXPLAIN SELECT * FROM v;
+EXPLAIN OPTIMIZED PLAN SELECT * FROM v;
 ----
 Explained Query:
   ReadStorage materialize.public.t
@@ -2023,7 +2023,7 @@ CREATE MATERIALIZED VIEW mv IN CLUSTER quickstart AS SELECT 1
 COMPLETE 0
 
 query error permission denied for SCHEMA "materialize.public"
-EXPLAIN MATERIALIZED VIEW mv;
+EXPLAIN OPTIMIZED PLAN MATERIALIZED VIEW mv;
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO materialize;
@@ -2031,7 +2031,7 @@ GRANT USAGE ON SCHEMA materialize.public TO materialize;
 COMPLETE 0
 
 query T multiline
-EXPLAIN MATERIALIZED VIEW mv;
+EXPLAIN OPTIMIZED PLAN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Constant
@@ -2066,7 +2066,7 @@ CREATE INDEX i IN CLUSTER quickstart ON t(a)
 COMPLETE 0
 
 query error permission denied for SCHEMA "materialize.public"
-EXPLAIN INDEX i;
+EXPLAIN OPTIMIZED PLAN INDEX i;
 
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO materialize;
@@ -2074,7 +2074,7 @@ GRANT USAGE ON SCHEMA materialize.public TO materialize;
 COMPLETE 0
 
 query T multiline
-EXPLAIN INDEX i;
+EXPLAIN OPTIMIZED PLAN INDEX i;
 ----
 materialize.public.i:
   ArrangeBy keys=[[#0]]

@@ -240,7 +240,7 @@ CREATE TABLE date_trunc_timestamps (
 )
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT date_trunc('day', ts) FROM date_trunc_timestamps
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT date_trunc('day', ts) FROM date_trunc_timestamps
 ----
 Explained Query:
   Project (#1) // { arity: 1 }
@@ -254,7 +254,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT date_trunc(field, ts) FROM date_trunc_fields, date_trunc_timestamps
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -747,7 +747,7 @@ CREATE TABLE t (
 )
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a IS NULL FROM t
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT a IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -761,7 +761,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a + a + a + a + a IS NULL FROM t
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT a + a + a + a + a IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -775,7 +775,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a + b IS NULL FROM t
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT a + b IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -793,7 +793,7 @@ EOF
 # exist, but we do not support them yet. Similarly for OR.
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT (a::bool AND b::bool) IS NULL FROM t
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) SELECT (a::bool AND b::bool) IS NULL FROM t
 ----
 Explained Query:
   Project (#2) // { arity: 1 }
@@ -1619,7 +1619,7 @@ SELECT mz_unsafe.mz_error_if_null(1, '')
 
 # Confirm that `mz_error_if_null` can be seen to be non-null.
 query T multiline
-EXPLAIN SELECT mz_unsafe.mz_error_if_null(t, '') IS NULL FROM ts_size;
+EXPLAIN OPTIMIZED PLAN SELECT mz_unsafe.mz_error_if_null(t, '') IS NULL FROM ts_size;
 ----
 Explained Query:
   Project (#1)

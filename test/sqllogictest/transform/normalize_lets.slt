@@ -11,7 +11,7 @@ mode cockroach
 
 ## Test a plausibly correct recursive query.
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
     bar (a int) as (SELECT a FROM foo)
 SELECT * FROM bar;
@@ -38,7 +38,7 @@ EOF
 ## Test a nested recursive query.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE
     foo (a int8) AS (
         WITH MUTUALLY RECURSIVE
             bar (b int8) AS (
@@ -59,7 +59,7 @@ EOF
 ## `bar` is used only in `baz`, so it should be inlined. The inner WMR should have only one cte.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE
     foo (a int8) AS (
         WITH MUTUALLY RECURSIVE
             bar (b int8) AS (
@@ -84,7 +84,7 @@ CREATE TABLE t1(f0 int);
 
 ## Test inlining a cte from a `Let` into a `LetRec`.
 query T multiline
-EXPLAIN WITH(raw)
+EXPLAIN OPTIMIZED PLAN WITH(raw)
 WITH
   cte0 AS (
     SELECT * from t1 where f0 < 27
@@ -122,7 +122,7 @@ EOF
 ## Test consolidation of not-really nested recursive query.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE
     foo (a int8) AS (
         WITH MUTUALLY RECURSIVE
             bar (b int8) AS (
@@ -142,7 +142,7 @@ EOF
 ## Test consolidation of independent recursive query blocks.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-EXPLAIN SELECT * FROM (
+EXPLAIN OPTIMIZED PLAN SELECT * FROM (
     WITH MUTUALLY RECURSIVE
         foo (a int8) AS (SELECT DISTINCT a FROM foo)
     SELECT * FROM foo
@@ -166,7 +166,7 @@ CREATE TABLE edges (src int, dst int);
 
 ## Complex inlining and other things
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE
     label (node int, comp int) AS (
         SELECT dst, MIN(comp)
         FROM (
@@ -242,7 +242,7 @@ EOF
 ## RECURSION LIMIT -- Simple test
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 10)
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 10)
   cnt (i int) AS (
     SELECT 1 AS i
     UNION
@@ -269,7 +269,7 @@ EOF
 ## RECURSION LIMIT -- RETURN AT RECURSION LIMIT
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 10)
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 10)
   cnt (i int) AS (
     SELECT 1 AS i
     UNION
@@ -296,7 +296,7 @@ EOF
 ## RECURSION LIMIT -- ERROR AT RECURSION LIMIT
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 10)
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 10)
   cnt (i int) AS (
     SELECT 1 AS i
     UNION
@@ -324,7 +324,7 @@ EOF
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 
 query T multiline
-EXPLAIN SELECT * FROM (
+EXPLAIN OPTIMIZED PLAN SELECT * FROM (
     WITH MUTUALLY RECURSIVE (RECURSION LIMIT 5)
         foo (a int8) AS (SELECT DISTINCT a FROM foo)
     SELECT * FROM foo
@@ -348,7 +348,7 @@ EOF
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 
 query T multiline
-EXPLAIN SELECT * FROM (
+EXPLAIN OPTIMIZED PLAN SELECT * FROM (
     WITH MUTUALLY RECURSIVE (RECURSION LIMIT 27)
         foo (a int8) AS (SELECT DISTINCT a FROM foo)
     SELECT * FROM foo
@@ -371,7 +371,7 @@ EOF
 ## Here, the ITERATION RECURSION of the inner WMR is irrelevant, because it's not recursive.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 9)
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 9)
     foo (a int8) AS (
         WITH MUTUALLY RECURSIVE (RECURSION LIMIT 3)
             bar (b int8) AS (
@@ -391,7 +391,7 @@ EOF
 # ITERATION RECURSION -- a nested recursive query.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 17)
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 17)
     foo (a int8) AS (
         WITH MUTUALLY RECURSIVE (RECURSION LIMIT 11)
             bar (b int8) AS (
@@ -411,7 +411,7 @@ EOF
 ## ITERATION RECURSION -- Complex inlining and other things.
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 21)
+EXPLAIN OPTIMIZED PLAN WITH MUTUALLY RECURSIVE (RECURSION LIMIT 21)
     label (node int, comp int) AS (
         SELECT dst, MIN(comp)
         FROM (
