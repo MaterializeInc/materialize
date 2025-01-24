@@ -333,7 +333,10 @@ fn test_time() {
     // Ensure that EXPLAIN selects a timestamp for `now()` and
     // `current_timestamp()`, though we don't care what the timestamp is.
     let rows = client
-        .query("EXPLAIN OPTIMIZED PLAN FOR SELECT now(), current_timestamp()", &[])
+        .query(
+            "EXPLAIN OPTIMIZED PLAN FOR SELECT now(), current_timestamp()",
+            &[],
+        )
         .unwrap();
     assert_eq!(1, rows.len());
 
@@ -3255,7 +3258,10 @@ async fn test_explain_as_of() {
             let query_ts = try_get_explain_timestamp(&query, &client).await?;
             assert_eq!(ts, query_ts);
             client
-                .query_one(&format!("EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM {query}"), &[])
+                .query_one(
+                    &format!("EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM {query}"),
+                    &[],
+                )
                 .await?;
             Ok::<_, anyhow::Error>(())
         })
