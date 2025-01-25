@@ -246,7 +246,7 @@ Explained Query:
           ReadIndex on=t t_a_idx=[*** full scan ***]
       Negate
         Distinct project=[#0{b}]
-          Project (#1)
+          Project (#1{b})
             ReadStorage materialize.public.mv
 
 Source materialize.public.mv
@@ -269,7 +269,7 @@ Explained Query:
       Project (#0{a})
         ReadIndex on=t t_a_idx=[*** full scan ***]
       Negate
-        Project (#1)
+        Project (#1{b})
           ReadStorage materialize.public.mv
 
 Source materialize.public.mv
@@ -398,10 +398,10 @@ Explained Query:
                 CrossJoin type=differential
                   ArrangeBy keys=[[]]
                     Distinct project=[#0{b}]
-                      Project (#1)
+                      Project (#1{b})
                         Get l0
                   ArrangeBy keys=[[]]
-                    Project (#1)
+                    Project (#1{b})
                       ReadStorage materialize.public.mv
 
 Source materialize.public.mv
@@ -421,7 +421,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
 Explained Query:
   With
     cte l0 =
-      Project (#1)
+      Project (#1{b})
         ReadIndex on=t t_a_idx=[*** full scan ***]
     cte l1 =
       Distinct project=[#0{b}]
@@ -446,7 +446,7 @@ Explained Query:
               Filter (#1{b}) IS NOT NULL
                 ReadStorage materialize.public.mv
   Return
-    Project (#2, #4)
+    Project (#2{a}, #4{a})
       Join on=(#0{b} = #1{b} = #3{b}) type=delta
         ArrangeBy keys=[[#0{b}]]
           Get l0
@@ -498,7 +498,7 @@ Explained Query:
         Get l0
     cte l2 =
       ArrangeBy keys=[[#0{b}]]
-        Project (#1)
+        Project (#1{b})
           Get l0
     cte l3 =
       Project (#0{a}..=#2{a})
@@ -516,11 +516,11 @@ Explained Query:
                 Get l2
                 ArrangeBy keys=[[#0{b}]]
                   Distinct project=[#0{b}]
-                    Project (#1)
+                    Project (#1{b})
                       Get l3
           Project ()
             ReadIndex on=t t_a_idx=[*** full scan ***]
-      Project (#0{a}, #2)
+      Project (#0{a}, #2{a})
         Get l3
 
 Used Indexes:
@@ -659,7 +659,7 @@ Explained Query:
       ArrangeBy keys=[[]]
         Get l0
     cte l2 =
-      Project (#0{a}, #1{b}, #3)
+      Project (#0{a}, #1{b}, #3{max})
         Filter (#0{a} != #3{max})
           Join on=(#0{a} = #2{a}) type=differential
             ArrangeBy keys=[[#0{a}]]
@@ -672,7 +672,7 @@ Explained Query:
                       Get l0
                   Get l1
   Return
-    Project (#0{a}..=#2{max}, #4)
+    Project (#0{a}..=#2{max}, #4{max})
       Filter (#0{a} != #4{max})
         Join on=(#0{a} = #3{a}) type=differential
           ArrangeBy keys=[[#0{a}]]
@@ -735,12 +735,12 @@ Explained Query:
       ArrangeBy keys=[[#1{b}]]
         Get l0
   Return
-    Project (#0{a}, #2)
+    Project (#0{a}, #2{a})
       Join on=(#1{b} = #3{b} = #4{b}) type=delta
         Get l1
         Get l1
         ArrangeBy keys=[[#0{b}]]
-          Project (#1)
+          Project (#1{b})
             Get l0
 
 Used Indexes:
@@ -936,10 +936,10 @@ WHERE a = 0
 GROUP BY a
 ----
 Explained Query:
-  Project (#1{max_b}, #0)
+  Project (#1, #0{max_b})
     Map (0)
       Reduce aggregates=[max(#0{b})]
-        Project (#1)
+        Project (#1{b})
           ReadIndex on=materialize.public.t t_a_idx=[lookup value=(0)]
 
 Used Indexes:
