@@ -24,9 +24,12 @@ use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 use pprof_util::ProfStartTime;
 use tikv_jemalloc_ctl::{epoch, stats};
 
+// TODO: Only set leak profiliing in CI, not in production, need to have a flag, or can we
+// overwrite the malloc_conf from the outside?
 #[allow(non_upper_case_globals)]
 #[export_name = "malloc_conf"]
-pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
+pub static malloc_conf: &[u8] =
+    b"prof_leak:true,prof_final:true,lg_prof_sample:0\0";
 
 #[derive(Copy, Clone, Debug)]
 pub struct JemallocProfMetadata {

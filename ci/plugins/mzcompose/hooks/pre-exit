@@ -132,6 +132,10 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -z "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_
     fi
 fi
 
+find . -name 'jeprof*.heap' | while read -r i; do
+    buildkite-agent artifact upload "$i"
+done
+
 if [ "$CI_ANNOTATE_ERRORS_RESULT" -ne 0 ]; then
   echo "+++ ci-annotate-errors failed, which indicates that an unknown error was found"
   exit "$CI_ANNOTATE_ERRORS_RESULT"
