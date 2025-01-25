@@ -58,8 +58,11 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
-use mz_sql::plan::{ConnectionDetails, NetworkPolicyRule, StatementContext};
+use mz_sql::plan::{
+    ConnectionDetails, NetworkPolicyRule, ReadThenWriteFormat, SelectOutput, StatementContext,
+};
 use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
+use mz_storage_client::client::TableData;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::GenericSourceConnection;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -2871,16 +2874,18 @@ impl Coordinator {
         } = plan;
 
         // Read then writes can be queued, so re-verify the id exists.
-        let desc = match self.catalog().try_get_entry(&id) {
+        let (desc, collection_id) = match self.catalog().try_get_entry(&id) {
             Some(table) => {
                 let full_name = self
                     .catalog()
                     .resolve_full_name(table.name(), Some(ctx.session().conn_id()));
                 // Inserts always occur at the latest version of the table.
-                table
+                let gid = table.latest_global_id();
+                let desc = table
                     .desc_latest(&full_name)
                     .expect("desc called on table")
-                    .into_owned()
+                    .into_owned();
+                (desc, gid)
             }
             None => {
                 ctx.retire(Err(AdapterError::Catalog(
@@ -2993,6 +2998,29 @@ impl Coordinator {
             session,
             Default::default(),
         );
+
+        let style = ExprPrepStyle::OneShot {
+            logical_time: EvalTime::NotAvailable,
+            session: peek_ctx.session(),
+            catalog_state: self.catalog().state(),
+        };
+        for expr in assignments.values_mut() {
+            return_if_err!(prep_scalar_expr(expr, style.clone()), peek_ctx);
+        }
+        let mutation_kind = match kind {
+            MutationKind::Insert => mz_expr::MutationKind::Insert,
+            MutationKind::Update => mz_expr::MutationKind::Update {
+                assignments: assignments.clone(),
+            },
+            MutationKind::Delete => mz_expr::MutationKind::Delete,
+        };
+        let output = SelectOutput::ReadThenWrite(ReadThenWriteFormat {
+            collection_id,
+            mutation_kind,
+            // TODO(parkmycar): This is wrong.
+            from_desc: desc.clone(),
+        });
+
         self.sequence_peek(
             peek_ctx,
             plan::SelectPlan {
@@ -3000,7 +3028,7 @@ impl Coordinator {
                 source: selection,
                 when: QueryWhen::FreshestTableWrite,
                 finishing,
-                copy_to: None,
+                output,
             },
             TargetCluster::Active,
             None,
@@ -3098,40 +3126,68 @@ impl Coordinator {
                     }
                     Ok(diffs)
                 };
-            let diffs = match peek_response {
-                ExecuteResponse::SendingRows { future: batch, .. } => {
-                    // TODO(jkosh44): This timeout should be removed;
-                    // we should instead periodically ensure clusters are
-                    // healthy and actively cancel any work waiting on unhealthy
-                    // clusters.
-                    match tokio::time::timeout(timeout_dur, batch).await {
-                        Ok(res) => match res {
-                            PeekResponseUnary::Rows(rows) => make_diffs(rows),
-                            PeekResponseUnary::Canceled => Err(AdapterError::Canceled),
-                            PeekResponseUnary::Error(e) => {
-                                Err(AdapterError::Unstructured(anyhow!(e)))
+            let diffs =
+                match peek_response {
+                    ExecuteResponse::SendingRows { future: batch, .. } => {
+                        // TODO(jkosh44): This timeout should be removed;
+                        // we should instead periodically ensure clusters are
+                        // healthy and actively cancel any work waiting on unhealthy
+                        // clusters.
+                        match tokio::time::timeout(timeout_dur, batch).await {
+                            Ok(res) => match res {
+                                PeekResponseUnary::Rows(rows) => make_diffs(rows),
+                                PeekResponseUnary::Batches(resp) => {
+                                    let _ = ctx.session_mut().take_transaction_timestamp_context();
+                                    // TODO(parkmycar): This needs to be majorly refactored.
+                                    let row_count: i64 = resp
+                                        .iter()
+                                        .filter_map(|b| b.batch.as_ref())
+                                        .flat_map(|b| &b.parts)
+                                        .filter_map(|p| p.diffs_sum)
+                                        .sum();
+                                    let row_count = u64::try_from(row_count)
+                                        .expect("inserted a negative amount of rows?");
+
+                                    let stage_write = ctx.session_mut().add_transaction_ops(
+                                        TransactionOps::Writes(vec![WriteOp {
+                                            id,
+                                            rows: TableData::Batches(resp.into()),
+                                        }]),
+                                    );
+                                    if let Err(err) = stage_write {
+                                        ctx.retire(Err(err));
+                                    } else {
+                                        ctx.retire(Ok(ExecuteResponse::Inserted(
+                                            usize::cast_from(row_count),
+                                        )));
+                                    }
+                                    return;
+                                }
+                                PeekResponseUnary::Canceled => Err(AdapterError::Canceled),
+                                PeekResponseUnary::Error(e) => {
+                                    Err(AdapterError::Unstructured(anyhow!(e)))
+                                }
+                            },
+                            Err(_) => {
+                                // We timed out, so remove the pending peek. This is
+                                // best-effort and doesn't guarantee we won't
+                                // receive a response.
+                                // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
+                                let result = internal_cmd_tx.send(Message::CancelPendingPeeks {
+                                    conn_id: ctx.session().conn_id().clone(),
+                                });
+                                if let Err(e) = result {
+                                    warn!("internal_cmd_rx dropped before we could send: {:?}", e);
+                                }
+                                Err(AdapterError::StatementTimeout)
                             }
-                        },
-                        Err(_) => {
-                            // We timed out, so remove the pending peek. This is
-                            // best-effort and doesn't guarantee we won't
-                            // receive a response.
-                            // It is not an error for this timeout to occur after `internal_cmd_rx` has been dropped.
-                            let result = internal_cmd_tx.send(Message::CancelPendingPeeks {
-                                conn_id: ctx.session().conn_id().clone(),
-                            });
-                            if let Err(e) = result {
-                                warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                            }
-                            Err(AdapterError::StatementTimeout)
                         }
                     }
-                }
-                ExecuteResponse::SendingRowsImmediate { rows } => make_diffs(rows),
-                resp => Err(AdapterError::Unstructured(anyhow!(
-                    "unexpected peek response: {resp:?}"
-                ))),
-            };
+                    ExecuteResponse::SendingRowsImmediate { rows } => make_diffs(rows),
+                    resp => Err(AdapterError::Unstructured(anyhow!(
+                        "unexpected peek response: {resp:?}"
+                    ))),
+                };
             let mut returning_rows = Vec::new();
             let mut diff_err: Option<AdapterError> = None;
             if !returning.is_empty() && diffs.is_ok() {

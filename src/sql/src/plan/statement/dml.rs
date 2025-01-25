@@ -53,7 +53,7 @@ use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::{
     self, side_effecting_func, transform_ast, CopyFromFilter, CopyToPlan, CreateSinkPlan,
-    ExplainPushdownPlan, ExplainSinkSchemaPlan, ExplainTimestampPlan,
+    ExplainPushdownPlan, ExplainSinkSchemaPlan, ExplainTimestampPlan, SelectOutput,
 };
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
@@ -234,6 +234,10 @@ fn plan_select_inner(
             }
         }
     };
+    let output = match copy_to {
+        None => SelectOutput::Rows,
+        Some(copy_to) => SelectOutput::CopyTo(copy_to),
+    };
 
     let plan = SelectPlan {
         source: expr,
@@ -244,7 +248,7 @@ fn plan_select_inner(
             project: finishing.project,
             order_by: finishing.order_by,
         },
-        copy_to,
+        output,
         select: Some(Box::new(select)),
     };
 

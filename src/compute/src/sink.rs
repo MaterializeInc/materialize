@@ -12,6 +12,7 @@ mod correction;
 mod correction_v2;
 mod materialized_view;
 mod materialized_view_v2;
+mod persist_batches;
 mod refresh;
 mod subscribe;
 

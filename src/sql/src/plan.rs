@@ -856,8 +856,28 @@ pub struct SelectPlan {
     pub when: QueryWhen,
     /// Instructions how to form the result set.
     pub finishing: RowSetFinishing,
-    /// For `COPY TO`, the format to use.
-    pub copy_to: Option<CopyFormat>,
+    /// Defines where we should output these results to.
+    pub output: SelectOutput,
+}
+
+#[derive(Clone, Debug)]
+pub enum SelectOutput {
+    /// Return a collection of Rows in-memory.
+    Rows,
+    /// Stage batches in Persist that we'll link (write) into a shard.
+    ReadThenWrite(ReadThenWriteFormat),
+    /// Copy out the result to some external resource, e.g. S3.
+    CopyTo(CopyFormat),
+}
+
+#[derive(Clone, Debug)]
+pub struct ReadThenWriteFormat {
+    /// The collection these batches will be appeneded to.
+    pub collection_id: GlobalId,
+    /// Description of the schema we'll be staging into Persist.
+    pub from_desc: RelationDesc,
+    /// Kind of mutation we're making for this read-then-write query.
+    pub mutation_kind: mz_expr::MutationKind,
 }
 
 #[derive(Debug)]

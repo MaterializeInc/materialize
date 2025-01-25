@@ -15,6 +15,7 @@ use mz_compute_types::plan::LirId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::batch::ProtoBatch;
 use mz_proto::{any_uuid, IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_timely_util::progress::any_antichain;
@@ -324,6 +325,8 @@ impl Arbitrary for FrontiersResponse {
 pub enum PeekResponse {
     /// Returned rows of a successful peek.
     Rows(RowCollection),
+    /// Results of the peek were sinked into a Persist Batch.
+    Staged(StagedPeekResponse),
     /// Error of an unsuccessful peek.
     Error(String),
     /// The peek was canceled.
@@ -336,6 +339,7 @@ impl RustType<ProtoPeekResponse> for PeekResponse {
         ProtoPeekResponse {
             kind: Some(match self {
                 PeekResponse::Rows(rows) => Rows(rows.into_proto()),
+                PeekResponse::Staged(staged) => Staged(staged.into_proto()),
                 PeekResponse::Error(err) => proto_peek_response::Kind::Error(err.clone()),
                 PeekResponse::Canceled => Canceled(()),
             }),
@@ -346,6 +350,7 @@ impl RustType<ProtoPeekResponse> for PeekResponse {
         use proto_peek_response::Kind::*;
         match proto.kind {
             Some(Rows(rows)) => Ok(PeekResponse::Rows(rows.into_rust()?)),
+            Some(Staged(staged)) => Ok(PeekResponse::Staged(staged.into_rust()?)),
             Some(proto_peek_response::Kind::Error(err)) => Ok(PeekResponse::Error(err)),
             Some(Canceled(())) => Ok(PeekResponse::Canceled),
             None => Err(TryFromProtoError::missing_field("ProtoPeekResponse::kind")),
@@ -371,6 +376,27 @@ impl Arbitrary for PeekResponse {
             ".*".prop_map(PeekResponse::Error).boxed(),
             Just(PeekResponse::Canceled).boxed(),
         ])
+    }
+}
+
+/// Response from a Peek whose results have been staged into Persist.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StagedPeekResponse {
+    /// Results of a peek that are staged in Persist.
+    pub staged_batches: Vec<ProtoBatch>,
+}
+
+impl RustType<ProtoStagedPeekResponse> for StagedPeekResponse {
+    fn into_proto(&self) -> ProtoStagedPeekResponse {
+        ProtoStagedPeekResponse {
+            staged_batches: self.staged_batches.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoStagedPeekResponse) -> Result<Self, TryFromProtoError> {
+        Ok(StagedPeekResponse {
+            staged_batches: proto.staged_batches,
+        })
     }
 }
 

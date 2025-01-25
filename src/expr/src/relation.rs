@@ -3625,6 +3625,56 @@ impl JoinInputCharacteristicsV1 {
     }
 }
 
+/// Kind of mutation for a Read-then-Write query.
+#[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MutationKind {
+    /// `INSERT`
+    Insert,
+    /// `UPDATE`
+    Update {
+        /// Columns to update.
+        assignments: BTreeMap<usize, MirScalarExpr>,
+    },
+    /// `DELETE`
+    Delete,
+}
+
+impl RustType<ProtoMutationKind> for MutationKind {
+    fn into_proto(&self) -> ProtoMutationKind {
+        match self {
+            MutationKind::Insert => ProtoMutationKind {
+                kind: Some(proto_mutation_kind::Kind::Insert(())),
+            },
+            MutationKind::Update { assignments } => {
+                let update = proto_mutation_kind::Update {
+                    assignments: assignments
+                        .iter()
+                        .map(|a| proto_mutation_kind::Assignment {
+                            column: u64::cast_from(*a.0),
+                            expr: Some(a.1.into_proto()),
+                        })
+                        .collect(),
+                };
+                ProtoMutationKind {
+                    kind: Some(proto_mutation_kind::Kind::Update(update)),
+                }
+            }
+            MutationKind::Delete => ProtoMutationKind {
+                kind: Some(proto_mutation_kind::Kind::Delete(())),
+            },
+        }
+    }
+
+    fn from_proto(proto: ProtoMutationKind) -> Result<Self, TryFromProtoError> {
+        match proto.kind {
+            Some(proto_mutation_kind::Kind::Insert(())) => Ok(MutationKind::Insert),
+            Some(proto_mutation_kind::Kind::Update(_)) => todo!("update"),
+            Some(proto_mutation_kind::Kind::Delete(())) => Ok(MutationKind::Delete),
+            None => Err(TryFromProtoError::missing_field("ProtoMutationKind::kind")),
+        }
+    }
+}
+
 /// Instructions for finishing the result of a query.
 ///
 /// The primary reason for the existence of this structure and attendant code

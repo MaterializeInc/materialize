@@ -623,7 +623,7 @@ impl<M> PeekMetrics<M> {
         use PeekResponse::*;
 
         match response {
-            Rows(_) => &self.rows,
+            Rows(_) | Staged(_) => &self.rows,
             Error(_) => &self.error,
             Canceled => &self.canceled,
         }

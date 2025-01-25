@@ -26,7 +26,7 @@ use mz_compute_client::protocol::command::{
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
-    StatusResponse, SubscribeResponse,
+    StagedPeekResponse, StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::render_plan::RenderPlan;
@@ -97,6 +97,10 @@ pub struct ComputeState {
     /// The entries are pairs of sink identifier (to identify the s3 oneshot instance)
     /// and the response itself.
     pub copy_to_response_buffer: Rc<RefCell<Vec<(GlobalId, CopyToResponse)>>>,
+    /// Shared buffer with Persist Batch Sink operator instances which they use to respond.
+    ///
+    /// The entires are pairs of sink identifier and the response itself.
+    pub staged_peek_reponse_buffer: Rc<RefCell<BTreeMap<GlobalId, StagedPeekResponse>>>,
     /// Peek commands that are awaiting fulfillment.
     pub pending_peeks: BTreeMap<Uuid, PendingPeek>,
     /// The logger, from Timely's logging framework, if logs are enabled.
@@ -200,6 +204,7 @@ impl ComputeState {
             traces,
             subscribe_response_buffer: Default::default(),
             copy_to_response_buffer: Default::default(),
+            staged_peek_reponse_buffer: Default::default(),
             pending_peeks: Default::default(),
             compute_logger: None,
             persist_clients,
@@ -520,6 +525,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         let subscribe_copy_ids: BTreeSet<_> = dataflow
             .subscribe_ids()
             .chain(dataflow.copy_to_ids())
+            // TODO(parkmycar): It feels like we shouldn't be doing this.
+            .chain(dataflow.sink_peek_ids())
             .collect();
 
         // Initialize compute and logging state for each object.
@@ -597,6 +604,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 let trace_bundle = self.compute_state.traces.get(id).unwrap().clone();
                 PendingPeek::index(peek, trace_bundle)
             }
+            PeekTarget::Sinked { select_id } => {
+                let sink_id = select_id.clone();
+                PendingPeek::sinked(peek, sink_id)
+            }
             PeekTarget::Persist { metadata, .. } => {
                 let metadata = metadata.clone();
                 PendingPeek::persist(
@@ -619,6 +630,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
     fn handle_cancel_peek(&mut self, uuid: Uuid) {
         if let Some(peek) = self.compute_state.pending_peeks.remove(&uuid) {
+            if let PendingPeek::Sinked(sinked) = &peek {
+                self.compute_state.collections.remove(&sinked.sink_id);
+            }
             self.send_peek_response(peek, PeekResponse::Canceled);
         }
     }
@@ -863,6 +877,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             PendingPeek::Index(peek) => {
                 peek.seek_fulfillment(upper, self.compute_state.max_result_size)
             }
+            PendingPeek::Sinked(peek) => {
+                let mut borrow = self.compute_state.staged_peek_reponse_buffer.borrow_mut();
+                borrow.remove(&peek.sink_id).map(PeekResponse::Staged)
+            }
             PendingPeek::Persist(peek) => peek.result.try_recv().ok().map(|(result, duration)| {
                 self.compute_state
                     .metrics
@@ -1029,6 +1047,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 pub enum PendingPeek {
     /// A peek against an index. (Possibly a temporary index created for the purpose.)
     Index(IndexPeek),
+    /// A peek whose result has been sinked into Persist Batches.
+    Sinked(SinkedPeek),
     /// A peek against a Persist-backed collection.
     Persist(PersistPeek),
 }
@@ -1039,6 +1059,7 @@ impl PendingPeek {
         let peek = self.peek();
         let (id, peek_type) = match &peek.target {
             PeekTarget::Index { id } => (id, logging::compute::PeekType::Index),
+            PeekTarget::Sinked { select_id } => (select_id, logging::compute::PeekType::Sinked),
             PeekTarget::Persist { id, .. } => (id, logging::compute::PeekType::Persist),
         };
         ComputeEvent::Peek(PeekEvent {
@@ -1069,6 +1090,15 @@ impl PendingPeek {
             trace_bundle,
             span: tracing::Span::current(),
         })
+    }
+
+    fn sinked(peek: Peek, sink_id: GlobalId) -> Self {
+        let sinked = SinkedPeek {
+            peek,
+            sink_id,
+            span: tracing::Span::current(),
+        };
+        PendingPeek::Sinked(sinked)
     }
 
     fn persist<A: Allocate>(
@@ -1140,6 +1170,7 @@ impl PendingPeek {
     fn span(&self) -> &tracing::Span {
         match self {
             PendingPeek::Index(p) => &p.span,
+            PendingPeek::Sinked(p) => &p.span,
             PendingPeek::Persist(p) => &p.span,
         }
     }
@@ -1147,6 +1178,7 @@ impl PendingPeek {
     pub(crate) fn peek(&self) -> &Peek {
         match self {
             PendingPeek::Index(p) => &p.peek,
+            PendingPeek::Sinked(p) => &p.peek,
             PendingPeek::Persist(p) => &p.peek,
         }
     }
@@ -1540,6 +1572,15 @@ impl IndexPeek {
 
         Ok(results)
     }
+}
+
+/// A Peek whose result is being sinked into a Persist batch.
+pub struct SinkedPeek {
+    pub(crate) peek: Peek,
+    /// The GlobalId of the sink.
+    sink_id: GlobalId,
+    /// The `tracing::Span` tracking this peek's operation
+    span: tracing::Span,
 }
 
 /// The frontiers we have reported to the controller for a collection.

@@ -156,6 +156,9 @@ where
             ComputeSinkConnection::CopyToS3Oneshot(_) => {
                 format!("CopyToS3OneshotSink({:?})", sink_id)
             }
+            ComputeSinkConnection::PersistBatches(_) => {
+                format!("PersistBatchesSink({:?})", sink_id)
+            }
         };
         self.scope
             .parent
@@ -215,5 +218,6 @@ where
         ComputeSinkConnection::MaterializedView(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::ContinualTask(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::CopyToS3Oneshot(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::PersistBatches(connection) => Box::new(connection.clone()),
     }
 }

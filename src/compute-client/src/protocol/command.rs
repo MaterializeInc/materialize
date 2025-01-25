@@ -537,6 +537,10 @@ pub enum PeekTarget {
         /// The id of the (possibly transient) index.
         id: GlobalId,
     },
+    Sinked {
+        /// ID of the dataflow created for the peek.
+        select_id: GlobalId,
+    },
     /// This peek is against a Persist collection.
     Persist {
         /// The id of the backing Persist collection.
@@ -551,6 +555,7 @@ impl PeekTarget {
     pub fn id(&self) -> GlobalId {
         match self {
             Self::Index { id } => *id,
+            Self::Sinked { select_id, .. } => *select_id,
             Self::Persist { id, .. } => *id,
         }
     }
@@ -615,7 +620,9 @@ impl RustType<ProtoPeek> for Peek {
                 PeekTarget::Index { id } => proto_peek::Target::Index(ProtoIndexTarget {
                     id: Some(id.into_proto()),
                 }),
-
+                PeekTarget::Sinked { select_id } => proto_peek::Target::Sinked(ProtoSinkedTarget {
+                    id: Some(select_id.into_proto()),
+                }),
                 PeekTarget::Persist { id, metadata } => {
                     proto_peek::Target::Persist(ProtoPersistTarget {
                         id: Some(id.into_proto()),
@@ -646,6 +653,9 @@ impl RustType<ProtoPeek> for Peek {
             target: match x.target {
                 Some(proto_peek::Target::Index(target)) => PeekTarget::Index {
                     id: target.id.into_rust_if_some("ProtoIndexTarget::id")?,
+                },
+                Some(proto_peek::Target::Sinked(target)) => PeekTarget::Sinked {
+                    select_id: target.id.into_rust_if_some("ProtoSinkedTarget::id")?,
                 },
                 Some(proto_peek::Target::Persist(target)) => PeekTarget::Persist {
                     id: target.id.into_rust_if_some("ProtoPersistTarget::id")?,

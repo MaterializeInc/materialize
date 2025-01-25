@@ -36,6 +36,7 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{separated, StrExt};
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::batch::ProtoBatch;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
 use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator};
@@ -44,6 +45,7 @@ use timely::progress::Timestamp;
 use uuid::Uuid;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
+use crate::optimize::peek::PeekOutput;
 use crate::optimize::OptimizerError;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
@@ -72,6 +74,7 @@ pub(crate) struct PendingPeek {
 #[derive(Debug)]
 pub enum PeekResponseUnary {
     Rows(Box<dyn RowIterator + Send + Sync>),
+    Batches(Vec<ProtoBatch>),
     Error(String),
     Canceled,
 }
@@ -79,7 +82,7 @@ pub enum PeekResponseUnary {
 #[derive(Clone, Debug)]
 pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
     pub(crate) desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
-    pub(crate) id: GlobalId,
+    pub(crate) output: PeekOutput,
     key: Vec<MirScalarExpr>,
     permutation: Vec<usize>,
     thinned_arity: usize,
@@ -88,7 +91,7 @@ pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
 impl<T> PeekDataflowPlan<T> {
     pub fn new(
         desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
-        id: GlobalId,
+        output: PeekOutput,
         typ: &RelationType,
     ) -> Self {
         let arity = typ.arity();
@@ -100,7 +103,7 @@ impl<T> PeekDataflowPlan<T> {
         let (permutation, thinning) = permutation_for_arrangement(&key, arity);
         Self {
             desc,
-            id,
+            output,
             key,
             permutation,
             thinned_arity: thinning.len(),
@@ -559,12 +562,14 @@ impl crate::coord::Coordinator {
                 // n.b. this index_id identifies a transient index the
                 // caller created, so it is guaranteed to be on
                 // `compute_instance`.
-                id: index_id,
+                //
+                // TODO(parkmycar): Update this comment.
+                output,
                 key: index_key,
                 permutation: index_permutation,
                 thinned_arity: index_thinned_arity,
             }) => {
-                let output_ids = dataflow.export_ids().collect();
+                let output_ids = dataflow.exported_index_ids().collect();
 
                 // Very important: actually create the dataflow (here, so we can destructure).
                 self.controller
@@ -579,6 +584,15 @@ impl crate::coord::Coordinator {
                 )
                 .await;
 
+                let (target, index_id) = match output {
+                    PeekOutput::Index {
+                        transient_id: index_id,
+                    } => (PeekTarget::Index { id: index_id }, Some(index_id)),
+                    PeekOutput::ReadThenWrite { sink_id, .. } => {
+                        (PeekTarget::Sinked { select_id: sink_id }, None)
+                    }
+                };
+
                 // Create an identity MFP operator.
                 let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
                 map_filter_project.permute_fn(
@@ -588,9 +602,9 @@ impl crate::coord::Coordinator {
                 let map_filter_project = mfp_to_safe_plan(map_filter_project)?;
                 (
                     (None, timestamp, map_filter_project),
-                    Some(index_id),
+                    index_id,
                     false,
-                    PeekTarget::Index { id: index_id },
+                    target,
                     StatementExecutionStrategy::Standard,
                 )
             }
@@ -657,6 +671,9 @@ impl crate::coord::Coordinator {
                         Ok((rows, _size_bytes)) => PeekResponseUnary::Rows(Box::new(rows)),
                         Err(e) => PeekResponseUnary::Error(e),
                     }
+                }
+                PeekResponse::Staged(response) => {
+                    PeekResponseUnary::Batches(response.staged_batches)
                 }
                 PeekResponse::Canceled => PeekResponseUnary::Canceled,
                 PeekResponse::Error(e) => PeekResponseUnary::Error(e),

@@ -957,6 +957,20 @@ impl ResultSender for WebSocket {
                                 }
                             }
                         }
+                        Some(PeekResponseUnary::Batches(_)) => {
+                            let msg = "unexpected staged response";
+                            let err = Error::Unstructured(anyhow!("{msg}")).into();
+                            break (
+                                true,
+                                vec![WebSocketResponse::Error(err)],
+                                Some((
+                                    StatementEndedExecutionReason::Errored {
+                                        error: msg.to_string(),
+                                    },
+                                    ctx_extra,
+                                )),
+                            );
+                        }
                         Some(PeekResponseUnary::Error(error)) => {
                             break (
                                 true,
@@ -1470,6 +1484,10 @@ async fn execute_stmt<S: ResultSender>(
                         Some(strategy),
                     );
                     rows
+                }
+                PeekResponseUnary::Batches(_) => {
+                    let msg = "unexpected staged response";
+                    return Ok(SqlResult::err(client, Error::Unstructured(anyhow!("{msg}"))).into());
                 }
                 PeekResponseUnary::Error(e) => {
                     return Ok(SqlResult::err(client, Error::Unstructured(anyhow!(e))).into());
