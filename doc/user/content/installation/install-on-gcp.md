@@ -22,7 +22,7 @@ Self-managed Materialize requires:
 
 The Terraform modules used in this tutorial are provided for
 demonstration/evaluation purposes only and not intended for production use.
-Materialize does not support nor recommends these modules for production use.
+Materialize does not support nor recommend these modules for production use.
 
 {{< /warning >}}
 
@@ -85,9 +85,9 @@ documentation](https://helm.sh/docs/intro/install/).
 
 {{< /warning >}}
 
-Materialize provides a [sample Terraform
-module](https://github.com/MaterializeInc/terraform-google-materialize) for
-evaluation purposes only. The module deploys a sample infrastructure on GCP
+Materialize provides [sample Terraform
+modules](https://github.com/MaterializeInc/terraform-google-materialize) for
+evaluation purposes only. The modules deploy a sample infrastructure on GCP
 (region `us-central1`) with the following components:
 
 - Google Kubernetes Engine (GKE) cluster
@@ -98,8 +98,17 @@ evaluation purposes only. The module deploys a sample infrastructure on GCP
 - Materialize Operator
 - Materialize instances (during subsequent runs after the Operator is running)
 
-For details on the sample infrastructure (such as the EKS cluster size, region,
-etc.), see the [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/examples/simple/main.tf).
+{{< tip >}}
+The tutorial uses the module found in the `examples/simple/`
+directory, which requires minimal user input. For more configuration options,
+you can run the modules at the [root of the
+repository](https://github.com/MaterializeInc/terraform-google-materialize/)
+instead.
+
+For details on the  `examples/simple/` infrastructure configuration (such as the
+node instance type, etc.), see the
+[examples/simple/main.tf](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/examples/simple/main.tf).
+{{< /tip >}}
 
 1. Enable the following services for your GCP project:
 
@@ -180,17 +189,17 @@ etc.), see the [examples/simple/main.tf](https://github.com/MaterializeInc/terra
 
 1. Clone the [Materialize's sample Terraform
    repo](https://github.com/MaterializeInc/terraform-google-materialize) and
-   checkout the `v0.1.1` tag.
+   checkout the `v0.1.2` tag.
 
    {{< tabs >}}
    {{< tab "Clone via SSH" >}}
    ```bash
-   git clone --depth 1 -b v0.1.1 git@github.com:MaterializeInc/terraform-google-materialize.git
+   git clone --depth 1 -b v0.1.2 git@github.com:MaterializeInc/terraform-google-materialize.git
    ```
    {{< /tab >}}
    {{< tab "Clone via HTTPS" >}}
    ```bash
-   git clone --depth 1 -b v0.1.1 https://github.com/MaterializeInc/terraform-google-materialize.git
+   git clone --depth 1 -b v0.1.2 https://github.com/MaterializeInc/terraform-google-materialize.git
    ```
    {{< /tab >}}
    {{< /tabs >}}
@@ -202,6 +211,17 @@ etc.), see the [examples/simple/main.tf](https://github.com/MaterializeInc/terra
    cd terraform-google-materialize/examples/simple
    ```
 
+   {{< tip >}}
+   The tutorial uses the module found in the `examples/simple/` directory, which
+   requires minimal user input. For more configuration options, you can run the
+   modules at the [root of the
+   repository](https://github.com/MaterializeInc/terraform-google-materialize/)
+   instead.
+
+   For details on the  `examples/simple/` infrastructure configuration (such as
+   the node instance type, etc.), see the [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/examples/simple/main.tf).
+   {{< /tip >}}
+
 1. Create a `terraform.tfvars` file (you can copy from the
    `terraform.tfvars.example` file) and specify:
 
@@ -209,9 +229,12 @@ etc.), see the [examples/simple/main.tf](https://github.com/MaterializeInc/terra
 
    -  A secure password for the Cloud SQL PostgreSQL database (to be created).
 
+   -  The region for the GKE cluster.
+
    ```bash
    project_id = "enter-your-gcp-project-id"
    database_password  = "enter-secure-password"
+   region = "us-central1"
    ```
 
 1. Initialize the terraform directory.
@@ -301,53 +324,45 @@ etc.), see the [examples/simple/main.tf](https://github.com/MaterializeInc/terra
    replicaset.apps/materialize-mz-simple-materialize-operator-74d8f549d6       1         1         1       36m
     ```
 
-1. To deploy Materialize instances, modify the `main.tf` file to include the
-   Materialize instance configuration; that is, uncomment out the
-   `materialize_instances` block. In the array, you can uncomment out one or
-   both of the `analytics` and `demo` instances (or provide your own instances).
+1. Once the Materialize operator is deployed and running, you can deploy the
+   Materialize instances. To deploy Materialize instances, create a
+   `mz_instances.tfvars` file with the Materialize instance configuration.
 
-   For example, to deploy the `demo` instance, uncomment out the following:
+   For example, the following specifies the configuration for a `demo` instance.
 
    ```bash
-   # Once the operator is installed, you can define your Materialize instances  here.
-   # Uncomment the following block (or provide your own instances) to configure  them.
+   cat <<EOF > mz_instances.tfvars
+
    materialize_instances = [
-   #   {
-   #     name           = "analytics"
-   #     namespace      = "materialize-environment"
-   #     database_name  = "analytics_db"
-   #     cpu_request    = "1"
-   #     memory_request = "4Gi"
-   #     memory_limit   = "4Gi"
-   #   },
-     {
-        name           = "demo"
-        namespace      = "materialize-environment"
-        database_name  = "demo_db"
-        cpu_request    = "2"
-        memory_request = "8Gi"
-        memory_limit   = "8Gi"
-      }
+       {
+         name           = "demo"
+         namespace      = "materialize-environment"
+         database_name  = "demo_db"
+         cpu_request    = "2"
+         memory_request = "8Gi"
+         memory_limit   = "8Gi"
+       }
    ]
+   EOF
    ```
 
-1. Create a terraform plan and review the changes.
+1. Create a terraform plan with both `.tfvars` files and review the changes.
 
-    ```bash
-    terraform plan -out my-plan.tfplan
-    ```
+   ```bash
+   terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars -out my-plan.tfplan
+   ```
 
-    The plan should show the changes to be made, with a summary similar to the
-    following:
+   The plan should show the changes to be made, with a summary similar to the
+   following:
 
-    ```
-    Plan: 4 to add, 0 to change, 0 to destroy.
+   ```
+   Plan: 4 to add, 0 to change, 0 to destroy.
 
-    Saved the plan to: my-plan.tfplan
+   Saved the plan to: my-plan.tfplan
 
-    To perform exactly these actions, run the following command to apply:
-    terraform apply "my-plan.tfplan"
-    ```
+   To perform exactly these actions, run the following command to apply:
+   terraform apply "my-plan.tfplan"
+   ```
 
 1. If you are satisfied with the changes, apply the terraform plan.
 
@@ -366,7 +381,7 @@ etc.), see the [examples/simple/main.tf](https://github.com/MaterializeInc/terra
    gke_cluster = <sensitive>
    service_accounts = {
      "gke_sa" = "mz-simple-gke-sa@mz-scratch.iam.gserviceaccount.com"
-     "materialize_sa" = "mz-simple-materialize-sa@mz-scratch.iam.gserviceaccount.   com"
+     "materialize_sa" = "mz-simple-materialize-sa@mz-scratch.iam.gserviceaccount.com"
    }
    ```
 
@@ -446,7 +461,7 @@ etc.), see the [examples/simple/main.tf](https://github.com/MaterializeInc/terra
       {{< /note >}}
 
    1. Open a browser and navigate to
-      [http://localhost:8080](http://localhost:8080).
+      [http://localhost:8080](http://localhost:8080). From the Console, you can get started with the Quickstart.
 
 ## Troubleshooting
 
@@ -471,10 +486,6 @@ kubectl get pvc -A
 
 ## Cleanup
 
-Delete the Materialize environment:
-```bash
-kubectl delete -f materialize-environment.yaml
-```
 
 To uninstall the Materialize operator:
 ```bash
