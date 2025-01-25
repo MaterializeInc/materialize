@@ -113,17 +113,17 @@ ORDER BY
 ----
 Explained Query:
   Finish order_by=[#1{first_name} asc nulls_last, #4{preference} asc nulls_last] output=[#1, #3]
-    Project (#0{id}..=#2{allowance}, #5, #6) // { arity: 5 }
+    Project (#0{id}..=#2{allowance}, #5{fruit}, #6{preference}) // { arity: 5 }
       Join on=(#0{id} = #3{id} AND #2{allowance} = #4{allowance}) type=differential // { arity: 7 }
         ArrangeBy keys=[[#0{id}, #2{allowance}]] // { arity: 3 }
           ReadStorage materialize.public.people // { arity: 3 }
         ArrangeBy keys=[[#0{id}, #1{allowance}]] // { arity: 4 }
           TopK group_by=[#0{id}, #1{allowance}] order_by=[#3{preference} asc nulls_last] limit=integer_to_bigint(#1{allowance}) offset=1 // { arity: 4 }
-            Project (#0{id}, #1{allowance}, #3{preference}, #4) // { arity: 4 }
+            Project (#0{id}, #1{allowance}, #3{fruit}, #4{preference}) // { arity: 4 }
               Join on=(#0{id} = #2{person_id}) type=differential // { arity: 5 }
                 ArrangeBy keys=[[#0{id}]] // { arity: 2 }
                   Distinct project=[#0{id}, #1{allowance}] // { arity: 2 }
-                    Project (#0{id}, #2) // { arity: 2 }
+                    Project (#0{id}, #2{allowance}) // { arity: 2 }
                       Filter (#0{id}) IS NOT NULL // { arity: 3 }
                         ReadStorage materialize.public.people // { arity: 3 }
                 ArrangeBy keys=[[#0{person_id}]] // { arity: 3 }
@@ -168,10 +168,10 @@ ORDER BY
 ----
 Explained Query:
   Finish order_by=[#1 asc nulls_last, #4{preference} asc nulls_last] output=[#1, #3]
-    Project (#2..=#4{preference}, #0, #1) // { arity: 5 }
+    Project (#2..=#4, #0{fruit}, #1{preference}) // { arity: 5 }
       Map (1, "frank", -4) // { arity: 5 }
         TopK order_by=[#1{preference} asc nulls_last] limit=-4 offset=1 // { arity: 2 }
-          Project (#1{preference}, #2) // { arity: 2 }
+          Project (#1{fruit}, #2{preference}) // { arity: 2 }
             Filter (#0{person_id} = 1) // { arity: 3 }
               ReadStorage materialize.public.preferred_fruits // { arity: 3 }
 
@@ -208,7 +208,7 @@ LIMIT 3;
 Explained Query:
   Finish order_by=[#0{state} asc nulls_last, #1{name} asc nulls_last] limit=3 output=[#0, #1]
     TopK group_by=[#0{state}] limit=integer_to_bigint((ascii(substr(#0{state}, 1, 1)) - 64)) // { arity: 2 }
-      Project (#1{name}, #0{state}) // { arity: 2 }
+      Project (#1{state}, #0{name}) // { arity: 2 }
         ReadStorage materialize.public.cities // { arity: 3 }
 
 Source materialize.public.cities
@@ -259,10 +259,10 @@ Explained Query:
     With
       cte l0 =
         Distinct project=[#0{state}] // { arity: 1 }
-          Project (#1) // { arity: 1 }
+          Project (#1{state}) // { arity: 1 }
             ReadStorage materialize.public.cities // { arity: 3 }
       cte l1 =
-        Project (#0{state}, #2) // { arity: 2 }
+        Project (#0{state}, #2{l}) // { arity: 2 }
           Join on=(#1{sl} = substr(#0{state}, 1, 1)) type=differential // { arity: 3 }
             ArrangeBy keys=[[substr(#0{state}, 1, 1)]] // { arity: 1 }
               Get l0 // { arity: 1 }
@@ -279,9 +279,9 @@ Explained Query:
                   Project (#0{state}) // { arity: 1 }
                     Get l1 // { arity: 2 }
     Return // { arity: 2 }
-      Project (#1{name}, #0{state}) // { arity: 2 }
+      Project (#1{state}, #0{name}) // { arity: 2 }
         TopK group_by=[#1{state}, #2{l}] order_by=[#0{name} asc nulls_last] limit=integer_to_bigint(#2{l}) // { arity: 3 }
-          Project (#0{name}, #1{state}, #3) // { arity: 3 }
+          Project (#0{name}, #1{state}, #3{l}) // { arity: 3 }
             Join on=(#1{state} = #2{state}) type=differential // { arity: 4 }
               ArrangeBy keys=[[#1{state}]] // { arity: 2 }
                 Project (#0{name}, #1{state}) // { arity: 2 }
@@ -330,7 +330,7 @@ Explained Query:
   CrossJoin type=differential // { arity: 2 }
     ArrangeBy keys=[[]] // { arity: 1 }
       Distinct project=[#0{state}] // { arity: 1 }
-        Project (#1) // { arity: 1 }
+        Project (#1{state}) // { arity: 1 }
           ReadStorage materialize.public.cities // { arity: 3 }
     ArrangeBy keys=[[]] // { arity: 1 }
       TopK limit=1 // { arity: 1 }
@@ -386,7 +386,7 @@ Explained Query:
       TopK group_by=[#1{state}] limit=integer_to_bigint((char_length(#1{state}) % 3)) // { arity: 2 }
         Get l0 // { arity: 2 }
   Return // { arity: 3 }
-    Project (#1{name}, #0{state}, #3) // { arity: 3 }
+    Project (#1{state}, #0{name}, #3{name}) // { arity: 3 }
       Join on=(#1{state} = #2{state}) type=differential // { arity: 4 }
         ArrangeBy keys=[[#1{state}]] // { arity: 2 }
           Get l1 // { arity: 2 }
@@ -396,7 +396,7 @@ Explained Query:
               Join on=(#0{state} = #2{state}) type=differential // { arity: 3 }
                 ArrangeBy keys=[[#0{state}]] // { arity: 1 }
                   Distinct project=[#0{state}] // { arity: 1 }
-                    Project (#1) // { arity: 1 }
+                    Project (#1{state}) // { arity: 1 }
                       Get l1 // { arity: 2 }
                 ArrangeBy keys=[[#1{state}]] // { arity: 2 }
                   Get l0 // { arity: 2 }
@@ -504,7 +504,7 @@ Explained Query:
   CrossJoin type=differential // { arity: 2 }
     ArrangeBy keys=[[]] // { arity: 1 }
       Distinct project=[#0{state}] // { arity: 1 }
-        Project (#1) // { arity: 1 }
+        Project (#1{state}) // { arity: 1 }
           ReadStorage materialize.public.cities // { arity: 3 }
     ArrangeBy keys=[[]] // { arity: 1 }
       Project (#0{name}) // { arity: 1 }
