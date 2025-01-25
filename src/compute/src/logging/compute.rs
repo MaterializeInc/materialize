@@ -225,6 +225,8 @@ pub enum ComputeEvent {
 pub enum PeekType {
     /// A peek against an index.
     Index,
+    /// A peek from a dataflow, sinked into Persist.
+    Sinked,
     /// A peek against persist.
     Persist,
 }
@@ -234,6 +236,7 @@ impl PeekType {
     fn name(self) -> &'static str {
         match self {
             PeekType::Index => "index",
+            PeekType::Sinked => "sinked",
             PeekType::Persist => "persist",
         }
     }

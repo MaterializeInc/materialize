@@ -1884,6 +1884,7 @@ where
                     batch = rows.remaining.recv() => match batch {
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
+                        Some(PeekResponseUnary::Batches(_)) => FetchResult::Error("unexpected staged result".to_string()),
                         Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
                     },
@@ -2068,6 +2069,19 @@ where
                                 "canceling statement due to user request",
                             ))
                             .await.map(|state| (state, SendRowsEndedReason::Canceled));
+                    }
+                    Some(PeekResponseUnary::Batches(_)) => {
+                        let msg = "unexpected staged response";
+                        let err = self
+                            .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, msg))
+                            .await
+                            .map(|state| {
+                                let reason = SendRowsEndedReason::Errored {
+                                    error: msg.to_string(),
+                                };
+                                (state, reason)
+                            });
+                        return err
                     }
                     Some(PeekResponseUnary::Rows(mut rows)) => {
                         count += rows.count();

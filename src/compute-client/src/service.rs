@@ -327,6 +327,18 @@ where
                             (PeekResponse::Canceled, _) => PeekResponse::Canceled,
                             (_, PeekResponse::Error(e)) => PeekResponse::Error(e),
                             (PeekResponse::Error(e), _) => PeekResponse::Error(e),
+                            (PeekResponse::Rows(rows), PeekResponse::Staged(batches))
+                            | (PeekResponse::Staged(batches), PeekResponse::Rows(rows)) => {
+                                // By default we merge into an empty `PeekResponse::Rows`.
+                                if rows.entries() == 0 {
+                                    PeekResponse::Staged(batches)
+                                } else {
+                                    mz_ore::soft_panic_or_log!(
+                                        "got both PeekResponse Staged and Rows"
+                                    );
+                                    PeekResponse::Error("internal error".to_string())
+                                }
+                            }
                             (PeekResponse::Rows(mut rows), PeekResponse::Rows(other)) => {
                                 let total_byte_size =
                                     rows.byte_len().saturating_add(other.byte_len());
@@ -344,6 +356,10 @@ where
                                     rows.merge(&other);
                                     PeekResponse::Rows(rows)
                                 }
+                            }
+                            (PeekResponse::Staged(mut batches), PeekResponse::Staged(other)) => {
+                                batches.staged_batches.extend(other.staged_batches);
+                                PeekResponse::Staged(batches)
                             }
                         };
                     }
