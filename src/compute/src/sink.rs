@@ -11,6 +11,7 @@ mod copy_to_s3_oneshot;
 mod correction;
 mod materialized_view;
 mod materialized_view_v2;
+mod persist_batches;
 mod refresh;
 mod subscribe;
 

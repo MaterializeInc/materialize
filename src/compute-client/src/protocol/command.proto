@@ -57,6 +57,10 @@ message ProtoIndexTarget {
   mz_repr.global_id.ProtoGlobalId id = 1;
 }
 
+message ProtoSinkedTarget {
+  mz_repr.global_id.ProtoGlobalId id = 1;
+}
+
 message ProtoPersistTarget {
   mz_repr.global_id.ProtoGlobalId id = 1;
   mz_storage_types.controller.ProtoCollectionMetadata metadata = 2;
@@ -72,7 +76,16 @@ message ProtoPeek {
   oneof target {
     ProtoIndexTarget index = 8;
     ProtoPersistTarget persist = 9;
+    ProtoSinkedTarget sinked = 10;
   }
+}
+
+message ProtoPeekIndexOutput {
+  mz_repr.global_id.ProtoGlobalId index_id = 1;
+}
+
+message ProtoPeekPersistBatchesOutput {
+  mz_repr.global_id.ProtoGlobalId collection_id = 1;
 }
 
 message ProtoComputeParameters {

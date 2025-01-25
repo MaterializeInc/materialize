@@ -1316,6 +1316,9 @@ where
                 ComputeSinkConnection::CopyToS3Oneshot(conn) => {
                     ComputeSinkConnection::CopyToS3Oneshot(conn)
                 }
+                ComputeSinkConnection::PersistBatches(conn) => {
+                    ComputeSinkConnection::PersistBatches(conn)
+                }
             };
             let desc = ComputeSinkDesc {
                 from: se.from,

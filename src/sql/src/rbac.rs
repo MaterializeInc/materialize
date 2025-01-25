@@ -791,7 +791,7 @@ fn generate_rbac_requirements(
             select: _,
             when: _,
             finishing: _,
-            copy_to: _,
+            output: _,
         }) => {
             let items = source
                 .depends_on()

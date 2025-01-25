@@ -15,14 +15,18 @@ use std::time::{Duration, Instant};
 
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
+use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistBatchesConnection};
 use mz_compute_types::ComputeInstanceId;
-use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{
+    MirRelationExpr, MirScalarExpr, MutationKind, OptimizedMirRelationExpr, RowSetFinishing,
+};
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
-use mz_repr::{GlobalId, RelationType, Timestamp};
+use mz_repr::{GlobalId, RelationDesc, RelationType, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
+use mz_storage_types::controller::CollectionMetadata;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
@@ -53,8 +57,8 @@ pub struct Optimizer {
     finishing: RowSetFinishing,
     /// A transient GlobalId to be used when constructing the dataflow.
     select_id: GlobalId,
-    /// A transient GlobalId to be used when constructing a PeekPlan.
-    index_id: GlobalId,
+    /// Describes where to output the results of the Peek.
+    output: PeekOutput,
     /// Optimizer config.
     config: OptimizerConfig,
     /// Optimizer metrics.
@@ -63,13 +67,34 @@ pub struct Optimizer {
     duration: Duration,
 }
 
+/// Defines where to collect the results of the Peek.
+#[derive(Debug, Clone)]
+pub enum PeekOutput {
+    Index {
+        /// Transient GlobalId used to stash in-memory results.
+        transient_id: GlobalId,
+    },
+    ReadThenWrite {
+        /// Transient GlobalId for the sink that will stage batches in Persist.
+        sink_id: GlobalId,
+        /// Collection the staged Batches will be associated with.
+        collection_id: GlobalId,
+        /// Metadata for the collection these Batches will be associated with.
+        collection_meta: CollectionMetadata,
+        /// Description of the data we're sinking.
+        from_desc: RelationDesc,
+        /// Kind of read-then-write plan we're executing, e.g. `UPDATE`.
+        mutation_kind: MutationKind,
+    },
+}
+
 impl Optimizer {
     pub fn new(
         catalog: Arc<Catalog>,
         compute_instance: ComputeInstanceSnapshot,
         finishing: RowSetFinishing,
+        output: PeekOutput,
         select_id: GlobalId,
-        index_id: GlobalId,
         config: OptimizerConfig,
         metrics: OptimizerMetrics,
     ) -> Self {
@@ -79,7 +104,7 @@ impl Optimizer {
             compute_instance,
             finishing,
             select_id,
-            index_id,
+            output,
             config,
             metrics,
             duration: Default::default(),
@@ -98,8 +123,8 @@ impl Optimizer {
         self.select_id
     }
 
-    pub fn index_id(&self) -> GlobalId {
-        self.index_id
+    pub fn output(&self) -> &PeekOutput {
+        &self.output
     }
 
     pub fn config(&self) -> &OptimizerConfig {
@@ -280,16 +305,61 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // TODO: Instead of conditioning here we should really
         // reconsider how to render multi-plan peek dataflows. The main
         // difficulty here is rendering the optional finishing bit.
-        if self.config.mode != OptimizeMode::Explain {
-            df_desc.export_index(
-                self.index_id,
-                IndexDesc {
-                    on_id: self.select_id,
-                    key,
+        match (&self.config.mode, &self.output) {
+            (OptimizeMode::Execute, PeekOutput::Index { transient_id }) => {
+                df_desc.export_index(
+                    *transient_id,
+                    IndexDesc {
+                        on_id: self.select_id,
+                        key,
+                    },
+                    typ.clone(),
+                );
+            }
+            (
+                OptimizeMode::Execute,
+                PeekOutput::ReadThenWrite {
+                    sink_id,
+                    collection_id,
+                    collection_meta,
+                    from_desc,
+                    mutation_kind,
                 },
-                typ.clone(),
-            );
+            ) => {
+                // TODO(parkmycar): We need to plan an MFP that can fill in
+                // default values of the collection we're sinking into.
+                let map_filter_project = mz_expr::MapFilterProject::new(typ.arity())
+                    .into_plan()
+                    .map_err(OptimizerError::Internal)?
+                    .into_nontemporal()
+                    .map_err(|_e| OptimizerError::UnsafeMfpPlan)?;
+                let sink_desc = ComputeSinkDesc {
+                    from_desc: from_desc.clone(),
+                    from: self.select_id,
+                    connection: ComputeSinkConnection::PersistBatches(PersistBatchesConnection {
+                        collection_id: *collection_id,
+                        collection_meta: collection_meta.clone(),
+                        finishing: self.finishing.clone(),
+                        literal_constraints: None,
+                        map_filter_project,
+                        mutation_kind: mutation_kind.clone(),
+                    }),
+                    with_snapshot: true,
+                    up_to: Default::default(),
+                    // No `FORCE NOT NULL` for peeks.
+                    non_null_assertions: Vec::new(),
+                    // No `REFRESH` for peeks.
+                    refresh_schedule: None,
+                };
+                df_desc.export_sink(*sink_id, sink_desc);
+            }
+            // Nothing to export for EXPLAIN queries.
+            (
+                OptimizeMode::Explain,
+                PeekOutput::Index { .. } | PeekOutput::ReadThenWrite { .. },
+            ) => (),
         }
+        if self.config.mode != OptimizeMode::Explain {}
 
         // Set the `as_of` and `until` timestamps for the dataflow.
         df_desc.set_as_of(timestamp_ctx.antichain());
@@ -425,7 +495,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                 trace_plan(&df_desc);
 
                 // Build the PeekPlan
-                PeekPlan::SlowPath(PeekDataflowPlan::new(df_desc, self.index_id(), &typ))
+                PeekPlan::SlowPath(PeekDataflowPlan::new(df_desc, self.output.clone(), &typ))
             }
         };
 
