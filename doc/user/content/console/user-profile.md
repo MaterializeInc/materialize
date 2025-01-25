@@ -9,8 +9,8 @@ menu:
     identifier: console-user-profile
 ---
 
-You can manage your user profile and account settings from the Materialize
-Console.
+You can find links to the documentation, Materialize Community slack, and Help
+Center from the profile menu.
 
 ![Image of the user profile menu](/images/console/console-user-profile.png
 "User profile menu")
