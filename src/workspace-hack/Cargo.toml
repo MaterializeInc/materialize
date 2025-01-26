@@ -292,7 +292,7 @@ linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
-rustix = { version = "0.38.43", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
+rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
@@ -302,7 +302,7 @@ linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
-rustix = { version = "0.38.43", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
+rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 
 [target.x86_64-apple-darwin.dependencies]
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
@@ -311,7 +311,7 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-featu
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
-rustix = { version = "0.38.43", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
+rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
@@ -321,7 +321,7 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-featu
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
-rustix = { version = "0.38.43", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
+rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 ### END HAKARI SECTION
