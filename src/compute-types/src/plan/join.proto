@@ -61,7 +61,8 @@ message ProtoDeltaStagePlan {
 
 message ProtoDeltaPathPlan {
   uint64 source_relation = 1;
-  repeated mz_expr.scalar.ProtoMirScalarExpr source_key = 2;
+  // Can't inline this as it must be an Option
+  ProtoMirScalarVec source_key = 2;
   ProtoJoinClosure initial_closure = 3;
   repeated ProtoDeltaStagePlan stage_plans = 4;
   optional ProtoJoinClosure final_closure = 5;
