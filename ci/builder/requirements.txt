@@ -56,7 +56,7 @@ semver==3.0.2
 shtab==1.7.1
 sqlparse==0.5.0
 toml==0.10.2
-twine==6.0.1
+twine==6.1.0
 types-Markdown==3.7.0.20241204
 types-prettytable==3.4.2.6
 types-psutil==6.1.0.20241221
