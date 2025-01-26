@@ -69,7 +69,7 @@ typing-extensions==4.12.2
 xxhash==3.5.0
 yamllint==1.35.1
 confluent-kafka==2.6.1
-fastavro==1.9.4
+fastavro==1.10.0
 websocket-client==1.8.0
 pyarrow-stubs==17.14
 pyarrow==18.1.0
