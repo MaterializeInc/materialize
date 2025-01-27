@@ -30,7 +30,7 @@ EXPLAIN OPTIMIZED PLAN FOR <explainee>;
 
 ### Explained object
 
-The following three objects can be explained.
+The following object types can be explained.
 
 Explained object | Description
 ------|-----
@@ -72,16 +72,16 @@ the information and rendering style of the generated explanation output.
 
 Modifier | Description
 ------|-----
-**arity** | Annotate each subplan with its number of produced columns. This is useful due to the use of offset-based column names.
+**arity** | _(on by default)_ Annotate each subplan with its number of produced columns. This is useful due to the use of offset-based column names.
 **cardinality** | Annotate each subplan with a symbolic estimate of its cardinality.
 **join implementations** | Render details about the [implementation strategy of optimized MIR `Join` nodes](#explain-with-join-implementations).
-**keys** | Annotate each subplan with its unique keys.
+**keys** | Annotates each subplan with a parenthesized list of unique keys. Each unique key is presented as a bracketed list of column identifiers. A list of column identifiers is reported as a unique key when for each setting of those columns to values there is at most one record in the collection. For example, `([0], [1,2])` is a list of two unique keys: column zero is a unique key, and columns 1 and 2 also form a unique key. Materialize only reports the most succinct form of keys, so for example while `[0]` and `[0, 1]` might both be unique keys, the latter is implied by the former and omitted. `()` indicates that the collection does not have any unique keys, while `([])` indicates that the empty projection is a unique key, meaning that the collection consists of 0 or 1 rows.
 **node identifiers** | Annotate each subplan in a `PHYSICAL PLAN` with its node ID.
 **redacted** | Anonymize literals in the output.
 **timing** | Annotate the output with the optimization time.
 **types** | Annotate each subplan with its inferred type.
-**humanized expressions** | Render `EXPLAIN AS TEXT` output with human-readable column references in operator expressions. **Warning**: SQL-level aliasing is not considered when inferring column names, so the plan output might become ambiguous if you use this modifier.
-**filter pushdown** | **Private preview** For each source, include a `pushdown` field that explains which filters [can be pushed down](../../transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
+**humanized expressions** | _(on by default)_ Add human-readable column names to column references. For example, `#0{id}` refers to column 0, whose name is `id`. Note that SQL-level aliasing is not considered when inferring column names, which means that the displayed column names can be ambiguous.
+**filter pushdown** | _(on by default)_ For each source, include a `pushdown` field that explains which filters [can be pushed down to the storage layer](../../transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
 Note that most modifiers are currently only supported for the `AS TEXT` output.
 
@@ -132,8 +132,8 @@ In this stage, the planner performs various optimizing rewrites:
 
 In this stage, the planner:
 
-- Maps plan operators to differential dataflow operators.
-- Locates existing arrangements which can be reused.
+- Decides on the exact execution details of each operator, and maps plan operators to differential dataflow operators.
+- Makes the final choices about creating or reusing [arrangements](/get-started/arrangements/#arrangements).
 
 #### From physical plan to dataflow
 
@@ -142,7 +142,7 @@ In the final stage, the planner:
 - Renders an actual dataflow from the physical plan, and
 - Installs the new dataflow into the running system.
 
-No smart logic runs as part of the rendering step, as the physical plan is meant to
+The rendering step does not make any further optimization choices, as the physical plan is meant to
 be a definitive and complete description of the rendered dataflow.
 
 ### Fast path queries
@@ -156,8 +156,11 @@ indicated by an "Explained Query (fast path):" heading before the explained quer
 
 ```text
 Explained Query (fast path):
-  Finish order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 output=[#0, #1]
-    ReadExistingIndex materialize.public.t_a_idx
+  Project (#0, #1)
+    ReadIndex on=materialize.public.t1 t1_x_idx=[lookup value=(5)]
+
+Used Indexes:
+  - materialize.public.t1_x_idx (lookup)
 ```
 
 
@@ -181,6 +184,8 @@ Return
     Get l0
     Get l0
 ```
+
+Note that CTEs in optimized plans do not directly correspond to CTEs in your original SQL query: For example, CTEs might disappear due to inlining (i.e., when a CTE is used only once, its definition is copied to that usage site); new CTEs can appear due to the optimizer recognizing that a part of the query appears more than once (aka common subexpression elimination). Also, certain SQL-level concepts, such as outer joins or subqueries, do not have an explicit representation in optimized plans, and are instead expressed as a pattern of operators involving CTEs. CTE names are always `l0`, `l1`, `l2`, ..., and do not correspond to SQL-level CTE names.
 
 <a name="explain-plan-columns"></a>
 
@@ -224,7 +229,7 @@ is **n**ull,
 **i**nequality to a literal,
 any **f**ilter.
 
-A plan can optionally end with a finishing action which can sort, limit and
+A plan can optionally end with a finishing action, which can sort, limit and
 project the result data. This operator is special, as it can only occur at the
 top of the plan. Finishing actions are executed outside the parallel dataflow
 that implements the rest of the plan.
@@ -254,12 +259,13 @@ are closer to SQL (and therefore less indicative of how the query will
 actually run).
 
 {{< tabs >}}
-{{< tab "In fully optimized physical (LIR) plans" >}}
-{{< explain-plans/operator-table data="explain_plan_operators" planType="LIR" >}}
+
+{{< tab "In decorrelated and optimized plans (default EXPLAIN)" >}}
+{{< explain-plans/operator-table data="explain_plan_operators" planType="optimized" >}}
 {{< /tab >}}
 
-{{< tab "In decorrelated and optimized plans" >}}
-{{< explain-plans/operator-table data="explain_plan_operators" planType="optimized" >}}
+{{< tab "In fully optimized physical (LIR) plans" >}}
+{{< explain-plans/operator-table data="explain_plan_operators" planType="LIR" >}}
 {{< /tab >}}
 
 {{< tab "In raw plans" >}}
