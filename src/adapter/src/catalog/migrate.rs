@@ -9,17 +9,21 @@
 
 use std::collections::BTreeMap;
 
+use maplit::btreeset;
 use mz_catalog::builtin::BuiltinTable;
 use mz_catalog::durable::Transaction;
 use mz_catalog::memory::objects::StateUpdate;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
+use mz_persist_types::ShardId;
 use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement};
+use mz_storage_client::controller::StorageTxn;
 use semver::Version;
 use tracing::info;
 use uuid::Uuid;
+
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::open::into_consolidatable_updates_startup;
 use crate::catalog::state::LocalExpressionCache;
@@ -186,10 +190,24 @@ pub(crate) async fn migrate(
 
 /// Migrations that run only on the durable catalog before any data is loaded into memory.
 pub(crate) fn durable_migrate(
-    _tx: &mut Transaction,
+    tx: &mut Transaction,
     _organization_id: Uuid,
     _boot_ts: Timestamp,
 ) -> Result<(), anyhow::Error> {
+    // Migrate the expression cache to a new shard. We're updating the keys to use the explicit
+    // binary version instead of the deploy generation.
+    const EXPR_CACHE_MIGRATION_KEY: &str = "expr_cache_migration";
+    const EXPR_CACHE_MIGRATION_DONE: u64 = 1;
+    if tx.get_config(EXPR_CACHE_MIGRATION_KEY.to_string()) != Some(EXPR_CACHE_MIGRATION_DONE) {
+        if let Some(shard_id) = tx.get_expression_cache_shard() {
+            tx.mark_shards_as_finalized(btreeset! {shard_id});
+            tx.set_expression_cache_shard(ShardId::new())?;
+        }
+        tx.set_config(
+            EXPR_CACHE_MIGRATION_KEY.to_string(),
+            Some(EXPR_CACHE_MIGRATION_DONE),
+        )?;
+    }
     Ok(())
 }
 
