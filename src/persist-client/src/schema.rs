@@ -306,7 +306,7 @@ pub(crate) enum PartMigration<K: Codec, V: Codec> {
     Codec { read: Schemas<K, V> },
     /// We have both write and read schemas, and they don't match.
     Either {
-        _write: Schemas<K, V>,
+        write: Schemas<K, V>,
         read: Schemas<K, V>,
         key_migration: Arc<Migration>,
         val_migration: Arc<Migration>,
@@ -319,12 +319,12 @@ impl<K: Codec, V: Codec> Clone for PartMigration<K, V> {
             Self::SameSchema { both } => Self::SameSchema { both: both.clone() },
             Self::Codec { read } => Self::Codec { read: read.clone() },
             Self::Either {
-                _write,
+                write,
                 read,
                 key_migration,
                 val_migration,
             } => Self::Either {
-                _write: _write.clone(),
+                write: write.clone(),
                 read: read.clone(),
                 key_migration: Arc::clone(key_migration),
                 val_migration: Arc::clone(val_migration),
@@ -384,7 +384,7 @@ where
                     .inc_by(start.elapsed().as_secs_f64());
 
                 Ok(PartMigration::Either {
-                    _write: write,
+                    write,
                     read,
                     key_migration,
                     val_migration,
