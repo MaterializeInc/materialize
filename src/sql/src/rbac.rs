@@ -791,7 +791,7 @@ fn generate_rbac_requirements(
             select: _,
             when: _,
             finishing: _,
-            copy_to: _,
+            output: _,
         }) => {
             let items = source
                 .depends_on()
@@ -841,6 +841,7 @@ fn generate_rbac_requirements(
             source: _,
             columns: _,
             params: _,
+            filter: _,
         }) => RbacRequirements {
             privileges: vec![
                 (

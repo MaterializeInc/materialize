@@ -486,6 +486,17 @@ crates_repository(
             # Note: This is a target we add from the additive build file above.
             deps = [":zlib"],
         )],
+        # TODO(parkmycar): Refactor this to build the version of zlib from the `bzip2-sys` crate.
+        "bzip2-sys": [crate.annotation(
+            gen_build_script = False,
+            deps = ["@bzip2"],
+        )],
+        "lzma-sys": [crate.annotation(
+            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.lzma-sys.bazel",
+            gen_build_script = False,
+            # Note: This is a target we add from the additive build file above.
+            deps = [":xz"],
+        )],
         "openssl-sys": [crate.annotation(
             build_script_data = [
                 "@openssl//:openssl_lib",

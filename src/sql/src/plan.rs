@@ -858,8 +858,28 @@ pub struct SelectPlan {
     pub when: QueryWhen,
     /// Instructions how to form the result set.
     pub finishing: RowSetFinishing,
-    /// For `COPY TO`, the format to use.
-    pub copy_to: Option<CopyFormat>,
+    /// Defines where we should output these results to.
+    pub output: SelectOutput,
+}
+
+#[derive(Clone, Debug)]
+pub enum SelectOutput {
+    /// Return a collection of Rows in-memory.
+    Rows,
+    /// Stage batches in Persist that we'll link (write) into a shard.
+    ReadThenWrite(ReadThenWriteFormat),
+    /// Copy out the result to some external resource, e.g. S3.
+    CopyTo(CopyFormat),
+}
+
+#[derive(Clone, Debug)]
+pub struct ReadThenWriteFormat {
+    /// The collection these batches will be appeneded to.
+    pub collection_id: GlobalId,
+    /// Description of the schema we'll be staging into Persist.
+    pub from_desc: RelationDesc,
+    /// Kind of mutation we're making for this read-then-write query.
+    pub mutation_kind: mz_expr::MutationKind,
 }
 
 #[derive(Debug)]
@@ -936,16 +956,32 @@ pub struct CopyFromPlan {
     pub source: CopyFromSource,
     pub columns: Vec<usize>,
     pub params: CopyFormatParams<'static>,
+    pub filter: Option<CopyFromFilter>,
 }
 
 #[derive(Debug)]
 pub enum CopyFromSource {
     /// Copying from a file local to the user, transmitted via pgwire.
     Stdin,
-    /// A remote resource, e.g. S3.
+    /// A remote resource, e.g. HTTP file.
     ///
     /// The contained [`HirScalarExpr`] evaluates to the Url for the remote resource.
     Url(HirScalarExpr),
+    /// A file in an S3 bucket.
+    AwsS3 {
+        /// Expression that evaluates to the file we want to copy.
+        uri: HirScalarExpr,
+        /// Details for how we connect to AWS S3.
+        connection: AwsConnection,
+        /// ID of the connection object.
+        connection_id: CatalogItemId,
+    },
+}
+
+#[derive(Debug)]
+pub enum CopyFromFilter {
+    Files(Vec<String>),
+    Pattern(String),
 }
 
 #[derive(Debug, Clone)]
