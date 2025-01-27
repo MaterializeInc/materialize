@@ -475,7 +475,7 @@ impl ScaledQuantity {
             }
         } else {
             for _ in 0..exponent {
-                result = result.checked_mul(2)?;
+                result = result.checked_mul(base)?;
             }
         }
         Some(result)
@@ -1779,5 +1779,56 @@ impl Service for KubernetesService {
             .iter()
             .map(|host| format!("{host}:{port}"))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn k8s_quantity_base10_large() {
+        let cases = &[
+            ("42", 42),
+            ("42k", 42000),
+            ("42M", 42000000),
+            ("42G", 42000000000),
+            ("42T", 42000000000000),
+            ("42P", 42000000000000000),
+        ];
+
+        for (input, expected) in cases {
+            let quantity = parse_k8s_quantity(input).unwrap();
+            let number = quantity.try_to_integer(0, true).unwrap();
+            assert_eq!(number, *expected, "input={input}, quantity={quantity:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn k8s_quantity_base10_small() {
+        let cases = &[("42n", 42), ("42u", 42000), ("42m", 42000000)];
+
+        for (input, expected) in cases {
+            let quantity = parse_k8s_quantity(input).unwrap();
+            let number = quantity.try_to_integer(-9, true).unwrap();
+            assert_eq!(number, *expected, "input={input}, quantity={quantity:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn k8s_quantity_base2() {
+        let cases = &[
+            ("42Ki", 42 << 10),
+            ("42Mi", 42 << 20),
+            ("42Gi", 42 << 30),
+            ("42Ti", 42 << 40),
+            ("42Pi", 42 << 50),
+        ];
+
+        for (input, expected) in cases {
+            let quantity = parse_k8s_quantity(input).unwrap();
+            let number = quantity.try_to_integer(0, false).unwrap();
+            assert_eq!(number, *expected, "input={input}, quantity={quantity:?}");
+        }
     }
 }
