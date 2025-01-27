@@ -11,6 +11,8 @@ syntax = "proto3";
 
 package mz_storage_types.oneshot_sources;
 
+import "pgcopy/src/copy.proto";
+
 message ProtoOneshotIngestionRequest {
   oneof source {
     ProtoHttpContentSource http = 1;
@@ -25,4 +27,6 @@ message ProtoHttpContentSource {
   string url = 1;
 }
 
-message ProtoCsvContentFormat {}
+message ProtoCsvContentFormat {
+  mz_pgcopy.copy.ProtoCopyCsvFormatParams params = 1;
+}
