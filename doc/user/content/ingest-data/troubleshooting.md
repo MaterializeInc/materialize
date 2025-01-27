@@ -38,15 +38,14 @@ SELECT * FROM mz_internal.mz_source_statuses
 WHERE name = <SOURCE_NAME>;
 ```
 
-If your source reports a status of `stalled` or `failed`, you likely have a
-configuration issue. The returned `error` field will provide more details.
 
-If your source reports a status of `starting` for more than a few minutes,
-[reach out to our team](http://materialize.com/convert-account/) for support.
-
-If your source reports a status of `running`, but you are not receiving data
-when you query the source, the source may still be ingesting its initial
-snapshot. See [Has my source ingested its initial snapshot?](#has-my-source-ingested-its-initial-snapshot).
+| Status        | Description/recommendation                                                                                                                                             |
+|---------------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `paused`      | Source is running on a cluster with 0 replicas. To resolve this, [increase the replication factor](/sql/alter-cluster/#replication-factor-1) of the cluster.                                                                                                          |
+| `stalled` | You likely have a configuration issue. The returned `error` field will provide more details.                                                     |
+| `failed` | You likely have a configuration issue. The returned `error` field will provide more details.                                                     |
+| `starting`    | If this status persists for more than a few minutes, [reach out to our team](http://materialize.com/convert-account/) for support.      |
+| `running`     | If your source is in a `running` state but you are not receiving data when you query the source, the source may still be ingesting its initial snapshot. See [Has my source ingested its initial snapshot?](#has-my-source-ingested-its-initial-snapshot). |
 
 ## Has my source ingested its initial snapshot?
 
