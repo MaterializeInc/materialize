@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "SwapSchema":
+        # PR#30883 (Columnar in logging dataflows) increases Mz memory usage
+        min_ancestor_mz_version_per_commit[
+            "a077232ffcb76ef7498da7637fbc9e80aa88765c"
+        ] = MzVersion.parse_mz("v0.131.0")
+
     if scenario_class_name == "FastPathOrderByLimit":
         # PR#30872 (rust: Upgrade to 1.83.0) increases wallclock
         min_ancestor_mz_version_per_commit[
