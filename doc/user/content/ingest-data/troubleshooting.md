@@ -38,6 +38,9 @@ SELECT * FROM mz_internal.mz_source_statuses
 WHERE name = <SOURCE_NAME>;
 ```
 
+If your source reports a status of `paused`, it is running on a cluster with 0 replicas.
+To resolve this, [increase the replication factor](/sql/alter-cluster/#replication-factor-1) of the cluster.
+
 If your source reports a status of `stalled` or `failed`, you likely have a
 configuration issue. The returned `error` field will provide more details.
 
