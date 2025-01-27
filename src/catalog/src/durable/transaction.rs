@@ -1836,6 +1836,13 @@ impl<'a> Transaction<'a> {
             .map(|shard_id| shard_id.parse().expect("valid ShardId"))
     }
 
+    pub fn set_expression_cache_shard(&mut self, shard_id: ShardId) -> Result<(), CatalogError> {
+        self.set_setting(
+            EXPRESSION_CACHE_SHARD_KEY.to_string(),
+            Some(shard_id.to_string()),
+        )
+    }
+
     /// Updates the catalog `enable_0dt_deployment` "config" value to
     /// match the `enable_0dt_deployment` "system var" value.
     ///

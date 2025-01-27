@@ -293,7 +293,6 @@ impl Catalog {
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             http_host_name: config.http_host_name,
         };
-        let deploy_generation = storage.get_deployment_generation().await?;
 
         let mut updates: Vec<_> = storage.sync_to_current_updates().await?;
         assert!(!updates.is_empty(), "initial catalog snapshot is missing");
@@ -464,7 +463,7 @@ impl Catalog {
                 .collect();
             let dyncfgs = config.persist_client.dyncfgs().clone();
             let expr_cache_config = ExpressionCacheConfig {
-                deploy_generation,
+                build_version: config.build_info.semver_version(),
                 shard_id: txn
                     .get_expression_cache_shard()
                     .expect("expression cache shard should exist for opened catalogs"),
