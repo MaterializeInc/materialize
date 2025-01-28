@@ -246,6 +246,19 @@ impl<T: Columnation> Default for StackWrapper<T> {
     }
 }
 
+impl<A: Columnation, B: Columnation, C: Columnation> StackWrapper<(A, B, C)> {
+    /// Copies a destructured tuple `(A, B, C)` into this column stack.
+    ///
+    /// This serves situations where a tuple should be constructed from its constituents but not
+    /// not all elements are available as owned data.
+    pub fn copy_destructured(&mut self, a: &A, b: &B, c: &C) {
+        match self {
+            Self::Legacy(stack) => stack.copy_destructured(a, b, c),
+            Self::Chunked(stack) => stack.copy_destructured(a, b, c),
+        }
+    }
+}
+
 /// A Stacked container builder that keep track of container memory usage.
 #[derive(Default)]
 pub struct AccountedStackBuilder<CB> {
@@ -615,6 +628,19 @@ impl<T: Columnation> Clone for ChunkedStack<T> {
         for item in source.range(..) {
             self.copy(item);
         }
+    }
+}
+
+impl<A: Columnation, B: Columnation, C: Columnation> ChunkedStack<(A, B, C)> {
+    /// Copies a destructured tuple `(A, B, C)` into this column stack.
+    ///
+    /// This serves situations where a tuple should be constructed from its constituents but not
+    /// not all elements are available as owned data.
+    pub fn copy_destructured(&mut self, a: &A, b: &B, c: &C) {
+        // SAFETY: We never drop the `T` returned from `copy_destructured`, satisfying its
+        // invariant.
+        let copy = unsafe { self.inner.copy_destructured(a, b, c) };
+        self.push(copy);
     }
 }
 
