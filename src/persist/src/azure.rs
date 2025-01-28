@@ -12,13 +12,15 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use azure_core::StatusCode;
 use azure_identity::create_default_credential;
 use azure_storage::{prelude::*, CloudLocation, EMULATOR_ACCOUNT};
+use azure_storage_blobs::blob::operations::GetBlobResponse;
 use azure_storage_blobs::prelude::*;
 use bytes::Bytes;
+use futures_util::stream::FuturesOrdered;
 use futures_util::StreamExt;
 use tracing::{info, warn};
 use url::Url;
@@ -185,13 +187,71 @@ impl Blob for AzureBlob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let path = self.get_path(key);
         let blob = self.client.blob_client(path);
-        let mut segments: Vec<MaybeLgBytes> = vec![];
 
+        /// Fetch a the body of a single [`GetBlobResponse`].
+        async fn fetch_chunk(
+            response: GetBlobResponse,
+            metrics: S3BlobMetrics,
+        ) -> Result<MaybeLgBytes, ExternalError> {
+            let content_length = response.blob.properties.content_length;
+
+            // Here we're being quite defensive. If `content_length` comes back
+            // as 0 it's most likely incorrect. In that case we'll copy bytes
+            // of the network into a growable buffer, then copy the entire
+            // buffer into lgalloc.
+            let mut buffer = match content_length {
+                1.. => {
+                    let region = metrics
+                        .lgbytes
+                        .persist_azure
+                        .new_region(usize::cast_from(content_length));
+                    PreSizedBuffer::Sized(region)
+                }
+                0 => PreSizedBuffer::Unknown(SegmentedBytes::new()),
+            };
+
+            let mut body = response.data;
+            while let Some(value) = body.next().await {
+                let value = value.map_err(|e| {
+                    ExternalError::from(anyhow!("Azure blob get body error: {}", e))
+                })?;
+
+                match &mut buffer {
+                    PreSizedBuffer::Sized(region) => region.extend_from_slice(&value),
+                    PreSizedBuffer::Unknown(segments) => segments.push(value),
+                }
+            }
+
+            // Spill our bytes to lgalloc, if they aren't already.
+            let lgbytes = match buffer {
+                PreSizedBuffer::Sized(region) => LgBytes::from(Arc::new(region)),
+                // Now that we've collected all of the segments, we know the size of our region.
+                PreSizedBuffer::Unknown(segments) => {
+                    let mut region = metrics.lgbytes.persist_azure.new_region(segments.len());
+                    for segment in segments.into_segments() {
+                        region.extend_from_slice(segment.as_ref());
+                    }
+                    LgBytes::from(Arc::new(region))
+                }
+            };
+
+            // Report if the content-length header didn't match the number of
+            // bytes we read from the network.
+            if content_length != u64::cast_from(lgbytes.len()) {
+                metrics.get_invalid_resp.inc();
+            }
+
+            Ok(MaybeLgBytes::LgBytes(lgbytes))
+        }
+
+        let mut requests = FuturesOrdered::new();
         // TODO: the default chunk size is 1MB. We have not tried tuning it,
         // but making this configurable / running some benchmarks could be
         // valuable.
         let mut stream = blob.get().into_stream();
+
         while let Some(value) = stream.next().await {
+            // Return early if any of the individual fetch requests return an error.
             let response = match value {
                 Ok(v) => v,
                 Err(e) => {
@@ -208,43 +268,19 @@ impl Blob for AzureBlob {
                 }
             };
 
-            let content_length = response.blob.properties.content_length;
-
-            // Here we're being quite defensive. If `content_length` comes back
-            // as 0 it's most likely incorrect. In that case we'll copy bytes
-            // of the network into a growable buffer, then copy the entire
-            // buffer into lgalloc.
-            let mut buffer = match content_length {
-                1.. => {
-                    let region = self
-                        .metrics
-                        .lgbytes
-                        .persist_azure
-                        .new_region(usize::cast_from(content_length));
-                    PreSizedBuffer::Sized(region)
-                }
-                0 => PreSizedBuffer::Unknown(Vec::new()),
-            };
-
-            let mut body = response.data;
-            while let Some(value) = body.next().await {
-                let value = value.map_err(|e| {
-                    ExternalError::from(anyhow!("Azure blob get body error: {}", e))
-                })?;
-                buffer.extend_from_slice(&value);
-            }
-
-            // Spill our bytes to lgalloc, if they aren't already.
-            let lg_bytes = match buffer {
-                PreSizedBuffer::Sized(region) => LgBytes::from(Arc::new(region)),
-                PreSizedBuffer::Unknown(buffer) => {
-                    self.metrics.lgbytes.persist_azure.try_mmap(buffer)
-                }
-            };
-            segments.push(MaybeLgBytes::LgBytes(lg_bytes));
+            // Drive all of the fetch requests concurrently.
+            let metrics = self.metrics.clone();
+            requests.push_back(fetch_chunk(response, metrics));
         }
 
-        Ok(Some(SegmentedBytes::from(segments)))
+        // Await on all of our chunks.
+        let mut segments = SegmentedBytes::with_capacity(requests.len());
+        while let Some(body) = requests.next().await {
+            let segment = body.context("azure get body err")?;
+            segments.push(segment);
+        }
+
+        Ok(Some(segments))
     }
 
     async fn list_keys_and_metadata(
@@ -343,16 +379,7 @@ impl Blob for AzureBlob {
 /// that as we read bytes off the network.
 enum PreSizedBuffer {
     Sized(MetricsRegion<u8>),
-    Unknown(Vec<u8>),
-}
-
-impl PreSizedBuffer {
-    fn extend_from_slice(&mut self, slice: &[u8]) {
-        match self {
-            PreSizedBuffer::Sized(region) => region.extend_from_slice(slice),
-            PreSizedBuffer::Unknown(buffer) => buffer.extend_from_slice(slice),
-        }
-    }
+    Unknown(SegmentedBytes),
 }
 
 #[cfg(test)]
