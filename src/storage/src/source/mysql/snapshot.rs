@@ -90,6 +90,7 @@ use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
 use futures::TryStreamExt;
+use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
 use mz_mysql_util::{pack_mysql_row, query_sys_var, MySqlError, ER_NO_SUCH_TABLE};
@@ -404,7 +405,18 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
                 let mut snapshot_staged = 0;
                 for (table, outputs) in &reader_snapshot_table_info {
-                    let query = format!("SELECT * FROM {}", table);
+                    // MySQL supports invisible columns, which must be requested explicitly in the projection
+                    // to be retrieved.
+                    let columns = outputs
+                        .iter()
+                        .flat_map(|info| {
+                            info.desc
+                                .columns
+                                .iter()
+                                .map(|col_info| format!("`{}`", col_info.name))
+                        })
+                        .join(", ");
+                    let query = format!("SELECT {} FROM {}", columns, table);
                     trace!(%id, "timely-{worker_id} reading snapshot from \
                                  table '{table}'");
                     let mut results = tx.exec_stream(query, ()).await?;
