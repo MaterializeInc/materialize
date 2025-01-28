@@ -66,6 +66,16 @@ is only one active ingestion dataflow. We need this for correctness in the face
 of upgrades, or failing/zombie `clusterd` pods. Today, source dataflows use the
 state in the upstream system (the slot) to fence out other readers.
 
+Q: What happens when `envd`/the controller restarts and doesn't know which
+replica a source is running on?
+
+A: The new controller will tell one replica to run the ingestion and
+reconciliation will make it so that only that replica _is_ running the source.
+If another replica was running the source, it would notice that it is no longer
+supposed to run it and stop. As mentioned above, we are optimizing for the case
+where there is only one replica running and short periods where we have two
+because of ALTER CLUSTER.
+
 ## Implementation
 
 We're keeping this very light for now, but think that the initial implementation
