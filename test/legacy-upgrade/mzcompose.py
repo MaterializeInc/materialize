@@ -29,6 +29,7 @@ from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.version_list import (
+    LTS_VERSIONS,
     VersionsFromDocs,
     get_all_published_mz_versions,
     get_published_minor_mz_versions,
@@ -80,6 +81,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="from what source to fetch the versions",
     )
     parser.add_argument("--ignore-missing-version", action="store_true")
+    parser.add_argument("--lts-upgrade", action="store_true")
     args = parser.parse_args()
 
     parallelism_index = buildkite.get_parallelism_index()
@@ -131,6 +133,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         test_upgrade_from_version(
             c, "current_source", priors=[], filter=args.filter, zero_downtime=False
         )
+        if args.lts_upgrade:
+            # Direct upgrade from latest LTS version without any inbetween versions
+            version = LTS_VERSIONS[-1]
+            priors = [v for v in all_versions if v <= version]
+            test_upgrade_from_version(
+                c,
+                f"{version}",
+                priors,
+                filter=args.filter,
+                zero_downtime=False,
+                lts_upgrade=True,
+            )
 
 
 def get_all_and_latest_two_minor_mz_versions(
@@ -152,6 +166,7 @@ def test_upgrade_from_version(
     priors: list[MzVersion],
     filter: str,
     zero_downtime: bool,
+    lts_upgrade: bool = False,
 ) -> None:
     print(
         f"+++ Testing {'0dt upgrade' if zero_downtime else 'regular upgrade'} from Materialize {from_version} to current_source."
@@ -241,7 +256,7 @@ def test_upgrade_from_version(
         c.kill(mz_service)
         c.rm(mz_service, "testdrive")
 
-    if from_version != "current_source":
+    if from_version != "current_source" and not lts_upgrade:
         # We can't skip in-between minor versions anymore, so go through all of them
         for version in get_published_minor_mz_versions(newest_first=False):
             if version <= from_version:

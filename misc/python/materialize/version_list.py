@@ -27,6 +27,11 @@ from materialize.mz_version import MzVersion
 
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
 
+LTS_VERSIONS = [
+    MzVersion.parse_mz("v0.130.1"),  # v25.1.0
+    # Put new versions at the bottom
+]
+
 # not released on Docker
 INVALID_VERSIONS = {
     MzVersion.parse_mz("v0.52.1"),
