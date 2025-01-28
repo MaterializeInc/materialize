@@ -50,4 +50,3 @@ For self-managed Materialize, Materialize provides:
 - [Materialize Operator Configuration](/installation/configuration/)
 - [Troubleshooting](/installation/troubleshooting/)
 - [Operational guidelines](/installation/operational-guidelines/)
-- [Upgrading](/installation/upgrading/)

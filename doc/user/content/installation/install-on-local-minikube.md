@@ -245,4 +245,3 @@ curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc
 - [Troubleshooting](/installation/troubleshooting/)
 - [Operational guidelines](/installation/operational-guidelines/)
 - [Installation](/installation/)
-- [Upgrading](/installation/upgrading/)

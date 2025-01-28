@@ -1,11 +1,10 @@
 ---
 title: "Upgrading"
 description: "Upgrading Helm chart and Materialize."
-aliases:
-  - /self-hosted/upgrading/
 menu:
   main:
     parent: "installation"
+draft: true
 ---
 
 The following provides steps for upgrading the Materialize operator and

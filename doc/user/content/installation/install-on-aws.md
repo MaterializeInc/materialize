@@ -28,7 +28,7 @@ When operating in AWS, we recommend:
 
 The Terraform modules used in this tutorial are provided for
 demonstration/evaluation purposes only and not intended for production use.
-Materialize does not support nor recommends these modules for production use.
+Materialize does not support nor recommend these modules for production use.
 
 {{< /warning >}}
 
@@ -68,7 +68,7 @@ documentation](https://helm.sh/docs/intro/install/).
 
 {{< /warning >}}
 
-Materialize provides a [sample Terraform
+Materialize provides [sample Terraform
 modules](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
 for evaluation purposes only. The modules deploy a sample infrastructure on AWS
 (region `us-east-1`) with the following components:
@@ -81,24 +81,32 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
 - Materialize instances (during subsequent runs after the Operator is running)
 
 {{< tip >}}
-For details on the sample infrastructure (such as the node group AMI type, node
-instance type, etc.), see the
+
+The tutorial uses the module found in the `examples/simple/`
+directory, which requires minimal user input. For more configuration options,
+you can run the modules at the [root of the
+repository](https://github.com/MaterializeInc/terraform-aws-materialize/)
+instead.
+
+For details on the  `examples/simple/` infrastructure configuration (such as the
+node instance type, etc.), see the
 [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/examples/simple/main.tf).
+
 {{< /tip >}}
 
 1. Clone the [Materialize's sample Terraform
    repo](https://github.com/MaterializeInc/terraform-google-materialize) and
-   checkout the `v0.2.0` tag.
+   checkout the `v0.2.1` tag.
 
    {{< tabs >}}
    {{< tab "Clone via SSH" >}}
    ```bash
-   git clone --depth 1 -b v0.2.0 git@github.com:MaterializeInc/terraform-aws-materialize.git
+   git clone --depth 1 -b v0.2.1 git@github.com:MaterializeInc/terraform-aws-materialize.git
    ```
    {{< /tab >}}
    {{< tab "Clone via HTTPS" >}}
    ```bash
-   git clone --depth 1 -b v0.2.0 https://github.com/MaterializeInc/terraform-aws-materialize.git
+   git clone --depth 1 -b v0.2.1 https://github.com/MaterializeInc/terraform-aws-materialize.git
    ```
    {{< /tab >}}
    {{< /tabs >}}
@@ -108,6 +116,16 @@ instance type, etc.), see the
    ```bash
    cd terraform-aws-materialize/examples/simple
    ```
+
+   {{< tip >}}
+   The tutorial uses the module found in the `examples/simple/` directory, which
+   requires minimal user input. For more configuration options, you can run the
+   modules at the [root of the repository](https://github.com/MaterializeInc/terraform-aws-materialize/) instead.
+
+   For details on the  `examples/simple/` infrastructure configuration (such as
+   the node instance type, etc.), see the
+   [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/examples/simple/main.tf).
+   {{< /tip >}}
 
 1. Create a `terraform.tfvars` file (you can copy from the
    `terraform.tfvars.example` file) and specify:
@@ -215,17 +233,14 @@ instance type, etc.), see the
     If you run into an error during deployment, refer to the
     [Troubleshooting](/installation/troubleshooting) guide.
 
-1. To deploy Materialize instances, add the Materialize instance configuration
-   to your `terraform.tfvars` file. If you copied  from the
-   `terraform.tfvars.example` file, you can just uncomment the
-   `materialize_instances` section.
+1. Once the Materialize operator is deployed and running, you can deploy the
+   Materialize instances. To deploy Materialize instances, create  a
+   `mz_instances.tfvars` file with the Materialize instance configuration.
 
-   For example, to deploy the `demo` instance, append the following to your
-   `terraform.tfvars` file:
+   For example, the following specifies the configuration for a `demo` instance.
 
    ```bash
-   cp terraform.tfvars terraform.tfvars.bak
-   cat <<EOF >> terraform.tfvars
+   cat <<EOF > mz_instances.tfvars
 
    materialize_instances = [
        {
@@ -240,23 +255,23 @@ instance type, etc.), see the
    EOF
    ```
 
-1. Create a terraform plan and review the changes.
+1. Create a terraform plan with both `.tfvars` files and review the changes.
 
-    ```bash
-    terraform plan -out my-plan.tfplan
-    ```
+   ```bash
+   terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars -out my-plan.tfplan
+   ```
 
-    The plan should show the changes to be made, with a summary similar to the
-    following:
+   The plan should show the changes to be made, with a summary similar to the
+   following:
 
-    ```
-    Plan: 4 to add, 0 to change, 0 to destroy.
+   ```
+   Plan: 4 to add, 0 to change, 0 to destroy.
 
-    Saved the plan to: my-plan.tfplan
+   Saved the plan to: my-plan.tfplan
 
-    To perform exactly these actions, run the following command to apply:
-    terraform apply "my-plan.tfplan"
-    ```
+   To perform exactly these actions, run the following command to apply:
+   terraform apply "my-plan.tfplan"
+   ```
 
 1. If you are satisfied with the changes, apply the terraform plan.
 
@@ -293,7 +308,7 @@ instance type, etc.), see the
 
    ```none
    NAME                                             READY   STATUS      RESTARTS      AGE
-   pod/create-db-demo-db-6pw88                     0/1     Completed   0             5m31s
+   pod/create-db-demo-db-6pw88                      0/1     Completed   0             5m31s
    pod/mzoxtq6663xq-balancerd-d5c64779c-jzqv2       1/1     Running     0             5m16s
    pod/mzoxtq6663xq-cluster-s1-replica-s1-gen-1-0   1/1     Running     0             5m21s
    pod/mzoxtq6663xq-cluster-s2-replica-s2-gen-1-0   1/1     Running     0             5m21s
@@ -359,7 +374,7 @@ instance type, etc.), see the
       {{< /note >}}
 
    1. Open a browser and navigate to
-      [http://localhost:8080](http://localhost:8080).
+      [http://localhost:8080](http://localhost:8080). From the Console, you can get started with the Quickstart.
 
 ## Troubleshooting
 
@@ -408,9 +423,10 @@ terraform destroy
 When prompted, type `yes` to confirm the deletion.
 
 {{< tip>}}
-To delete your S3 bucket, you may need to empty the S3 bucket first.  If the
-`terraform destroy` command fails because the S3 bucket is not empty, empty the
-S3 bucket first and rerun the `terraform destroy` command.
+To delete your S3 bucket, you may need to empty the S3 bucket first.
+If the `terraform destroy` command is unable to delete the S3 bucket and does
+not progress beyond "Still destroying...", empty the S3 bucket first and rerun
+bucket first and rerun the `terraform destroy` command.
 {{</ tip >}}
 
 ## See also
@@ -419,4 +435,3 @@ S3 bucket first and rerun the `terraform destroy` command.
 - [Troubleshooting](/installation/troubleshooting/)
 - [Operational guidelines](/installation/operational-guidelines/)
 - [Installation](/installation/)
-- [Upgrading](/installation/upgrading/)
