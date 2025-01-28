@@ -2062,6 +2062,152 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn check_data_versions_with_lts_versions() {
+        #[track_caller]
+        fn testcase(code: &str, data: &str, lts_versions: &[Version], expected: Result<(), ()>) {
+            let code = Version::parse(code).unwrap();
+            let data = Version::parse(data).unwrap();
+            let actual = cfg::check_data_version_with_lts_versions(&code, &data, lts_versions)
+                .map_err(|_| ());
+            assert_eq!(actual, expected);
+        }
+
+        let none = [];
+        let one = [Version::new(0, 130, 0)];
+        let two = [Version::new(0, 130, 0), Version::new(0, 140, 0)];
+        let three = [
+            Version::new(0, 130, 0),
+            Version::new(0, 140, 0),
+            Version::new(0, 150, 0),
+        ];
+
+        testcase("0.130.0", "0.128.0", &none, Ok(()));
+        testcase("0.130.0", "0.129.0", &none, Ok(()));
+        testcase("0.130.0", "0.130.0", &none, Ok(()));
+        testcase("0.130.0", "0.130.1", &none, Ok(()));
+        testcase("0.130.1", "0.130.0", &none, Ok(()));
+        testcase("0.130.0", "0.131.0", &none, Ok(()));
+        testcase("0.130.0", "0.132.0", &none, Err(()));
+
+        testcase("0.129.0", "0.127.0", &none, Ok(()));
+        testcase("0.129.0", "0.128.0", &none, Ok(()));
+        testcase("0.129.0", "0.129.0", &none, Ok(()));
+        testcase("0.129.0", "0.129.1", &none, Ok(()));
+        testcase("0.129.1", "0.129.0", &none, Ok(()));
+        testcase("0.129.0", "0.130.0", &none, Ok(()));
+        testcase("0.129.0", "0.131.0", &none, Err(()));
+
+        testcase("0.130.0", "0.128.0", &one, Ok(()));
+        testcase("0.130.0", "0.129.0", &one, Ok(()));
+        testcase("0.130.0", "0.130.0", &one, Ok(()));
+        testcase("0.130.0", "0.130.1", &one, Ok(()));
+        testcase("0.130.1", "0.130.0", &one, Ok(()));
+        testcase("0.130.0", "0.131.0", &one, Ok(()));
+        testcase("0.130.0", "0.132.0", &one, Ok(()));
+
+        testcase("0.129.0", "0.127.0", &one, Ok(()));
+        testcase("0.129.0", "0.128.0", &one, Ok(()));
+        testcase("0.129.0", "0.129.0", &one, Ok(()));
+        testcase("0.129.0", "0.129.1", &one, Ok(()));
+        testcase("0.129.1", "0.129.0", &one, Ok(()));
+        testcase("0.129.0", "0.130.0", &one, Ok(()));
+        testcase("0.129.0", "0.131.0", &one, Err(()));
+
+        testcase("0.131.0", "0.129.0", &one, Ok(()));
+        testcase("0.131.0", "0.130.0", &one, Ok(()));
+        testcase("0.131.0", "0.131.0", &one, Ok(()));
+        testcase("0.131.0", "0.131.1", &one, Ok(()));
+        testcase("0.131.1", "0.131.0", &one, Ok(()));
+        testcase("0.131.0", "0.132.0", &one, Ok(()));
+        testcase("0.131.0", "0.133.0", &one, Err(()));
+
+        testcase("0.130.0", "0.128.0", &two, Ok(()));
+        testcase("0.130.0", "0.129.0", &two, Ok(()));
+        testcase("0.130.0", "0.130.0", &two, Ok(()));
+        testcase("0.130.0", "0.130.1", &two, Ok(()));
+        testcase("0.130.1", "0.130.0", &two, Ok(()));
+        testcase("0.130.0", "0.131.0", &two, Ok(()));
+        testcase("0.130.0", "0.132.0", &two, Ok(()));
+        testcase("0.130.0", "0.135.0", &two, Ok(()));
+        testcase("0.130.0", "0.138.0", &two, Ok(()));
+        testcase("0.130.0", "0.139.0", &two, Ok(()));
+        testcase("0.130.0", "0.140.0", &two, Ok(()));
+        testcase("0.130.9", "0.140.0", &two, Ok(()));
+        testcase("0.130.0", "0.140.1", &two, Ok(()));
+        testcase("0.130.3", "0.140.1", &two, Ok(()));
+        testcase("0.130.3", "0.140.9", &two, Ok(()));
+        testcase("0.130.0", "0.141.0", &two, Err(()));
+        testcase("0.129.0", "0.133.0", &two, Err(()));
+        testcase("0.129.0", "0.140.0", &two, Err(()));
+        testcase("0.131.0", "0.133.0", &two, Err(()));
+        testcase("0.131.0", "0.140.0", &two, Err(()));
+
+        testcase("0.130.0", "0.128.0", &three, Ok(()));
+        testcase("0.130.0", "0.129.0", &three, Ok(()));
+        testcase("0.130.0", "0.130.0", &three, Ok(()));
+        testcase("0.130.0", "0.130.1", &three, Ok(()));
+        testcase("0.130.1", "0.130.0", &three, Ok(()));
+        testcase("0.130.0", "0.131.0", &three, Ok(()));
+        testcase("0.130.0", "0.132.0", &three, Ok(()));
+        testcase("0.130.0", "0.135.0", &three, Ok(()));
+        testcase("0.130.0", "0.138.0", &three, Ok(()));
+        testcase("0.130.0", "0.139.0", &three, Ok(()));
+        testcase("0.130.0", "0.140.0", &three, Ok(()));
+        testcase("0.130.9", "0.140.0", &three, Ok(()));
+        testcase("0.130.0", "0.140.1", &three, Ok(()));
+        testcase("0.130.3", "0.140.1", &three, Ok(()));
+        testcase("0.130.3", "0.140.9", &three, Ok(()));
+        testcase("0.130.0", "0.141.0", &three, Err(()));
+        testcase("0.129.0", "0.133.0", &three, Err(()));
+        testcase("0.129.0", "0.140.0", &three, Err(()));
+        testcase("0.131.0", "0.133.0", &three, Err(()));
+        testcase("0.131.0", "0.140.0", &three, Err(()));
+        testcase("0.130.0", "0.150.0", &three, Err(()));
+
+        testcase("0.140.0", "0.138.0", &three, Ok(()));
+        testcase("0.140.0", "0.139.0", &three, Ok(()));
+        testcase("0.140.0", "0.140.0", &three, Ok(()));
+        testcase("0.140.0", "0.140.1", &three, Ok(()));
+        testcase("0.140.1", "0.140.0", &three, Ok(()));
+        testcase("0.140.0", "0.141.0", &three, Ok(()));
+        testcase("0.140.0", "0.142.0", &three, Ok(()));
+        testcase("0.140.0", "0.145.0", &three, Ok(()));
+        testcase("0.140.0", "0.148.0", &three, Ok(()));
+        testcase("0.140.0", "0.149.0", &three, Ok(()));
+        testcase("0.140.0", "0.150.0", &three, Ok(()));
+        testcase("0.140.9", "0.150.0", &three, Ok(()));
+        testcase("0.140.0", "0.150.1", &three, Ok(()));
+        testcase("0.140.3", "0.150.1", &three, Ok(()));
+        testcase("0.140.3", "0.150.9", &three, Ok(()));
+        testcase("0.140.0", "0.151.0", &three, Err(()));
+        testcase("0.139.0", "0.143.0", &three, Err(()));
+        testcase("0.139.0", "0.150.0", &three, Err(()));
+        testcase("0.141.0", "0.143.0", &three, Err(()));
+        testcase("0.141.0", "0.150.0", &three, Err(()));
+
+        testcase("0.150.0", "0.148.0", &three, Ok(()));
+        testcase("0.150.0", "0.149.0", &three, Ok(()));
+        testcase("0.150.0", "0.150.0", &three, Ok(()));
+        testcase("0.150.0", "0.150.1", &three, Ok(()));
+        testcase("0.150.1", "0.150.0", &three, Ok(()));
+        testcase("0.150.0", "0.151.0", &three, Ok(()));
+        testcase("0.150.0", "0.152.0", &three, Ok(()));
+        testcase("0.150.0", "0.155.0", &three, Ok(()));
+        testcase("0.150.0", "0.158.0", &three, Ok(()));
+        testcase("0.150.0", "0.159.0", &three, Ok(()));
+        testcase("0.150.0", "0.160.0", &three, Ok(()));
+        testcase("0.150.9", "0.160.0", &three, Ok(()));
+        testcase("0.150.0", "0.160.1", &three, Ok(()));
+        testcase("0.150.3", "0.160.1", &three, Ok(()));
+        testcase("0.150.3", "0.160.9", &three, Ok(()));
+        testcase("0.150.0", "0.161.0", &three, Ok(()));
+        testcase("0.149.0", "0.153.0", &three, Err(()));
+        testcase("0.149.0", "0.160.0", &three, Err(()));
+        testcase("0.151.0", "0.153.0", &three, Err(()));
+        testcase("0.151.0", "0.160.0", &three, Err(()));
+    }
+
+    #[mz_ore::test]
     fn check_data_versions() {
         #[track_caller]
         fn testcase(code: &str, data: &str, expected: Result<(), ()>) {

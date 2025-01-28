@@ -909,6 +909,18 @@ steps:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-lts-upgrade
+        label: "Checks LTS upgrade, whole-Mz restart"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 2
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=UpgradeEntireMzFromLatestLTS, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade"
         depends_on: build-aarch64
@@ -1709,7 +1721,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: legacy-upgrade
-              args: ["--versions-source=docs"]
+              args: ["--versions-source=docs", "--lts-upgrade"]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
