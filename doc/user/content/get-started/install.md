@@ -44,10 +44,3 @@ For self-managed Materialize, Materialize provides:
 [Install on GCP](/installation/install-on-gcp/)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
-
-## See also
-
-- [Materialize Operator Configuration](/installation/configuration/)
-- [Troubleshooting](/installation/troubleshooting/)
-- [Operational guidelines](/installation/operational-guidelines/)
-- [Upgrading](/installation/upgrading/)
