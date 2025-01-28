@@ -354,7 +354,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         image=get_old_image_for_source_table_migration_test(),
         external_metadata_store=True,
         external_blob_store=True,
-        additional_system_parameter_defaults=additional_system_parameter_defaults,
+        additional_system_parameter_defaults=dict(additional_system_parameter_defaults),
     )
 
     additional_system_parameter_defaults["force_source_table_syntax"] = "true"
