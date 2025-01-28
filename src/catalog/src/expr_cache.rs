@@ -112,7 +112,7 @@ pub struct ExpressionCacheConfig {
     pub persist: PersistClient,
     pub shard_id: ShardId,
     pub current_ids: BTreeSet<GlobalId>,
-    pub remove_prior_gens: bool,
+    pub remove_prior_versions: bool,
     pub compact_shard: bool,
     pub dyncfgs: ConfigSet,
 }
@@ -141,7 +141,7 @@ impl ExpressionCache {
             persist,
             shard_id,
             current_ids,
-            remove_prior_gens,
+            remove_prior_versions,
             compact_shard,
             dyncfgs,
         }: ExpressionCacheConfig,
@@ -159,7 +159,7 @@ impl ExpressionCache {
         const RETRIES: usize = 100;
         for _ in 0..RETRIES {
             match cache
-                .try_open(&current_ids, remove_prior_gens, compact_shard, &dyncfgs)
+                .try_open(&current_ids, remove_prior_versions, compact_shard, &dyncfgs)
                 .await
             {
                 Ok((local_expressions, global_expressions)) => {
@@ -175,7 +175,7 @@ impl ExpressionCache {
     async fn try_open(
         &mut self,
         current_ids: &BTreeSet<GlobalId>,
-        remove_prior_gens: bool,
+        remove_prior_versions: bool,
         compact_shard: bool,
         dyncfgs: &ConfigSet,
     ) -> Result<
@@ -242,7 +242,7 @@ impl ExpressionCache {
                         }
                     }
                 }
-            } else if remove_prior_gens {
+            } else if remove_prior_versions {
                 // Remove expressions from previous versions.
                 keys_to_remove.push((key.clone(), None));
             }
@@ -567,7 +567,7 @@ mod tests {
         let shard_id = ShardId::new();
 
         let mut current_ids = BTreeSet::new();
-        let mut remove_prior_gens = false;
+        let mut remove_prior_versions = false;
         // Compacting the shard takes too long, so we leave it to integration tests.
         let compact_shard = false;
         let dyncfgs = &mz_persist_client::cfg::all_dyncfgs(ConfigSet::default());
@@ -582,7 +582,7 @@ mod tests {
                     persist: persist.clone(),
                     shard_id,
                     current_ids: current_ids.clone(),
-                    remove_prior_gens,
+                    remove_prior_versions,
                     compact_shard,
                     dyncfgs: dyncfgs.clone(),
                 })
@@ -626,7 +626,7 @@ mod tests {
                     persist: persist.clone(),
                     shard_id,
                     current_ids: current_ids.clone(),
-                    remove_prior_gens,
+                    remove_prior_versions,
                     compact_shard,
                     dyncfgs: dyncfgs.clone(),
                 })
@@ -655,7 +655,7 @@ mod tests {
                     persist: persist.clone(),
                     shard_id,
                     current_ids: current_ids.clone(),
-                    remove_prior_gens,
+                    remove_prior_versions,
                     compact_shard,
                     dyncfgs: dyncfgs.clone(),
                 })
@@ -698,7 +698,7 @@ mod tests {
                     persist: persist.clone(),
                     shard_id,
                     current_ids: current_ids.clone(),
-                    remove_prior_gens,
+                    remove_prior_versions,
                     compact_shard,
                     dyncfgs: dyncfgs.clone(),
                 })
@@ -721,7 +721,7 @@ mod tests {
                     persist: persist.clone(),
                     shard_id,
                     current_ids: current_ids.clone(),
-                    remove_prior_gens,
+                    remove_prior_versions,
                     compact_shard,
                     dyncfgs: dyncfgs.clone(),
                 })
@@ -773,7 +773,7 @@ mod tests {
                     persist: persist.clone(),
                     shard_id,
                     current_ids: current_ids.clone(),
-                    remove_prior_gens,
+                    remove_prior_versions,
                     compact_shard,
                     dyncfgs: dyncfgs.clone(),
                 })
@@ -790,14 +790,14 @@ mod tests {
 
         {
             // Open the cache at a new version and clear previous versions.
-            remove_prior_gens = true;
+            remove_prior_versions = true;
             let (_cache, local_entries, global_entries) =
                 ExpressionCacheHandle::spawn_expression_cache(ExpressionCacheConfig {
                     build_version: second_version.clone(),
                     persist: persist.clone(),
                     shard_id,
                     current_ids: current_ids.clone(),
-                    remove_prior_gens,
+                    remove_prior_versions,
                     compact_shard,
                     dyncfgs: dyncfgs.clone(),
                 })
@@ -820,7 +820,7 @@ mod tests {
                     persist: persist.clone(),
                     shard_id,
                     current_ids: current_ids.clone(),
-                    remove_prior_gens,
+                    remove_prior_versions,
                     compact_shard,
                     dyncfgs: dyncfgs.clone(),
                 })
