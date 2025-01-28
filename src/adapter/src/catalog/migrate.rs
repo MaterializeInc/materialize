@@ -562,17 +562,14 @@ fn ast_rewrite_sources_to_tables(
 
                 assert_eq!(
                     item.name,
-                    name.0
-                        .last()
-                        .expect("at least one ident")
-                        .to_ast_string_stable()
+                    name.0.last().expect("at least one ident").to_string()
                 );
                 // First find an unused name within the same schema to avoid conflicts.
                 let is_valid = |new_source_ident: &Ident| {
                     if item_names_per_schema
                         .get(&item.schema_id)
                         .expect("schema must exist")
-                        .contains(&new_source_ident.to_ast_string_stable())
+                        .contains(&new_source_ident.to_string())
                     {
                         Ok::<_, IdentError>(false)
                     } else {
@@ -589,7 +586,7 @@ fn ast_rewrite_sources_to_tables(
                 let mut new_source_name = name.clone();
                 *new_source_name.0.last_mut().expect("at least one ident") =
                     new_source_ident.clone();
-                item.name = new_source_ident.to_ast_string_stable();
+                item.name = new_source_ident.to_string();
 
                 // A reference to the source that will be included in the table statement
                 let source_ref =
