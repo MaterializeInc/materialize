@@ -3986,7 +3986,6 @@ pub fn serve(
         let builtin_item_migration_config = if enable_0dt_deployment {
             BuiltinItemMigrationConfig::ZeroDownTime {
                 persist_client: persist_client.clone(),
-                deploy_generation: controller_config.deploy_generation,
                 read_only: read_only_controllers,
             }
         } else {

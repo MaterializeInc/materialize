@@ -98,7 +98,6 @@ pub enum BuiltinItemMigrationConfig {
     Legacy,
     ZeroDownTime {
         persist_client: PersistClient,
-        deploy_generation: u64,
         read_only: bool,
     },
 }
