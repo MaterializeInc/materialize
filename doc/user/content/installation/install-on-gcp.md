@@ -514,4 +514,3 @@ When prompted to proceed, type `yes` to confirm the deletion.
 - [Troubleshooting](/installation/troubleshooting/)
 - [Operational guidelines](/installation/operational-guidelines/)
 - [Installation](/installation/)
-- [Upgrading](/installation/upgrading/)

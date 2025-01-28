@@ -435,4 +435,3 @@ bucket first and rerun the `terraform destroy` command.
 - [Troubleshooting](/installation/troubleshooting/)
 - [Operational guidelines](/installation/operational-guidelines/)
 - [Installation](/installation/)
-- [Upgrading](/installation/upgrading/)
