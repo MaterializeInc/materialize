@@ -384,7 +384,7 @@ impl Listeners {
 
         // Determine whether we should perform a 0dt deployment.
         let enable_0dt_deployment = {
-            let default = config
+            let cli_default = config
                 .system_parameter_defaults
                 .get(ENABLE_0DT_DEPLOYMENT.name())
                 .map(|x| {
@@ -397,26 +397,25 @@ impl Listeners {
                     })
                 })
                 .transpose()?;
+            let compiled_default = ENABLE_0DT_DEPLOYMENT.default().clone();
             let ld = get_ld_value("enable_0dt_deployment", &remote_system_parameters, |x| {
                 strconv::parse_bool(x).map_err(|x| x.to_string())
             })?;
             let catalog = openable_adapter_storage.get_enable_0dt_deployment().await?;
-            let computed = ld
-                .or(catalog)
-                .or(default)
-                .unwrap_or(ENABLE_0DT_DEPLOYMENT.default().clone());
+            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
             info!(
                 %computed,
                 ?ld,
                 ?catalog,
-                ?default,
+                ?cli_default,
+                ?compiled_default,
                 "determined value for enable_0dt_deployment system parameter",
             );
             computed
         };
         // Determine the maximum wait time when doing a 0dt deployment.
         let with_0dt_deployment_max_wait = {
-            let default = config
+            let cli_default = config
                 .system_parameter_defaults
                 .get(WITH_0DT_DEPLOYMENT_MAX_WAIT.name())
                 .map(|x| {
@@ -429,6 +428,7 @@ impl Listeners {
                     })
                 })
                 .transpose()?;
+            let compiled_default = WITH_0DT_DEPLOYMENT_MAX_WAIT.default().clone();
             let ld = get_ld_value(
                 WITH_0DT_DEPLOYMENT_MAX_WAIT.name(),
                 &remote_system_parameters,
@@ -446,15 +446,13 @@ impl Listeners {
             let catalog = openable_adapter_storage
                 .get_0dt_deployment_max_wait()
                 .await?;
-            let computed = ld
-                .or(catalog)
-                .or(default)
-                .unwrap_or(WITH_0DT_DEPLOYMENT_MAX_WAIT.default().clone());
+            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
             info!(
                 ?computed,
                 ?ld,
                 ?catalog,
-                ?default,
+                ?cli_default,
+                ?compiled_default,
                 "determined value for {} system parameter",
                 WITH_0DT_DEPLOYMENT_MAX_WAIT.name()
             );
@@ -463,7 +461,7 @@ impl Listeners {
         // Determine whether we should panic if we reach the maximum wait time
         // without the preflight checks succeeding.
         let enable_0dt_deployment_panic_after_timeout = {
-            let default = config
+            let cli_default = config
                 .system_parameter_defaults
                 .get(ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name())
                 .map(|x| {
@@ -476,6 +474,7 @@ impl Listeners {
                     })
                 })
                 .transpose()?;
+            let compiled_default = ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.default().clone();
             let ld = get_ld_value(
                 "enable_0dt_deployment_panic_after_timeout",
                 &remote_system_parameters,
@@ -484,15 +483,13 @@ impl Listeners {
             let catalog = openable_adapter_storage
                 .get_enable_0dt_deployment_panic_after_timeout()
                 .await?;
-            let computed = ld
-                .or(catalog)
-                .or(default)
-                .unwrap_or(ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.default().clone());
+            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
             info!(
                 %computed,
                 ?ld,
                 ?catalog,
-                ?default,
+                ?cli_default,
+                ?compiled_default,
                 "determined value for enable_0dt_deployment_panic_after_timeout system parameter",
             );
             computed
