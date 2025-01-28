@@ -2,13 +2,14 @@
 
 ## Context
 
-We want to support zero-downtime ALTER on clusters. The plan for this is to
-turn on a new replica with the changed parameters and turn off the old replica
-when the new one is "sufficiently ready". This in turn requires that we are
-able to run sources and sinks on multi-replica clusters. This document concerns
-sources, we are punting on sinks for now though we might use a very similar
-solution once we have addressed [storage: restarting a Sink should not require
-reading a snapshot of the input #8603
+We want to support zero-downtime ALTER CLUSTER (aka graceful cluster
+reconfiguration). The plan for this is to turn on a new replica with the
+changed parameters and turn off the old replica when the new one is
+"sufficiently ready". This in turn requires that we are able to run sources and
+sinks on multi-replica clusters. This document concerns sources, we are punting
+on sinks for now though we might use a very similar solution once we have
+addressed [storage: restarting a Sink should not require reading a snapshot of
+the input #8603
 ](https://github.com/MaterializeInc/database-issues/issues/8603).
 
 For (UPSERT) Kafka sources we already have a solution in [Feedback
@@ -61,7 +62,7 @@ dataflow for a singleton source? Say when the replica processes take longer than
 expected to shut down.
 
 A: This is caught by the mechanisms we already have today for making sure there
-is only one active ingestion dataflow. We need this for correctness in the fact
+is only one active ingestion dataflow. We need this for correctness in the face
 of upgrades, or failing/zombie `clusterd` pods. Today, source dataflows use the
 state in the upstream system (the slot) to fence out other readers.
 
