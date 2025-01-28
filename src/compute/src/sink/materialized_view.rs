@@ -42,7 +42,7 @@ use tracing::trace;
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
 use crate::render::StartSignal;
-use crate::sink::correction::Correction;
+use crate::sink::correction::CorrectionV1;
 use crate::sink::materialized_view_v2;
 use crate::sink::refresh::apply_refresh;
 
@@ -667,8 +667,9 @@ where
         // Contains `desired - persist`, reflecting the updates we would like to commit
         // to `persist` in order to "correct" it to track `desired`. These collections are
         // only modified by updates received from either the `desired` or `persist` inputs.
-        let mut correction_oks = Correction::new(sink_metrics.clone(), sink_worker_metrics.clone());
-        let mut correction_errs = Correction::new(sink_metrics, sink_worker_metrics);
+        let mut correction_oks =
+            CorrectionV1::new(sink_metrics.clone(), sink_worker_metrics.clone());
+        let mut correction_errs = CorrectionV1::new(sink_metrics, sink_worker_metrics);
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -746,7 +747,7 @@ where
                 }
                 Some(event) = desired_oks_input.next() => {
                     match event {
-                        Event::Data(_cap, data) => {
+                        Event::Data(_cap, mut data) => {
                             // Extract desired rows as positive contributions to `correction_oks`.
                             if sink_id.is_user() && !data.is_empty() {
                                 trace!(
@@ -764,7 +765,7 @@ where
                                 );
                             }
 
-                            correction_oks.insert(data);
+                            correction_oks.insert(&mut data);
 
                             continue;
                         }
@@ -775,7 +776,7 @@ where
                 }
                 Some(event) = desired_errs_input.next() => {
                     match event {
-                        Event::Data(_cap, data) => {
+                        Event::Data(_cap, mut data) => {
                             // Extract desired rows as positive contributions to `correction_errs`.
                             if sink_id.is_user() && !data.is_empty() {
                                 trace!(
@@ -793,7 +794,7 @@ where
                                 );
                             }
 
-                            correction_errs.insert(data);
+                            correction_errs.insert(&mut data);
 
                             continue;
                         }
@@ -804,9 +805,9 @@ where
                 }
                 Some(event) = persist_oks_input.next() => {
                     match event {
-                        Event::Data(_cap, data) => {
+                        Event::Data(_cap, mut data) => {
                             // Extract persist rows as negative contributions to `correction_oks`.
-                            correction_oks.insert_negated(data);
+                            correction_oks.insert_negated(&mut data);
 
                             continue;
                         }
@@ -817,9 +818,9 @@ where
                 }
                 Some(event) = persist_errs_input.next() => {
                     match event {
-                        Event::Data(_cap, data) => {
+                        Event::Data(_cap, mut data) => {
                             // Extract persist rows as negative contributions to `correction_errs`.
-                            correction_errs.insert_negated(data);
+                            correction_errs.insert_negated(&mut data);
 
                             continue;
                         }

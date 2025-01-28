@@ -115,6 +115,7 @@ use std::sync::Arc;
 
 use differential_dataflow::{Collection, Hashable};
 use futures::StreamExt;
+use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
@@ -211,6 +212,7 @@ where
         &desired,
         &persist,
         &descs,
+        compute_state.worker_config.clone(),
     );
 
     let append_token = append::render(sink_id, persist_api, active_worker_id, &descs, &batches);
@@ -668,6 +670,7 @@ mod write {
         desired: &DesiredStreams<S>,
         persist: &PersistStreams<S>,
         descs: &Stream<S, BatchDescription>,
+        worker_config: ConfigSet,
     ) -> (BatchesStream<S>, PressOnDropButton)
     where
         S: Scope<Timestamp = Timestamp>,
@@ -702,7 +705,14 @@ mod write {
 
             let writer = persist_api.open_writer().await;
             let sink_metrics = persist_api.open_metrics().await;
-            let mut state = State::new(sink_id, worker_id, writer, sink_metrics, as_of);
+            let mut state = State::new(
+                sink_id,
+                worker_id,
+                writer,
+                sink_metrics,
+                as_of,
+                &worker_config,
+            );
 
             loop {
                 // Read from the inputs, extract `desired` updates as positive contributions to
@@ -712,8 +722,8 @@ mod write {
                 let maybe_batch = tokio::select! {
                     Some(event) = desired_inputs.ok.next() => {
                         match event {
-                            Event::Data(_cap, data) => {
-                                state.corrections.ok.insert(data);
+                            Event::Data(_cap, mut data) => {
+                                state.corrections.ok.insert(&mut data);
                                 None
                             }
                             Event::Progress(frontier) => {
@@ -724,8 +734,8 @@ mod write {
                     }
                     Some(event) = desired_inputs.err.next() => {
                         match event {
-                            Event::Data(_cap, data) => {
-                                state.corrections.err.insert(data);
+                            Event::Data(_cap, mut data) => {
+                                state.corrections.err.insert(&mut data);
                                 None
                             }
                             Event::Progress(frontier) => {
@@ -736,8 +746,8 @@ mod write {
                     }
                     Some(event) = persist_inputs.ok.next() => {
                         match event {
-                            Event::Data(_cap, data) => {
-                                state.corrections.ok.insert_negated(data);
+                            Event::Data(_cap, mut data) => {
+                                state.corrections.ok.insert_negated(&mut data);
                                 None
                             }
                             Event::Progress(frontier) => {
@@ -748,8 +758,8 @@ mod write {
                     }
                     Some(event) = persist_inputs.err.next() => {
                         match event {
-                            Event::Data(_cap, data) => {
-                                state.corrections.err.insert_negated(data);
+                            Event::Data(_cap, mut data) => {
+                                state.corrections.err.insert_negated(&mut data);
                                 None
                             }
                             Event::Progress(frontier) => {
@@ -821,6 +831,7 @@ mod write {
             persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
             metrics: SinkMetrics,
             as_of: Antichain<Timestamp>,
+            worker_config: &ConfigSet,
         ) -> Self {
             let worker_metrics = metrics.for_worker(worker_id);
 
@@ -833,8 +844,8 @@ mod write {
                 worker_id,
                 persist_writer,
                 corrections: OkErr::new(
-                    Correction::new(metrics.clone(), worker_metrics.clone()),
-                    Correction::new(metrics, worker_metrics),
+                    Correction::new(metrics.clone(), worker_metrics.clone(), worker_config),
+                    Correction::new(metrics, worker_metrics, worker_config),
                 ),
                 desired_frontiers: OkErr::new_frontiers(),
                 persist_frontiers: OkErr::new_frontiers(),
