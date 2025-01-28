@@ -328,7 +328,6 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         forward_buildkite_shard=True,
         kafka_default_partitions=args.kafka_default_partitions,
         aws_region=args.aws_region,
-        # validate_catalog_store=True,
         default_timeout=args.default_timeout,
         volumes_extra=["mzdata:/mzdata"],
         external_blob_store=True,
@@ -350,8 +349,6 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         additional_system_parameter_defaults[key] = val
 
-    additional_system_parameter_defaults["force_source_table_syntax"] = "true"
-
     mz_old = Materialized(
         default_size=Materialized.Size.DEFAULT_SIZE,
         image=get_old_image_for_source_table_migration_test(),
@@ -359,6 +356,9 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         external_blob_store=True,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
     )
+
+    additional_system_parameter_defaults["force_source_table_syntax"] = "true"
+
     mz_new = Materialized(
         default_size=Materialized.Size.DEFAULT_SIZE,
         image=get_new_image_for_source_table_migration_test(),
