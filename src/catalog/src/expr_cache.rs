@@ -128,7 +128,7 @@ impl ExpressionCache {
     /// Reconciliation will remove all entries that are not in `current_ids` and remove all
     /// entries that have optimizer features that are not equal to `optimizer_features`.
     ///
-    /// If `remove_prior_gens` is `true`, then all previous versions are durably removed from the
+    /// If `remove_prior_versions` is `true`, then all previous versions are durably removed from the
     /// cache.
     ///
     /// If `compact_shard` is `true`, then this function will block on fully compacting the backing
