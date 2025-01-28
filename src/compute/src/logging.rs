@@ -236,7 +236,7 @@ where
     CB: ContainerBuilder,
     L: Into<LogVariant>,
     F: for<'a> FnMut(
-            <B::Output as Container>::Item<'a>,
+            <B::Output as Container>::ItemRef<'a>,
             &mut PermutedRowPacker,
             &mut OutputSession<CB>,
         ) + 'static,
@@ -251,7 +251,7 @@ where
         move |input, output| {
             while let Some((time, data)) = input.next() {
                 let mut session = output.session_with_builder(&time);
-                for item in data.drain() {
+                for item in data.iter().flatten().flat_map(|chunk| chunk.iter()) {
                     logic(item, &mut packer, &mut session);
                 }
             }

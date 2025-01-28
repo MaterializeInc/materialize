@@ -798,6 +798,7 @@ class SubqueriesWhereClauseOr(Generator):
     COUNT = min(
         Generator.COUNT, 10
     )  # https://github.com/MaterializeInc/database-issues/issues/2630
+    MAX_COUNT = 160  # Too long-running with count=320
 
     @classmethod
     def body(cls) -> None:
@@ -1492,6 +1493,7 @@ class RowsJoinOuter(Generator):
 
 class PostgresSources(Generator):
     COUNT = 300  # high memory consumption, slower  with source tables
+    MAX_COUNT = 600  # Too long-running with count=1200
 
     @classmethod
     def body(cls) -> None:

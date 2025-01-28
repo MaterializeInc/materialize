@@ -25,12 +25,11 @@ use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::channels::ContainerBytes;
-use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::generic::operator::{self, Operator};
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputHandleCore};
 use timely::dataflow::operators::Capability;
-use timely::dataflow::{Scope, StreamCore};
+use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, Data, PartialOrder};
 
@@ -708,7 +707,18 @@ where
                 h.finish()
             });
             consolidate_pact::<Ba, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
-                .map(|((k, ()), time, diff)| (k.clone(), time.clone(), diff.clone()))
+                .unary(Pipeline, "unpack consolidated", |_, _| {
+                    |input, output| {
+                        input.for_each(|time, data| {
+                            let mut session = output.session(&time);
+                            for ((k, ()), t, d) in
+                                data.iter().flatten().flat_map(|chunk| chunk.iter())
+                            {
+                                session.give((k.clone(), t.clone(), d.clone()))
+                            }
+                        })
+                    }
+                })
                 .as_collection()
         } else {
             self
@@ -730,7 +740,17 @@ where
             Exchange::new(move |update: &((D1, ()), G::Timestamp, R)| (update.0).0.hashed());
 
         consolidate_pact::<Ba, _, _>(&self.map(|k| (k, ())).inner, exchange, name)
-            .map(|((k, ()), time, diff)| (k.clone(), time.clone(), diff.clone()))
+            .unary(Pipeline, &format!("Unpack {name}"), |_, _| {
+                |input, output| {
+                    input.for_each(|time, data| {
+                        let mut session = output.session(&time);
+                        for ((k, ()), t, d) in data.iter().flatten().flat_map(|chunk| chunk.iter())
+                        {
+                            session.give((k.clone(), t.clone(), d.clone()))
+                        }
+                    })
+                }
+            })
             .as_collection()
     }
 }
@@ -770,14 +790,15 @@ where
 
 /// Aggregates the weights of equal records into at most one record.
 ///
-/// The data are accumulated in place, each held back until their timestamp has completed.
+/// Produces a stream of chains of records, partitioned according to `pact`. The
+/// data is sorted according to `Ba`. For each timestamp, it produces at most one chain.
 ///
-/// This serves as a low-level building-block for more user-friendly functions.
+/// The data are accumulated in place, each held back until their timestamp has completed.
 pub fn consolidate_pact<Ba, P, G>(
     stream: &StreamCore<G, Ba::Input>,
     pact: P,
     name: &str,
-) -> StreamCore<G, Ba::Output>
+) -> Stream<G, Vec<Ba::Output>>
 where
     G: Scope,
     Ba: Batcher<Time = G::Timestamp> + 'static,
@@ -833,9 +854,7 @@ where
                             // Extract updates not in advance of `upper`.
                             let output =
                                 batcher.seal::<ConsolidateBuilder<_, Ba::Output>>(upper.clone());
-                            for mut batch in output {
-                                session.give_container(&mut batch);
-                            }
+                            session.give(output);
                         }
                     }
 

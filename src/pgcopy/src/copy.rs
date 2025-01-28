@@ -640,6 +640,18 @@ pub struct CopyCsvFormatParams<'a> {
     pub null: Cow<'a, str>,
 }
 
+impl<'a> CopyCsvFormatParams<'a> {
+    pub fn to_owned(&self) -> CopyCsvFormatParams<'static> {
+        CopyCsvFormatParams {
+            delimiter: self.delimiter,
+            quote: self.quote,
+            escape: self.escape,
+            header: self.header,
+            null: Cow::Owned(self.null.to_string()),
+        }
+    }
+}
+
 impl RustType<ProtoCopyCsvFormatParams> for CopyCsvFormatParams<'static> {
     fn into_proto(&self) -> ProtoCopyCsvFormatParams {
         ProtoCopyCsvFormatParams {

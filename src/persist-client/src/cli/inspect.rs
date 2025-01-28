@@ -37,7 +37,7 @@ use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::cli::args::{make_blob, make_consensus, StateArgs, NO_COMMIT, READ_ALL_BUILD_INFO};
 use crate::error::CodecConcreteType;
-use crate::fetch::{Cursor, EncodedPart};
+use crate::fetch::EncodedPart;
 use crate::internal::encoding::{Rollup, UntypedState};
 use crate::internal::paths::{
     BlobKey, BlobKeyPrefix, PartialBatchKey, PartialBlobKey, PartialRollupKey, WriterKey,
@@ -361,15 +361,19 @@ pub async fn blob_batch_part(
         desc,
         updates: Vec::new(),
     };
-    let mut cursor = Cursor::default();
-    while let Some(((k, v, t, d), _)) = cursor.pop(&encoded_part) {
+    let records = encoded_part.normalize(&metrics.columnar);
+    for ((k, v), t, d) in records
+        .records()
+        .expect("only implemented for records")
+        .iter()
+    {
         if out.updates.len() > limit {
             break;
         }
         out.updates.push(BatchPartUpdate {
             k: format!("{:?}", PrettyBytes(k)),
             v: format!("{:?}", PrettyBytes(v)),
-            t,
+            t: u64::from_le_bytes(t),
             d: i64::from_le_bytes(d),
         });
     }
@@ -408,8 +412,9 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
             )
             .await
             .expect("part exists");
-            let mut cursor = Cursor::default();
-            while let Some(((k, v, mut t, d), _)) = cursor.pop(&encoded_part) {
+            let part = encoded_part.normalize(&state_versions.metrics.columnar);
+            for ((k, v), t, d) in part.records().expect("codec records").iter() {
+                let mut t = <u64 as Codec64>::decode(t);
                 t.advance_by(as_of);
                 let d = <i64 as Codec64>::decode(d);
                 updates.push(((k.to_owned(), v.to_owned()), t, d));
