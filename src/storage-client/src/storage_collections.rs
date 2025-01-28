@@ -93,14 +93,10 @@ pub trait StorageCollections: Debug {
     /// We get `init_ids`, which tells us about all collections that currently
     /// exist, so that we can record durable state for those that _we_ don't
     /// know yet about.
-    ///
-    /// We also get `drop_ids`, which tells us about all collections that we
-    /// might have known about before and have now been dropped.
     async fn initialize_state(
         &self,
         txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
         init_ids: BTreeSet<GlobalId>,
-        drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Update storage configuration with new parameters.
@@ -1318,7 +1314,6 @@ where
         &self,
         txn: &mut (dyn StorageTxn<T> + Send),
         init_ids: BTreeSet<GlobalId>,
-        drop_ids: BTreeSet<GlobalId>,
     ) -> Result<(), StorageError<T>> {
         let metadata = txn.get_collection_metadata();
         let existing_metadata: BTreeSet<_> = metadata.into_iter().map(|(id, _)| id).collect();
@@ -1327,12 +1322,16 @@ where
         let new_collections: BTreeSet<GlobalId> =
             init_ids.difference(&existing_metadata).cloned().collect();
 
-        self.prepare_state(txn, new_collections, drop_ids, BTreeMap::default())
-            .await?;
+        self.prepare_state(
+            txn,
+            new_collections,
+            BTreeSet::default(),
+            BTreeMap::default(),
+        )
+        .await?;
 
         // All shards that belong to collections dropped in the last epoch are
-        // eligible for finalization. This intentionally includes any built-in
-        // collections present in `drop_ids`.
+        // eligible for finalization.
         //
         // n.b. this introduces an unlikely race condition: if a collection is
         // dropped from the catalog, but the dataflow is still running on a
