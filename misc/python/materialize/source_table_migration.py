@@ -36,11 +36,9 @@ def _verify_source(
 
         # must not crash
         statement = f"SELECT count(*) FROM {source_name};"
-        print(statement)
         c.sql_query(statement)
 
         statement = f"SHOW CREATE SOURCE {source_name};"
-        print(statement)
         result = c.sql_query(statement)
         sql = result[0][1]
         assert "FOR TABLE" not in sql, f"FOR TABLE found in: {sql}"
