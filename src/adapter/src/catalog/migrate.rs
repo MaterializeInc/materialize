@@ -745,9 +745,7 @@ fn ast_rewrite_sources_to_tables(
                 changed_ids.insert(source_id, new_table_id);
             }
 
-            // When we upgrade to > rust 1.81 we should use #[expect(unreachable_patterns)]
-            // to enforce that we have covered all CreateSourceStatement variants.
-            #[allow(unreachable_patterns)]
+            #[expect(unreachable_patterns)]
             Statement::CreateSource(_) => {}
             _ => (),
         }

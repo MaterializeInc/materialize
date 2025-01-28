@@ -1885,6 +1885,20 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     }
 
     /// Sort item updates by dependency.
+    ///
+    /// First we group items into groups that are totally ordered by dependency. For example, when
+    /// sorting all items by dependency we know that all tables can come after all sources, because
+    /// a source can never depend on a table. Within these groups, the ID order matches the
+    /// dependency order.
+    ///
+    /// It used to be the case that the ID order of ALL items matched the dependency order. However,
+    /// certain migrations shuffled item IDs around s.t. this was no longer true. A much better
+    /// approach would be to investigate each item, discover their exact dependencies, and then
+    /// perform a topological sort. This is non-trivial because we only have the CREATE SQL of each
+    /// item here. Within the SQL the dependent items are sometimes referred to by ID and sometimes
+    /// referred to by name.
+    ///
+    /// The logic of this function should match [`sort_temp_item_updates`].
     fn sort_item_updates(
         item_updates: Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
     ) -> VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)> {
@@ -1892,6 +1906,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         // items in other groups. For example, all sinks are ordered greater than all tables.
         let mut types = Vec::new();
         // N.B. Functions can depend on system tables, but not user tables.
+        // TODO(udf): This will change when UDFs are supported.
         let mut funcs = Vec::new();
         let mut secrets = Vec::new();
         let mut connections = Vec::new();
@@ -1949,6 +1964,8 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     let item_additions = sort_item_updates(item_additions);
 
     /// Sort temporary item updates by dependency.
+    ///
+    /// The logic of this function should match [`sort_item_updates`].
     fn sort_temp_item_updates(
         temp_item_updates: Vec<(TemporaryItem, Timestamp, StateDiff)>,
     ) -> VecDeque<(TemporaryItem, Timestamp, StateDiff)> {
