@@ -27,4 +27,3 @@ For additional `kubectl` commands, see [kubectl Quick reference](https://kuberne
 - [Configuration](/installation/configuration/)
 - [Operational guidelines](/installation/operational-guidelines/)
 - [Installation](/installation/)
-- [Upgrading](/installation/upgrading/)

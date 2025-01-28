@@ -61,4 +61,3 @@ To configure the Materialize operator chart, you can:
 - [Troubleshooting](/installation/troubleshooting/)
 - [Installation](/installation/)
 - [Operational guidelines](/installation/operational-guidelines/)
-- [Upgrading](/installation/upgrading/)

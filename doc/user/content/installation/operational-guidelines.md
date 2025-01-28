@@ -143,4 +143,3 @@ Enabling network policies ...
 - [Configuration](/installation/configuration/)
 - [Installation](/installation/)
 - [Troubleshooting](/installation/troubleshooting/)
-- [Upgrading](/installation/upgrading/)
