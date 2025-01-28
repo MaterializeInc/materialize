@@ -337,7 +337,7 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         // TODO(jkosh44) With the proper lifetime incantations, we might be able to accept
         // references to `C::KeyCodec` and `C::ValCodec`, since that's what
         // `WriteHandle::compare_and_append` wants. That would avoid some clones from callers of
-        // this method.i
+        // this method.
         I: IntoIterator<Item = ((C::KeyCodec, C::ValCodec), i64)>,
     {
         let expected_upper = write_ts;
