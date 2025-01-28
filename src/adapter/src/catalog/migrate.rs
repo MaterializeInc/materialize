@@ -19,7 +19,7 @@ use mz_persist_types::ShardId;
 use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::names::FullItemName;
-use mz_sql_parser::ast::{Raw, Statement};
+use mz_sql_parser::ast::{IdentError, Raw, Statement};
 use mz_storage_client::controller::StorageTxn;
 use semver::Version;
 use tracing::info;
@@ -560,32 +560,36 @@ fn ast_rewrite_sources_to_tables(
                 // queries that reference the source name, since they will now need to query the
                 // table instead.
 
+                assert_eq!(
+                    item.name,
+                    name.0
+                        .last()
+                        .expect("at least one ident")
+                        .to_ast_string_stable()
+                );
                 // First find an unused name within the same schema to avoid conflicts.
-                let mut new_source_item_name = format!("{}_source", item.name);
-                let mut new_source_name_inner =
-                    format!("{}_source", name.0.last().expect("at least one ident"));
-                let mut i = 0;
-                while item_names_per_schema
-                    .get(&item.schema_id)
-                    .expect("schema must exist")
-                    .contains(&new_source_item_name)
-                {
-                    new_source_item_name = format!("{}_source_{}", item.name, i);
-                    new_source_name_inner = format!(
-                        "{}_source_{}",
-                        name.0.last().expect("at least one ident"),
-                        i
-                    );
-                    i += 1;
-                }
+                let is_valid = |new_source_ident: &Ident| {
+                    if item_names_per_schema
+                        .get(&item.schema_id)
+                        .expect("schema must exist")
+                        .contains(&new_source_ident.to_ast_string_stable())
+                    {
+                        Ok::<_, IdentError>(false)
+                    } else {
+                        Ok(true)
+                    }
+                };
+                let new_source_ident =
+                    Ident::try_generate_name(item.name.clone(), "_source", is_valid)?;
+
                 // We will use the original item name for the new table item.
                 let table_item_name = item.name.clone();
 
                 // Update the source item/statement to use the new name.
                 let mut new_source_name = name.clone();
                 *new_source_name.0.last_mut().expect("at least one ident") =
-                    Ident::new_unchecked(new_source_name_inner);
-                item.name = new_source_item_name;
+                    new_source_ident.clone();
+                item.name = new_source_ident.to_ast_string_stable();
 
                 // A reference to the source that will be included in the table statement
                 let source_ref =
