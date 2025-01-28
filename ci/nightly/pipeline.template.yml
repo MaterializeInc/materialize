@@ -1216,14 +1216,31 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 1200
       concurrency: 1
-      concurrency_group: 'terraform'
+      concurrency_group: 'terraform-aws'
       agents:
         queue: linux-aarch64-small
       plugins:
         - ./ci/plugins/scratch-aws-access: ~
         - ./ci/plugins/mzcompose:
             composition: terraform
+            run: aws
       branches: "main v*.* lts-v*"
+
+    - id: terraform-gcp
+      label: "Terraform + Helm Chart E2E on GCP"
+      artifact_paths: [test/terraform/aws/terraform.tfstate]
+      depends_on: build-aarch64
+      timeout_in_minutes: 1200
+      concurrency: 1
+      concurrency_group: 'terraform-gcp'
+      agents:
+        queue: linux-aarch64-small
+      plugins:
+        - ./ci/plugins/scratch-aws-access: ~
+        - ./ci/plugins/mzcompose:
+            composition: terraform
+            run: gcp
+      #branches: "main v*.* lts-v*"
 
   - group: "Output consistency"
     key: output-consistency
