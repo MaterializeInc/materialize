@@ -1285,7 +1285,7 @@ pub static ENABLE_RBAC_CHECKS: VarDefinition = VarDefinition::new(
 
 pub static ENABLE_SESSION_RBAC_CHECKS: VarDefinition = VarDefinition::new(
     "enable_session_rbac_checks",
-    // TODO(jkosh44) Once RBAC is complete, change this to `true`.
+    // TODO(jkosh44) Once RBAC is enabled in all environments, change this to `true`.
     value!(bool; false),
     "User facing session boolean flag indicating whether to apply RBAC checks before \
         executing statements (Materialize).",
