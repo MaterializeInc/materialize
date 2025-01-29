@@ -10,8 +10,6 @@ menu:
 
 ## Recommended instance types
 
-Materialize has been tested to work on instances with the following properties:
-
 - ARM-based CPU
 - 1:8 ratio of vCPU to GiB memory
 - 1:16 ratio of vCPU to GiB local instance storage (if enabling spill-to-disk)
