@@ -5969,6 +5969,12 @@ FROM (
 ORDER BY outer_a, outer_b;
 ----
 Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#2]
+  With
+    cte [l1 as subquery-1] =
+      Reduce aggregates=[sum(#0)]
+        Project (#3)
+          Map (lead(row(#0, 1, null)) over (partition by [((4 * #0) / (#^0 + char_length(#^1)))] order by [#0 asc nulls_last]), (3 + #2))
+            Get materialize.public.foo
   Return
     Map (select(Get l1))
       Distinct
@@ -5982,12 +5988,6 @@ Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#2]
           Project (#2, #1)
             Map ((#0 + 5))
               Get materialize.public.foo
-  With
-    cte l1 =
-      Reduce aggregates=[sum(#0)]
-        Project (#3)
-          Map (lead(row(#0, 1, null)) over (partition by [((4 * #0) / (#^0 + char_length(#^1)))] order by [#0 asc nulls_last]), (3 + #2))
-            Get materialize.public.foo
 
 Target cluster: quickstart
 

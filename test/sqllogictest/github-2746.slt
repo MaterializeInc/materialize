@@ -60,6 +60,26 @@ WHERE
  );
 ----
 Explained Query:
+  With
+    cte l0 =
+      Join::Linear
+        linear_stage[0]
+          lookup={ relation=1, key=[] }
+          stream={ key=[], thinning=(#0) }
+        source={ relation=0, key=[] }
+        ArrangeBy
+          raw=true
+          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
+          types=[integer]
+          Get::Collection materialize.public.lineitem
+            project=(#0)
+            raw=true
+        ArrangeBy
+          raw=true
+          arrangements[0]={ key=[], permutation=id, thinning=() }
+          Get::Collection materialize.public.orders
+            project=()
+            raw=true
   Return
     Join::Linear
       final_closure
@@ -141,26 +161,6 @@ Explained Query:
             Get::Collection materialize.public.orders
               filter=((#0) IS NOT NULL)
               raw=true
-  With
-    cte l0 =
-      Join::Linear
-        linear_stage[0]
-          lookup={ relation=1, key=[] }
-          stream={ key=[], thinning=(#0) }
-        source={ relation=0, key=[] }
-        ArrangeBy
-          raw=true
-          arrangements[0]={ key=[], permutation=id, thinning=(#0) }
-          types=[integer]
-          Get::Collection materialize.public.lineitem
-            project=(#0)
-            raw=true
-        ArrangeBy
-          raw=true
-          arrangements[0]={ key=[], permutation=id, thinning=() }
-          Get::Collection materialize.public.orders
-            project=()
-            raw=true
 
 Source materialize.public.orders
   project=(#0, #4)

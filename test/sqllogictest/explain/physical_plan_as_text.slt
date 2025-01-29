@@ -308,22 +308,6 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
 (SELECT x + 1 FROM cte UNION ALL SELECT x - 1 FROM cte)
 ----
 Explained Query:
-  Return
-    Union
-      Get::Arrangement l0
-        project=(#1)
-        map=((#0 + 1))
-        key=#0
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=() }
-        types=[integer?]
-      Get::Arrangement l0
-        project=(#1)
-        map=((#0 - 1))
-        key=#0
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=() }
-        types=[integer?]
   With
     cte l0 =
       Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
@@ -341,6 +325,22 @@ Explained Query:
             Negate
               Get::Collection materialize.public.mv
                 raw=true
+  Return
+    Union
+      Get::Arrangement l0
+        project=(#1)
+        map=((#0 + 1))
+        key=#0
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        types=[integer?]
+      Get::Arrangement l0
+        project=(#1)
+        map=((#0 - 1))
+        key=#0
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=() }
+        types=[integer?]
 
 Source materialize.public.mv
   project=(#1)
@@ -486,6 +486,21 @@ SELECT
 FROM t
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Accumulable
+        simple_aggrs[0]=(0, 0, sum(#0))
+        distinct_aggrs[0]=(1, 1, count(distinct #0))
+        val_plan
+          project=(#0, #0)
+        key_plan
+          project=()
+        Get::Arrangement materialize.public.t
+          project=(#1)
+          key=#0
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer?, integer?]
   Return
     Union
       ArrangeBy
@@ -506,21 +521,6 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
           Constant
             - ()
-  With
-    cte l0 =
-      Reduce::Accumulable
-        simple_aggrs[0]=(0, 0, sum(#0))
-        distinct_aggrs[0]=(1, 1, count(distinct #0))
-        val_plan
-          project=(#0, #0)
-        key_plan
-          project=()
-        Get::Arrangement materialize.public.t
-          project=(#1)
-          key=#0
-          raw=false
-          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-          types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -590,26 +590,6 @@ EXPLAIN PHYSICAL PLAN AS TEXT FOR
 MATERIALIZED VIEW hierarchical_global_mv
 ----
 materialize.public.hierarchical_global_mv:
-  Return
-    Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Arrangement l0
-              project=()
-              key=
-              raw=false
-              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
-          Constant
-            - ()
   With
     cte l0 =
       Reduce::Hierarchical
@@ -626,20 +606,6 @@ materialize.public.hierarchical_global_mv:
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
           types=[integer?, integer?]
-
-Used Indexes:
-  - materialize.public.t_a_idx (*** full scan ***)
-
-Target cluster: quickstart
-
-EOF
-
-# Test Reduce::Hierarchical (global aggregate, one-shot).
-query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
-SELECT * FROM hierarchical_global
-----
-Explained Query:
   Return
     Union
       ArrangeBy
@@ -660,6 +626,20 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
           Constant
             - ()
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test Reduce::Hierarchical (global aggregate, one-shot).
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+SELECT * FROM hierarchical_global
+----
+Explained Query:
   With
     cte l0 =
       Reduce::Hierarchical
@@ -677,6 +657,26 @@ Explained Query:
           raw=false
           arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
           types=[integer?, integer?]
+  Return
+    Union
+      ArrangeBy
+        input_key=[]
+        raw=true
+        Get::PassArrangements l0
+          raw=false
+          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Mfp
+        project=(#0, #1)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Arrangement l0
+              project=()
+              key=
+              raw=false
+              arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+          Constant
+            - ()
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -742,21 +742,14 @@ SELECT
 FROM t
 ----
 Explained Query:
-  Return
-    Union
-      Get::PassArrangements l1
-        raw=true
-      Mfp
-        project=(#0, #1)
-        map=(null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Collection l1
-              project=()
-              raw=true
-          Constant
-            - ()
   With
+    cte l0 =
+      Get::Arrangement materialize.public.t
+        project=(#1)
+        key=#0
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        types=[integer?, integer?]
     cte l1 =
       Join::Linear
         linear_stage[0]
@@ -781,13 +774,20 @@ Explained Query:
             project=()
           Get::PassArrangements l0
             raw=true
-    cte l0 =
-      Get::Arrangement materialize.public.t
-        project=(#1)
-        key=#0
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-        types=[integer?, integer?]
+  Return
+    Union
+      Get::PassArrangements l1
+        raw=true
+      Mfp
+        project=(#0, #1)
+        map=(null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Collection l1
+              project=()
+              raw=true
+          Constant
+            - ()
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -1059,22 +1059,14 @@ EXPLAIN PHYSICAL PLAN AS TEXT FOR
 MATERIALIZED VIEW collated_global_mv
 ----
 materialize.public.collated_global_mv:
-  Return
-    Union
-      Get::Collection l1
-        project=(#2, #4, #0, #1, #3, #5)
-        raw=true
-      Mfp
-        project=(#0..=#5)
-        map=(0, null, null, null, null, null)
-        Union consolidate_output=true
-          Negate
-            Get::Collection l1
-              project=()
-              raw=true
-          Constant
-            - ()
   With
+    cte l0 =
+      Get::Arrangement materialize.public.t
+        project=(#1)
+        key=#0
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        types=[integer?, integer?]
     cte l1 =
       Join::Delta
         plan_path[0]
@@ -1170,27 +1162,6 @@ materialize.public.collated_global_mv:
             project=()
           Get::PassArrangements l0
             raw=true
-    cte l0 =
-      Get::Arrangement materialize.public.t
-        project=(#1)
-        key=#0
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-        types=[integer?, integer?]
-
-Used Indexes:
-  - materialize.public.t_a_idx (*** full scan ***)
-
-Target cluster: quickstart
-
-EOF
-
-# Test Reduce::Collated (global aggregate, one-shot).
-query T multiline
-EXPLAIN PHYSICAL PLAN AS TEXT FOR
-SELECT * FROM collated_global
-----
-Explained Query:
   Return
     Union
       Get::Collection l1
@@ -1206,7 +1177,28 @@ Explained Query:
               raw=true
           Constant
             - ()
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Test Reduce::Collated (global aggregate, one-shot).
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+SELECT * FROM collated_global
+----
+Explained Query:
   With
+    cte l0 =
+      Get::Arrangement materialize.public.t
+        project=(#1)
+        key=#0
+        raw=false
+        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+        types=[integer?, integer?]
     cte l1 =
       Join::Delta
         plan_path[0]
@@ -1303,13 +1295,21 @@ Explained Query:
             project=()
           Get::PassArrangements l0
             raw=true
-    cte l0 =
-      Get::Arrangement materialize.public.t
-        project=(#1)
-        key=#0
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-        types=[integer?, integer?]
+  Return
+    Union
+      Get::Collection l1
+        project=(#2, #4, #0, #1, #3, #5)
+        raw=true
+      Mfp
+        project=(#0..=#5)
+        map=(0, null, null, null, null, null)
+        Union consolidate_output=true
+          Negate
+            Get::Collection l1
+              project=()
+              raw=true
+          Constant
+            - ()
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
@@ -1837,6 +1837,22 @@ SELECT
 FROM t
 ----
 Explained Query:
+  With
+    cte l0 =
+      Reduce::Basic
+        aggrs[0]=(0, string_agg[order_by=[]](row(row((integer_to_text(#0) || "1"), ","))))
+        aggrs[1]=(1, string_agg[order_by=[]](row(row((integer_to_text(#0) || "2"), ","))))
+        val_plan
+          project=(#2, #3)
+          map=(integer_to_text(#0), row(row((#1 || "1"), ",")), row(row((#1 || "2"), ",")))
+        key_plan
+          project=()
+        Get::Arrangement materialize.public.t
+          project=(#1)
+          key=#0
+          raw=false
+          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
+          types=[integer?, integer?]
   Return
     Union
       ArrangeBy
@@ -1857,22 +1873,6 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
           Constant
             - ()
-  With
-    cte l0 =
-      Reduce::Basic
-        aggrs[0]=(0, string_agg[order_by=[]](row(row((integer_to_text(#0) || "1"), ","))))
-        aggrs[1]=(1, string_agg[order_by=[]](row(row((integer_to_text(#0) || "2"), ","))))
-        val_plan
-          project=(#2, #3)
-          map=(integer_to_text(#0), row(row((#1 || "1"), ",")), row(row((#1 || "2"), ",")))
-        key_plan
-          project=()
-        Get::Arrangement materialize.public.t
-          project=(#1)
-          key=#0
-          raw=false
-          arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-          types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t_a_idx (*** full scan ***)
