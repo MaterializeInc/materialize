@@ -486,11 +486,11 @@ EOF
 
 # Regression test for gh issue 27348 (cardinality + WMR panic)
 query T multiline
-explain with(cardinality)
-with mutually recursive
-  t(x int) as (select 1 union all select * from u),
-  u(x int) as (select t.x+1 from t where x < 7)
-(select * from t);
+EXPLAIN OPTIMIZED PLAN WITH(cardinality) FOR
+WITH MUTUALLY RECURSIVE
+  t(x int) AS (SELECT 1 UNION ALL SELECT * FROM u),
+  u(x int) AS (SELECT t.x+1 FROM t WHERE x < 7)
+SELECT * FROM t;
 ----
 Explained Query:
   With Mutually Recursive

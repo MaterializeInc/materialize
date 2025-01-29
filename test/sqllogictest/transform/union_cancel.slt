@@ -280,7 +280,7 @@ CREATE TABLE init(n int, m int, s string);
 
 # Union branch cancellation should happen inside WMR.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 WITH MUTUALLY RECURSIVE
   c0(n int) AS (
     (SELECT n FROM init)

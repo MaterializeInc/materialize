@@ -489,7 +489,7 @@ SET cluster = c1;
 
 # EXPLAIN in c1 (should be running with the feature flag turned on).
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT
   t1.y as f1,
   t2.y as f2,
@@ -530,7 +530,7 @@ SET cluster = c2;
 
 # EXPLAIN in c2 (should be running with the feature flag turned off).
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT
   t1.y as f1,
   t2.y as f2,

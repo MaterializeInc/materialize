@@ -89,7 +89,7 @@ Target cluster: multiprocess
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT regexp_match('ABC', 'a.*');
 ----
 Explained Query (fast path):
@@ -106,7 +106,7 @@ SELECT regexp_match('ABC', 'a.*');
 NULL
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT regexp_match('ABC', 'a.*', 'i');
 ----
 Explained Query (fast path):
@@ -157,7 +157,7 @@ INSERT INTO t VALUES (
 
 # Note that sqllogictest can't handle newlines in string output, so replace those when displaying `s`
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT replace(s, E'\n', '<newline>') FROM t WHERE s~'a.*';
 ----
 Explained Query:
@@ -179,7 +179,7 @@ SELECT replace(s, E'\n', '<newline>') FROM t WHERE s~'a.*';
 abc
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT replace(s, E'\n', '<newline>') FROM t WHERE s~*'a.*';
 ----
 Explained Query:
@@ -202,7 +202,7 @@ ABC
 abc
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*') FROM t;
 ----
 Explained Query:
@@ -229,7 +229,7 @@ abc
 {abc}
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT replace(s, E'\n', '<newline>'), regexp_match(s, 'a.*', 'i') FROM t;
 ----
 Explained Query:
@@ -285,7 +285,7 @@ SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~ '\';
 # Dynamic regexes (binary (or variadic) versions)
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~ regex_pat;
 ----
 Explained Query:
@@ -308,7 +308,7 @@ abc
 test line 1<newline>test line 2
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~* regex_pat;
 ----
 Explained Query:
@@ -332,7 +332,7 @@ abc
 test line 1<newline>test line 2
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat) FROM t;
 ----
 Explained Query:
@@ -364,7 +364,7 @@ test line 1<newline>test line 2
 {"1<newline>test line 2"}
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT replace(s, E'\n', '<newline>'), regex_pat, regexp_match(s, regex_pat, 'i') FROM t;
 ----
 Explained Query:
@@ -436,7 +436,7 @@ SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~* regex_pat;
 
 # TODO: multiline literal errors should be printed somehow differently in EXPLAIN
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT *, s~'\' FROM t;
 ----
 Explained Query:
@@ -542,7 +542,7 @@ no match
 # Test regexp_replace success paths
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT regexp_replace('FOOBARBAZ', 'b..', 'X');
 ----
 Explained Query (fast path):
@@ -559,7 +559,7 @@ SELECT regexp_replace('FOOBARBAZ', 'b..', 'X');
 FOOBARBAZ
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT regexp_replace('FOOBARBAZ', 'b..', 'X', 'i');
 ----
 Explained Query (fast path):
@@ -597,7 +597,7 @@ statement ok
 INSERT INTO r VALUES ('foobarbaz', 'b..', 'X'), ('foobarbaz', 'b(..)', '>${1}<'), ('FOOBARBAZ', 'b..', 'X'), ('FOOZARZAZ', 'b..', 'X');
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT regexp_replace(s, 'b..', 'X') FROM r;
 ----
 Explained Query:
@@ -624,7 +624,7 @@ FOOZARZAZ
 FOOZARZAZ
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT regexp_replace(s, 'b..', 'X', 'i') FROM r;
 ----
 Explained Query:
@@ -651,7 +651,7 @@ FOOZARZAZ
 FOOZARZAZ
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT regexp_replace(s, 'b..', 'X', 'ig') FROM r;
 ----
 Explained Query:
@@ -678,7 +678,7 @@ FOOZARZAZ
 FOOZARZAZ
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT regexp_replace(s, regex, replacement, 'ig') FROM r;
 ----
 Explained Query:
@@ -707,7 +707,7 @@ foo>ar<>az<
 # Test regexp_replace error paths
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT regexp_replace('foobarbaz', 'b(..', 'X', 'ig');
 ----
 Explained Query (fast path):
@@ -730,7 +730,7 @@ statement ok
 INSERT INTO e VALUES ('foobarbaz', 'b(..', 'X');
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT s, regexp_replace(s, 'b(..', replacement, 'ig') FROM e;
 ----
 Explained Query:

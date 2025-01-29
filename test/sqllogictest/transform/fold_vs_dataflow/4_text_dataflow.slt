@@ -112,7 +112,7 @@ CDCDABCDef
 {CD}
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT
  f1 || f4,
  UPPER(f1), LOWER(f1),

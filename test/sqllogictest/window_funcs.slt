@@ -6026,7 +6026,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT
   sum(y-3) OVER (PARTITION BY 2*x, 3*y ORDER BY x+1, y+2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
 FROM t7
@@ -7146,7 +7146,7 @@ NULL
 
 # Test `on_unique` for lag/lead
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT
   lag(x,y,100) OVER (PARTITION BY x ORDER BY y+y)
 FROM t9;
@@ -7197,7 +7197,7 @@ NULL
 
 # Test `on_unique` for `FusedValueWindowFunc`. There should be NO window function call in the following plan.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT
   x,
   y,
@@ -7431,7 +7431,7 @@ where (case when (((select "collection_timestamp" from mz_internal.mz_storage_us
 ## Tests for window function fusion
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT
   *,
   lag(x)          OVER (ORDER BY x),
@@ -7516,7 +7516,7 @@ ORDER BY x,y;
 # In the following query, currently we only fuse the two inner `lag`s.
 # In theory, we could also fuse the two `last_value`s.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT
   *,
   first_value(
@@ -7591,7 +7591,7 @@ ORDER BY x,y;
 17  18  1111  306  2222  35  16  35
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT
   *,
   lag(x) OVER (),

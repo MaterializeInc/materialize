@@ -1573,7 +1573,7 @@ statement ok
 SET CLUSTER = no_replicas;
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT * FROM t4;
 ----
 Explained Query:

@@ -64,7 +64,7 @@ EOF
 
 # Ensure LEFT JOIN is planned with only one join.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN FOR
 select * from
 foo_raw left join bar on foo_raw.a = bar.a;
 ----
@@ -101,7 +101,7 @@ EOF
 # RIGHT JOIN should be planned with only one join.
 # At the moment, we do not see the join symmetry.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN FOR
 select * from
 bar right join foo_raw on foo_raw.a = bar.a;
 ----
@@ -143,7 +143,7 @@ EOF
 
 # Ensure that multiple left joins still produce one join operator each.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN FOR
 select * from
 foo left join bar on foo.a = bar.a
     left join baz on foo.b = baz.b
@@ -213,7 +213,7 @@ EOF
 # Record how we do not yet fully optimize projections in left join stacks.
 # This plan appears to require further projection pushdown to cancel the last join.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN FOR
 select count(*) from
 foo left join bar on foo.a = bar.a
     left join baz on foo.b = baz.b
@@ -295,7 +295,7 @@ EOF
 
 # Record how we can push filters through left joins to their source.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN FOR
 select * from
 foo left join baz on foo.b = baz.b
     left join quux on baz.c = quux.c
@@ -353,7 +353,7 @@ EOF
 # collect info about ids inside a LetRec.
 # The resulting plan should have 1 join with 2 inputs.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN FOR
 with mutually recursive
   c0(a int4, b int8, u text, key int4) as (
     select * from (
@@ -428,7 +428,7 @@ EOF
 # The resulting plan should have 1 join with 2 inputs.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN FOR
 with mutually recursive
   c0(a int4, b int8, u text, key int4) as (
     select * from (
@@ -454,7 +454,7 @@ EOF
 # The resulting plan should have 1 join with 2 inputs.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN FOR
 with mutually recursive
   keys(a int4) as (
     select distinct c0.a from c0, bar where c0.a = bar.a
@@ -479,7 +479,7 @@ EOF
 # The resulting plan should have 1 join with 2 inputs.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN FOR
 with mutually recursive
   bar2(a int4, v text) as (
     select * from bar
@@ -540,7 +540,7 @@ EOF
 # is now being referenced from the body.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN FOR
 with mutually recursive
   bar2(a int4, v text) as (
     select * from bar
@@ -627,7 +627,7 @@ EOF
 # Similar to the previous test, but the recursive Get is at the other input. This means that the input that should have
 # a known key is the static one, for which we don't need to go propagate a key through a recursive Get.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN FOR
 with mutually recursive
   c0(a int4, b int8, u text, a_bar int4, v_bar text) as (
     (
@@ -679,7 +679,7 @@ EOF
 # Ensure LEFT JOIN inside WMR is planned with only one join.
 # A variation of the previous one.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN FOR
 with mutually recursive
   c0(a int4, b int8, u text, a_bar int4, v_bar text) as (
     (
@@ -727,7 +727,7 @@ EOF
 
 # Ensure that multiple left joins inside a WMR still produce one join operator each.
 query T multiline
-explain
+EXPLAIN OPTIMIZED PLAN FOR
 with mutually recursive
   c0(a int4, b int8, u text) as (
     (

@@ -27,7 +27,7 @@ $ set-regex match=(\s\(u\d+\)|materialize\.public\.) replacement=
 > EXPLAIN OPTIMIZED PLAN FOR SELECT (SELECT 'a' LIMIT 1);
 Explained Query (fast path):
   Constant
-    - ("a")
+    - (a)
 
 Target cluster: mz_catalog_server
 

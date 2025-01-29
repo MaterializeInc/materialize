@@ -576,7 +576,7 @@ INSERT INTO init VALUES (1, 3, 'aaa'), (2, 4, 'bbb');
 # The `WHERE n<5` should be pushed into l0.
 # Furthermore, within l0 it should be pushed down on top of the Gets. The Source should also have it.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 WITH MUTUALLY RECURSIVE
   c0(n int) AS (
     (SELECT n FROM init)
@@ -626,7 +626,7 @@ EOF
 # Here, a pushdown should NOT happen, because not every use of the Get has the predicate.
 # That is, the `< 5` predicate should stay inside the `cte l1 =`, and shouldn't appear anywhere else.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 WITH MUTUALLY RECURSIVE
   c0(n int) AS (
     (SELECT n FROM init)
@@ -673,7 +673,7 @@ EOF
 
 # Same as the previous query, but the predicate should stay inside the `cte l2 =`
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 WITH MUTUALLY RECURSIVE
   c0(n int) AS (
     (SELECT n FROM init)
@@ -723,7 +723,7 @@ EOF
 # intersection in `get_predicates` empty.
 # The predicate should NOT be pushed into the `cte l0 =`, and should stay in both the `cte l2 =` and the `cte l1 =`.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 WITH MUTUALLY RECURSIVE
   c0(n int) AS (
     (SELECT n FROM init)
@@ -776,7 +776,7 @@ EOF
 # iterations (l2).
 # That is, the `> 7` predicate should stay inside the `cte l0 =` and the body.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 WITH MUTUALLY RECURSIVE
   c0(n int) AS (
     (SELECT n FROM init)
@@ -826,7 +826,7 @@ EOF
 # iterations (l1).
 # The `> 7` should end up inside the `cte l1 =`, and should disappear from everywhere else.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 WITH MUTUALLY RECURSIVE
   c0(n int) AS (
     (SELECT n FROM init)
@@ -878,7 +878,7 @@ EOF
 # because `l2` is being referenced across iterations.
 # That is, the `< 3` predicate should stay inside the `cte l0 =`.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 WITH MUTUALLY RECURSIVE
   c0(n int) AS (
     (SELECT n FROM init)
@@ -986,7 +986,7 @@ statement ok
 CREATE TABLE t(x int, y int);
 
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT *
 FROM (
   SELECT x, y, x*y as z1, x*y + 1 AS z2
@@ -1014,7 +1014,7 @@ DROP ROLE r2;
 # expressions should mention only the previous map expression, but not earlier ones. Also, there has to be at least
 # 3 map expressions, so that adding the support of the last one doesn't immediately cover all of the map expressions.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT * FROM (
   SELECT z2 * 4 AS z3
   FROM (
@@ -1043,7 +1043,7 @@ EOF
 # Test when `push_filters_through_map` runs into the inlining limit: The source shouldn't have the filter pushed down
 # into it.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT * FROM (
   SELECT * FROM (
     SELECT *, x + y + z1 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 AS r1
@@ -1070,7 +1070,7 @@ EOF
 # Also adds more predicates to test a bit more scenarios.
 # Also tests that MFP CSE happens for the MFP that is in the source.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT * FROM (
   SELECT * FROM (
     SELECT *, x + y + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z2 + z1 AS r1

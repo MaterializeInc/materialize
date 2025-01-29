@@ -75,7 +75,7 @@ EOF
 # Positive example: both c1 and c2 and consequently the body of the
 # WMR are monotonic.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 WITH MUTUALLY RECURSIVE
   c0(x INT, y INT) AS (
     SELECT * FROM (VALUES (1, 2), (3, 4), (5, 6))
@@ -128,7 +128,7 @@ EOF
 # Negative example: c2 (and consequently c2 and the WMR block body) are not
 # monotonic because c2 has a LIMIT clause.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 WITH MUTUALLY RECURSIVE
   c0(x INT, y INT) AS (
     SELECT * FROM (VALUES (1, 2), (3, 4), (5, 6))
