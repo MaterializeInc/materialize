@@ -3983,17 +3983,14 @@ pub fn serve(
             .open(controller_config.persist_location.clone())
             .await
             .context("opening persist client")?;
-        let builtin_item_migration_config = if enable_0dt_deployment {
-            BuiltinItemMigrationConfig::ZeroDownTime {
+        let builtin_item_migration_config =
+            BuiltinItemMigrationConfig {
                 persist_client: persist_client.clone(),
                 read_only: read_only_controllers,
             }
-        } else {
-            BuiltinItemMigrationConfig::Legacy
-        };
+        ;
         let OpenCatalogResult {
             mut catalog,
-            storage_collections_to_drop,
             migrated_storage_collections_0dt,
             new_builtin_collections,
             builtin_table_updates,
@@ -4158,7 +4155,6 @@ pub fn serve(
                             controller_config,
                             controller_envd_epoch,
                             read_only_controllers,
-                            storage_collections_to_drop,
                         )
                     })
                     .unwrap_or_terminate("failed to initialize storage_controller");

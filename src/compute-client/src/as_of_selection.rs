@@ -812,7 +812,6 @@ mod tests {
             &self,
             _txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
             _init_ids: BTreeSet<GlobalId>,
-            _drop_ids: BTreeSet<GlobalId>,
         ) -> Result<(), StorageError<Self::Timestamp>> {
             unimplemented!()
         }

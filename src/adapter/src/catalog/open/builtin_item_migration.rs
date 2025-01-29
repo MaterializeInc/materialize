@@ -40,15 +40,13 @@ use tracing::{debug, error};
 
 use crate::catalog::open::builtin_item_migration::persist_schema::{TableKey, TableKeySchema};
 use crate::catalog::state::LocalExpressionCache;
-use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
+use crate::catalog::{BuiltinTableUpdate, CatalogState};
 
 /// The results of a builtin item migration.
 pub(crate) struct BuiltinItemMigrationResult {
     /// A vec of updates to apply to the builtin tables.
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
-    /// A set of storage collections to drop (only used by legacy migration).
-    pub(crate) storage_collections_to_drop: BTreeSet<GlobalId>,
-    /// A set of new shards that may need to be initialized (only used by 0dt migration).
+    /// A set of new shards that may need to be initialized.
     pub(crate) migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// Some cleanup action to take once the migration has been made durable.
     pub(crate) cleanup_action: BoxFuture<'static, ()>,
@@ -60,59 +58,20 @@ pub(crate) async fn migrate_builtin_items(
     txn: &mut Transaction<'_>,
     local_expr_cache: &mut LocalExpressionCache,
     migrated_builtins: Vec<CatalogItemId>,
-    config: BuiltinItemMigrationConfig,
+    BuiltinItemMigrationConfig {
+        persist_client,
+        read_only,
+    }: BuiltinItemMigrationConfig,
 ) -> Result<BuiltinItemMigrationResult, Error> {
-    match config {
-        BuiltinItemMigrationConfig::Legacy => {
-            migrate_builtin_items_legacy(state, txn, migrated_builtins).await
-        }
-        BuiltinItemMigrationConfig::ZeroDownTime {
-            persist_client,
-            read_only,
-        } => {
-            migrate_builtin_items_0dt(
-                state,
-                txn,
-                local_expr_cache,
-                persist_client,
-                migrated_builtins,
-                read_only,
-            )
-            .await
-        }
-    }
-}
-
-/// The legacy method for builtin migrations is to drop all migrated items and all of their
-/// dependents and re-create them all with the new schema and new global IDs.
-async fn migrate_builtin_items_legacy(
-    state: &mut CatalogState,
-    txn: &mut Transaction<'_>,
-    migrated_builtins: Vec<CatalogItemId>,
-) -> Result<BuiltinItemMigrationResult, Error> {
-    let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter(&state.config().builtins_cfg)
-        .map(|builtin| {
-            let id = state.resolve_builtin_object(builtin);
-            let fingerprint = builtin.fingerprint();
-            (id, fingerprint)
-        })
-        .collect();
-    let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
+    migrate_builtin_items_0dt(
         state,
         txn,
+        local_expr_cache,
+        persist_client,
         migrated_builtins,
-        id_fingerprint_map,
-    )?;
-    let builtin_table_updates =
-        Catalog::apply_builtin_migration(state, txn, &mut builtin_migration_metadata).await?;
-
-    let cleanup_action = async {}.boxed();
-    Ok(BuiltinItemMigrationResult {
-        builtin_table_updates,
-        storage_collections_to_drop: builtin_migration_metadata.previous_storage_collection_ids,
-        migrated_storage_collections_0dt: BTreeSet::new(),
-        cleanup_action,
-    })
+        read_only,
+    )
+    .await
 }
 
 /// An implementation of builtin item migrations that is compatible with zero down-time upgrades.
@@ -472,7 +431,6 @@ async fn migrate_builtin_items_0dt(
 
     Ok(BuiltinItemMigrationResult {
         builtin_table_updates,
-        storage_collections_to_drop: BTreeSet::new(),
         migrated_storage_collections_0dt,
         cleanup_action,
     })
