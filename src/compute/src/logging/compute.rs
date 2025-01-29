@@ -24,14 +24,11 @@ use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Timestamp};
 use mz_timely_util::containers::{Column, ColumnBuilder, ProvidedBuilder};
 use mz_timely_util::replay::MzReplay;
-use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::pushers::buffer::Session;
-use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::{Concatenate, Enter, Operator};
+use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::scheduling::Scheduler;
 use timely::{Container, Data};
 use tracing::error;
@@ -39,7 +36,8 @@ use uuid::Uuid;
 
 use crate::extensions::arrange::MzArrange;
 use crate::logging::{
-    ComputeLog, EventQueue, LogCollection, LogVariant, PermutedRowPacker, SharedLoggingState,
+    ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, OutputSessionVec,
+    PermutedRowPacker, SharedLoggingState, Update,
 };
 use crate::row_spine::{RowRowBatcher, RowRowBuilder};
 use crate::typedefs::RowRowSpine;
@@ -299,6 +297,7 @@ pub(super) fn construct<A: Scheduler + 'static, S: Scope<Timestamp = Timestamp>>
     scheduler: A,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
+    compute_event_stream: impl IntoIterator<Item = StreamCore<S, Column<(Duration, ComputeEvent)>>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
@@ -318,6 +317,12 @@ pub(super) fn construct<A: Scheduler + 'static, S: Scope<Timestamp = Timestamp>>
                 }
             },
         );
+
+        let logs = compute_event_stream
+            .into_iter()
+            .map(|stream| stream.enter(scope))
+            .chain(std::iter::once(logs));
+        let logs = scope.concatenate(logs);
 
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
@@ -663,34 +668,21 @@ struct ArrangementSizeState {
     count: isize,
 }
 
-/// An update of value `D` at a time and with a diff.
-type Update<D> = (D, Timestamp, Diff);
-/// A pusher for updates of value `D` for vector-based containers.
-type Pusher<D> = Counter<Timestamp, Vec<Update<D>>, Tee<Timestamp, Vec<Update<D>>>>;
-/// A pusher for updates of value `D` for columnar containers.
-type PusherColumnar<D> = Counter<Timestamp, Column<Update<D>>, Tee<Timestamp, Column<Update<D>>>>;
-/// An output session for vector-based containers of updates `D`, using a capacity container builder.
-type OutputSession<'a, D> =
-    Session<'a, Timestamp, CapacityContainerBuilder<Vec<Update<D>>>, Pusher<D>>;
-/// An output session for columnar containers of updates `D`, using a column builder.
-type OutputSessionColumnar<'a, D> =
-    Session<'a, Timestamp, ColumnBuilder<Update<D>>, PusherColumnar<D>>;
-
 /// Bundled output sessions used by the demux operator.
 struct DemuxOutput<'a> {
-    export: OutputSession<'a, ExportDatum>,
-    frontier: OutputSession<'a, FrontierDatum>,
-    import_frontier: OutputSession<'a, ImportFrontierDatum>,
-    peek: OutputSession<'a, PeekDatum>,
-    peek_duration: OutputSession<'a, PeekDurationDatum>,
-    shutdown_duration: OutputSession<'a, u128>,
-    arrangement_heap_size: OutputSession<'a, ArrangementHeapDatum>,
-    arrangement_heap_capacity: OutputSession<'a, ArrangementHeapDatum>,
-    arrangement_heap_allocations: OutputSession<'a, ArrangementHeapDatum>,
-    hydration_time: OutputSession<'a, HydrationTimeDatum>,
-    error_count: OutputSession<'a, ErrorCountDatum>,
-    lir_mapping: OutputSessionColumnar<'a, LirMappingDatum>,
-    dataflow_global_ids: OutputSession<'a, DataflowGlobalDatum>,
+    export: OutputSessionVec<'a, Update<ExportDatum>>,
+    frontier: OutputSessionVec<'a, Update<FrontierDatum>>,
+    import_frontier: OutputSessionVec<'a, Update<ImportFrontierDatum>>,
+    peek: OutputSessionVec<'a, Update<PeekDatum>>,
+    peek_duration: OutputSessionVec<'a, Update<PeekDurationDatum>>,
+    shutdown_duration: OutputSessionVec<'a, Update<u128>>,
+    arrangement_heap_size: OutputSessionVec<'a, Update<ArrangementHeapDatum>>,
+    arrangement_heap_capacity: OutputSessionVec<'a, Update<ArrangementHeapDatum>>,
+    arrangement_heap_allocations: OutputSessionVec<'a, Update<ArrangementHeapDatum>>,
+    hydration_time: OutputSessionVec<'a, Update<HydrationTimeDatum>>,
+    error_count: OutputSessionVec<'a, Update<ErrorCountDatum>>,
+    lir_mapping: OutputSessionColumnar<'a, Update<LirMappingDatum>>,
+    dataflow_global_ids: OutputSessionVec<'a, Update<DataflowGlobalDatum>>,
 }
 
 #[derive(Clone)]

@@ -102,28 +102,32 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         let dataflow_index = self.worker.next_dataflow_index();
         self.worker.dataflow_named("Dataflow: logging", |scope| {
             let mut collections = BTreeMap::new();
-            collections.extend(super::timely::construct(
-                scope.clone(),
-                self.config,
-                self.t_event_queue.clone(),
-                Rc::clone(&self.shared_state),
-            ));
+            let super::timely::Return {
+                collections: timely_collections,
+                compute_events: compute_events_timely,
+            } = super::timely::construct(scope.clone(), self.config, self.t_event_queue.clone());
+            collections.extend(timely_collections);
             collections.extend(super::reachability::construct(
                 scope.clone(),
                 self.config,
                 self.r_event_queue.clone(),
             ));
-            collections.extend(super::differential::construct(
+            let super::differential::Return {
+                collections: differential_collections,
+                compute_events: compute_events_differential,
+            } = super::differential::construct(
                 scope.clone(),
                 self.config,
                 self.d_event_queue.clone(),
                 Rc::clone(&self.shared_state),
-            ));
+            );
+            collections.extend(differential_collections);
             collections.extend(super::compute::construct(
                 scope.clone(),
                 scope.parent.clone(),
                 self.config,
                 self.c_event_queue.clone(),
+                [compute_events_timely, compute_events_differential],
                 Rc::clone(&self.shared_state),
             ));
 

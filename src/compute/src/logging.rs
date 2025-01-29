@@ -21,7 +21,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::Duration;
 
-use ::timely::container::ContainerBuilder;
+use ::timely::container::{CapacityContainerBuilder, ContainerBuilder};
 use ::timely::dataflow::channels::pact::Pipeline;
 use ::timely::dataflow::channels::pushers::buffer::Session;
 use ::timely::dataflow::channels::pushers::{Counter, Tee};
@@ -36,12 +36,25 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
 use mz_repr::{Datum, Diff, Row, RowPacker, RowRef, Timestamp};
 use mz_timely_util::activator::RcActivator;
+use mz_timely_util::containers::ColumnBuilder;
 use mz_timely_util::operator::consolidate_pact;
 
 use crate::logging::compute::Logger as ComputeLogger;
 use crate::typedefs::RowRowAgent;
 
 pub use crate::logging::initialize::initialize;
+
+/// An update of value `D` at a time and with a diff.
+pub(super) type Update<D> = (D, Timestamp, Diff);
+/// A pusher for containers `C`.
+pub(super) type Pusher<C> = Counter<Timestamp, C, Tee<Timestamp, C>>;
+/// An output session for the specified container builder.
+pub(super) type OutputSession<'a, CB> =
+    Session<'a, Timestamp, CB, Pusher<<CB as ContainerBuilder>::Container>>;
+/// An output session for vector-based containers of updates `D`, using a capacity container builder.
+pub(super) type OutputSessionVec<'a, D> = OutputSession<'a, CapacityContainerBuilder<Vec<D>>>;
+/// An output session for columnar containers of updates `D`, using a column builder.
+pub(super) type OutputSessionColumnar<'a, D> = OutputSession<'a, ColumnBuilder<D>>;
 
 /// Logs events as a timely stream, with progress statements.
 struct BatchLogger<C, P>
@@ -215,10 +228,6 @@ struct LogCollection {
     /// Token that should be dropped to drop this collection.
     token: Rc<dyn Any>,
 }
-
-pub(super) type Pusher<C> = Counter<Timestamp, C, Tee<Timestamp, C>>;
-pub(super) type OutputSession<'a, CB> =
-    Session<'a, Timestamp, CB, Pusher<<CB as ContainerBuilder>::Container>>;
 
 /// A single-purpose function to consolidate and pack updates for log collection.
 ///

@@ -21,23 +21,29 @@ use differential_dataflow::logging::{
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::containers::{
-    columnar_exchange, Col2ValBatcher, ColumnBuilder, ProvidedBuilder,
+    columnar_exchange, Col2ValBatcher, Column, ColumnBuilder, ProvidedBuilder,
 };
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::Leave;
+use timely::dataflow::{Scope, Stream, StreamCore};
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ArrangementHeapSizeOperatorDrop, ComputeEvent};
 use crate::logging::{
     consolidate_and_pack, DifferentialLog, EventQueue, LogCollection, LogVariant,
-    SharedLoggingState,
+    OutputSessionColumnar, SharedLoggingState,
 };
 use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{KeyBatcher, RowRowSpine};
+
+pub(super) struct Return<S: Scope> {
+    pub collections: BTreeMap<LogVariant, LogCollection>,
+    pub compute_events: StreamCore<S, Column<(Duration, ComputeEvent)>>,
+}
 
 /// Constructs the logging dataflow for differential logs.
 ///
@@ -50,7 +56,7 @@ pub(super) fn construct<S: Scope<Timestamp = Timestamp>>(
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
-) -> BTreeMap<LogVariant, LogCollection> {
+) -> Return<S> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
 
     scope.scoped("Dataflow: differential logging", move |scope| {
@@ -82,6 +88,7 @@ pub(super) fn construct<S: Scope<Timestamp = Timestamp>>(
         let (mut batcher_size_out, batcher_size) = demux.new_output();
         let (mut batcher_capacity_out, batcher_capacity) = demux.new_output();
         let (mut batcher_allocations_out, batcher_allocations) = demux.new_output();
+        let (mut compute_events_out, compute_events) = demux.new_output();
 
         let mut demux_state = Default::default();
         demux.build(move |_capability| {
@@ -93,6 +100,7 @@ pub(super) fn construct<S: Scope<Timestamp = Timestamp>>(
                 let mut batcher_size = batcher_size_out.activate();
                 let mut batcher_capacity = batcher_capacity_out.activate();
                 let mut batcher_allocations = batcher_allocations_out.activate();
+                let mut compute_events_out = compute_events_out.activate();
 
                 input.for_each(|cap, data| {
                     let mut output_buffers = DemuxOutput {
@@ -103,6 +111,7 @@ pub(super) fn construct<S: Scope<Timestamp = Timestamp>>(
                         batcher_size: batcher_size.session_with_builder(&cap),
                         batcher_capacity: batcher_capacity.session_with_builder(&cap),
                         batcher_allocations: batcher_allocations.session_with_builder(&cap),
+                        compute_events: compute_events_out.session_with_builder(&cap),
                     };
 
                     for (time, event) in data.drain(..) {
@@ -157,7 +166,7 @@ pub(super) fn construct<S: Scope<Timestamp = Timestamp>>(
         ];
 
         // Build the output arrangements.
-        let mut result = BTreeMap::new();
+        let mut collections = BTreeMap::new();
         for (variant, collection) in logs {
             let variant = LogVariant::Differential(variant);
             if config.index_logs.contains_key(&variant) {
@@ -171,11 +180,11 @@ pub(super) fn construct<S: Scope<Timestamp = Timestamp>>(
                     trace,
                     token: Rc::clone(&token),
                 };
-                result.insert(variant, collection);
+                collections.insert(variant, collection);
             }
         }
 
-        result
+        Return { collections, compute_events: compute_events.leave() }
     })
 }
 
@@ -193,6 +202,7 @@ struct DemuxOutput<'a> {
     batcher_size: OutputSession<'a, (usize, ())>,
     batcher_capacity: OutputSession<'a, (usize, ())>,
     batcher_allocations: OutputSession<'a, (usize, ())>,
+    compute_events: OutputSessionColumnar<'a, (Duration, ComputeEvent)>,
 }
 
 /// State maintained by the demux operator.
@@ -284,17 +294,18 @@ impl DemuxHandler<'_, '_> {
         debug_assert_ne!(diff, 0);
         self.output.sharing.give(((operator_id, ()), ts, diff));
 
-        if let Some(logger) = &mut self.shared_state.compute_logger {
-            let sharing = self.state.sharing.entry(operator_id).or_default();
-            *sharing = (i64::try_from(*sharing).expect("must fit") + diff)
-                .try_into()
-                .expect("under/overflow");
-            if *sharing == 0 {
-                self.state.sharing.remove(&operator_id);
-                logger.log(&ComputeEvent::ArrangementHeapSizeOperatorDrop(
-                    ArrangementHeapSizeOperatorDrop { operator_id },
-                ));
-            }
+        let sharing = self.state.sharing.entry(operator_id).or_default();
+        *sharing = (i64::try_from(*sharing).expect("must fit") + diff)
+            .try_into()
+            .expect("under/overflow");
+        if *sharing == 0 {
+            self.state.sharing.remove(&operator_id);
+            self.output.compute_events.give(&(
+                self.time,
+                ComputeEvent::ArrangementHeapSizeOperatorDrop(ArrangementHeapSizeOperatorDrop {
+                    operator_id,
+                }),
+            ));
         }
     }
 
