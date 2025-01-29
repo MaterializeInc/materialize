@@ -333,7 +333,7 @@ impl LazyUnaryFunc for CastStringToArray {
             },
         )?;
 
-        Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, datums))?)
+        Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, datums))?)
     }
 
     /// The output ColumnType of this function

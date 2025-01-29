@@ -13,7 +13,9 @@ use std::io;
 use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, RowRef, ScalarType};
+use mz_repr::{
+    ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, RowRef, ScalarType, SharedRow,
+};
 use proptest::prelude::{any, Arbitrary, Just};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::Deserialize;
@@ -785,6 +787,7 @@ pub fn decode_copy_format_csv(
 
     let mut record = ByteRecord::new();
 
+    let buf = RowArena::new();
     while rdr.read_byte_record(&mut record)? {
         if record.len() == 1 && record.iter().next() == Some(END_OF_COPY_MARKER) {
             break;
@@ -802,15 +805,24 @@ pub fn decode_copy_format_csv(
             std::cmp::Ordering::Equal => Ok(()),
         }?;
 
-        let mut row = Vec::new();
-        let buf = RowArena::new();
+        let binding = SharedRow::get();
+        let mut row_builder = binding.borrow_mut();
+        let mut row_packer = row_builder.packer();
+        buf.clear();
 
         for (typ, raw_value) in column_types.iter().zip(record.iter()) {
             if raw_value == null_as_bytes {
-                row.push(Datum::Null);
+                row_packer.push(Datum::Null);
             } else {
-                match mz_pgrepr::Value::decode_text(typ, raw_value) {
-                    Ok(value) => row.push(value.into_datum(&buf, typ)),
+                let s = match std::str::from_utf8(raw_value) {
+                    Ok(s) => s,
+                    Err(err) => {
+                        let msg = format!("invalid utf8 data in column: {}", err);
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
+                    }
+                };
+                match mz_pgrepr::Value::decode_text_into_row(typ, s, &mut row_packer) {
+                    Ok(()) => {}
                     Err(err) => {
                         let msg = format!("unable to decode column: {}", err);
                         return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
@@ -818,7 +830,7 @@ pub fn decode_copy_format_csv(
                 }
             }
         }
-        rows.push(Row::pack(row));
+        rows.push(row_builder.clone());
     }
 
     Ok(rows)

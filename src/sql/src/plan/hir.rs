@@ -2964,7 +2964,7 @@ impl HirScalarExpr {
 
         let mut row = Row::default();
         row.packer()
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: datums.len(),

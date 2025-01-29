@@ -467,7 +467,7 @@ impl Coordinator {
             },
         ]);
         packer
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: params.len(),
