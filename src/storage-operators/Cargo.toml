@@ -15,12 +15,16 @@ arrow = { version = "53.3.0", default-features = false }
 async-compression = { version = "0.4.5", features = ["bzip2", "gzip", "tokio", "xz", "zstd"] }
 async-stream = "0.3.3"
 aws-types = "1.1.1"
+aws-smithy-types = "1.1.8"
 bytes = "1.3.0"
 bytesize = "1.1.0"
-differential-dataflow = "0.13.3"
 csv-async = { version = "1.3.0", features = ["tokio"] }
+derivative = "2.2.0"
+differential-dataflow = "0.13.3"
 futures = "0.3.25"
+glob = "0.3.2"
 http = "1.1.0"
+itertools = "0.12.1"
 mz-aws-util = { path = "../aws-util" }
 mz-arrow-util = { path = "../arrow-util" }
 mz-dyncfg = { path = "../dyncfg" }
@@ -41,7 +45,7 @@ reqwest = { version = "0.11.13", features = ["stream"] }
 sentry = { version = "0.29.1" }
 serde = { version = "1.0.152", features = ["derive"] }
 smallvec = { version = "1.10.0", features = ["union"] }
-timely = "0.16.0"
+timely = "0.17.0"
 thiserror = "1.0.37"
 tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-stream = "0.1.11"

@@ -566,12 +566,12 @@ async fn upgrade_check(
         .clone();
 
     let boot_ts = now().into();
+    let read_only = true;
     // BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
     // get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     // Because of that we purposefully move this Future onto the heap (i.e. Box it).
     let InitializeStateResult {
         state,
-        storage_collections_to_drop: _,
         migrated_storage_collections_0dt: _,
         new_builtin_collections: _,
         builtin_table_updates: _,
@@ -585,7 +585,7 @@ async fn upgrade_check(
             all_features: false,
             build_info: &BUILD_INFO,
             environment_id: args.environment_id.clone(),
-            read_only: true,
+            read_only,
             now,
             boot_ts,
             skip_migrations: false,
@@ -610,7 +610,12 @@ async fn upgrade_check(
                 secrets_reader,
                 None,
             ),
-            builtin_item_migration_config: BuiltinItemMigrationConfig::Legacy,
+            builtin_item_migration_config: BuiltinItemMigrationConfig {
+                // We don't actually want to write anything down, so use an in-memory persist
+                // client.
+                persist_client: PersistClient::new_for_tests().await,
+                read_only,
+            },
             persist_client: persist_client.clone(),
             enable_expression_cache_override: None,
             enable_0dt_deployment: true,

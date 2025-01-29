@@ -42,9 +42,10 @@ static EXECUTABLE: LazyLock<String> = LazyLock::new(|| {
 });
 
 mz_http_util::make_handle_static!(
-    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/http/static"),
-    "src/http/static",
-    "src/http/static-dev"
+    dir_1: ::include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/http/static"),
+    dir_2: ::include_dir::include_dir!("$OUT_DIR/src/http/static"),
+    prod_base_path: "src/http/static",
+    dev_base_path: "src/http/static-dev",
 );
 
 /// Creates a router that serves the profiling endpoints.

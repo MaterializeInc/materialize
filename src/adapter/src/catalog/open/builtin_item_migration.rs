@@ -40,15 +40,13 @@ use tracing::{debug, error};
 
 use crate::catalog::open::builtin_item_migration::persist_schema::{TableKey, TableKeySchema};
 use crate::catalog::state::LocalExpressionCache;
-use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
+use crate::catalog::{BuiltinTableUpdate, CatalogState};
 
 /// The results of a builtin item migration.
 pub(crate) struct BuiltinItemMigrationResult {
     /// A vec of updates to apply to the builtin tables.
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
-    /// A set of storage collections to drop (only used by legacy migration).
-    pub(crate) storage_collections_to_drop: BTreeSet<GlobalId>,
-    /// A set of new shards that may need to be initialized (only used by 0dt migration).
+    /// A set of new shards that may need to be initialized.
     pub(crate) migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// Some cleanup action to take once the migration has been made durable.
     pub(crate) cleanup_action: BoxFuture<'static, ()>,
@@ -60,61 +58,20 @@ pub(crate) async fn migrate_builtin_items(
     txn: &mut Transaction<'_>,
     local_expr_cache: &mut LocalExpressionCache,
     migrated_builtins: Vec<CatalogItemId>,
-    config: BuiltinItemMigrationConfig,
+    BuiltinItemMigrationConfig {
+        persist_client,
+        read_only,
+    }: BuiltinItemMigrationConfig,
 ) -> Result<BuiltinItemMigrationResult, Error> {
-    match config {
-        BuiltinItemMigrationConfig::Legacy => {
-            migrate_builtin_items_legacy(state, txn, migrated_builtins).await
-        }
-        BuiltinItemMigrationConfig::ZeroDownTime {
-            persist_client,
-            deploy_generation,
-            read_only,
-        } => {
-            migrate_builtin_items_0dt(
-                state,
-                txn,
-                local_expr_cache,
-                persist_client,
-                migrated_builtins,
-                deploy_generation,
-                read_only,
-            )
-            .await
-        }
-    }
-}
-
-/// The legacy method for builtin migrations is to drop all migrated items and all of their
-/// dependents and re-create them all with the new schema and new global IDs.
-async fn migrate_builtin_items_legacy(
-    state: &mut CatalogState,
-    txn: &mut Transaction<'_>,
-    migrated_builtins: Vec<CatalogItemId>,
-) -> Result<BuiltinItemMigrationResult, Error> {
-    let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter(&state.config().builtins_cfg)
-        .map(|builtin| {
-            let id = state.resolve_builtin_object(builtin);
-            let fingerprint = builtin.fingerprint();
-            (id, fingerprint)
-        })
-        .collect();
-    let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
+    migrate_builtin_items_0dt(
         state,
         txn,
+        local_expr_cache,
+        persist_client,
         migrated_builtins,
-        id_fingerprint_map,
-    )?;
-    let builtin_table_updates =
-        Catalog::apply_builtin_migration(state, txn, &mut builtin_migration_metadata).await?;
-
-    let cleanup_action = async {}.boxed();
-    Ok(BuiltinItemMigrationResult {
-        builtin_table_updates,
-        storage_collections_to_drop: builtin_migration_metadata.previous_storage_collection_ids,
-        migrated_storage_collections_0dt: BTreeSet::new(),
-        cleanup_action,
-    })
+        read_only,
+    )
+    .await
 }
 
 /// An implementation of builtin item migrations that is compatible with zero down-time upgrades.
@@ -134,11 +91,11 @@ async fn migrate_builtin_items_legacy(
 ///
 ///    1. Each environment has a dedicated persist shard, called the migration shard, that allows
 ///       environments to durably write down metadata while in read-only mode. The shard is a
-///       mapping of `(GlobalId, deploy_generation)` to `ShardId`.
-///    2. Collect the `GlobalId` of all migrated tables for the current deploy generation.
+///       mapping of `(GlobalId, build_version)` to `ShardId`.
+///    2. Collect the `GlobalId` of all migrated tables for the current build version.
 ///    3. Read in the current contents of the migration shard.
 ///    4. Collect all the `ShardId`s from the migration shard that are not at the current
-///       `deploy_generation` or are not in the set of migrated tables.
+///       `build_version` or are not in the set of migrated tables.
 ///       a. If they ARE NOT mapped to a `GlobalId` in the storage metadata then they are shards
 ///          from an incomplete migration. Finalize them and remove them from the migration shard.
 ///          Note: care must be taken to not remove the shard from the migration shard until we are
@@ -146,10 +103,10 @@ async fn migrate_builtin_items_legacy(
 ///       b. If they ARE mapped to a `GlobalId` in the storage metadata then they are shards from a
 ///       complete migration. Remove them from the migration shard.
 ///    5. Collect all the `GlobalId`s of tables that are migrated, but not in the migration shard
-///       for the current deploy generation. Generate new `ShardId`s and add them to the migration
+///       for the current build version. Generate new `ShardId`s and add them to the migration
 ///       shard.
 ///    6. At this point the migration shard should only logically contain a mapping of migrated
-///       table `GlobalId`s to new `ShardId`s for the current deploy generation. For each of these
+///       table `GlobalId`s to new `ShardId`s for the current build version. For each of these
 ///       `GlobalId`s such that the `ShardId` isn't already in the storage metadata:
 ///       a. Remove the current `GlobalId` to `ShardId` mapping from the storage metadata.
 ///       b. Finalize the removed `ShardId`s.
@@ -177,7 +134,6 @@ async fn migrate_builtin_items_0dt(
     local_expr_cache: &mut LocalExpressionCache,
     persist_client: PersistClient,
     migrated_builtins: Vec<CatalogItemId>,
-    deploy_generation: u64,
     read_only: bool,
 ) -> Result<BuiltinItemMigrationResult, Error> {
     assert_eq!(
@@ -185,6 +141,8 @@ async fn migrate_builtin_items_0dt(
         txn.is_savepoint(),
         "txn must be in savepoint mode when read_only is true, and in writable mode when read_only is false"
     );
+
+    let build_version = state.config.build_info.semver_version();
 
     // 0. Update durably stored fingerprints.
     let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter(&state.config().builtins_cfg)
@@ -237,7 +195,9 @@ async fn migrate_builtin_items_0dt(
         .expect("builtin migration shard should exist for opened catalogs");
     let diagnostics = Diagnostics {
         shard_name: "builtin_migration".to_string(),
-        handle_purpose: format!("builtin table migration shard for org {organization_id:?} generation {deploy_generation:?}"),
+        handle_purpose: format!(
+            "builtin table migration shard for org {organization_id:?} version {build_version:?}"
+        ),
     };
     let mut since_handle: SinceHandle<TableKey, ShardId, Timestamp, Diff, i64> = persist_client
         .open_critical_since(
@@ -348,16 +308,16 @@ async fn migrate_builtin_items_0dt(
         txn.get_collection_metadata()
     };
     for (table_key, shard_id) in global_id_shards.clone() {
-        if table_key.deploy_generation > deploy_generation {
+        if table_key.build_version > build_version {
             halt!(
-                "saw deploy generation {}, which is greater than current deploy generation {}",
-                table_key.deploy_generation,
-                deploy_generation
+                "saw build version {}, which is greater than current build version {}",
+                table_key.build_version,
+                build_version
             );
         }
 
         if !migrated_storage_collections.contains(&table_key.global_id)
-            || table_key.deploy_generation < deploy_generation
+            || table_key.build_version < build_version
         {
             global_id_shards.remove(&table_key);
             if storage_collection_metadata.get(&GlobalId::System(table_key.global_id))
@@ -370,7 +330,7 @@ async fn migrate_builtin_items_0dt(
         }
     }
 
-    // 5. Add migrated tables to migration shard for current generation.
+    // 5. Add migrated tables to migration shard for current build version.
     let mut global_id_shards: BTreeMap<_, _> = global_id_shards
         .into_iter()
         .map(|(table_key, shard_id)| (table_key.global_id, shard_id))
@@ -381,7 +341,7 @@ async fn migrate_builtin_items_0dt(
             global_id_shards.insert(global_id, shard_id);
             let table_key = TableKey {
                 global_id,
-                deploy_generation,
+                build_version: build_version.clone(),
             };
             migrated_shard_updates.push(((table_key, shard_id), upper, 1));
         }
@@ -471,7 +431,6 @@ async fn migrate_builtin_items_0dt(
 
     Ok(BuiltinItemMigrationResult {
         builtin_table_updates,
-        storage_collections_to_drop: BTreeSet::new(),
         migrated_storage_collections_0dt,
         cleanup_action,
     })
@@ -541,15 +500,15 @@ mod persist_schema {
     use mz_persist_types::stats::NoneStats;
     use mz_persist_types::Codec;
 
-    #[derive(Debug, Clone, Default, Eq, Ord, PartialEq, PartialOrd)]
+    #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
     pub(super) struct TableKey {
         pub(super) global_id: u64,
-        pub(super) deploy_generation: u64,
+        pub(super) build_version: semver::Version,
     }
 
     impl std::fmt::Display for TableKey {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "{}-{}", self.global_id, self.deploy_generation)
+            write!(f, "{}-{}", self.global_id, self.build_version)
         }
     }
 
@@ -557,19 +516,19 @@ mod persist_schema {
         type Err = String;
 
         fn from_str(s: &str) -> Result<Self, Self::Err> {
-            let parts: Vec<_> = s.split('-').collect();
-            let &[global_id, deploy_generation] = parts.as_slice() else {
+            let parts: Vec<_> = s.splitn(2, '-').collect();
+            let &[global_id, build_version] = parts.as_slice() else {
                 return Err(format!("invalid TableKey '{s}'"));
             };
             let global_id = global_id
                 .parse()
                 .map_err(|e: ParseIntError| e.to_string())?;
-            let deploy_generation = deploy_generation
+            let build_version = build_version
                 .parse()
-                .map_err(|e: ParseIntError| e.to_string())?;
+                .map_err(|e: semver::Error| e.to_string())?;
             Ok(TableKey {
                 global_id,
-                deploy_generation,
+                build_version,
             })
         }
     }
@@ -585,6 +544,15 @@ mod persist_schema {
 
         fn try_from(s: String) -> Result<Self, Self::Error> {
             s.parse()
+        }
+    }
+
+    impl Default for TableKey {
+        fn default() -> Self {
+            Self {
+                global_id: Default::default(),
+                build_version: semver::Version::new(0, 0, 0),
+            }
         }
     }
 

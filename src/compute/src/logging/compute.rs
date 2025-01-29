@@ -308,16 +308,16 @@ pub(super) fn construct<A: Allocate + 'static>(
 
     worker.dataflow_named("Dataflow: compute logging", move |scope| {
         let enable_logging = config.enable_logging;
-        let (logs, token) = Some(event_queue.link).mz_replay::<_, ProvidedBuilder<_>, _>(
+        let (logs, token) = event_queue.links.mz_replay::<_, ProvidedBuilder<_>, _>(
             scope,
             "compute logs",
             config.interval,
             event_queue.activator,
-            move |mut session, data| {
+            move |mut session, mut data| {
                 // If logging is disabled, we still need to install the indexes, but we can leave them
                 // empty. We do so by immediately filtering all logs events.
                 if enable_logging {
-                    session.give_container(&mut data.clone())
+                    session.give_container(data.to_mut())
                 }
             },
         );

@@ -1831,6 +1831,13 @@ impl<'a> Transaction<'a> {
             .map(|shard_id| shard_id.parse().expect("valid ShardId"))
     }
 
+    pub fn set_builtin_migration_shard(&mut self, shard_id: ShardId) -> Result<(), CatalogError> {
+        self.set_setting(
+            BUILTIN_MIGRATION_SHARD_KEY.to_string(),
+            Some(shard_id.to_string()),
+        )
+    }
+
     pub fn get_expression_cache_shard(&self) -> Option<ShardId> {
         self.get_setting(EXPRESSION_CACHE_SHARD_KEY.to_string())
             .map(|shard_id| shard_id.parse().expect("valid ShardId"))

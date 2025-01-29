@@ -804,6 +804,23 @@ pub(crate) fn durable_migrate(
             Some(EXPR_CACHE_MIGRATION_DONE),
         )?;
     }
+
+    // Migrate the builtin migration shard to a new shard. We're updating the keys to use the explicit
+    // binary version instead of the deploy generation.
+    const BUILTIN_MIGRATION_SHARD_MIGRATION_KEY: &str = "migration_shard_migration";
+    const BUILTIN_MIGRATION_SHARD_MIGRATION_DONE: u64 = 1;
+    if tx.get_config(BUILTIN_MIGRATION_SHARD_MIGRATION_KEY.to_string())
+        != Some(BUILTIN_MIGRATION_SHARD_MIGRATION_DONE)
+    {
+        if let Some(shard_id) = tx.get_builtin_migration_shard() {
+            tx.mark_shards_as_finalized(btreeset! {shard_id});
+            tx.set_builtin_migration_shard(ShardId::new())?;
+        }
+        tx.set_config(
+            BUILTIN_MIGRATION_SHARD_MIGRATION_KEY.to_string(),
+            Some(BUILTIN_MIGRATION_SHARD_MIGRATION_DONE),
+        )?;
+    }
     Ok(())
 }
 

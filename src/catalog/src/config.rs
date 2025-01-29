@@ -94,13 +94,9 @@ pub struct StateConfig {
 }
 
 #[derive(Debug)]
-pub enum BuiltinItemMigrationConfig {
-    Legacy,
-    ZeroDownTime {
-        persist_client: PersistClient,
-        deploy_generation: u64,
-        read_only: bool,
-    },
+pub struct BuiltinItemMigrationConfig {
+    pub persist_client: PersistClient,
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
