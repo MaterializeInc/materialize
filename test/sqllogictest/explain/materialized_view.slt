@@ -125,7 +125,7 @@ ALTER INDEX accounts_balance_idx RENAME TO accounts_balance_index;
 
 # ensure that the index is still used by the view
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR OPTIMiZED PLAN FOR MATERIALIZED VIEW mv;
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Project (#0, #1)

@@ -28,7 +28,7 @@ statement error more than one record produced in subquery
 select a, b, ( select c from test3 where a = test3.a and b = test3.b) from test1;
 
 query T multiline
-explain with(arity, join implementations) select a, b, ( select c from test3 where a = test3.a and b = test3.b) from test1;
+explain optimized plan with(arity, join implementations) for select a, b, ( select c from test3 where a = test3.a and b = test3.b) from test1;
 ----
 Explained Query:
   With

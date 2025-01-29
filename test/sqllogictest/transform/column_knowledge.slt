@@ -575,7 +575,7 @@ create table int_table(int_col integer NOT NULL);
 # TODO: get rid of the unnecessary !isnull at the end of this plan
 
 query T multiline
-explain with(arity, join implementations) select * from int_table, double_table where int_table.int_col = double_table.double_col;
+explain optimized plan with(arity, join implementations) for select * from int_table, double_table where int_table.int_col = double_table.double_col;
 ----
 Explained Query:
   Join on=(#1 = integer_to_double(#0)) type=differential // { arity: 2 }
