@@ -2166,7 +2166,7 @@ impl RowPacker<'_> {
     /// the cardinality of the array as described by `dims`, or if the
     /// number of dimensions exceeds [`MAX_ARRAY_DIMENSIONS`]. If an error
     /// occurs, the packer's state will be unchanged.
-    pub fn push_array<'a, I, D>(
+    pub fn try_push_array<'a, I, D>(
         &mut self,
         dims: &[ArrayDimension],
         iter: I,
@@ -2175,25 +2175,32 @@ impl RowPacker<'_> {
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
-        self.push_array_with(dims, |packer| {
-            let mut nelements = 0;
-            for datum in iter {
-                packer.push(datum);
-                nelements += 1;
-            }
-            Ok::<_, InvalidArrayError>(nelements)
-        })
+        // SAFETY: The function returns the exact number of elements pushed into the array.
+        unsafe {
+            self.push_array_with_unchecked(dims, |packer| {
+                let mut nelements = 0;
+                for datum in iter {
+                    packer.push(datum);
+                    nelements += 1;
+                }
+                Ok::<_, InvalidArrayError>(nelements)
+            })
+        }
     }
 
     /// Convenience function to construct an array from a function. The function must return the
     /// number of elements it pushed into the array. It is undefined behavior if the function returns
     /// a number different to the number of elements it pushed.
     ///
-    /// Returns an error if the number of elements in `iter` does not match
+    /// Returns an error if the number of elements pushed by `f` does not match
     /// the cardinality of the array as described by `dims`, or if the
-    /// number of dimensions exceeds [`MAX_ARRAY_DIMENSIONS`]. If an error
+    /// number of dimensions exceeds [`MAX_ARRAY_DIMENSIONS`], or if `f` errors. If an error
     /// occurs, the packer's state will be unchanged.
-    pub fn push_array_with<F, E>(&mut self, dims: &[ArrayDimension], f: F) -> Result<(), E>
+    pub unsafe fn push_array_with_unchecked<F, E>(
+        &mut self,
+        dims: &[ArrayDimension],
+        f: F,
+    ) -> Result<(), E>
     where
         F: FnOnce(&mut RowPacker) -> Result<usize, E>,
         E: From<InvalidArrayError>,
@@ -2263,7 +2270,7 @@ impl RowPacker<'_> {
     /// Pushes an [`Array`] that is built from a closure.
     ///
     /// __WARNING__: This is fairly "sharp" tool that is easy to get wrong. You
-    /// should prefer [`RowPacker::push_array`] when possible.
+    /// should prefer [`RowPacker::try_push_array`] when possible.
     ///
     /// Returns an error if the number of elements pushed does not match
     /// the cardinality of the array as described by `dims`, or if the
@@ -3037,7 +3044,7 @@ mod tests {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer
-            .push_array(&[DIM], vec![Datum::Int32(1), Datum::Int32(2)])
+            .try_push_array(&[DIM], vec![Datum::Int32(1), Datum::Int32(2)])
             .unwrap();
         let arr1 = row.unpack_first().unwrap_array();
         assert_eq!(arr1.dims().into_iter().collect::<Vec<_>>(), vec![DIM]);
@@ -3069,7 +3076,7 @@ mod tests {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer
-            .push_array(
+            .try_push_array(
                 &[
                     ArrayDimension {
                         lower_bound: 1,
@@ -3097,7 +3104,7 @@ mod tests {
         let max_dims = usize::from(MAX_ARRAY_DIMENSIONS);
 
         // An array with one too many dimensions should be rejected.
-        let res = row.packer().push_array(
+        let res = row.packer().try_push_array(
             &vec![
                 ArrayDimension {
                     lower_bound: 1,
@@ -3113,7 +3120,7 @@ mod tests {
         // An array with exactly the maximum allowable dimensions should be
         // accepted.
         row.packer()
-            .push_array(
+            .try_push_array(
                 &vec![
                     ArrayDimension {
                         lower_bound: 1,
@@ -3129,7 +3136,7 @@ mod tests {
     #[mz_ore::test]
     fn test_array_wrong_cardinality() {
         let mut row = Row::default();
-        let res = row.packer().push_array(
+        let res = row.packer().try_push_array(
             &[
                 ArrayDimension {
                     lower_bound: 1,

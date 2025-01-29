@@ -1153,7 +1153,7 @@ impl CatalogState {
         let progress_topic = kafka.progress_topic(&self.config.connection_context, id);
         let mut row = Row::default();
         row.packer()
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: kafka.brokers.len(),
@@ -1757,7 +1757,7 @@ impl CatalogState {
 
             let mut row = Row::default();
             row.packer()
-                .push_array(
+                .try_push_array(
                     &[ArrayDimension {
                         lower_bound: 1,
                         length: arg_type_ids.len(),
@@ -1825,7 +1825,7 @@ impl CatalogState {
 
         let mut row = Row::default();
         row.packer()
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: arg_type_ids.len(),
@@ -2136,7 +2136,7 @@ impl CatalogState {
         let mut row = Row::default();
         let flat_privileges: Vec<_> = privileges.all_values_owned().collect();
         row.packer()
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: flat_privileges.len(),
@@ -2254,7 +2254,7 @@ impl CatalogState {
                 ]);
                 if reference.columns.len() > 0 {
                     packer
-                        .push_array(
+                        .try_push_array(
                             &[ArrayDimension {
                                 lower_bound: 1,
                                 length: reference.columns.len(),

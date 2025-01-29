@@ -227,7 +227,7 @@ impl Value {
                 };
                 buf.make_datum(|packer| {
                     packer
-                        .push_array(
+                        .try_push_array(
                             &dims,
                             elements.into_iter().map(|element| match element {
                                 Some(element) => element.into_datum(buf, element_pg_type),
@@ -678,8 +678,7 @@ impl Value {
         })
     }
 
-    /// Deserializes a value of type `ty` from `raw` using the [text encoding
-    /// format](Format::Text).
+    /// Deserializes a value of type `ty` from `s` using the [text encoding format](Format::Text).
     pub fn decode_text_into_row<'a>(
         ty: &'a Type,
         s: &'a str,
@@ -689,20 +688,23 @@ impl Value {
             Type::Array(elem_type) => {
                 let (elements, dims) =
                     strconv::parse_array(s, || None, |elem_text| Ok::<_, String>(Some(elem_text)))?;
-                packer.push_array_with(&dims, |packer| {
-                    let mut nelements = 0;
-                    for element in elements {
-                        match element {
-                            Some(elem_text) => {
-                                Value::decode_text_into_row(elem_type, &elem_text, packer)?
-                            }
+                // SAFETY: The function returns the number of times it called `push` on the packer.
+                unsafe {
+                    packer.push_array_with_unchecked(&dims, |packer| {
+                        let mut nelements = 0;
+                        for element in elements {
+                            match element {
+                                Some(elem_text) => {
+                                    Value::decode_text_into_row(elem_type, &elem_text, packer)?
+                                }
 
-                            None => packer.push(Datum::Null),
+                                None => packer.push(Datum::Null),
+                            }
+                            nelements += 1;
                         }
-                        nelements += 1;
-                    }
-                    Ok::<_, Box<dyn Error + Sync + Send>>(nelements)
-                })?
+                        Ok::<_, Box<dyn Error + Sync + Send>>(nelements)
+                    })?
+                }
             }
             Type::Int2Vector { .. } => {
                 return Err("input of Int2Vector types is not implemented".into())

@@ -381,7 +381,7 @@ where
         length: datums.len(),
     };
     temp_storage.make_datum(|packer| {
-        packer.push_array(&[dims], datums).unwrap();
+        packer.try_push_array(&[dims], datums).unwrap();
     })
 }
 
