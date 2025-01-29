@@ -8,8 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use aws_sdk_s3::config::Builder;
-use aws_sdk_s3::Client;
 use aws_types::sdk_config::SdkConfig;
+use bytes::Bytes;
+
+pub use aws_sdk_s3::Client;
 
 /// Creates a new client from an [SDK config](aws_types::sdk_config::SdkConfig)
 /// with Materialize-specific customizations.
@@ -45,4 +47,31 @@ pub async fn list_bucket_path(
                 .collect::<Result<Vec<String>, _>>()
         })
         .transpose()
+}
+
+/// A wrapper around [`ByteStream`] that implements the [`futures::stream::Stream`] trait.
+///
+/// [`ByteStream`]: aws_smithy_types::byte_stream::ByteStream
+#[pin_project::pin_project]
+pub struct ByteStreamAdapter {
+    #[pin]
+    inner: aws_smithy_types::byte_stream::ByteStream,
+}
+
+impl ByteStreamAdapter {
+    pub fn new(bytes: aws_smithy_types::byte_stream::ByteStream) -> Self {
+        ByteStreamAdapter { inner: bytes }
+    }
+}
+
+impl futures::stream::Stream for ByteStreamAdapter {
+    type Item = Result<Bytes, aws_smithy_types::byte_stream::error::Error>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.project();
+        aws_smithy_types::byte_stream::ByteStream::poll_next(this.inner, cx)
+    }
 }

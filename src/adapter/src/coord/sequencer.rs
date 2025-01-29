@@ -373,7 +373,7 @@ impl Coordinator {
                             session,
                         );
                     }
-                    CopyFromSource::Url(_) => {
+                    CopyFromSource::Url(_) | CopyFromSource::AwsS3 { .. } => {
                         self.sequence_copy_from(ctx, plan, target_cluster).await;
                     }
                 },

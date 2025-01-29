@@ -10,6 +10,7 @@
 //! Generic HTTP oneshot source that will fetch a file from the public internet.
 
 use bytes::Bytes;
+use derivative::Derivative;
 use futures::stream::{BoxStream, StreamExt};
 use futures::TryStreamExt;
 use reqwest::Client;
@@ -21,8 +22,10 @@ use crate::oneshot_source::{
 };
 
 /// Generic oneshot source that fetches a file from a URL on the public internet.
-#[derive(Clone)]
+#[derive(Clone, Derivative)]
+#[derivative(Debug)]
 pub struct HttpOneshotSource {
+    #[derivative(Debug = "ignore")]
     client: Client,
     origin: Url,
 }
@@ -122,7 +125,7 @@ impl OneshotSource for HttpOneshotSource {
         &'s self,
         object: Self::Object,
         _checksum: Self::Checksum,
-        _range: Option<std::ops::Range<usize>>,
+        _range: Option<std::ops::RangeInclusive<usize>>,
     ) -> BoxStream<'s, Result<Bytes, StorageErrorX>> {
         // TODO(cf1): Support the range param.
         // TODO(cf1): Validate our checksum.
