@@ -159,8 +159,8 @@ impl BlobConfig {
                 .split_once('.')
             {
                 // The Azurite emulator always uses the well-known account name devstoreaccount1
-                Some((account, "blob.core.windows.net")) | Some((account, _))
-                    if account == "devstoreaccount1" =>
+                Some((account, root))
+                    if account == "devstoreaccount1" || root == "blob.core.windows.net" =>
                 {
                     if let Some(container) = url
                         .path_segments()
