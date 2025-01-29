@@ -22,7 +22,7 @@ CREATE TABLE u (
 # A global aggregation has a key []
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(keys) FOR AS TEXT FOR SELECT sum(a) FROM t
+EXPLAIN OPTIMIZED PLAN WITH(keys) AS TEXT FOR SELECT sum(a) FROM t
 ----
 Explained Query:
   With
@@ -50,7 +50,7 @@ EOF
 # all columns that have unique values are unique keys of an ok constant
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(keys, no fast path) FOR AS TEXT FOR SELECT * FROM (VALUES (1, 2, 3), (4, 2, 4));
+EXPLAIN OPTIMIZED PLAN WITH(keys, no fast path) AS TEXT FOR SELECT * FROM (VALUES (1, 2, 3), (4, 2, 4));
 ----
 Explained Query:
   Constant // { keys: "([0], [2])" }
@@ -70,7 +70,7 @@ CREATE DEFAULT INDEX on v;
 # join + unique key sets being split by a predicate `<column1> = <column2>`
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(keys) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(keys) AS TEXT FOR
 SELECT * FROM
 (SELECT sum(a) as a, b FROM t GROUP BY b) t
 INNER JOIN
@@ -101,7 +101,7 @@ EOF
 # topk limit = 1 + filter column = constant
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(keys) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(keys) AS TEXT FOR
 (SELECT a, c::double FROM
     (SELECT DISTINCT c FROM u) grp,
     LATERAL (
@@ -151,7 +151,7 @@ Notices:
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(keys) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(keys) AS TEXT FOR
 SELECT 1 = (Select * FROM generate_series(1, 100000) limit 3)
 ----
 Explained Query:

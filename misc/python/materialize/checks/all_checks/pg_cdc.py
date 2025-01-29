@@ -219,7 +219,7 @@ class PgCdcBase:
             > SELECT key FROM (SHOW INDEXES ON postgres_source_tableA{self.suffix});
             {{f1,f2}}
 
-            ? EXPLAIN OPTIMIZED PLAN SELECT DISTINCT f1, f2 FROM postgres_source_tableA{self.suffix};
+            ? EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT f1, f2 FROM postgres_source_tableA{self.suffix};
             Explained Query (fast path):
               Project (#0, #1)
                 ReadIndex on=materialize.public.postgres_source_tablea{self.suffix} postgres_source_tablea{self.suffix}_primary_idx=[*** full scan ***]

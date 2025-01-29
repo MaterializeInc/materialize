@@ -58,7 +58,7 @@ mode cockroach
 
 # Test constant error.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT 1 / 0
 ----
 Explained Query (fast path):
@@ -70,7 +70,7 @@ EOF
 
 # Test constant with two elements.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 (SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
 ----
 Explained Query (fast path):
@@ -99,7 +99,7 @@ EOF
 
 # Test basic linear chains (fast path).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT 1, a + b as c FROM t WHERE a = 5 and b < 0 and a + b > 0
 ----
 Explained Query (fast path):
@@ -117,7 +117,7 @@ EOF
 
 # Test basic linear chains (slow path).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
 ----
 Explained Query:
@@ -135,7 +135,7 @@ EOF
 
 # Test table functions in the select clause (FlatMap).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT generate_series(a, b) from t
 ----
 Explained Query:
@@ -152,7 +152,7 @@ EOF
 
 # Test TopK.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT * FROM ov
 ----
 Explained Query:
@@ -168,7 +168,7 @@ EOF
 
 # Test Finish.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 ----
 Explained Query (fast path):
@@ -184,7 +184,7 @@ EOF
 
 # Test Reduce (global).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t
 ----
 Explained Query:
@@ -215,7 +215,7 @@ EOF
 
 # Test Reduce (local).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t GROUP BY b
 ----
 Explained Query:
@@ -233,7 +233,7 @@ EOF
 
 # Test EXISTS subqueries.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
 Explained Query:
@@ -284,7 +284,7 @@ EOF
 
 # Test SELECT subqueries.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
 ----
 Explained Query:
@@ -351,7 +351,7 @@ EOF
 
 # Test outer joins (ON syntax).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT t1.a, t2.a
 FROM t as t1
 LEFT JOIN t as t2 ON t1.b = t2.b
@@ -401,7 +401,7 @@ EOF
 
 # Test an IndexedFilter join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR
 SELECT a, max(b)
 FROM t
 WHERE a = 0
@@ -428,7 +428,7 @@ CREATE INDEX t_a_b_idx ON T(a,b)
 
 # Test an IndexedFilter join WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS TEXT FOR
 SELECT a, max(b)
 FROM t
 WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
@@ -448,7 +448,7 @@ EOF
 
 # Test an IndexedFilter join on fast path WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) FOR AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS TEXT FOR
 SELECT *
 FROM t
 WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
