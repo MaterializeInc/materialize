@@ -1410,6 +1410,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "buildid"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0188344028070a23e23eebec37f4c5699db7b5a5fd088d97e6fae7727ac0dd77"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "log",
+ "winapi",
+]
+
+[[package]]
 name = "built"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4857,7 +4869,9 @@ dependencies = [
 name = "mz-build-info"
 version = "0.0.0"
 dependencies = [
+ "buildid",
  "compile-time-run",
+ "hex",
  "semver",
  "workspace-hack",
 ]

@@ -10,7 +10,9 @@ publish = false
 workspace = true
 
 [dependencies]
+buildid = "1.0.3"
 compile-time-run = "0.2.12"
+hex = "0.4.3"
 semver = { version = "1.0.16", optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

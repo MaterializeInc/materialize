@@ -462,8 +462,18 @@ impl Catalog {
                 )
                 .collect();
             let dyncfgs = config.persist_client.dyncfgs().clone();
+            let build_version = if config.build_info.is_dev() {
+                // A single dev version can be used for many different builds, so we need to use
+                // the build version that is also enriched with build metadata.
+                config
+                    .build_info
+                    .semver_version_build()
+                    .expect("build ID is not available on your platform!")
+            } else {
+                config.build_info.semver_version()
+            };
             let expr_cache_config = ExpressionCacheConfig {
-                build_version: config.build_info.semver_version(),
+                build_version,
                 shard_id: txn
                     .get_expression_cache_shard()
                     .expect("expression cache shard should exist for opened catalogs"),
