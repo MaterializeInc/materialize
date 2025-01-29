@@ -576,7 +576,7 @@ EOF
 # Here, SemijoinIdempotence relies on the keys introduced by the `select distinct on` being propagated through the
 # recursive Get.
 query T multiline
-explain with(keys)
+explain optimized plan with(keys) for
 with mutually recursive
   c0(a int4, b int8, u text, a2 int4, v2 text) as (
     select distinct on (1) * from (
@@ -822,7 +822,7 @@ EOF
 # The plan currently has one join, but maybe that could be optimized out too: the join with baz is currently present,
 # because baz.c is used in the condition of the join with quux. However, the join with quux is optimized out.
 query T multiline
-explain with(arity)
+explain optimized plan with(arity) for
 with mutually recursive
   c0(a int4, b int8, u text) as (
     (

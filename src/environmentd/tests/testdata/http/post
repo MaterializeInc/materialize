@@ -248,7 +248,7 @@ http
 {"results":[{"error":{"message":"unsupported via this API: COPY (SELECT 1) TO STDOUT","code":"XX000"},"notices":[]}]}
 
 http
-{"query":"EXPLAIN SELECT 1"}
+{"query":"EXPLAIN OPTIMIZED PLAN FOR SELECT 1"}
 ----
 200 OK
 {"results":[{"tag":"SELECT 1","rows":[["Explained Query (fast path):\n  Constant\n    - (1)\n\nTarget cluster: mz_catalog_server\n"]],"desc":{"columns":[{"name":"Optimized Plan","type_oid":25,"type_len":-1,"type_mod":-1}]},"notices":[]}]}
