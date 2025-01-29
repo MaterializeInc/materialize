@@ -801,7 +801,7 @@ select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 gro
 1  3  2
 
 query T multiline
-explain with(arity, join implementations) select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1
+explain optimized plan with(arity, join implementations) for select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1
 ----
 Explained Query:
   With
@@ -857,7 +857,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-explain with(arity, join implementations) select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
+explain optimized plan with(arity, join implementations) for select t1.f1, count(t1.f2), max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
 ----
 Explained Query:
   With
@@ -915,7 +915,7 @@ EOF
 
 # if the count is removed, the outer join can be safely converted into an inner join
 query T multiline
-explain with(arity, join implementations) select t1.f1, max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
+explain optimized plan with(arity, join implementations) for select t1.f1, max(t2.f2) from t1 left join t2 on t1.f2 = t2.f1 group by t1.f1 having max(t2.f2) > 0
 ----
 Explained Query:
   Filter (#1 > 0) // { arity: 2 }

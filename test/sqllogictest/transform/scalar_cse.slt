@@ -124,7 +124,7 @@ statement ok
 CREATE TABLE t(x int);
 
 query T multiline
-explain select * from t where 2*x + 2*x > 0
+explain optimized plan for select * from t where 2*x + 2*x > 0
 ----
 Explained Query:
   Project (#0)
@@ -141,7 +141,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-explain select * from t where 2*x + 2*x + 2*x > 0
+explain optimized plan for select * from t where 2*x + 2*x + 2*x > 0
 ----
 Explained Query:
   Project (#0)
@@ -158,7 +158,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-explain select * from t where 2*x + 5*x + 2*x > 0
+explain optimized plan for select * from t where 2*x + 5*x + 2*x > 0
 ----
 Explained Query:
   Project (#0)

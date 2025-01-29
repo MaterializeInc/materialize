@@ -112,7 +112,7 @@ create materialized view mv1 as select * from (select * from t1 order by f1 limi
 ----
 
 query T multiline
-explain with(arity, join implementations) materialized view mv1;
+explain optimized plan with(arity, join implementations) for materialized view mv1;
 ----
 materialize.public.mv1:
   TopK order_by=[#0 asc nulls_last] limit=3 offset=3 // { arity: 2 }

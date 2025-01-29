@@ -39,7 +39,7 @@ create materialized view quux as select distinct on (c) c, x from quux_raw where
 # Demonstrate core semijoin idempotence simplification: semijoin removal.
 # The resulting plan should have 1 join with 2 inputs and no distinct operators.
 query T multiline
-explain select * from (with keys as (
+explain optimized plan for select * from (with keys as (
     select distinct foo.a from foo, bar where foo.a = bar.a
 )
 select * from foo, keys where foo.a = keys.a)

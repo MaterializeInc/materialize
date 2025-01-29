@@ -5627,7 +5627,7 @@ INSERT INTO t2 VALUES ('abc', 'a%', 'a.*'), ('ABC', 'a%', 'a.*'), ('ccc', 'a%', 
 # the other fields.
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR AS JSON
+EXPLAIN OPTIMIZED PLAN AS JSON FOR
 SELECT s FROM t2 WHERE s ~ 'a.*';
 ----
 {

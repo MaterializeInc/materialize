@@ -47,7 +47,7 @@ EOF
 
 # Must explain the "Locally Optimized Plan".
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR LOCALLY OPTIMIZED PLAN FOR
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR
 VIEW v;
 ----
 With
@@ -79,7 +79,7 @@ EOF
 
 # Must explain the "Locally Optimized Plan" (same as above).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR LOCALLY OPTIMIZED PLAN FOR
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR
 REPLAN VIEW v;
 ----
 With
@@ -112,7 +112,7 @@ EOF
 # Must explain the "Locally Optimized Plan" after changing the feature flag
 # (same as below).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR LOCALLY OPTIMIZED PLAN WITH(ENABLE NEW OUTER JOIN LOWERING = TRUE) FOR
+EXPLAIN LOCALLY OPTIMIZED PLAN WITH(ENABLE NEW OUTER JOIN LOWERING = TRUE) FOR
 REPLAN VIEW v;
 ----
 With
@@ -160,7 +160,7 @@ WHERE
 
 # Ensure that flag whas used during planning.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR LOCALLY OPTIMIZED PLAN FOR
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR
 VIEW v;
 ----
 With
@@ -191,7 +191,7 @@ EOF
 
 # Must be re-planning with the feature flag turned off.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR LOCALLY OPTIMIZED PLAN WITH(ENABLE NEW OUTER JOIN LOWERING = FALSE) FOR
+EXPLAIN LOCALLY OPTIMIZED PLAN WITH(ENABLE NEW OUTER JOIN LOWERING = FALSE) FOR
 REPLAN VIEW v;
 ----
 With

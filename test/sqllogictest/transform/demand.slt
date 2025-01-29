@@ -30,7 +30,7 @@ select x from (select x, 1/a from (select 2 as x), t);
 # call in the physical optimizer, because at the time of the first `Demand` call, the column that is later dummied in
 # the second call is still being used in a join constraint, but this join is then eliminated by `RedundantJoin`.
 query T multiline
-explain with(arity, join implementations)
+explain optimized plan with(arity, join implementations) for
 select
   case when (((false)
           and (true))
