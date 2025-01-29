@@ -339,7 +339,7 @@ key    id1  id2  measurement
 # For UPSERT sources with INCLUDE KEY, we expect the queries to
 # take advantage of the uniqueness propery of the key column.
 
-> EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT named FROM bareformatconfluent;
+? EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT named FROM bareformatconfluent;
 Explained Query:
   Project (#0)
     ReadStorage materialize.public.bareformatconfluent
@@ -350,7 +350,7 @@ Target cluster: quickstart
 
 > CREATE DEFAULT INDEX ON bareformatconfluent;
 
-> EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT named FROM bareformatconfluent;
+? EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT named FROM bareformatconfluent;
 Explained Query (fast path):
   Project (#0)
     ReadIndex on=materialize.public.bareformatconfluent bareformatconfluent_primary_idx=[*** full scan ***]
@@ -373,7 +373,7 @@ Target cluster: quickstart
 # For ENVELOPE NONE with INCLUDE KEY, uniqueness is not guaranteed,
 # so we expect that query plans will contain an explicit Distinct on
 
-> EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT named FROM envelope_none_with_key;
+? EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT named FROM envelope_none_with_key;
 Explained Query:
   Distinct project=[#0] monotonic
     Project (#0)
@@ -385,7 +385,7 @@ Target cluster: quickstart
 
 > CREATE DEFAULT INDEX ON envelope_none_with_key;
 
-> EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT named FROM envelope_none_with_key;
+? EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT named FROM envelope_none_with_key;
 Explained Query:
   Distinct project=[#0] monotonic
     Project (#0)

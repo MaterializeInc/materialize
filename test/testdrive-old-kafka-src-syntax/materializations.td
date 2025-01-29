@@ -172,7 +172,7 @@ contains:test5 is a view, which cannot be exported as a sink
 
 $ set-regex match=(\s\(u\d+\)) replacement=
 
-> EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM test5;
+? EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM test5;
 Explained Query (fast path):
   ReadIndex on=materialize.public.test5 test5_primary_idx=[*** full scan ***]
 
@@ -200,7 +200,7 @@ contains:catalog item 'materialize.public.idx1' is an index and so cannot be dep
 # unmaterialize the view.
 > DROP INDEX test5_primary_idx
 
-> EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM test5
+? EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM test5
 Explained Query (fast path):
   Project (#1, #0)
     ReadIndex on=materialize.public.test5 idx1=[*** full scan ***]

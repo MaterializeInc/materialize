@@ -24,10 +24,10 @@ ALTER SYSTEM SET min_timestamp_interval = '100ms'
 # Remove references to internal table identifiers and "materialize.public" strings
 $ set-regex match=(\s\(u\d+\)|materialize\.public\.) replacement=
 
-> EXPLAIN OPTIMIZED PLAN FOR SELECT (SELECT 'a' LIMIT 1);
+? EXPLAIN OPTIMIZED PLAN FOR SELECT (SELECT 'a' LIMIT 1);
 Explained Query (fast path):
   Constant
-    - (a)
+    - ("a")
 
 Target cluster: mz_catalog_server
 
