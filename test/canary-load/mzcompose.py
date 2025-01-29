@@ -158,7 +158,7 @@ def fetch_token(user_name: str, password: str) -> str:
         password=password,
         host="admin.cloud.materialize.com/frontegg",
         scheme="https",
-        max_tries=1,
+        max_tries=10,
     )
 
 
