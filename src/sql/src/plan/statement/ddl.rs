@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
+use mz_adapter_types::dyncfgs::ENABLE_MULTI_REPLICA_SOURCES;
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
@@ -1184,7 +1185,15 @@ pub fn plan_create_source(
                 sql_bail!("cannot create source in cluster with more than one replica")
             }
         }
-        CreateSourceConnection::Kafka { .. } | CreateSourceConnection::LoadGenerator { .. } => {}
+        CreateSourceConnection::Kafka { .. } | CreateSourceConnection::LoadGenerator { .. } => {
+            let enable_multi_replica_sources =
+                ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs());
+            if !enable_multi_replica_sources {
+                if in_cluster.replica_ids().len() > 1 {
+                    sql_bail!("cannot create source in cluster with more than one replica")
+                }
+            }
+        }
     }
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
@@ -5335,7 +5344,9 @@ fn contains_single_replica_objects(scx: &StatementContext, cluster: &dyn Catalog
         let single_replica_source = match item.source_desc() {
             Ok(Some(desc)) => match desc.connection {
                 GenericSourceConnection::Kafka(_) | GenericSourceConnection::LoadGenerator(_) => {
-                    false
+                    let enable_multi_replica_sources =
+                        ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs());
+                    !enable_multi_replica_sources
                 }
                 GenericSourceConnection::MySql(_) | GenericSourceConnection::Postgres(_) => true,
             },
