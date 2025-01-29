@@ -145,3 +145,7 @@ ci_unimportant_heading ":docker: Cleaning up after mzcompose"
 run kill || true
 run rm --force -v
 run down --volumes
+
+ci_unimportant_heading "terraform: Destroying leftover state in case job was cancelled or timed out..."
+bin/ci-builder run stable terraform -chdir=test/terraform/aws destroy || true
+bin/ci-builder run stable terraform -chdir=test/terraform/gcp destroy || true
