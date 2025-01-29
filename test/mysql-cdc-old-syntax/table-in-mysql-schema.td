@@ -29,11 +29,13 @@ $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-pass
 $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
 DROP DATABASE IF EXISTS another_schema;
+DROP DATABASE IF EXISTS other;
+DROP DATABASE IF EXISTS mysql;
+CREATE DATABASE mysql;
 USE mysql;
-
 # Insert data pre-snapshot
-CREATE TABLE t_in_mysql (f1 INT);
-INSERT INTO t_in_mysql VALUES (1), (2);
+CREATE TABLE mysql.t_in_mysql (f1 INT);
+INSERT INTO mysql.t_in_mysql VALUES (1), (2);
 
 ! CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
