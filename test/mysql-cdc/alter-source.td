@@ -322,7 +322,7 @@ INSERT INTO table_a VALUES (5, 'five', 5);
 4 four 1
 5 five 5
 
-> EXPLAIN SELECT * FROM table_a WHERE f3 IS NULL;
+? EXPLAIN SELECT * FROM table_a WHERE f3 IS NULL;
 "Explained Query (fast path):\n  Constant <empty>\n\nTarget cluster: quickstart\n"
 
 #
