@@ -1252,7 +1252,7 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: gcp
-      #branches: "main v*.* lts-v*"
+      branches: "main v*.* lts-v*"
 
   - group: "Output consistency"
     key: output-consistency
