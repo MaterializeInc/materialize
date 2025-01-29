@@ -50,8 +50,10 @@ macro_rules! make_handle_static {
         ) -> impl ::axum::response::IntoResponse {
             #[cfg(not(feature = "dev-web"))]
             const DIR_1: ::include_dir::Dir = $dir_1;
-            #[cfg(not(feature = "dev-web"))]
-            $(const DIR_2: ::include_dir::Dir = $dir_2;)?
+            $(
+                #[cfg(not(feature = "dev-web"))]
+                const DIR_2: ::include_dir::Dir = $dir_2;
+            )?
 
 
             #[cfg(not(feature = "dev-web"))]
