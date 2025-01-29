@@ -115,18 +115,23 @@ where
 ///
 /// This is just a bundle-type intended to make passing around its contents in the logging
 /// initialization code more convenient.
+///
+/// The `N` type parameter specifies the number of links to create for the event queue. We need
+/// separate links for queues that feed from multiple loggers because the `EventLink` type is not
+/// multi-producer safe (it is a linked-list, and multiple writers would blindly append, replacing
+/// existing new data, and cutting off other writers).
 #[derive(Clone)]
-struct EventQueue<C> {
-    link: Rc<EventLink<Timestamp, C>>,
+struct EventQueue<C, const N: usize = 1> {
+    links: [Rc<EventLink<Timestamp, C>>; N],
     activator: RcActivator,
 }
 
-impl<C> EventQueue<C> {
+impl<C, const N: usize> EventQueue<C, N> {
     fn new(name: &str) -> Self {
         let activator_name = format!("{name}_activator");
         let activate_after = 128;
         Self {
-            link: Rc::new(EventLink::new()),
+            links: [(); N].map(|_| Rc::new(EventLink::new())),
             activator: RcActivator::new(activator_name, activate_after),
         }
     }

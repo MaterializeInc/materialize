@@ -5567,15 +5567,25 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER: LazyLock<BuiltinView> =
         oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER_OID,
         column_defs: None,
         sql: "SELECT
-    address,
+    addr2.id,
+    reachability.worker_id,
     port,
-    worker_id,
     update_type,
     time,
     pg_catalog.count(*) as count
 FROM
-    mz_introspection.mz_dataflow_operator_reachability_raw
-GROUP BY address, port, worker_id, update_type, time",
+    mz_introspection.mz_dataflow_operator_reachability_raw reachability,
+    mz_introspection.mz_dataflow_addresses_per_worker addr1,
+    mz_introspection.mz_dataflow_addresses_per_worker addr2
+WHERE
+    CASE
+        WHEN source = 0 THEN addr2.address = addr1.address
+        ELSE addr2.address = addr1.address || reachability.source
+    END
+    AND addr1.id = reachability.id
+    AND addr1.worker_id = reachability.worker_id
+    AND addr2.worker_id = reachability.worker_id
+GROUP BY addr2.id, reachability.worker_id, port, update_type, time",
         access: vec![PUBLIC_SELECT],
     });
 
@@ -5587,13 +5597,13 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY: LazyLock<BuiltinView> =
         column_defs: None,
         sql: "
 SELECT
-    address,
+    id,
     port,
     update_type,
     time,
     pg_catalog.sum(count) as count
 FROM mz_introspection.mz_dataflow_operator_reachability_per_worker
-GROUP BY address, port, update_type, time",
+GROUP BY id, port, update_type, time",
         access: vec![PUBLIC_SELECT],
     });
 

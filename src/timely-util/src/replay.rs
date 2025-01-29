@@ -13,6 +13,7 @@
 //! provides the protocol and semantics of the [MzReplay] operator.
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use timely::container::ContainerBuilder;
@@ -56,14 +57,14 @@ where
     ) -> (StreamCore<S, CB::Container>, Rc<dyn Any>)
     where
         CB: ContainerBuilder,
-        L: FnMut(Session<T, CB, PushCounter<T, CB::Container, Tee<T, CB::Container>>>, &C)
+        L: FnMut(Session<T, CB, PushCounter<T, CB::Container, Tee<T, CB::Container>>>, Cow<C>)
             + 'static;
 }
 
 impl<T, C, I, A> MzReplay<T, C, A> for I
 where
     T: Timestamp,
-    C: Container,
+    C: Container + Clone,
     I: IntoIterator,
     I::Item: EventIterator<T, C> + 'static,
     A: ActivatorTrait + 'static,
@@ -78,7 +79,7 @@ where
     ) -> (StreamCore<S, CB::Container>, Rc<dyn Any>)
     where
         for<'a> CB: ContainerBuilder,
-        L: FnMut(Session<T, CB, PushCounter<T, CB::Container, Tee<T, CB::Container>>>, &C)
+        L: FnMut(Session<T, CB, PushCounter<T, CB::Container, Tee<T, CB::Container>>>, Cow<C>)
             + 'static,
     {
         let name = format!("Replay {}", name);
@@ -135,13 +136,21 @@ where
             if weak_token.upgrade().is_some() {
                 for event_stream in event_streams.iter_mut() {
                     while let Some(event) = event_stream.next() {
-                        match &event {
-                            Event::Progress(vec) => {
+                        use Cow::*;
+                        match event {
+                            Owned(Event::Progress(vec)) => {
+                                progress.internals[0].extend(vec.iter().cloned());
+                                progress_sofar.extend(vec.into_iter());
+                            }
+                            Owned(Event::Messages(time, data)) => {
+                                logic(output.session_with_builder(&time), Owned(data));
+                            }
+                            Borrowed(Event::Progress(vec)) => {
                                 progress.internals[0].extend(vec.iter().cloned());
                                 progress_sofar.extend(vec.iter().cloned());
                             }
-                            Event::Messages(time, data) => {
-                                logic(output.session_with_builder(time), data);
+                            Borrowed(Event::Messages(time, data)) => {
+                                logic(output.session_with_builder(time), Borrowed(data));
                             }
                         }
                     }

@@ -64,7 +64,7 @@ mz_continual_tasks_ind  CREATE␠INDEX␠"mz_continual_tasks_ind"␠IN␠CLUSTER
 mz_databases_ind  CREATE␠INDEX␠"mz_databases_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s457␠AS␠"mz_catalog"."mz_databases"]␠("name")
 mz_dataflow_addresses_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_addresses_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_dataflow_addresses_per_worker"␠("id",␠"worker_id")
 mz_dataflow_channels_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_channels_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_dataflow_channels_per_worker"␠("id",␠"worker_id")
-mz_dataflow_operator_reachability_raw_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_operator_reachability_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_dataflow_operator_reachability_raw"␠("address",␠"port",␠"worker_id",␠"update_type",␠"time")
+mz_dataflow_operator_reachability_raw_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_operator_reachability_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_dataflow_operator_reachability_raw"␠("id",␠"worker_id",␠"source",␠"port",␠"update_type",␠"time")
 mz_dataflow_operators_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_operators_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_dataflow_operators_per_worker"␠("id",␠"worker_id")
 mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_dataflow_shutdown_durations_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_dataflow_shutdown_durations_histogram_raw"␠("worker_id",␠"duration_ns")
 mz_frontiers_ind  CREATE␠INDEX␠"mz_frontiers_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s696␠AS␠"mz_internal"."mz_frontiers"]␠("object_id")
@@ -369,8 +369,9 @@ mz_dataflow_channels_per_worker  id
 mz_dataflow_channels_per_worker  to_index
 mz_dataflow_channels_per_worker  to_port
 mz_dataflow_channels_per_worker  worker_id
-mz_dataflow_operator_reachability_raw  address
+mz_dataflow_operator_reachability_raw  id
 mz_dataflow_operator_reachability_raw  port
+mz_dataflow_operator_reachability_raw  source
 mz_dataflow_operator_reachability_raw  time
 mz_dataflow_operator_reachability_raw  update_type
 mz_dataflow_operator_reachability_raw  worker_id

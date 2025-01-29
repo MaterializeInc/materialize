@@ -18,11 +18,12 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
-use mz_timely_util::containers::{columnar_exchange, Col2ValBatcher, ColumnBuilder};
+use mz_timely_util::containers::{
+    columnar_exchange, Col2ValBatcher, ColumnBuilder, ProvidedBuilder,
+};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
 use timely::container::columnation::{Columnation, CopyRegion};
-use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
@@ -61,20 +62,19 @@ pub(super) fn construct<A: Allocate>(
     worker.dataflow_named("Dataflow: timely logging", move |scope| {
         let enable_logging = config.enable_logging;
         let (logs, token) =
-            Some(event_queue.link).mz_replay::<_, CapacityContainerBuilder<_>, _>(
+            event_queue.links.mz_replay::<_, ProvidedBuilder<_>, _>(
                 scope,
                 "timely logs",
                 config.interval,
                 event_queue.activator,
-                move |mut session, data| {
+                move |mut session, mut data| {
                     // If logging is disabled, we still need to install the indexes, but we can leave them
                     // empty. We do so by immediately filtering all logs events.
                     if enable_logging {
-                        session.give_iterator(data.iter())
+                        session.give_container(data.to_mut())
                     }
                 },
             );
-        let logs = logs.container::<Vec<_>>();
 
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.

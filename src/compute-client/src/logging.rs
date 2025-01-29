@@ -448,16 +448,10 @@ impl LogVariant {
                 .finish(),
 
             LogVariant::Timely(TimelyLog::Reachability) => RelationDesc::builder()
-                .with_column(
-                    "address",
-                    ScalarType::List {
-                        element_type: Box::new(ScalarType::UInt64),
-                        custom_id: None,
-                    }
-                    .nullable(false),
-                )
-                .with_column("port", ScalarType::UInt64.nullable(false))
+                .with_column("id", ScalarType::UInt64.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("source", ScalarType::UInt64.nullable(false))
+                .with_column("port", ScalarType::UInt64.nullable(false))
                 .with_column("update_type", ScalarType::String.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(true))
                 .finish(),

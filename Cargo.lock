@@ -2369,9 +2369,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dataflow"
-version = "0.13.3"
+version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86f47ab549a056e3959ce2036d6b20ba369a75e2a0605ccf64256e153626b352"
+checksum = "75b93af605b7f82fbf6e671a5bb0f940b385e57254a0af59ce6dfb98b8c4b302"
 dependencies = [
  "columnar",
  "fnv",
@@ -2381,9 +2381,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dogs3"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8ece5ac3c62f1cb6e21560b53102963aa91513d3f72911d99b6620f2d3ac6b1"
+checksum = "17ba29145a1df1bdc3da1142eeb991f0866620c79ce9d85e83a3837f29112ba0"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -10406,9 +10406,9 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.16.1"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ace21eb2a22c1b80b0b9b5be0627eb0f95a128a5751e866aefc90a85e3007d3"
+checksum = "0506b6506ef04c371ea6151942df60e309e7f5e710458a6b533e364ee0b3cab3"
 dependencies = [
  "bincode",
  "byteorder",
