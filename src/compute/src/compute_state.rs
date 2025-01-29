@@ -65,6 +65,7 @@ use uuid::Uuid;
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
+use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
@@ -665,10 +666,14 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             panic!("dataflow server has already initialized logging");
         }
 
-        let (logger, traces) = logging::initialize(self.timely_worker, &config);
+        let LoggingTraces {
+            traces,
+            dataflow_index,
+            compute_logger: logger,
+        } = logging::initialize(self.timely_worker, &config);
 
         let mut log_index_ids = config.index_logs;
-        for (log, (trace, dataflow_index)) in traces {
+        for (log, trace) in traces {
             // Install trace as maintained index.
             let id = log_index_ids
                 .remove(&log)
