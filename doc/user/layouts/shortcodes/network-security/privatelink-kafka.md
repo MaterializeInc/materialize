@@ -151,4 +151,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-The `(PORT <port_number>)` value must match the port that you used when creating the **TCP listener** in the Network Load Balancer. Be sure to specify the correct availability zone for each broker.
+There are a few important things to note:
+
+* The `(PORT <port_number>)` value must exactly match the port assigned to the corresponding broker in the **TCP listener** of the Network Load Balancer. Misalignment between ports and broker addresses will result in connectivity issues.
+* For same-region connections, be sure to specify the correct availability zone for each broker as well.
