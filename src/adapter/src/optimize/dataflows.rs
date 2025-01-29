@@ -530,7 +530,7 @@ fn eval_unmaterializable_func(
     let pack_1d_array = |datums: Vec<Datum>| {
         let mut row = Row::default();
         row.packer()
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: datums.len(),
@@ -640,7 +640,7 @@ fn eval_unmaterializable_func(
             row.packer().push_dict_with(|row| {
                 for (role_id, role_membership) in &role_memberships {
                     row.push(Datum::from(role_id.as_str()));
-                    row.push_array(
+                    row.try_push_array(
                         &[ArrayDimension {
                             lower_bound: 1,
                             length: role_membership.len(),

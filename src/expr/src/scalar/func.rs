@@ -2115,7 +2115,7 @@ fn parse_ident<'a>(
     }
 
     Ok(temp_storage.try_make_datum(|packer| {
-        packer.push_array(
+        packer.try_push_array(
             &[ArrayDimension {
                 lower_bound: 1,
                 length: elems.len(),
@@ -2146,7 +2146,7 @@ fn regexp_split_to_array_re<'a>(
     let found = mz_regexp::regexp_split_to_array(text, regexp);
     let mut row = Row::default();
     let mut packer = row.packer();
-    packer.push_array(
+    packer.try_push_array(
         &[ArrayDimension {
             lower_bound: 1,
             length: found.len(),
@@ -6550,7 +6550,7 @@ fn regexp_match_static<'a>(
         // participate in the match.
         match needle.captures(haystack.unwrap_str()) {
             None => packer.push(Datum::Null),
-            Some(captures) => packer.push_array(
+            Some(captures) => packer.try_push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: captures.len() - 1,
@@ -6567,7 +6567,7 @@ fn regexp_match_static<'a>(
         // containing the match, or null if there is no match.
         match needle.find(haystack.unwrap_str()) {
             None => packer.push(Datum::Null),
-            Some(mtch) => packer.push_array(
+            Some(mtch) => packer.try_push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: 1,
@@ -6817,7 +6817,7 @@ fn array_create_multidim<'a>(
     if datums.iter().all(|d| d.unwrap_array().dims().is_empty()) {
         let dims = &[];
         let datums = &[];
-        let datum = temp_storage.try_make_datum(|packer| packer.push_array(dims, datums))?;
+        let datum = temp_storage.try_make_datum(|packer| packer.try_push_array(dims, datums))?;
         return Ok(datum);
     }
 
@@ -6831,7 +6831,8 @@ fn array_create_multidim<'a>(
     let elements = datums
         .iter()
         .flat_map(|d| d.unwrap_array().elements().iter());
-    let datum = temp_storage.try_make_datum(move |packer| packer.push_array(&dims, elements))?;
+    let datum =
+        temp_storage.try_make_datum(move |packer| packer.try_push_array(&dims, elements))?;
     Ok(datum)
 }
 
@@ -6855,7 +6856,7 @@ fn array_create_scalar<'a>(
         // strangely to satisfy the borrow checker while avoiding an allocation.
         dims = &[];
     }
-    let datum = temp_storage.try_make_datum(|packer| packer.push_array(dims, datums))?;
+    let datum = temp_storage.try_make_datum(|packer| packer.try_push_array(dims, datums))?;
     Ok(datum)
 }
 
@@ -7351,7 +7352,7 @@ fn array_remove<'a>(
         length: elems.len(),
     };
 
-    Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, elems))?)
+    Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)
 }
 
 // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -7535,7 +7536,7 @@ fn array_array_concat<'a>(
 
     let elems = a_array.elements().iter().chain(b_array.elements().iter());
 
-    Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, elems))?)
+    Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)
 }
 
 fn list_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -7779,8 +7780,9 @@ fn array_fill<'a>(
             .collect()
     };
 
-    Ok(temp_storage
-        .try_make_datum(|packer| packer.push_array(&array_dimensions, vec![fill; fill_count]))?)
+    Ok(temp_storage.try_make_datum(|packer| {
+        packer.try_push_array(&array_dimensions, vec![fill; fill_count])
+    })?)
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]

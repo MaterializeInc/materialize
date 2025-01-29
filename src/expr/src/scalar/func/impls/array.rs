@@ -272,7 +272,7 @@ impl LazyUnaryFunc for CastArrayToArray {
             .map(|datum| self.cast_expr.eval(&[datum], temp_storage))
             .collect::<Result<Vec<Datum<'a>>, EvalError>>()?;
 
-        Ok(temp_storage.try_make_datum(|packer| packer.push_array(&dims, casted_datums))?)
+        Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, casted_datums))?)
     }
 
     fn output_type(&self, _input_type: ColumnType) -> ColumnType {

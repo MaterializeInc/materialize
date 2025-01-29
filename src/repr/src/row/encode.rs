@@ -2106,12 +2106,12 @@ impl RowPacker<'_> {
                     })
                     .collect::<Vec<_>>();
                 match x.elements.as_ref() {
-                    None => self.push_array(&dims, [].iter()),
+                    None => self.try_push_array(&dims, [].iter()),
                     Some(elements) => {
                         // TODO: Could we avoid this Row alloc if we made a
                         // push_array_with?
                         let elements_row = Row::try_from(elements)?;
-                        self.push_array(&dims, elements_row.iter())
+                        self.try_push_array(&dims, elements_row.iter())
                     }
                 }
                 .map_err(|err| err.to_string())?
@@ -2463,7 +2463,7 @@ mod tests {
         let metrics = ColumnarMetrics::disconnected();
 
         packer
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 0,
                     length: 3,
@@ -2682,7 +2682,7 @@ mod tests {
             Datum::Null,
         ]);
         packer
-            .push_array(
+            .try_push_array(
                 &[ArrayDimension {
                     lower_bound: 2,
                     length: 2,

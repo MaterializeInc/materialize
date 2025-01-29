@@ -1911,30 +1911,30 @@ ORDER BY
 ----
 TopK order_by=[#0 asc nulls_last]
   Project (#1, #2)
-    Return
-      Filter ((select(Get l3) AND (#3 = #7)) AND (#8 = text_to_char("CANADA")))
-        CrossJoin
-          Get materialize.public.supplier
-          Get materialize.public.nation
     With
-      cte l3 =
+      cte [l3 as subquery-3] =
         Reduce aggregates=[any((#^0 = #0))]
           Project (#1)
-            Return
-              Filter (select(Get l1) AND (integer_to_numeric(#2) > select(Get l2)))
-                Get materialize.public.partsupp
             With
-              cte l1 =
-                Reduce aggregates=[any((#^0 = #0))]
-                  Project (#0)
-                    Filter (varchar_to_text(#1) like "forest%")
-                      Get materialize.public.part
-              cte l2 =
+              cte [l2 as subquery-2] =
                 Project (#1)
                   Map ((0.5 * #0))
                     Reduce aggregates=[sum(#4)]
                       Filter ((((#1 = #^0) AND (#2 = #^1)) AND (#10 >= text_to_date("1995-01-01"))) AND (date_to_timestamp(#10) < (text_to_date("1995-01-01") + 1 year)))
                         Get materialize.public.lineitem
+              cte [l1 as subquery-1] =
+                Reduce aggregates=[any((#^0 = #0))]
+                  Project (#0)
+                    Filter (varchar_to_text(#1) like "forest%")
+                      Get materialize.public.part
+            Return
+              Filter (select(Get l1) AND (integer_to_numeric(#2) > select(Get l2)))
+                Get materialize.public.partsupp
+    Return
+      Filter ((select(Get l3) AND (#3 = #7)) AND (#8 = text_to_char("CANADA")))
+        CrossJoin
+          Get materialize.public.supplier
+          Get materialize.public.nation
 
 Target cluster: quickstart
 

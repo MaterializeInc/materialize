@@ -2039,7 +2039,7 @@ impl<'a, E> DatumType<'a, E> for ArrayRustType<String> {
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(temp_storage.make_datum(|packer| {
             packer
-                .push_array(
+                .try_push_array(
                     &[ArrayDimension {
                         lower_bound: 1,
                         length: self.0.len(),
@@ -3298,7 +3298,7 @@ impl ScalarType {
 
                 let mut row = Row::default();
                 row.packer()
-                    .push_array::<_, Datum<'static>>(
+                    .try_push_array::<_, Datum<'static>>(
                         &[ArrayDimension {
                             lower_bound: 1,
                             length: 0,
@@ -3307,7 +3307,7 @@ impl ScalarType {
                     )
                     .expect("failed to push empty array");
                 row.packer()
-                    .push_array(
+                    .try_push_array(
                         &[ArrayDimension {
                             lower_bound: 1,
                             length: datums.len(),
@@ -3328,7 +3328,7 @@ impl ScalarType {
         static EMPTY_ARRAY: LazyLock<Row> = LazyLock::new(|| {
             let mut row = Row::default();
             row.packer()
-                .push_array::<_, Datum<'static>>(
+                .try_push_array::<_, Datum<'static>>(
                     &[ArrayDimension {
                         lower_bound: 1,
                         length: 0,
@@ -3700,7 +3700,7 @@ impl Arbitrary for ScalarType {
 static EMPTY_ARRAY_ROW: LazyLock<Row> = LazyLock::new(|| {
     let mut row = Row::default();
     row.packer()
-        .push_array(&[], iter::empty::<Datum>())
+        .try_push_array(&[], iter::empty::<Datum>())
         .expect("array known to be valid");
     row
 });
@@ -4014,7 +4014,7 @@ fn arb_array(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropAr
         let element_datums: Vec<Datum<'_>> = elements.iter().map(|pd| pd.into()).collect();
         let mut row = Row::default();
         row.packer()
-            .push_array(&dimensions, element_datums)
+            .try_push_array(&dimensions, element_datums)
             .unwrap();
         PropArray(row, elements)
     })
