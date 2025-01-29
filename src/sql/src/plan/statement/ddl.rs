@@ -952,6 +952,13 @@ pub fn plan_create_source(
 
             connection
         }
+        CreateSourceConnection::SqlServer { .. } => {
+            // TODO(sql_server1)
+            return Err(PlanError::Unsupported {
+                feature: "SQL SERVER".to_string(),
+                discussion_no: None,
+            });
+        }
         CreateSourceConnection::MySql {
             connection,
             options,
