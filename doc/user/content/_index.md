@@ -7,6 +7,9 @@ aliases:
 disable_list: true
 ---
 
+Materialize is a real-time data integration platform that enables you to use SQL
+to transform, deliver, and act on fast changing data.
+
 With self-managed Materialize, you can deploy and operate Materialize in your
 Kubernetes environment. For self-managed Materialize, Materialize provides:
 
