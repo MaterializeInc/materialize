@@ -214,8 +214,6 @@ struct LogCollection {
     trace: RowRowAgent<Timestamp, Diff>,
     /// Token that should be dropped to drop this collection.
     token: Rc<dyn Any>,
-    /// Index of the dataflow exporting this collection.
-    dataflow_index: usize,
 }
 
 pub(super) type Pusher<C> = Counter<Timestamp, C, Tee<Timestamp, C>>;

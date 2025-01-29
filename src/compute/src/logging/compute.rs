@@ -24,7 +24,6 @@ use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Timestamp};
 use mz_timely_util::containers::{Column, ColumnBuilder, ProvidedBuilder};
 use mz_timely_util::replay::MzReplay;
-use timely::communication::Allocate;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
@@ -34,7 +33,6 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Scheduler;
-use timely::worker::Worker;
 use timely::{Container, Data};
 use tracing::error;
 use uuid::Uuid;
@@ -292,21 +290,20 @@ impl LirMetadata {
 /// Constructs the logging dataflow for compute logs.
 ///
 /// Params
-/// * `worker`: The Timely worker hosting the log analysis dataflow.
+/// * `scope`: The Timely scope hosting the log analysis dataflow.
+/// * `scheduler`: The timely scheduler to obtainer activators.
 /// * `config`: Logging configuration.
 /// * `event_queue`: The source to read compute log events from.
-pub(super) fn construct<A: Allocate + 'static>(
-    worker: &mut timely::worker::Worker<A>,
+pub(super) fn construct<A: Scheduler + 'static, S: Scope<Timestamp = Timestamp>>(
+    mut scope: S,
+    scheduler: A,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
-    let worker_id = worker.index();
-    let worker2 = worker.clone();
-    let dataflow_index = worker.next_dataflow_index();
 
-    worker.dataflow_named("Dataflow: compute logging", move |scope| {
+    scope.scoped("Dataflow: compute logging", move |scope| {
         let enable_logging = config.enable_logging;
         let (logs, token) = event_queue.links.mz_replay::<_, ProvidedBuilder<_>, _>(
             scope,
@@ -341,7 +338,7 @@ pub(super) fn construct<A: Allocate + 'static>(
         let (mut lir_mapping_out, lir_mapping) = demux.new_output();
         let (mut dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
 
-        let mut demux_state = DemuxState::new(worker2);
+        let mut demux_state = DemuxState::new(scheduler);
         demux.build(move |_capability| {
             move |_frontiers| {
                 let mut export = export_out.activate();
@@ -389,6 +386,8 @@ pub(super) fn construct<A: Allocate + 'static>(
                 });
             }
         });
+
+        let worker_id = scope.index();
 
         // Encode the contents of each logging stream into its expected `Row` format.
         let mut packer = PermutedRowPacker::new(ComputeLog::DataflowCurrent);
@@ -569,7 +568,6 @@ pub(super) fn construct<A: Allocate + 'static>(
                 let collection = LogCollection {
                     trace,
                     token: Rc::clone(&token),
-                    dataflow_index,
                 };
                 result.insert(variant, collection);
             }
@@ -594,9 +592,9 @@ where
 }
 
 /// State maintained by the demux operator.
-struct DemuxState<A: Allocate> {
-    /// The worker hosting this operator.
-    worker: Worker<A>,
+struct DemuxState<A> {
+    /// The timely scheduler.
+    scheduler: A,
     /// State tracked per dataflow export.
     exports: BTreeMap<GlobalId, ExportState>,
     /// Maps live dataflows to counts of their exports.
@@ -615,10 +613,10 @@ struct DemuxState<A: Allocate> {
     dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
 }
 
-impl<A: Allocate> DemuxState<A> {
-    fn new(worker: Worker<A>) -> Self {
+impl<A: Scheduler> DemuxState<A> {
+    fn new(scheduler: A) -> Self {
         Self {
-            worker,
+            scheduler,
             exports: Default::default(),
             dataflow_export_counts: Default::default(),
             dataflow_drop_times: Default::default(),
@@ -763,7 +761,7 @@ struct DataflowGlobalDatum {
 }
 
 /// Event handler of the demux operator.
-struct DemuxHandler<'a, 'b, A: Allocate + 'static> {
+struct DemuxHandler<'a, 'b, A: Scheduler> {
     /// State kept by the demux operator.
     state: &'a mut DemuxState<A>,
     /// State shared across log receivers.
@@ -776,7 +774,7 @@ struct DemuxHandler<'a, 'b, A: Allocate + 'static> {
     time: Duration,
 }
 
-impl<A: Allocate> DemuxHandler<'_, '_, A> {
+impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     /// Return the timestamp associated with the current event, based on the event time and the
     /// logging interval.
     fn ts(&self) -> Timestamp {
@@ -1198,7 +1196,7 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     ) {
         let activator = self
             .state
-            .worker
+            .scheduler
             .activator_for(address.into_iter().collect());
         let existing = self
             .state

@@ -20,8 +20,8 @@ use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_timely_util::containers::{columnar_exchange, Col2ValBatcher, Column, ColumnBuilder};
 use mz_timely_util::replay::MzReplay;
-use timely::communication::Allocate;
 use timely::dataflow::channels::pact::ExchangeCore;
+use timely::dataflow::Scope;
 use timely::Container;
 
 use crate::extensions::arrange::MzArrangeCore;
@@ -33,21 +33,18 @@ use crate::typedefs::RowRowSpine;
 /// Constructs the logging dataflow for reachability logs.
 ///
 /// Params
-/// * `worker`: The Timely worker hosting the log analysis dataflow.
+/// * `scope`: The Timely scope hosting the log analysis dataflow.
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
-pub(super) fn construct<A: Allocate>(
-    worker: &mut timely::worker::Worker<A>,
+pub(super) fn construct<S: Scope<Timestamp = Timestamp>>(
+    mut scope: S,
     config: &LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ReachabilityEvent)>, 3>,
 ) -> BTreeMap<LogVariant, LogCollection> {
-    let interval_ms = std::cmp::max(1, config.interval.as_millis());
-    let worker_index = worker.index();
-    let dataflow_index = worker.next_dataflow_index();
-
     // A dataflow for multiple log-derived arrangements.
-    let traces = worker.dataflow_named("Dataflow: timely reachability logging", move |scope| {
+    let traces = scope.scoped("Dataflow: timely reachability logging", move |scope| {
         let enable_logging = config.enable_logging;
+        let interval_ms = std::cmp::max(1, config.interval.as_millis());
         type UpdatesKey = (bool, usize, usize, usize, Timestamp);
 
         type CB = ColumnBuilder<((UpdatesKey, ()), Timestamp, Diff)>;
@@ -75,6 +72,7 @@ pub(super) fn construct<A: Allocate>(
 
         // Restrict results by those logs that are meant to be active.
         let logs_active = [LogVariant::Timely(TimelyLog::Reachability)];
+        let worker_id = scope.index();
 
         let updates = consolidate_and_pack::<_, Col2ValBatcher<UpdatesKey, _, _, _>, ColumnBuilder<_>, _, _>(
             &updates,
@@ -84,7 +82,7 @@ pub(super) fn construct<A: Allocate>(
                 let update_type = if *update_type { "source" } else { "target" };
                 let data = packer.pack_slice(&[
                     Datum::UInt64(u64::cast_from(*operator_id)),
-                    Datum::UInt64(u64::cast_from(worker_index)),
+                    Datum::UInt64(u64::cast_from(worker_id)),
                     Datum::UInt64(u64::cast_from(*source)),
                     Datum::UInt64(u64::cast_from(*port)),
                     Datum::String(update_type),
@@ -106,7 +104,6 @@ pub(super) fn construct<A: Allocate>(
                 let collection = LogCollection {
                     trace,
                     token: Rc::clone(&token),
-                    dataflow_index,
                 };
                 result.insert(variant, collection);
             }

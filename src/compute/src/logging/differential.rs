@@ -24,12 +24,11 @@ use mz_timely_util::containers::{
     columnar_exchange, Col2ValBatcher, ColumnBuilder, ProvidedBuilder,
 };
 use mz_timely_util::replay::MzReplay;
-use timely::communication::Allocate;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::Stream;
+use timely::dataflow::{Scope, Stream};
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ArrangementHeapSizeOperatorDrop, ComputeEvent};
@@ -43,20 +42,18 @@ use crate::typedefs::{KeyBatcher, RowRowSpine};
 /// Constructs the logging dataflow for differential logs.
 ///
 /// Params
-/// * `worker`: The Timely worker hosting the log analysis dataflow.
+/// * `scope`: The Timely scope hosting the log analysis dataflow.
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
-pub(super) fn construct<A: Allocate>(
-    worker: &mut timely::worker::Worker<A>,
+pub(super) fn construct<S: Scope<Timestamp = Timestamp>>(
+    mut scope: S,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
-    let worker_id = worker.index();
-    let dataflow_index = worker.next_dataflow_index();
 
-    worker.dataflow_named("Dataflow: differential logging", move |scope| {
+    scope.scoped("Dataflow: differential logging", move |scope| {
         let enable_logging = config.enable_logging;
         let (logs, token) = event_queue.links
             .mz_replay::<_, ProvidedBuilder<_>, _>(
@@ -125,6 +122,7 @@ pub(super) fn construct<A: Allocate>(
         // We're lucky and the differential logs all have the same stream format, so just implement
         // the call once.
         let stream_to_collection = |input: &Stream<_, ((usize, ()), Timestamp, Diff)>, log| {
+            let worker_id = scope.index();
             consolidate_and_pack::<_, KeyBatcher<_, _, _>, ColumnBuilder<_>, _, _>(
                 input,
                 log,
@@ -172,7 +170,6 @@ pub(super) fn construct<A: Allocate>(
                 let collection = LogCollection {
                     trace,
                     token: Rc::clone(&token),
-                    dataflow_index,
                 };
                 result.insert(variant, collection);
             }

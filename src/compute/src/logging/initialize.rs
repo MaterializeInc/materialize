@@ -21,6 +21,7 @@ use mz_timely_util::containers::{Column, ColumnBuilder};
 use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::container::{ContainerBuilder, PushInto};
+use timely::dataflow::Scope;
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
@@ -98,34 +99,35 @@ struct LoggingContext<'a, A: Allocate> {
 
 impl<A: Allocate + 'static> LoggingContext<'_, A> {
     fn construct_dataflows(&mut self) -> BTreeMap<LogVariant, (TraceBundle, usize)> {
-        let mut collections = BTreeMap::new();
-        collections.extend(super::timely::construct(
-            self.worker,
-            self.config,
-            self.t_event_queue.clone(),
-            Rc::clone(&self.shared_state),
-        ));
-        collections.extend(super::reachability::construct(
-            self.worker,
-            self.config,
-            self.r_event_queue.clone(),
-        ));
-        collections.extend(super::differential::construct(
-            self.worker,
-            self.config,
-            self.d_event_queue.clone(),
-            Rc::clone(&self.shared_state),
-        ));
-        collections.extend(super::compute::construct(
-            self.worker,
-            self.config,
-            self.c_event_queue.clone(),
-            Rc::clone(&self.shared_state),
-        ));
+        let dataflow_index = self.worker.next_dataflow_index();
+        self.worker.dataflow_named("Dataflow: logging", |scope| {
+            let mut collections = BTreeMap::new();
+            collections.extend(super::timely::construct(
+                scope.clone(),
+                self.config,
+                self.t_event_queue.clone(),
+                Rc::clone(&self.shared_state),
+            ));
+            collections.extend(super::reachability::construct(
+                scope.clone(),
+                self.config,
+                self.r_event_queue.clone(),
+            ));
+            collections.extend(super::differential::construct(
+                scope.clone(),
+                self.config,
+                self.d_event_queue.clone(),
+                Rc::clone(&self.shared_state),
+            ));
+            collections.extend(super::compute::construct(
+                scope.clone(),
+                scope.parent.clone(),
+                self.config,
+                self.c_event_queue.clone(),
+                Rc::clone(&self.shared_state),
+            ));
 
-        let errs = self
-            .worker
-            .dataflow_named("Dataflow: logging errors", |scope| {
+            let errs = scope.scoped("Dataflow: logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowError, Diff> =
                     Collection::empty(scope).into();
                 collection
@@ -133,17 +135,18 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                     .trace
             });
 
-        // TODO(vmarcos): If we introduce introspection sources that would match
-        // type specialization for keys, we'd need to ensure that type specialized
-        // variants reach the map below (issue database-issues#6763).
-        collections
-            .into_iter()
-            .map(|(log, collection)| {
-                let bundle =
-                    TraceBundle::new(collection.trace, errs.clone()).with_drop(collection.token);
-                (log, (bundle, collection.dataflow_index))
-            })
-            .collect()
+            // TODO(vmarcos): If we introduce introspection sources that would match
+            // type specialization for keys, we'd need to ensure that type specialized
+            // variants reach the map below (issue database-issues#6763).
+            collections
+                .into_iter()
+                .map(|(log, collection)| {
+                    let bundle = TraceBundle::new(collection.trace, errs.clone())
+                        .with_drop(collection.token);
+                    (log, (bundle, dataflow_index))
+                })
+                .collect()
+        })
     }
 
     /// Construct a new reachability logger for timestamp type `T`.

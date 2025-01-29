@@ -22,12 +22,12 @@ use mz_timely_util::containers::{
     columnar_exchange, Col2ValBatcher, ColumnBuilder, ProvidedBuilder,
 };
 use mz_timely_util::replay::MzReplay;
-use timely::communication::Allocate;
 use timely::container::columnation::{Columnation, CopyRegion};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::Scope;
 use timely::logging::{
     ChannelsEvent, MessagesEvent, OperatesEvent, ParkEvent, ScheduleEvent, ShutdownEvent,
     TimelyEvent,
@@ -45,21 +45,16 @@ use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
 /// Constructs the logging dataflow for timely logs.
 ///
 /// Params
-/// * `worker`: The Timely worker hosting the log analysis dataflow.
+/// * `scope`: The Timely scope hosting the log analysis dataflow.
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
-pub(super) fn construct<A: Allocate>(
-    worker: &mut timely::worker::Worker<A>,
+pub(super) fn construct<S: Scope<Timestamp = Timestamp>>(
+    mut scope: S,
     config: &LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, TimelyEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 ) -> BTreeMap<LogVariant, LogCollection> {
-    let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
-    let worker_id = worker.index();
-    let peers = worker.peers();
-    let dataflow_index = worker.next_dataflow_index();
-
-    worker.dataflow_named("Dataflow: timely logging", move |scope| {
+    scope.scoped("Dataflow: timely logging", move |scope| {
         let enable_logging = config.enable_logging;
         let (logs, token) =
             event_queue.links.mz_replay::<_, ProvidedBuilder<_>, _>(
@@ -91,8 +86,11 @@ pub(super) fn construct<A: Allocate>(
         let (mut batches_sent_out, batches_sent) = demux.new_output();
         let (mut batches_received_out, batches_received) = demux.new_output();
 
+        let worker_id = scope.index();
         let mut demux_state = DemuxState::default();
-        demux.build(move |_capability| {
+        demux.build(|_capability| {
+            let peers = scope.peers();
+            let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
             move |_frontiers| {
                 let mut operates = operates_out.activate();
                 let mut channels = channels_out.activate();
@@ -316,7 +314,6 @@ pub(super) fn construct<A: Allocate>(
                 let collection = LogCollection {
                     trace,
                     token: Rc::clone(&token),
-                    dataflow_index,
                 };
                 result.insert(variant, collection);
             }
