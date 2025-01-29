@@ -14,7 +14,7 @@
 /bin
 /bin/lint-versions                  @MaterializeInc/testing
 /ci                                 @MaterializeInc/testing
-/ci/test/lint-deps.toml             @danhhz @benesch
+/ci/test/lint-deps.toml
 /doc/user                           @MaterializeInc/docs
 /doc/developer/reference/compute    @MaterializeInc/cluster
 /doc/developer/reference/storage    @MaterializeInc/cluster
@@ -46,7 +46,7 @@
 /src/adapter/src/coord/introspection.rs @MaterializeInc/cluster
 # to track changes to feature flags
 /src/adapter/src/flags.rs           @MaterializeInc/testing
-/src/alloc                          @benesch
+/src/alloc
 /src/audit-log                      @MaterializeInc/adapter
 /src/avro                           @MaterializeInc/cluster
 /src/avro-derive                    @MaterializeInc/cluster
@@ -65,8 +65,8 @@
 /src/controller                     @MaterializeInc/cluster
 /src/controller-types               @MaterializeInc/cluster
 /src/durable-cache                  @MaterializeInc/adapter
-/src/dyncfg                         @danhhz
-/src/dyncfgs                        @danhhz
+/src/dyncfg
+/src/dyncfgs
 /src/environmentd                   @MaterializeInc/adapter
 /src/expr                           @MaterializeInc/cluster
 /src/expr-parser                    @MaterializeInc/cluster
@@ -78,15 +78,15 @@
 /src/kafka-util                     @MaterializeInc/cluster
 /src/lowertest                      @MaterializeInc/cluster
 /src/lowertest-derive               @MaterializeInc/cluster
-/src/metabase                       @benesch
+/src/metabase
 /src/mysql-util                     @MaterializeInc/cluster
 /src/mz                             @MaterializeInc/integrations
-/src/npm                            @benesch
+/src/npm
 /src/orchestrator                   @MaterializeInc/cloud
 /src/orchestrator-kubernetes        @MaterializeInc/cloud
 /src/orchestrator-process           @MaterializeInc/cloud
 /src/orchestrator-tracing           @MaterializeInc/cloud
-/src/ore                            @benesch
+/src/ore
 /src/persist                        @MaterializeInc/persist
 /src/persist-cli                    @MaterializeInc/persist
 /src/persist-client                 @MaterializeInc/persist
@@ -107,7 +107,7 @@
 /src/rocksdb                        @MaterializeInc/cluster
 /src/s3-datagen                     @MaterializeInc/cluster
 /src/secrets                        @MaterializeInc/cloud
-/src/segment                        @benesch
+/src/segment
 /src/service                        @MaterializeInc/cluster
 /src/sql                            @MaterializeInc/adapter
 /src/sql/src/session/vars.rs
@@ -132,7 +132,7 @@
 /src/testdrive                      @MaterializeInc/testing
 /src/timely-util                    @MaterializeInc/cluster
 /src/transform                      @MaterializeInc/cluster
-/src/txn-wal                        @aljoscha @danhhz @jkosh44
+/src/txn-wal                        @aljoscha
 /src/walkabout                      @MaterializeInc/adapter
 /src/workspace-hack                 @MaterializeInc/testing
 /test
