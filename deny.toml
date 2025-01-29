@@ -160,6 +160,7 @@ name = "strum-macros"
 name = "log"
 wrappers = [
     "azure_svc_blobstorage",
+    "buildid",
     "deadpool-postgres",
     "eventsource-client",
     "fail",
