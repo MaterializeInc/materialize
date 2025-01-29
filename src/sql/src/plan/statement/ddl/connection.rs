@@ -164,6 +164,19 @@ pub(super) fn validate_options_per_connection_type(
             SslMode,
             User,
         ],
+        CreateConnectionType::SqlServer => &[
+            AwsPrivatelink,
+            Database,
+            Host,
+            Password,
+            Port,
+            SshTunnel,
+            SslCertificate,
+            SslCertificateAuthority,
+            SslKey,
+            SslMode,
+            User,
+        ],
     };
 
     for o in permitted_options {
@@ -492,6 +505,15 @@ impl ConnectionOptionExtracted {
                         .user
                         .ok_or_else(|| sql_err!("USER option is required"))?,
                 })
+            }
+            CreateConnectionType::SqlServer => {
+                scx.require_feature_flag(&vars::ENABLE_SQL_SERVER_SOURCE)?;
+
+                // TODO(sql_server1)
+                return Err(PlanError::Unsupported {
+                    feature: "SQL SERVER".to_string(),
+                    discussion_no: None,
+                });
             }
         };
 

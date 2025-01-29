@@ -65,6 +65,7 @@ Broker
 Brokers
 By
 Bytes
+Capture
 Cardinality
 Cascade
 Case
@@ -223,6 +224,7 @@ Input
 Insert
 Insights
 Inspect
+Instance
 Int
 Integer
 Internal
@@ -400,6 +402,7 @@ Seed
 Select
 Sequences
 Serializable
+Server
 Service
 Session
 Set
@@ -413,6 +416,7 @@ Snapshot
 Some
 Source
 Sources
+Sql
 Ssh
 Ssl
 Start

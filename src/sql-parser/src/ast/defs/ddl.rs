@@ -887,6 +887,7 @@ pub enum CreateConnectionType {
     Csr,
     Postgres,
     Ssh,
+    SqlServer,
     MySql,
     Yugabyte,
 }
@@ -911,6 +912,9 @@ impl AstDisplay for CreateConnectionType {
             }
             Self::Ssh => {
                 f.write_str("SSH TUNNEL");
+            }
+            Self::SqlServer => {
+                f.write_str("SQL SERVER");
             }
             Self::MySql => {
                 f.write_str("MYSQL");
@@ -1179,6 +1183,42 @@ pub struct MySqlConfigOption<T: AstInfo> {
 impl_display_for_with_option!(MySqlConfigOption);
 impl_display_t!(MySqlConfigOption);
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SqlServerConfigOptionName {
+    CaptureInstance,
+}
+
+impl AstDisplay for SqlServerConfigOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            SqlServerConfigOptionName::CaptureInstance => "CAPTURE INSTANCE",
+        })
+    }
+}
+impl_display!(SqlServerConfigOptionName);
+
+impl WithOptionName for SqlServerConfigOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            SqlServerConfigOptionName::CaptureInstance => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// An option in a `{FROM|INTO} CONNECTION ...` statement.
+pub struct SqlServerConfigOption<T: AstInfo> {
+    pub name: SqlServerConfigOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(SqlServerConfigOption);
+impl_display_t!(SqlServerConfigOption);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceConnection<T: AstInfo> {
     Kafka {
@@ -1192,6 +1232,10 @@ pub enum CreateSourceConnection<T: AstInfo> {
     Yugabyte {
         connection: T::ItemName,
         options: Vec<PgConfigOption<T>>,
+    },
+    SqlServer {
+        connection: T::ItemName,
+        options: Vec<SqlServerConfigOption<T>>,
     },
     MySql {
         connection: T::ItemName,
@@ -1235,6 +1279,18 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                 options,
             } => {
                 f.write_str("YUGABYTE CONNECTION ");
+                f.write_node(connection);
+                if !options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(options));
+                    f.write_str(")");
+                }
+            }
+            CreateSourceConnection::SqlServer {
+                connection,
+                options,
+            } => {
+                f.write_str("SQL SERVER CONNECTION ");
                 f.write_node(connection);
                 if !options.is_empty() {
                     f.write_str(" (");
