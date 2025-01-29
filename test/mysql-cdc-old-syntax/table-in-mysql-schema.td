@@ -30,8 +30,7 @@ $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
 DROP DATABASE IF EXISTS another_schema;
 DROP DATABASE IF EXISTS other;
-DROP DATABASE IF EXISTS mysql;
-CREATE DATABASE mysql;
+CREATE DATABASE IF NOT EXISTS mysql;
 USE mysql;
 # Insert data pre-snapshot
 CREATE TABLE mysql.t_in_mysql (f1 INT);
