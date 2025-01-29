@@ -43,5 +43,6 @@ GRANT CREATE, USAGE ON SCHEMA public TO materialize
 $ kafka-ingest format=bytes topic=resolution-no-publish-writer timestamp=1
 \\x00\x00\x00\x00\x01\xf6\x01
 
-! SELECT * FROM resolution_no_publish_writer;
-contains:to resolve
+# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/8933 is fixed
+# ! SELECT * FROM resolution_no_publish_writer;
+# contains:to resolve

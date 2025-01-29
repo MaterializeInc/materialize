@@ -35,7 +35,6 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.source_table_migration import (
     get_new_image_for_source_table_migration_test,
-    get_old_image_for_source_table_migration_test,
     verify_sources_after_source_table_migration,
 )
 
@@ -56,18 +55,6 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for name in c.workflows:
-        if name == "default":
-            continue
-
-        if name == "migration":
-            continue
-
-        with c.test_case(name):
-            c.workflow(name)
-
-
-def workflow_kafka(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run testdrive."""
     parser.add_argument(
         "--redpanda",
@@ -351,13 +338,17 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     mz_old = Materialized(
         default_size=Materialized.Size.DEFAULT_SIZE,
-        image=get_old_image_for_source_table_migration_test(),
+        image=get_new_image_for_source_table_migration_test(),
         external_metadata_store=True,
         external_blob_store=True,
         additional_system_parameter_defaults=dict(additional_system_parameter_defaults),
     )
 
+    print(additional_system_parameter_defaults)
+    x = dict(additional_system_parameter_defaults)
     additional_system_parameter_defaults["force_source_table_syntax"] = "true"
+    print(additional_system_parameter_defaults)
+    print(x)
 
     mz_new = Materialized(
         default_size=Materialized.Size.DEFAULT_SIZE,

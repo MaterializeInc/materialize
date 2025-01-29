@@ -152,6 +152,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             zero_downtime=True,
             force_source_table_syntax=False,
         )
+        if args.lts_upgrade:
+            # Direct upgrade from latest LTS version without any inbetween versions
+            version = LTS_VERSIONS[-1]
+            priors = [v for v in all_versions if v <= version]
+            test_upgrade_from_version(
+                c,
+                f"{version}",
+                priors,
+                filter=args.filter,
+                zero_downtime=False,
+                force_source_table_syntax=True,
+                lts_upgrade=True,
+            )
     if parallelism_count == 1 or parallelism_index == 1:
         test_upgrade_from_version(
             c,
@@ -179,6 +192,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 priors,
                 filter=args.filter,
                 zero_downtime=False,
+                force_source_table_syntax=False,
                 lts_upgrade=True,
             )
 

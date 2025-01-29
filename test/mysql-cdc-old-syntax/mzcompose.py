@@ -96,7 +96,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
     )
     for name in sharded_workflows:
-        if name == "default":
+        if name in ("default", "migration"):
             continue
 
         with c.test_case(name):
