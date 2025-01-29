@@ -9,9 +9,9 @@
 
 use aws_sdk_s3::config::Builder;
 use aws_types::sdk_config::SdkConfig;
+use bytes::Bytes;
 
 pub use aws_sdk_s3::Client;
-use bytes::Bytes;
 
 /// Creates a new client from an [SDK config](aws_types::sdk_config::SdkConfig)
 /// with Materialize-specific customizations.
