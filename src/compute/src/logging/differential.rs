@@ -58,7 +58,7 @@ pub(super) fn construct<A: Allocate>(
 
     worker.dataflow_named("Dataflow: differential logging", move |scope| {
         let enable_logging = config.enable_logging;
-        let (logs, token) = event_queue.links.clone()
+        let (logs, token) = event_queue.links
             .mz_replay::<_, ProvidedBuilder<_>, _>(
                 scope,
                 "differential logs",

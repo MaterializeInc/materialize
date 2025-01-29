@@ -118,7 +118,8 @@ where
 ///
 /// The `N` type parameter specifies the number of links to create for the event queue. We need
 /// separate links for queues that feed from multiple loggers because the `EventLink` type is not
-/// multi-producer safe.
+/// multi-producer safe (it is a linked-list, and multiple writers would blindly append, replacing
+/// existing new data, and cutting off other writers).
 #[derive(Clone)]
 struct EventQueue<C, const N: usize = 1> {
     links: [Rc<EventLink<Timestamp, C>>; N],

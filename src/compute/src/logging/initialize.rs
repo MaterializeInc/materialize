@@ -171,7 +171,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         let mut register = self.worker.log_register();
         register.insert_logger("timely", t_logger);
         // Note that each reachability logger has a unique index, this is crucial to avoid dropping
-        // data.
+        // data because the event link structure is not multi-producer safe.
         self.register_reachability_logger::<Timestamp>(&mut register, 0);
         self.register_reachability_logger::<Product<Timestamp, PointStamp<u64>>>(&mut register, 1);
         self.register_reachability_logger::<(Timestamp, Subtime)>(&mut register, 2);

@@ -5578,7 +5578,10 @@ FROM
     mz_introspection.mz_dataflow_addresses_per_worker addr1,
     mz_introspection.mz_dataflow_addresses_per_worker addr2
 WHERE
-    addr2.address = addr1.address || reachability.source
+    CASE
+        WHEN source = 0 THEN addr2.address = addr1.address
+        ELSE addr2.address = addr1.address || reachability.source
+    END
     AND addr1.id = reachability.id
     AND addr1.worker_id = reachability.worker_id
     AND addr2.worker_id = reachability.worker_id
