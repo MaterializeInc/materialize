@@ -21,7 +21,7 @@ use mz_timely_util::containers::{Column, ColumnBuilder};
 use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::container::{ContainerBuilder, PushInto};
-use timely::dataflow::Scope;
+use timely::dataflow::{InputHandle, Scope};
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
@@ -79,7 +79,7 @@ pub fn initialize<A: Allocate + 'static>(
     };
 
     let logger = worker.log_register().get("materialize/compute").unwrap();
-    (logger, traces)
+    (logger, traces.logs)
 }
 
 pub(super) type ReachabilityEvent = (usize, Vec<(usize, usize, bool, Timestamp, Diff)>);
@@ -97,24 +97,33 @@ struct LoggingContext<'a, A: Allocate> {
     shared_state: Rc<RefCell<SharedLoggingState>>,
 }
 
+pub(super) struct Return {
+    pub logs: BTreeMap<LogVariant, (TraceBundle, usize)>,
+}
+
 impl<A: Allocate + 'static> LoggingContext<'_, A> {
-    fn construct_dataflows(&mut self) -> BTreeMap<LogVariant, (TraceBundle, usize)> {
+    fn construct_dataflows(&mut self) -> Return {
         let dataflow_index = self.worker.next_dataflow_index();
         self.worker.dataflow_named("Dataflow: logging", |scope| {
             let mut collections = BTreeMap::new();
+
             let super::timely::Return {
                 collections: timely_collections,
                 compute_events: compute_events_timely,
+                operator_to_dataflow,
             } = super::timely::construct(scope.clone(), self.config, self.t_event_queue.clone());
             collections.extend(timely_collections);
+
             collections.extend(super::reachability::construct(
                 scope.clone(),
                 self.config,
                 self.r_event_queue.clone(),
             ));
+
             let super::differential::Return {
                 collections: differential_collections,
                 compute_events: compute_events_differential,
+                batcher_heap_size,
             } = super::differential::construct(
                 scope.clone(),
                 self.config,
@@ -122,14 +131,27 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                 Rc::clone(&self.shared_state),
             );
             collections.extend(differential_collections);
-            collections.extend(super::compute::construct(
+
+            let super::compute::Return {
+                collections: compute_collections,
+                arrangement_heap_size,
+            } = super::compute::construct(
                 scope.clone(),
                 scope.parent.clone(),
                 self.config,
                 self.c_event_queue.clone(),
                 [compute_events_timely, compute_events_differential],
                 Rc::clone(&self.shared_state),
-            ));
+            );
+            collections.extend(compute_collections);
+
+            let watchdog_streams = super::watchdog::Streams {
+                arrangement_heap_size,
+                batcher_heap_size,
+                operator_to_dataflow,
+                heap_size_limits: Collection::empty(scope).inner,
+            };
+            super::watchdog::construct(scope.clone(), watchdog_streams);
 
             let errs = scope.scoped("Dataflow: logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowError, Diff> =
@@ -142,14 +164,15 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             // TODO(vmarcos): If we introduce introspection sources that would match
             // type specialization for keys, we'd need to ensure that type specialized
             // variants reach the map below (issue database-issues#6763).
-            collections
+            let logs = collections
                 .into_iter()
                 .map(|(log, collection)| {
                     let bundle = TraceBundle::new(collection.trace, errs.clone())
                         .with_drop(collection.token);
                     (log, (bundle, dataflow_index))
                 })
-                .collect()
+                .collect();
+            Return { logs }
         })
     }
 

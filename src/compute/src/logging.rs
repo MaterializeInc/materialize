@@ -14,6 +14,7 @@ mod differential;
 mod initialize;
 mod reachability;
 mod timely;
+mod watchdog;
 
 use std::any::Any;
 use std::collections::BTreeMap;

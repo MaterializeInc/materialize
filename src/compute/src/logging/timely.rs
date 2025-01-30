@@ -13,6 +13,12 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::extensions::arrange::MzArrangeCore;
+use crate::logging::compute::{ComputeEvent, DataflowShutdown};
+use crate::logging::{consolidate_and_pack, LogCollection, OutputSessionColumnar, Update};
+use crate::logging::{EventQueue, LogVariant, TimelyLog};
+use crate::row_spine::RowRowBuilder;
+use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
@@ -20,14 +26,16 @@ use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::containers::{
     columnar_exchange, Col2ValBatcher, Column, ColumnBuilder, ProvidedBuilder,
 };
+use mz_timely_util::operator::Bifurcate;
 use mz_timely_util::replay::MzReplay;
 use timely::container::columnation::{Columnation, CopyRegion};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::Leave;
-use timely::dataflow::{Scope, StreamCore};
+use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::logging::{
     ChannelsEvent, MessagesEvent, OperatesEvent, ParkEvent, ScheduleEvent, ShutdownEvent,
     TimelyEvent,
@@ -35,16 +43,10 @@ use timely::logging::{
 use timely::Container;
 use tracing::error;
 
-use crate::extensions::arrange::MzArrangeCore;
-use crate::logging::compute::{ComputeEvent, DataflowShutdown};
-use crate::logging::{consolidate_and_pack, LogCollection, OutputSessionColumnar};
-use crate::logging::{EventQueue, LogVariant, TimelyLog};
-use crate::row_spine::RowRowBuilder;
-use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
-
 pub(super) struct Return<S: Scope> {
     pub collections: BTreeMap<LogVariant, LogCollection>,
     pub compute_events: StreamCore<S, Column<(Duration, ComputeEvent)>>,
+    pub operator_to_dataflow: Stream<S, Update<(usize, usize)>>,
 }
 
 /// Constructs the logging dataflow for timely logs.
@@ -179,6 +181,12 @@ pub(super) fn construct<S: Scope<Timestamp = Timestamp>>(
                 session.give((data, time, diff));
             },
         );
+
+        let (addresses, operator_to_dataflow) = addresses.bifurcate::<CapacityContainerBuilder<Vec<_>>>("addresses", |data, output| {
+            output.give_iterator(IntoIterator::into_iter(data).map(|((op, addr), time, diff)| {
+                ((*op, addr[0]), *time, *diff)
+            }));
+        });
 
         let addresses = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
             &addresses,
@@ -325,7 +333,7 @@ pub(super) fn construct<S: Scope<Timestamp = Timestamp>>(
             }
         }
 
-        Return { collections, compute_events: compute_events.leave() }
+        Return { collections, compute_events: compute_events.leave(), operator_to_dataflow: operator_to_dataflow.leave() }
     })
 }
 

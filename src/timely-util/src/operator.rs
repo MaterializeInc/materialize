@@ -922,3 +922,67 @@ where
         std::mem::take(chain)
     }
 }
+
+pub use bifurcate::Bifurcate;
+
+mod bifurcate {
+    use timely::container::ContainerBuilder;
+    use timely::dataflow::channels::pact::Pipeline;
+    use timely::dataflow::channels::pushers::buffer::Session;
+    use timely::dataflow::channels::pushers::{Counter, Tee};
+    use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+    use timely::dataflow::{Scope, StreamCore};
+    use timely::Container;
+
+    use crate::containers::ProvidedBuilder;
+
+    pub trait Bifurcate<G: Scope, C>: Sized {
+        fn bifurcate<CB: ContainerBuilder>(
+            &self,
+            name: &str,
+            logic: impl FnMut(
+                    &mut C,
+                    &mut Session<
+                        G::Timestamp,
+                        CB,
+                        Counter<G::Timestamp, CB::Container, Tee<G::Timestamp, CB::Container>>,
+                    >,
+                ) + 'static,
+        ) -> (Self, StreamCore<G, CB::Container>);
+    }
+
+    impl<G: Scope, C: Container + Clone + 'static> Bifurcate<G, C> for StreamCore<G, C> {
+        fn bifurcate<CB: ContainerBuilder>(
+            &self,
+            name: &str,
+            mut logic: impl FnMut(
+                    &mut C,
+                    &mut Session<
+                        G::Timestamp,
+                        CB,
+                        Counter<G::Timestamp, CB::Container, Tee<G::Timestamp, CB::Container>>,
+                    >,
+                ) + 'static,
+        ) -> (Self, StreamCore<G, CB::Container>) {
+            let mut builder = OperatorBuilder::new(format!("Bifurcate {name}"), self.scope());
+            let mut input = builder.new_input(self, Pipeline);
+            let (mut self_out, self_stream) = builder.new_output::<ProvidedBuilder<C>>();
+            let (mut other_out, other_stream) = builder.new_output::<CB>();
+
+            builder.build(move |_| {
+                move |_frontiers| {
+                    let mut self_out = self_out.activate();
+                    let mut other_out = other_out.activate();
+                    input.for_each(|time, data| {
+                        let mut session = self_out.session_with_builder(&time);
+                        let mut other = other_out.session_with_builder(&time);
+                        logic(data, &mut other);
+                        session.give_container(data);
+                    });
+                }
+            });
+
+            (self_stream, other_stream)
+        }
+    }
+}
