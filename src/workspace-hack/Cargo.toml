@@ -91,7 +91,7 @@ openssl = { version = "0.10.66", features = ["vendored"] }
 openssl-sys = { version = "0.9.103", default-features = false, features = ["vendored"] }
 ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
-parquet = { version = "53.3.0", default-features = false, features = ["arrow", "brotli", "flate2", "lz4", "snap", "zstd"] }
+parquet = { version = "53.3.0", default-features = false, features = ["arrow", "async", "brotli", "flate2", "lz4", "snap", "zstd"] }
 percent-encoding = { version = "2.3.1" }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
@@ -226,7 +226,7 @@ openssl = { version = "0.10.66", features = ["vendored"] }
 openssl-sys = { version = "0.9.103", default-features = false, features = ["vendored"] }
 ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
-parquet = { version = "53.3.0", default-features = false, features = ["arrow", "brotli", "flate2", "lz4", "snap", "zstd"] }
+parquet = { version = "53.3.0", default-features = false, features = ["arrow", "async", "brotli", "flate2", "lz4", "snap", "zstd"] }
 percent-encoding = { version = "2.3.1" }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
