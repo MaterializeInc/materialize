@@ -87,8 +87,6 @@ ERROR_RE = re.compile(
     | environmentd\ .*\ unrecognized\ configuration\ parameter
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     | SUMMARY:\ .*Sanitizer
-    | Fixpoint\ .*\ detected\ a\ loop\ of\ length\ .*\ after\ .*\ iterations
-    | Fixpoint\ .*\ failed\ to\ reach\ a\ fixed\ point,\ or\ cycle\ of\ length\ at\ most
     | primary\ source\ \w+\ seemingly\ dropped\ before\ subsource
     # Only notifying on unexpected failures. INT, TRAP, BUS, FPE, SEGV, PIPE
     | \ ANOM_ABEND\ .*\ sig=(2|5|7|8|11|13)
