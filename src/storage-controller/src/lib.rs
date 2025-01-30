@@ -2145,6 +2145,7 @@ where
             instance.rehydrate_failed_replicas();
         }
 
+        let mut status_updates = vec![];
         let mut updated_frontiers = BTreeMap::new();
 
         // Take the currently stashed responses so that we can call mut receiver functions in the loop.
@@ -2196,58 +2197,56 @@ where
                         }
                     }
                 }
-                (replica_id, StorageResponse::StatusUpdates(mut updates)) => {
-                    for status_update in &mut updates {
-                        // NOTE(aljoscha): We sniff out the hydration status for
-                        // ingestions from status updates. This is the easiest we
-                        // can do right now, without going deeper into changing the
-                        // comms protocol between controller and cluster. We cannot,
-                        // for example use `StorageResponse::FrontierUpper`,
-                        // because those will already get sent when the ingestion is
-                        // just being created.
-                        //
-                        // Sources differ in when they will report as Running. Kafka
-                        // UPSERT sources will only switch to `Running` once their
-                        // state has been initialized from persist, which is the
-                        // first case that we care about right now.
-                        //
-                        // I wouldn't say it's ideal, but it's workable until we
-                        // find something better.
-                        match status_update.status {
-                            Status::Running => {
-                                let collection = self.collections.get_mut(&status_update.id);
-                                match collection {
-                                    Some(collection) => {
-                                        match collection.extra_state {
-                                            CollectionStateExtra::Ingestion(
-                                                ref mut ingestion_state,
-                                            ) => {
-                                                if !ingestion_state.hydrated {
-                                                    tracing::debug!(ingestion_id = %status_update.id, "ingestion is hydrated");
-                                                    ingestion_state.hydrated = true;
-                                                }
-                                            }
-                                            CollectionStateExtra::Export(_) => {
-                                                // TODO(sinks): track sink hydration?
-                                            }
-                                            CollectionStateExtra::None => {
-                                                // Nothing to do
+                (replica_id, StorageResponse::StatusUpdate(mut status_update)) => {
+                    // NOTE(aljoscha): We sniff out the hydration status for
+                    // ingestions from status updates. This is the easiest we
+                    // can do right now, without going deeper into changing the
+                    // comms protocol between controller and cluster. We cannot,
+                    // for example use `StorageResponse::FrontierUpper`,
+                    // because those will already get sent when the ingestion is
+                    // just being created.
+                    //
+                    // Sources differ in when they will report as Running. Kafka
+                    // UPSERT sources will only switch to `Running` once their
+                    // state has been initialized from persist, which is the
+                    // first case that we care about right now.
+                    //
+                    // I wouldn't say it's ideal, but it's workable until we
+                    // find something better.
+                    match status_update.status {
+                        Status::Running => {
+                            let collection = self.collections.get_mut(&status_update.id);
+                            match collection {
+                                Some(collection) => {
+                                    match collection.extra_state {
+                                        CollectionStateExtra::Ingestion(
+                                            ref mut ingestion_state,
+                                        ) => {
+                                            if !ingestion_state.hydrated {
+                                                tracing::debug!(ingestion_id = %status_update.id, "ingestion is hydrated");
+                                                ingestion_state.hydrated = true;
                                             }
                                         }
+                                        CollectionStateExtra::Export(_) => {
+                                            // TODO(sinks): track sink hydration?
+                                        }
+                                        CollectionStateExtra::None => {
+                                            // Nothing to do
+                                        }
                                     }
-                                    None => (), // no collection, let's say that's fine
-                                                // here
                                 }
+                                None => (), // no collection, let's say that's fine
+                                            // here
                             }
-                            _ => (),
                         }
-
-                        // Set replica_id in the status update if available
-                        if let Some(id) = replica_id {
-                            status_update.replica_id = Some(id);
-                        }
+                        _ => {},
                     }
-                    self.record_status_updates(updates);
+
+                    // Set replica_id in the status update if available
+                    if let Some(id) = replica_id {
+                        status_update.replica_id = Some(id);
+                    }
+                    status_updates.push(status_update);
                 }
                 (_replica_id, StorageResponse::StagedBatches(batches)) => {
                     for (ingestion_id, batches) in batches {
@@ -2271,6 +2270,8 @@ where
                 }
             }
         }
+
+        self.record_status_updates(status_updates);
 
         // Process dropped tables in a single batch.
         let mut dropped_table_ids = Vec::new();
