@@ -218,11 +218,9 @@ where
                     self.active_ingestions.insert(ingestion.id);
                 }
             }
-            StorageCommand::AllowCompaction(policies) => {
-                for (id, frontier) in policies {
-                    if frontier.is_empty() {
-                        self.active_ingestions.remove(id);
-                    }
+            StorageCommand::AllowCompaction(id, frontier) => {
+                if frontier.is_empty() {
+                    self.active_ingestions.remove(id);
                 }
             }
             _ => (),

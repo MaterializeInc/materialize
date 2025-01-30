@@ -2097,10 +2097,7 @@ where
             // Note that while collections are dropped, the `client` may already
             // be cleared out, before we do this post-processing!
             if let Some(client) = instance {
-                client.send(StorageCommand::AllowCompaction(vec![(
-                    id,
-                    read_frontier.clone(),
-                )]));
+                client.send(StorageCommand::AllowCompaction(id, read_frontier.clone()));
             }
         }
 

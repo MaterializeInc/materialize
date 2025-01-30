@@ -131,9 +131,8 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     RunOneshotIngestion(RunOneshotIngestionCommand),
     /// Enable compaction in storage-managed collections.
     ///
-    /// Each entry in the vector names a collection and provides a frontier after which
-    /// accumulations must be correct.
-    AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
+    /// A collection id and a frontier after which accumulations must be correct.
+    AllowCompaction(GlobalId, Antichain<T>),
     RunSinks(Vec<RunSinkCommand<T>>),
 }
 
@@ -146,7 +145,7 @@ impl<T> StorageCommand<T> {
             | InitializationComplete
             | AllowWrites
             | UpdateConfiguration(_)
-            | AllowCompaction(_) => false,
+            | AllowCompaction(_, _) => false,
             // TODO(cf2): multi-replica oneshot ingestions. At the moment returning
             // true here means we can't run `COPY FROM` on multi-replica clusters, this
             // should be easy enough to support though.
@@ -292,11 +291,10 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                 StorageCommand::UpdateConfiguration(params) => {
                     UpdateConfiguration(params.into_proto())
                 }
-                StorageCommand::AllowCompaction(collections) => {
-                    AllowCompaction(ProtoAllowCompaction {
-                        collections: collections.into_proto(),
-                    })
-                }
+                StorageCommand::AllowCompaction(id, frontier) => AllowCompaction(ProtoCompaction {
+                    id: Some(id.into_proto()),
+                    frontier: Some(frontier.into_proto()),
+                }),
                 StorageCommand::RunIngestions(sources) => CreateSources(ProtoCreateSources {
                     sources: sources.into_proto(),
                 }),
@@ -328,8 +326,11 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
             Some(CreateSources(ProtoCreateSources { sources })) => {
                 Ok(StorageCommand::RunIngestions(sources.into_rust()?))
             }
-            Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
-                Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
+            Some(AllowCompaction(ProtoCompaction { id, frontier })) => {
+                Ok(StorageCommand::AllowCompaction(
+                    id.into_rust_if_some("ProtoCompaction::id")?,
+                    frontier.into_rust_if_some("ProtoCompaction::frontier")?,
+                ))
             }
             Some(RunSinks(ProtoRunSinks { sinks })) => {
                 Ok(StorageCommand::RunSinks(sinks.into_rust()?))
@@ -357,22 +358,9 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
             proptest::collection::vec(any::<RunSinkCommand<mz_repr::Timestamp>>(), 1..4)
                 .prop_map(StorageCommand::RunSinks)
                 .boxed(),
-            proptest::collection::vec(
-                (
-                    any::<GlobalId>(),
-                    proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
-                ),
-                1..4,
-            )
-            .prop_map(|collections| {
-                StorageCommand::AllowCompaction(
-                    collections
-                        .into_iter()
-                        .map(|(id, frontier_vec)| (id, Antichain::from(frontier_vec)))
-                        .collect(),
-                )
-            })
-            .boxed(),
+            (any::<GlobalId>(), any_antichain())
+                .prop_map(|(id, frontier)| StorageCommand::AllowCompaction(id, frontier))
+                .boxed(),
         ])
     }
 }
@@ -799,7 +787,7 @@ where
             StorageCommand::InitializationComplete
             | StorageCommand::AllowWrites
             | StorageCommand::UpdateConfiguration(_)
-            | StorageCommand::AllowCompaction(_)
+            | StorageCommand::AllowCompaction(_, _)
             | StorageCommand::RunOneshotIngestion(_) => {}
         };
     }
