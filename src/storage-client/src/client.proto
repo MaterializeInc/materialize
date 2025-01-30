@@ -83,7 +83,7 @@ message ProtoStorageCommand {
 
   oneof kind {
     ProtoCreateTimely create_timely = 6;
-    ProtoCreateSources create_sources = 1;
+    ProtoRunIngestionCommand run_ingestion = 1;
     ProtoCompaction allow_compaction = 2;
     google.protobuf.Empty initialization_complete = 3;
     google.protobuf.Empty allow_writes = 7;

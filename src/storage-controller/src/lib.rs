@@ -3325,7 +3325,7 @@ where
             })?;
 
         let augmented_ingestion = RunIngestionCommand { id, description };
-        instance.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
+        instance.send(StorageCommand::RunIngestion(augmented_ingestion));
 
         Ok(())
     }

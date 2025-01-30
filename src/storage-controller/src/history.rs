@@ -74,7 +74,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
                 InitializationComplete => metrics.initialization_complete_count.inc(),
                 AllowWrites => metrics.allow_writes_count.inc(),
                 UpdateConfiguration(_) => metrics.update_configuration_count.inc(),
-                RunIngestions(x) => metrics.run_ingestions_count.add(x.len().cast_into()),
+                RunIngestion(_) => metrics.run_ingestions_count.inc(),
                 RunSinks(x) => metrics.run_sinks_count.add(x.len().cast_into()),
                 AllowCompaction(_, _) => metrics.allow_compaction_count.inc(),
                 RunOneshotIngestion(_) | CancelOneshotIngestion { .. } => {
@@ -114,8 +114,8 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
                 InitializationComplete => initialization_complete = true,
                 AllowWrites => allow_writes = true,
                 UpdateConfiguration(params) => final_configuration.update(params),
-                RunIngestions(cmds) => {
-                    final_ingestions.extend(cmds.into_iter().map(|c| (c.id, c)));
+                RunIngestion(ingestion) => {
+                    final_ingestions.insert(ingestion.id, ingestion);
                 }
                 RunSinks(cmds) => {
                     final_sinks.extend(cmds.into_iter().map(|c| (c.id, c)));
@@ -207,10 +207,9 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
 
         let count = u64::cast_from(run_ingestions.len());
         self.metrics.run_ingestions_count.set(count);
-        if !run_ingestions.is_empty() {
-            self.reduced_count += run_ingestions.len();
-            self.commands
-                .push(StorageCommand::RunIngestions(run_ingestions));
+        self.reduced_count += run_ingestions.len();
+        for ingestion in run_ingestions {
+            self.commands.push(StorageCommand::RunIngestion(ingestion));
         }
 
         let count = u64::cast_from(run_sinks.len());
@@ -462,10 +461,10 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestions(vec![RunIngestionCommand {
+            StorageCommand::RunIngestion(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }]),
+            }),
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
             StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::new()),
             StorageCommand::AllowCompaction(GlobalId::User(3), Antichain::new()),
@@ -486,10 +485,10 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestions(vec![RunIngestionCommand {
+            StorageCommand::RunIngestion(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }]),
+            }),
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(1)),
             StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(2)),
             StorageCommand::AllowCompaction(GlobalId::User(3), Antichain::from_elem(3)),
@@ -510,10 +509,10 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestions(vec![RunIngestionCommand {
+            StorageCommand::RunIngestion(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }]),
+            }),
             StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::new()),
         ];
 

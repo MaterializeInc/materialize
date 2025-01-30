@@ -127,8 +127,8 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     AllowWrites,
     /// Update storage instance configuration.
     UpdateConfiguration(StorageParameters),
-    /// Run the enumerated sources, each associated with its identifier.
-    RunIngestions(Vec<RunIngestionCommand>),
+    /// Run the specified ingestion dataflow.
+    RunIngestion(RunIngestionCommand),
     /// Enable compaction in storage-managed collections.
     ///
     /// A collection id and a frontier after which accumulations must be correct.
@@ -167,7 +167,7 @@ impl<T> StorageCommand<T> {
             // TODO(cf2): multi-replica oneshot ingestions. At the moment returning
             // true here means we can't run `COPY FROM` on multi-replica clusters, this
             // should be easy enough to support though.
-            RunIngestions(_) | RunSinks(_) | RunOneshotIngestion(_) => true,
+            RunIngestion(_) | RunSinks(_) | RunOneshotIngestion(_) => true,
         }
     }
 }
@@ -313,9 +313,7 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                     id: Some(id.into_proto()),
                     frontier: Some(frontier.into_proto()),
                 }),
-                StorageCommand::RunIngestions(sources) => CreateSources(ProtoCreateSources {
-                    sources: sources.into_proto(),
-                }),
+                StorageCommand::RunIngestion(ingestion) => RunIngestion(ingestion.into_proto()),
                 StorageCommand::RunSinks(sinks) => RunSinks(ProtoRunSinks {
                     sinks: sinks.into_proto(),
                 }),
@@ -348,8 +346,8 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
             Some(UpdateConfiguration(params)) => {
                 Ok(StorageCommand::UpdateConfiguration(params.into_rust()?))
             }
-            Some(CreateSources(ProtoCreateSources { sources })) => {
-                Ok(StorageCommand::RunIngestions(sources.into_rust()?))
+            Some(RunIngestion(ingestion)) => {
+                Ok(StorageCommand::RunIngestion(ingestion.into_rust()?))
             }
             Some(AllowCompaction(ProtoCompaction { id, frontier })) => {
                 Ok(StorageCommand::AllowCompaction(
@@ -390,8 +388,8 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
             // TODO(guswynn): cluster-unification: also test `CreateTimely` here.
-            proptest::collection::vec(any::<RunIngestionCommand>(), 1..4)
-                .prop_map(StorageCommand::RunIngestions)
+            any::<RunIngestionCommand>()
+                .prop_map(StorageCommand::RunIngestion)
                 .boxed(),
             proptest::collection::vec(any::<RunSinkCommand<mz_repr::Timestamp>>(), 1..4)
                 .prop_map(StorageCommand::RunSinks)
@@ -829,9 +827,9 @@ where
                 // until we are required to manage multiple replicas, we can handle
                 // keeping track of state across restarts of storage server(s).
             }
-            StorageCommand::RunIngestions(ingestions) => ingestions
-                .iter()
-                .for_each(|i| self.insert_new_uppers(i.description.collection_ids())),
+            StorageCommand::RunIngestion(ingestion) => {
+                self.insert_new_uppers(ingestion.description.collection_ids());
+            }
             StorageCommand::RunSinks(exports) => {
                 exports.iter().for_each(|e| self.insert_new_uppers([e.id]))
             }
