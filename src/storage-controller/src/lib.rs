@@ -1886,16 +1886,17 @@ where
             instance.rehydrate_failed_replicas();
         }
 
-        let mut updated_frontiers = None;
+        let mut updated_frontiers = BTreeMap::new();
 
         // Take the allocation so that we can call mut receiver functions in the loop. We put it
         // back at the end of the loop.
         let mut stashed_responses = std::mem::take(&mut self.stashed_responses);
         for resp in stashed_responses.drain(..) {
             match resp {
-                StorageResponse::FrontierUppers(updates) => {
-                    self.update_write_frontiers(&updates);
-                    updated_frontiers = Some(Response::FrontierUpdates(updates));
+                StorageResponse::FrontierUpper(id, upper) => {
+                    let update = (id, upper);
+                    self.update_write_frontiers(std::slice::from_ref(&update));
+                    updated_frontiers.insert(update.0, update.1);
                 }
                 StorageResponse::DroppedId(id) => {
                     tracing::debug!("DroppedId for collection {id}");
@@ -1956,7 +1957,7 @@ where
                         // ingestions from status updates. This is the easiest we
                         // can do right now, without going deeper into changing the
                         // comms protocol between controller and cluster. We cannot,
-                        // for example use `StorageResponse::FrontierUppers`,
+                        // for example use `StorageResponse::FrontierUpper`,
                         // because those will already get sent when the ingestion is
                         // just being created.
                         //
@@ -2161,7 +2162,13 @@ where
             );
         }
 
-        Ok(updated_frontiers)
+        if updated_frontiers.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(Response::FrontierUpdates(
+                updated_frontiers.into_iter().collect(),
+            )))
+        }
     }
 
     async fn inspect_persist_state(
