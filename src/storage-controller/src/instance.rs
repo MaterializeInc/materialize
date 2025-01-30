@@ -186,9 +186,8 @@ where
                 StorageCommand::RunIngestion(ingestion) => {
                     status_updates.push(make_update(ingestion.id, "source"));
                 }
-                StorageCommand::RunSinks(cmds) => {
-                    let updates = cmds.iter().map(|c| make_update(c.id, "sink"));
-                    status_updates.extend(updates);
+                StorageCommand::RunSink(sink) => {
+                    status_updates.push(make_update(sink.id, "sink"));
                 }
                 _ => (),
             }
