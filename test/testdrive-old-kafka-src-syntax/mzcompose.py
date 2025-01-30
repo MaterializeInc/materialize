@@ -281,6 +281,17 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=str,
         help="set the default timeout for Testdrive",
     )
+
+    parser.add_argument(
+        "--rewrite-results",
+        action="store_true",
+        help="Rewrite results, disables junit reports",
+    )
+
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+    )
+
     parser.add_argument(
         "files",
         nargs="*",
@@ -312,18 +323,6 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     dependencies += kafka_deps
 
-    testdrive = Testdrive(
-        forward_buildkite_shard=True,
-        kafka_default_partitions=args.kafka_default_partitions,
-        aws_region=args.aws_region,
-        default_timeout=args.default_timeout,
-        volumes_extra=["mzdata:/mzdata"],
-        external_blob_store=True,
-        fivetran_destination=True,
-        fivetran_destination_files_path="/share/tmp",
-        entrypoint_extra=[f"--var=uses-redpanda={args.redpanda}"],
-    )
-
     sysparams = args.system_param
     if not args.system_param:
         sysparams = []
@@ -337,12 +336,39 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         additional_system_parameter_defaults[key] = val
 
+    leaves_tombstones = (
+        "true"
+        if additional_system_parameter_defaults.get(
+            "storage_use_continual_feedback_upsert",
+            get_default_system_parameters()["storage_use_continual_feedback_upsert"],
+        )
+           == "false"
+        else "false"
+    )
+
     mz_old = Materialized(
         default_size=Materialized.Size.DEFAULT_SIZE,
-        image=get_old_image_for_source_table_migration_test(),
-        external_metadata_store=True,
+        image=get_new_image_for_source_table_migration_test(),
         external_blob_store=True,
+        blob_store_is_azure=args.azurite,
         additional_system_parameter_defaults=dict(additional_system_parameter_defaults),
+    )
+
+    testdrive = Testdrive(
+        forward_buildkite_shard=True,
+        kafka_default_partitions=args.kafka_default_partitions,
+        aws_region=args.aws_region,
+        validate_catalog_store=True,
+        default_timeout=args.default_timeout,
+        volumes_extra=["mzdata:/mzdata"],
+        external_blob_store=True,
+        blob_store_is_azure=args.azurite,
+        fivetran_destination=True,
+        fivetran_destination_files_path="/share/tmp",
+        entrypoint_extra=[
+            f"--var=uses-redpanda={args.redpanda}",
+            f"--var=leaves-tombstones={leaves_tombstones}",
+        ],
     )
 
     print(additional_system_parameter_defaults)
@@ -354,8 +380,8 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
     mz_new = Materialized(
         default_size=Materialized.Size.DEFAULT_SIZE,
         image=get_new_image_for_source_table_migration_test(),
-        external_metadata_store=True,
         external_blob_store=True,
+        blob_store_is_azure=args.azurite,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
     )
 
