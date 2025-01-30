@@ -249,6 +249,10 @@ where
         let mut binding_buffer = Vec::new();
         let mut interesting_times = Vec::new();
 
+        // Accumulation buffer for `remap_input` updates.
+        use timely::progress::ChangeBatch;
+        let mut remap_accum_buffer: ChangeBatch<(IntoTime, FromTime)> = ChangeBatch::new();
+
         // The operator drains `remap_input` and organizes new bindings that are not beyond
         // `remap_input`'s frontier into the time ordered `remap_trace`.
         //
@@ -269,17 +273,19 @@ where
 
             // STEP 1. Accept new bindings into `pending_remap`.
             // Advance all `into` times by `as_of`, and consolidate all updates at that frontier.
-            use timely::progress::ChangeBatch;
-            let mut consolidated: ChangeBatch<(IntoTime, FromTime)> = ChangeBatch::new();
             while let Some((_, data)) = remap_input.next() {
                 for (from, mut into, diff) in data.drain(..) {
                     into.advance_by(as_of.borrow());
-                    consolidated.update((into, from), diff);
+                    remap_accum_buffer.update((into, from), diff);
                 }
             }
             // Drain consolidated bindings into the `pending_remap` heap.
-            for ((into, from), diff) in consolidated.drain() {
-                pending_remap.push(Reverse((into, from, diff)));
+            // Only do this once any of the `remap_input` frontier has passed `as_of`.
+            // For as long as the input frontier is less-equal `as_of`, we have no finalized times.
+            if !PartialOrder::less_equal(&frontiers[0].frontier(), &as_of.borrow()) {
+                for ((into, from), diff) in remap_accum_buffer.drain() {
+                    pending_remap.push(Reverse((into, from, diff)));
+                }
             }
 
             // STEP 2. Extract bindings not beyond `remap_frontier` and commit them into `remap_trace`.
