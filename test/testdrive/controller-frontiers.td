@@ -186,7 +186,7 @@ sink1 s1
     ON frontiers.object_id = sinks.id
   WHERE
     frontiers.object_id LIKE 'u%' AND
-    frontiers.read_frontier IS NULL AND
+    frontiers.read_frontier != 0 AND
     frontiers.write_frontier > 0
 sink1
 
