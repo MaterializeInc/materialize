@@ -746,6 +746,16 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             replica_id,
             status
         );
+        if let Some(subscribe) = self.subscribes.get(&status.collection_id) {
+            self.deliver_response(ComputeControllerResponse::SubscribeResponse(
+                status.collection_id,
+                SubscribeBatch {
+                    lower: subscribe.frontier.clone(),
+                    upper: subscribe.frontier.clone(),
+                    updates: Err("Dataflow limit exceeded".to_string()),
+                },
+            ))
+        }
     }
 
     /// Clean up collection state that is not needed anymore.
