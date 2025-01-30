@@ -25,7 +25,7 @@ use mz_catalog::builtin::{
 use mz_catalog::durable::objects::{
     ClusterKey, DatabaseKey, DurableType, ItemKey, NetworkPolicyKey, RoleKey, SchemaKey,
 };
-use mz_catalog::durable::{CatalogError, DurableCatalogError, SystemObjectMapping};
+use mz_catalog::durable::{CatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
@@ -54,7 +54,7 @@ use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
-use tracing::{error, info_span, warn, Instrument};
+use tracing::{info_span, warn, Instrument};
 
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
@@ -1035,17 +1035,7 @@ impl CatalogState {
                         }
                     }
                 };
-                // We allow sinks to break this invariant due to a know issue with `ALTER SINK`.
-                // https://github.com/MaterializeInc/materialize/pull/28708.
-                if !entry.is_sink() && entry.uses().iter().any(|id| *id > entry.id) {
-                    let msg = format!(
-                        "item cannot depend on items with larger GlobalIds, item: {:?}, dependencies: {:?}",
-                        entry,
-                        entry.uses()
-                    );
-                    error!("internal catalog errr: {msg}");
-                    return Err(CatalogError::Durable(DurableCatalogError::Internal(msg)));
-                }
+
                 self.insert_entry(entry);
             }
             StateDiff::Retraction => {
@@ -1912,42 +1902,145 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         }
     }
 
-    /// Sort item updates by [`CatalogItemId`].
+    /// Sort item updates by dependency.
+    ///
+    /// First we group items into groups that are totally ordered by dependency. For example, when
+    /// sorting all items by dependency we know that all tables can come after all sources, because
+    /// a source can never depend on a table. Within these groups, the ID order matches the
+    /// dependency order.
+    ///
+    /// It used to be the case that the ID order of ALL items matched the dependency order. However,
+    /// certain migrations shuffled item IDs around s.t. this was no longer true. A much better
+    /// approach would be to investigate each item, discover their exact dependencies, and then
+    /// perform a topological sort. This is non-trivial because we only have the CREATE SQL of each
+    /// item here. Within the SQL the dependent items are sometimes referred to by ID and sometimes
+    /// referred to by name.
+    ///
+    /// The logic of this function should match [`sort_temp_item_updates`].
     fn sort_item_updates(
         item_updates: Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
     ) -> VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)> {
-        item_updates
-            .into_iter()
-            // HACK: due to `ALTER SINK`, sinks can appear before the objects they
-            // depend upon. Fortunately, because sinks can never have dependencies
-            // and can never depend upon one another, to fix the topological sort,
-            // we can just always move sinks to the end.
-            .sorted_by_key(|(item, _ts, _diff)| {
-                if item.create_sql.starts_with("CREATE SINK") {
-                    CatalogItemId::User(u64::MAX)
-                } else {
-                    item.id
-                }
-            })
+        // Partition items into groups s.t. each item in one group has a predefined order with all
+        // items in other groups. For example, all sinks are ordered greater than all tables.
+        let mut types = Vec::new();
+        // N.B. Functions can depend on system tables, but not user tables.
+        // TODO(udf): This will change when UDFs are supported.
+        let mut funcs = Vec::new();
+        let mut secrets = Vec::new();
+        let mut connections = Vec::new();
+        let mut sources = Vec::new();
+        let mut tables = Vec::new();
+        let mut derived_items = Vec::new();
+        let mut sinks = Vec::new();
+        let mut continual_tasks = Vec::new();
+
+        for update in item_updates {
+            match update.0.item_type() {
+                CatalogItemType::Type => types.push(update),
+                CatalogItemType::Func => funcs.push(update),
+                CatalogItemType::Secret => secrets.push(update),
+                CatalogItemType::Connection => connections.push(update),
+                CatalogItemType::Source => sources.push(update),
+                CatalogItemType::Table => tables.push(update),
+                CatalogItemType::View
+                | CatalogItemType::MaterializedView
+                | CatalogItemType::Index => derived_items.push(update),
+                CatalogItemType::Sink => sinks.push(update),
+                CatalogItemType::ContinualTask => continual_tasks.push(update),
+            }
+        }
+
+        // Within each group, sort by ID.
+        for group in [
+            &mut types,
+            &mut funcs,
+            &mut secrets,
+            &mut connections,
+            &mut sources,
+            &mut tables,
+            &mut derived_items,
+            &mut sinks,
+            &mut continual_tasks,
+        ] {
+            group.sort_by_key(|(item, _, _)| item.id);
+        }
+
+        iter::empty()
+            .chain(types)
+            .chain(funcs)
+            .chain(secrets)
+            .chain(connections)
+            .chain(sources)
+            .chain(tables)
+            .chain(derived_items)
+            .chain(sinks)
+            .chain(continual_tasks)
             .collect()
     }
+
     let item_retractions = sort_item_updates(item_retractions);
     let item_additions = sort_item_updates(item_additions);
 
-    /// Sort temporary item updates by GlobalId.
+    /// Sort temporary item updates by dependency.
+    ///
+    /// The logic of this function should match [`sort_item_updates`].
     fn sort_temp_item_updates(
         temp_item_updates: Vec<(TemporaryItem, Timestamp, StateDiff)>,
     ) -> VecDeque<(TemporaryItem, Timestamp, StateDiff)> {
-        temp_item_updates
-            .into_iter()
-            // HACK: due to `ALTER SINK`, sinks can appear before the objects they
-            // depend upon. Fortunately, because sinks can never have dependencies
-            // and can never depend upon one another, to fix the topological sort,
-            // we can just always move sinks to the end.
-            .sorted_by_key(|(item, _ts, _diff)| match item.item.typ() {
-                CatalogItemType::Sink => CatalogItemId::User(u64::MAX),
-                _ => item.id,
-            })
+        // Partition items into groups s.t. each item in one group has a predefined order with all
+        // items in other groups. For example, all sinks are ordered greater than all tables.
+        let mut types = Vec::new();
+        // N.B. Functions can depend on system tables, but not user tables.
+        let mut funcs = Vec::new();
+        let mut secrets = Vec::new();
+        let mut connections = Vec::new();
+        let mut sources = Vec::new();
+        let mut tables = Vec::new();
+        let mut derived_items = Vec::new();
+        let mut sinks = Vec::new();
+        let mut continual_tasks = Vec::new();
+
+        for update in temp_item_updates {
+            match update.0.item.typ() {
+                CatalogItemType::Type => types.push(update),
+                CatalogItemType::Func => funcs.push(update),
+                CatalogItemType::Secret => secrets.push(update),
+                CatalogItemType::Connection => connections.push(update),
+                CatalogItemType::Source => sources.push(update),
+                CatalogItemType::Table => tables.push(update),
+                CatalogItemType::View
+                | CatalogItemType::MaterializedView
+                | CatalogItemType::Index => derived_items.push(update),
+                CatalogItemType::Sink => sinks.push(update),
+                CatalogItemType::ContinualTask => continual_tasks.push(update),
+            }
+        }
+
+        // Within each group, sort by ID.
+        for group in [
+            &mut types,
+            &mut funcs,
+            &mut secrets,
+            &mut connections,
+            &mut sources,
+            &mut tables,
+            &mut derived_items,
+            &mut sinks,
+            &mut continual_tasks,
+        ] {
+            group.sort_by_key(|(item, _, _)| item.id);
+        }
+
+        iter::empty()
+            .chain(types)
+            .chain(funcs)
+            .chain(secrets)
+            .chain(connections)
+            .chain(sources)
+            .chain(tables)
+            .chain(derived_items)
+            .chain(sinks)
+            .chain(continual_tasks)
             .collect()
     }
     let temp_item_retractions = sort_temp_item_updates(temp_item_retractions);

@@ -1943,29 +1943,6 @@ impl Coordinator {
         let mut privatelink_connections = BTreeMap::new();
 
         for entry in &entries {
-            // TODO(database-issues#7922): we should move this invariant into `CatalogEntry`.
-            mz_ore::soft_assert_or_log!(
-                // We only expect user objects to objects obey this invariant.
-                // System objects, for instance, can depend on other system
-                // objects that belong to a schema that is simply loaded first.
-                // To meaningfully resolve this, we could need more careful
-                // loading order or more complex IDs, neither of which seem very
-                // beneficial.
-                //
-                // HACK: sinks are permitted to depend on items with larger IDs,
-                // due to `ALTER SINK`.
-                !entry.id().is_user()
-                    || entry.is_sink()
-                    || entry
-                        .uses()
-                        .iter()
-                        .all(|dependency_id| *dependency_id <= entry.id),
-                "entries should only use to items with lesser `GlobalId`s, but \
-                {:?} uses {:?}",
-                entry.id,
-                entry.uses()
-            );
-
             debug!(
                 "coordinator init: installing {} {}",
                 entry.item().typ(),

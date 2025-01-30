@@ -615,6 +615,17 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+      - id: mysql-cdc-migration
+        label: MySQL CDC source-versioning migration tests
+        depends_on: build-aarch64
+        timeout_in_minutes: 360
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc-old-syntax
+              run: migration
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
       - id: mysql-cdc-resumption-old-syntax
         label: MySQL CDC resumption tests (before source versioning)
         depends_on: build-aarch64
@@ -645,6 +656,17 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
+
+      - id: pg-cdc-migration
+        label: Postgres CDC source-versioning migration tests
+        depends_on: build-aarch64
+        timeout_in_minutes: 360
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: pg-cdc-old-syntax
+              run: migration
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
 
       - id: pg-cdc-resumption-old-syntax
         label: Postgres CDC resumption tests (before source versioning)
@@ -677,6 +699,16 @@ steps:
         agents:
           queue: hetzner-aarch64-8cpu-16gb
 
+      - id: testdrive-kafka-migration
+        label: "Testdrive (before Kafka source versioning) migration tests"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive-old-kafka-src-syntax
+              run: migration
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
 
   - group: AWS
     key: aws
