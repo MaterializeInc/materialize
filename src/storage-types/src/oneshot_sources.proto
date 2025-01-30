@@ -34,7 +34,9 @@ message ProtoOneshotIngestionRequest {
   }
 }
 
-message ProtoHttpContentSource { string url = 1; }
+message ProtoHttpContentSource {
+  string url = 1;
+}
 
 message ProtoAwsS3Source {
   mz_storage_types.connections.aws.ProtoAwsConnection connection = 1;
