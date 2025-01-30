@@ -71,10 +71,6 @@ message ProtoRunSinkCommand {
   mz_storage_types.sinks.ProtoStorageSinkDesc description = 2;
 }
 
-message ProtoRunSinks {
-  repeated ProtoRunSinkCommand sinks = 1;
-}
-
 message ProtoStorageCommand {
   message ProtoCreateTimely {
     mz_cluster_client.client.ProtoTimelyConfig config = 1;
@@ -87,7 +83,7 @@ message ProtoStorageCommand {
     ProtoCompaction allow_compaction = 2;
     google.protobuf.Empty initialization_complete = 3;
     google.protobuf.Empty allow_writes = 7;
-    ProtoRunSinks run_sinks = 4;
+    ProtoRunSinkCommand run_sink = 4;
     mz_storage_types.parameters.ProtoStorageParameters update_configuration = 5;
     ProtoRunOneshotIngestionsCommand run_oneshot_ingestions = 10;
     ProtoCancelOneshotIngestionsCommand cancel_oneshot_ingestions = 11;

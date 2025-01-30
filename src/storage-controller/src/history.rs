@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 
 use mz_dyncfg::ConfigValHandle;
-use mz_ore::cast::{CastFrom, CastInto};
+use mz_ore::cast::CastFrom;
 use mz_storage_client::client::StorageCommand;
 use mz_storage_client::metrics::HistoryMetrics;
 use mz_storage_types::parameters::StorageParameters;
@@ -75,7 +75,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
                 AllowWrites => metrics.allow_writes_count.inc(),
                 UpdateConfiguration(_) => metrics.update_configuration_count.inc(),
                 RunIngestion(_) => metrics.run_ingestions_count.inc(),
-                RunSinks(x) => metrics.run_sinks_count.add(x.len().cast_into()),
+                RunSink(_) => metrics.run_sinks_count.inc(),
                 AllowCompaction(_, _) => metrics.allow_compaction_count.inc(),
                 RunOneshotIngestion(_) | CancelOneshotIngestion { .. } => {
                     // TODO(cf2): Add metrics for oneshot ingestions.
@@ -117,8 +117,8 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
                 RunIngestion(ingestion) => {
                     final_ingestions.insert(ingestion.id, ingestion);
                 }
-                RunSinks(cmds) => {
-                    final_sinks.extend(cmds.into_iter().map(|c| (c.id, c)));
+                RunSink(sink) => {
+                    final_sinks.insert(sink.id, sink);
                 }
                 AllowCompaction(id, since) => {
                     final_compactions.insert(id, since);
@@ -213,10 +213,10 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         }
 
         let count = u64::cast_from(run_sinks.len());
-        self.metrics.run_sinks_count.set(count);
-        if !run_sinks.is_empty() {
-            self.reduced_count += run_sinks.len();
-            self.commands.push(StorageCommand::RunSinks(run_sinks));
+        self.metrics.run_ingestions_count.set(count);
+        self.reduced_count += run_sinks.len();
+        for sink in run_sinks {
+            self.commands.push(StorageCommand::RunSink(sink));
         }
 
         // Note: RunOneshotIngestion commands are reduced, as we receive
@@ -531,10 +531,10 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunSinks(vec![RunSinkCommand {
+            StorageCommand::RunSink(RunSinkCommand {
                 id: GlobalId::User(1),
                 description: sink_description(),
-            }]),
+            }),
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
         ];
 
@@ -554,10 +554,10 @@ mod tests {
 
         let sink_desc = sink_description();
         let commands = [
-            StorageCommand::RunSinks(vec![RunSinkCommand {
+            StorageCommand::RunSink(RunSinkCommand {
                 id: GlobalId::User(1),
                 description: sink_desc.clone(),
-            }]),
+            }),
             StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(42)),
         ];
 
@@ -573,10 +573,10 @@ mod tests {
             as_of: Antichain::from_elem(42),
             ..sink_desc
         };
-        let expected_commands = [StorageCommand::RunSinks(vec![RunSinkCommand {
+        let expected_commands = [StorageCommand::RunSink(RunSinkCommand {
             id: GlobalId::User(1),
             description: expected_sink_desc,
-        }])];
+        })];
 
         assert_eq!(commands_after, expected_commands);
     }

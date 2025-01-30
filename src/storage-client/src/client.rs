@@ -133,7 +133,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     ///
     /// A collection id and a frontier after which accumulations must be correct.
     AllowCompaction(GlobalId, Antichain<T>),
-    RunSinks(Vec<RunSinkCommand<T>>),
+    RunSink(RunSinkCommand<T>),
     /// Run a dataflow which will ingest data from an external source and only __stage__ it in
     /// Persist.
     ///
@@ -167,7 +167,7 @@ impl<T> StorageCommand<T> {
             // TODO(cf2): multi-replica oneshot ingestions. At the moment returning
             // true here means we can't run `COPY FROM` on multi-replica clusters, this
             // should be easy enough to support though.
-            RunIngestion(_) | RunSinks(_) | RunOneshotIngestion(_) => true,
+            RunIngestion(_) | RunSink(_) | RunOneshotIngestion(_) => true,
         }
     }
 }
@@ -314,9 +314,7 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                     frontier: Some(frontier.into_proto()),
                 }),
                 StorageCommand::RunIngestion(ingestion) => RunIngestion(ingestion.into_proto()),
-                StorageCommand::RunSinks(sinks) => RunSinks(ProtoRunSinks {
-                    sinks: sinks.into_proto(),
-                }),
+                StorageCommand::RunSink(sink) => RunSink(sink.into_proto()),
                 StorageCommand::RunOneshotIngestion(ingestions) => {
                     RunOneshotIngestions(ProtoRunOneshotIngestionsCommand {
                         ingestions: ingestions.iter().map(|cmd| cmd.into_proto()).collect(),
@@ -355,9 +353,7 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
                     frontier.into_rust_if_some("ProtoCompaction::frontier")?,
                 ))
             }
-            Some(RunSinks(ProtoRunSinks { sinks })) => {
-                Ok(StorageCommand::RunSinks(sinks.into_rust()?))
-            }
+            Some(RunSink(sink)) => Ok(StorageCommand::RunSink(sink.into_rust()?)),
             Some(RunOneshotIngestions(oneshot)) => {
                 let ingestions = oneshot
                     .ingestions
@@ -391,8 +387,8 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
             any::<RunIngestionCommand>()
                 .prop_map(StorageCommand::RunIngestion)
                 .boxed(),
-            proptest::collection::vec(any::<RunSinkCommand<mz_repr::Timestamp>>(), 1..4)
-                .prop_map(StorageCommand::RunSinks)
+            any::<RunSinkCommand<mz_repr::Timestamp>>()
+                .prop_map(StorageCommand::RunSink)
                 .boxed(),
             (any::<GlobalId>(), any_antichain())
                 .prop_map(|(id, frontier)| StorageCommand::AllowCompaction(id, frontier))
@@ -830,8 +826,8 @@ where
             StorageCommand::RunIngestion(ingestion) => {
                 self.insert_new_uppers(ingestion.description.collection_ids());
             }
-            StorageCommand::RunSinks(exports) => {
-                exports.iter().for_each(|e| self.insert_new_uppers([e.id]))
+            StorageCommand::RunSink(export) => {
+                self.insert_new_uppers([export.id]);
             }
             StorageCommand::InitializationComplete
             | StorageCommand::AllowWrites

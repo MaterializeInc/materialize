@@ -1670,7 +1670,7 @@ where
                 export_id: id,
             })?;
 
-        instance.send(StorageCommand::RunSinks(vec![cmd]));
+        instance.send(StorageCommand::RunSink(cmd));
         Ok(())
     }
 
@@ -1766,7 +1766,9 @@ where
                 }
             })?;
 
-            instance.send(StorageCommand::RunSinks(cmds));
+            for cmd in cmds {
+                instance.send(StorageCommand::RunSink(cmd));
+            }
 
             // Update state only after all possible errors have occurred.
             for (id, new_export_description) in export_updates {
@@ -3392,7 +3394,7 @@ where
                 export_id: id,
             })?;
 
-        instance.send(StorageCommand::RunSinks(vec![cmd]));
+        instance.send(StorageCommand::RunSink(cmd));
 
         Ok(())
     }

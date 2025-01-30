@@ -193,10 +193,9 @@ where
                         None
                     }
                 }
-                StorageCommand::RunSinks(mut cmds) => {
-                    cmds.retain(|cmd| self.is_active_replica(&cmd.id, &replica_id));
-                    if cmds.len() > 0 {
-                        Some(StorageCommand::RunSinks(cmds))
+                StorageCommand::RunSink(sink) => {
+                    if self.is_active_replica(&sink.id, &replica_id) {
+                        Some(StorageCommand::RunSink(sink))
                     } else {
                         None
                     }
@@ -323,9 +322,8 @@ where
                         status_updates.push(make_update(id, "source"));
                     }
                 }
-                StorageCommand::RunSinks(cmds) => {
-                    let updates = cmds.iter().map(|c| make_update(c.id, "sink"));
-                    status_updates.extend(updates);
+                StorageCommand::RunSink(sink) => {
+                    status_updates.push(make_update(sink.id, "sink"));
                 }
                 _ => (),
             }
@@ -357,16 +355,14 @@ where
                     replica.send(StorageCommand::RunIngestion(ingestion.clone()));
                 }
             }
-            StorageCommand::RunSinks(sinks) => {
+            StorageCommand::RunSink(sink) => {
                 // First absorb into our state, because this might change
                 // scheduling decisions, which need to be respected just below
                 // when sending commands.
-                self.absorb_exports(sinks.clone());
+                self.absorb_export(sink.clone());
 
-                for cmd in sinks.iter() {
-                    for replica in self.active_replicas(&cmd.id) {
-                        replica.send(StorageCommand::RunSinks(vec![cmd.clone()]));
-                    }
+                for replica in self.active_replicas(&sink.id) {
+                    replica.send(StorageCommand::RunSink(sink.clone()));
                 }
             }
             StorageCommand::AllowCompaction(id, frontier) => {
@@ -431,30 +427,28 @@ where
     ///
     /// This does _not_ send commands to replicas, we only record the export
     /// in state and potentially update scheduling decisions.
-    fn absorb_exports(&mut self, exports: Vec<RunSinkCommand<T>>) {
-        for export in exports {
-            let existing_export_state = self.active_exports.get_mut(&export.id);
+    fn absorb_export(&mut self, export: RunSinkCommand<T>) {
+        let existing_export_state = self.active_exports.get_mut(&export.id);
 
-            if let Some(export_state) = existing_export_state {
-                // It's an update for an existing export. We don't need to
-                // change anything about our scheduling decisions, no need to
-                // update active_exports.
+        if let Some(export_state) = existing_export_state {
+            // It's an update for an existing export. We don't need to
+            // change anything about our scheduling decisions, no need to
+            // update active_exports.
 
-                tracing::debug!(
-                    export_id = %export.id,
-                    active_replicas = %export_state.active_replicas.iter().map(|id| id.to_string()).join(", "),
-                    "updating export"
-                );
-            } else {
-                // We create a new export state for this export.
-                let export_state = ActiveExport {
-                    active_replicas: BTreeSet::new(),
-                };
-                self.active_exports.insert(export.id, export_state);
+            tracing::debug!(
+                export_id = %export.id,
+                active_replicas = %export_state.active_replicas.iter().map(|id| id.to_string()).join(", "),
+                "updating export"
+            );
+        } else {
+            // We create a new export state for this export.
+            let export_state = ActiveExport {
+                active_replicas: BTreeSet::new(),
+            };
+            self.active_exports.insert(export.id, export_state);
 
-                // Maybe update scheduling decisions.
-                self.update_scheduling(false);
-            }
+            // Maybe update scheduling decisions.
+            self.update_scheduling(false);
         }
     }
 
@@ -598,9 +592,9 @@ where
                     let replica = self.replicas.get_mut(&replica_id).expect("missing replica");
                     replica.send(StorageCommand::RunIngestion(ingestion));
                 }
-                if !export_commands.is_empty() {
+                for export in export_commands {
                     let replica = self.replicas.get_mut(&replica_id).expect("missing replica");
-                    replica.send(StorageCommand::RunSinks(export_commands));
+                    replica.send(StorageCommand::RunSink(export));
                 }
             }
         }
@@ -650,10 +644,12 @@ where
         }
 
         self.history.iter().rev().find_map(|command| {
-            if let StorageCommand::RunSinks(cmds) = command {
-                cmds.iter()
-                    .find(|cmd| &cmd.id == id)
-                    .map(|cmd| cmd.description.clone())
+            if let StorageCommand::RunSink(sink) = command {
+                if &sink.id == id {
+                    Some(sink.description.clone())
+                } else {
+                    None
+                }
             } else {
                 None
             }

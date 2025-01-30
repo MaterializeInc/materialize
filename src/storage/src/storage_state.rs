@@ -1034,19 +1034,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             .expect("only alter compatible ingestions permitted");
                     }
                 }
-                StorageCommand::RunSinks(exports) => {
-                    info!(%worker_id, ?exports, "reconcile: received RunSinks command");
+                StorageCommand::RunSink(export) => {
+                    info!(%worker_id, ?export, "reconcile: received RunSink command");
 
                     // Ensure that exports are forward-rolling alter compatible.
-                    for export in exports {
-                        let prev = running_exports_descriptions
-                            .insert(export.id, export.description.clone());
+                    let prev =
+                        running_exports_descriptions.insert(export.id, export.description.clone());
 
-                        if let Some(prev_export) = prev {
-                            prev_export
-                                .alter_compatible(export.id, &export.description)
-                                .expect("only alter compatible exports permitted");
-                        }
+                    if let Some(prev_export) = prev {
+                        prev_export
+                            .alter_compatible(export.id, &export.description)
+                            .expect("only alter compatible exports permitted");
                     }
                 }
                 StorageCommand::RunOneshotIngestion(ingestions) => {
@@ -1133,35 +1131,33 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             && running_ingestion != Some(&ingestion.description)
                     }
                 }
-                StorageCommand::RunSinks(exports) => {
-                    exports.retain_mut(|export| {
-                        if drop_commands.remove(&export.id)
-                            // If there were multiple `RunSinks` in the command
-                            // stream, we want to ensure none of them are
-                            // retained.
-                            || self.storage_state.dropped_ids.contains(&export.id)
-                        {
-                            info!(%worker_id, %export.id, "reconcile: dropping sink");
+                StorageCommand::RunSink(export) => {
+                    if drop_commands.remove(&export.id)
+                        // If there were multiple `RunSink` in the command
+                        // stream, we want to ensure none of them are
+                        // retained.
+                        || self.storage_state.dropped_ids.contains(&export.id)
+                    {
+                        info!(%worker_id, %export.id, "reconcile: dropping sink");
 
-                            // Make sure that we report back that the ID was
-                            // dropped.
-                            self.storage_state.dropped_ids.push(export.id);
+                        // Make sure that we report back that the ID was
+                        // dropped.
+                        self.storage_state.dropped_ids.push(export.id);
 
-                            false
-                        } else {
-                            expected_objects.insert(export.id);
+                        should_keep = false
+                    } else {
+                        expected_objects.insert(export.id);
 
-                            let running_sink = self.storage_state.exports.get(&export.id);
+                        let running_sink = self.storage_state.exports.get(&export.id);
 
-                            // We keep only:
-                            // - The most recent version of the sink, which
-                            //   is why these commands are run in reverse.
-                            // - Sinks whose descriptions are not exactly
-                            //   those that are currently running.
-                            seen_most_recent_definition.insert(export.id)
-                                && running_sink != Some(&export.description)
-                        }
-                    })
+                        // We keep only:
+                        // - The most recent version of the sink, which
+                        //   is why these commands are run in reverse.
+                        // - Sinks whose descriptions are not exactly
+                        //   those that are currently running.
+                        should_keep = seen_most_recent_definition.insert(export.id)
+                            && running_sink != Some(&export.description);
+                    }
                 }
                 StorageCommand::RunOneshotIngestion(ingestions) => ingestions.retain(|ingestion| {
                     let already_running = self
@@ -1361,30 +1357,28 @@ impl StorageState {
                     self.drop_oneshot_ingestion(id);
                 }
             }
-            StorageCommand::RunSinks(exports) => {
-                for export in exports {
-                    // Remember the sink description to facilitate possible
-                    // reconciliation later.
-                    let prev = self.exports.insert(export.id, export.description.clone());
+            StorageCommand::RunSink(export) => {
+                // Remember the sink description to facilitate possible
+                // reconciliation later.
+                let prev = self.exports.insert(export.id, export.description.clone());
 
-                    // New sink, add state.
-                    if prev.is_none() {
-                        self.reported_frontiers.insert(
+                // New sink, add state.
+                if prev.is_none() {
+                    self.reported_frontiers.insert(
+                        export.id,
+                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
+                    );
+                }
+
+                // This needs to be broadcast by one worker and go through the internal command
+                // fabric, to ensure consistent ordering of dataflow rendering across all
+                // workers.
+                if self.timely_worker_index == 0 {
+                    self.internal_cmd_tx
+                        .send(InternalStorageCommand::RunSinkDataflow(
                             export.id,
-                            Antichain::from_elem(mz_repr::Timestamp::minimum()),
-                        );
-                    }
-
-                    // This needs to be broadcast by one worker and go through the internal command
-                    // fabric, to ensure consistent ordering of dataflow rendering across all
-                    // workers.
-                    if self.timely_worker_index == 0 {
-                        self.internal_cmd_tx
-                            .send(InternalStorageCommand::RunSinkDataflow(
-                                export.id,
-                                export.description,
-                            ));
-                    }
+                            export.description,
+                        ));
                 }
             }
             StorageCommand::AllowCompaction(id, frontier) => {
