@@ -504,8 +504,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         disruption.disruption(c)
 
         validate(c)
-        # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/8932 is fixed
-        # validate_introspection_compaction(c, disruption.compaction_checks)
+        validate_introspection_compaction(c, disruption.compaction_checks)
 
 
 def get_single_value_from_cursor(cursor: Cursor) -> Any:
