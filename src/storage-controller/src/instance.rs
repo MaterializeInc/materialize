@@ -279,9 +279,8 @@ where
                         status_updates.push(make_update(id, "source"));
                     }
                 }
-                StorageCommand::RunSinks(cmds) => {
-                    let updates = cmds.iter().map(|c| make_update(c.id, "sink"));
-                    status_updates.extend(updates);
+                StorageCommand::RunSink(sink) => {
+                    status_updates.push(make_update(sink.id, "sink"));
                 }
                 _ => (),
             }
@@ -311,10 +310,8 @@ where
                     replica.send(StorageCommand::RunIngestion(ingestion.clone()));
                 }
             }
-            StorageCommand::RunSinks(sinks) => {
-                for sink in sinks.iter() {
-                    self.active_exports.insert(sink.id);
-                }
+            StorageCommand::RunSink(sink) => {
+                self.active_exports.insert(sink.id);
                 for replica in self.replicas.values_mut() {
                     replica.send(command.clone());
                 }
