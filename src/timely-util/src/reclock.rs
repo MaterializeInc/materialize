@@ -238,7 +238,7 @@ where
         // complicated API to traverse it. This is left for future work if the naive trace
         // maintenance implemented in this operator becomes problematic.
         let mut remap_upper = Antichain::from_elem(IntoTime::minimum());
-        let mut remap_since = as_of;
+        let mut remap_since = as_of.clone();
         let mut remap_trace = Vec::new();
 
         // A stash of source updates for which we don't know the corresponding binding yet.
@@ -268,10 +268,18 @@ where
             let mut session = output.session(cap);
 
             // STEP 1. Accept new bindings into `pending_remap`.
+            // Advance all `into` times by `as_of`, and consolidate all updates at that frontier.
+            use timely::progress::ChangeBatch;
+            let mut consolidated: ChangeBatch<(IntoTime, FromTime)> = ChangeBatch::new();
             while let Some((_, data)) = remap_input.next() {
-                for (from, into, diff) in data.drain(..) {
-                    pending_remap.push(Reverse((into, from, diff)));
+                for (from, mut into, diff) in data.drain(..) {
+                    into.advance_by(as_of.borrow());
+                    consolidated.update((into, from), diff);
                 }
+            }
+            // Drain consolidated bindings into the `pending_remap` heap.
+            for ((into, from), diff) in consolidated.drain() {
+                pending_remap.push(Reverse((into, from, diff)));
             }
 
             // STEP 2. Extract bindings not beyond `remap_frontier` and commit them into `remap_trace`.
