@@ -2801,10 +2801,10 @@ where
 
                 // Send AllowCompaction command directly to the instance
                 if let Some(instance) = self.instances.get_mut(&cluster_id) {
-                    instance.send(StorageCommand::AllowCompaction(vec![(
+                    instance.send(StorageCommand::AllowCompaction(
                         key,
                         frontier.clone(),
-                    )]));
+                    ));
                 } else {
                     soft_panic_or_log!(
                         "missing instance client for cluster {cluster_id} while we still have outstanding AllowCompaction command {frontier:?} for {key}");
