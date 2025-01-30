@@ -516,7 +516,7 @@ pub fn decode_copy_format<'a>(
         )),
         CopyFormatParams::Parquet => {
             // TODO(cf2): Support Parquet over STDIN.
-            return Err(io::Error::new(io::ErrorKind::Unsupported, "parquet format"));
+            Err(io::Error::new(io::ErrorKind::Unsupported, "parquet format"))
         }
     }
 }
@@ -534,7 +534,7 @@ pub fn encode_copy_format<'a>(
         CopyFormatParams::Binary => encode_copy_row_binary(row, typ, out),
         CopyFormatParams::Parquet => {
             // TODO(cf2): Support Parquet over STDIN.
-            return Err(io::Error::new(io::ErrorKind::Unsupported, "parquet format"));
+            Err(io::Error::new(io::ErrorKind::Unsupported, "parquet format"))
         }
     }
 }
@@ -563,7 +563,7 @@ pub fn encode_copy_format_header<'a>(
         }
         CopyFormatParams::Parquet => {
             // TODO(cf2): Support Parquet over STDIN.
-            return Err(io::Error::new(io::ErrorKind::Unsupported, "parquet format"));
+            Err(io::Error::new(io::ErrorKind::Unsupported, "parquet format"))
         }
     }
 }
