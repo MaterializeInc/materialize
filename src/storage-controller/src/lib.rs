@@ -169,7 +169,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// A shared TxnsCache running in a task and communicated with over a channel.
     txns_read: TxnsRead<T>,
     txns_metrics: Arc<TxnMetrics>,
-    stashed_response: Option<(Option<ReplicaId>, StorageResponse<T>)>,
+    stashed_responses: Vec<(Option<ReplicaId>, StorageResponse<T>)>,
     /// Channel for sending table handle drops.
     #[derivative(Debug = "ignore")]
     pending_table_handle_drops_tx: mpsc::UnboundedSender<GlobalId>,
@@ -2193,24 +2193,19 @@ where
             return;
         }
 
-        if let Ok(dropped_id) = self.pending_table_handle_drops_rx.try_recv() {
-            // HACKY: We cannot check if the channel has data on the version of
-            // tokio that we're using, so we do a try_recv and put it back.
-            self.pending_table_handle_drops_tx
-                .send(dropped_id)
-                .expect("ourselves are not dropped");
+        if !self.pending_table_handle_drops_rx.is_empty() {
             return;
         }
 
-        self.stashed_response = tokio::select! {
-            // Order matters here. We want to process internal commands
-            // before processing external commands.
-            biased;
-
-            Some(m) = self.instance_response_rx.recv() => Some(m),
+        tokio::select! {
+            Some(m) = self.instance_response_rx.recv() => {
+                self.stashed_responses.push(m);
+                while let Ok(m) = self.instance_response_rx.try_recv() {
+                    self.stashed_responses.push(m);
+                }
+            }
             _ = self.maintenance_ticker.tick() => {
                 self.maintenance_scheduled = true;
-                None
             },
         };
     }
@@ -2231,153 +2226,158 @@ where
         }
 
         let mut updated_frontiers = None;
-        match self.stashed_response.take() {
-            None => (),
-            Some((_replica_id, StorageResponse::FrontierUppers(updates))) => {
-                self.update_write_frontiers(&updates);
-                updated_frontiers = Some(Response::FrontierUpdates(updates));
-            }
-            Some((replica_id, StorageResponse::DroppedId(id))) => {
-                let replica_id = replica_id.expect("DroppedId from unknown replica");
-                if let Some(remaining_replicas) = self.dropped_objects.get_mut(&id) {
-                    remaining_replicas.remove(&replica_id);
-                    if remaining_replicas.is_empty() {
-                        self.dropped_objects.remove(&id);
-                    }
-                } else {
-                    soft_panic_or_log!("unexpected DroppedId for {id}");
-                }
-            }
-            Some((_replica_id, StorageResponse::StatisticsUpdates(source_stats, sink_stats))) => {
-                // Note we only hold the locks while moving some plain-old-data around here.
-                //
-                // We just write the whole object, as the update from storage represents the
-                // current values.
-                //
-                // We don't overwrite removed objects, as we may have received a late
-                // `StatisticsUpdates` while we were shutting down the storage object.
-                {
-                    let mut shared_stats = self.source_statistics.lock().expect("poisoned");
-                    for stat in source_stats {
-                        // Don't override it if its been removed.
-                        shared_stats
-                            .source_statistics
-                            .entry(stat.id)
-                            .and_modify(|current| current.stat().incorporate(stat));
-                    }
-                }
 
-                {
-                    let mut shared_stats = self.sink_statistics.lock().expect("poisoned");
-                    for stat in sink_stats {
-                        // Don't override it if its been removed.
-                        shared_stats
-                            .entry(stat.id)
-                            .and_modify(|current| current.stat().incorporate(stat));
+        // Take the currently stashed responses so that we can call mut receiver functions in the loop.
+        let stashed_responses = std::mem::take(&mut self.stashed_responses);
+        for resp in stashed_responses {
+            match resp {
+                (_replica_id, StorageResponse::FrontierUppers(updates)) => {
+                    self.update_write_frontiers(&updates);
+                    updated_frontiers = Some(Response::FrontierUpdates(updates));
+                }
+                (replica_id, StorageResponse::DroppedId(id)) => {
+                    let replica_id = replica_id.expect("DroppedId from unknown replica");
+                    if let Some(remaining_replicas) = self.dropped_objects.get_mut(&id) {
+                        remaining_replicas.remove(&replica_id);
+                        if remaining_replicas.is_empty() {
+                            self.dropped_objects.remove(&id);
+                        }
+                    } else {
+                        soft_panic_or_log!("unexpected DroppedId for {id}");
                     }
                 }
-            }
-            Some((replica_id, StorageResponse::StatusUpdates(mut updates))) => {
-                for status_update in &mut updates {
-                    // NOTE(aljoscha): We sniff out the hydration status for
-                    // ingestions from status updates. This is the easiest we
-                    // can do right now, without going deeper into changing the
-                    // comms protocol between controller and cluster. We cannot,
-                    // for example use `StorageResponse::FrontierUppers`,
-                    // because those will already get sent when the ingestion is
-                    // just being created.
+                (_replica_id, StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
+                    // Note we only hold the locks while moving some plain-old-data around here.
                     //
-                    // Sources differ in when they will report as Running. Kafka
-                    // UPSERT sources will only switch to `Running` once their
-                    // state has been initialized from persist, which is the
-                    // first case that we care about right now.
+                    // We just write the whole object, as the update from storage represents the
+                    // current values.
                     //
-                    // I wouldn't say it's ideal, but it's workable until we
-                    // find something better.
-                    match status_update.status {
-                        Status::Running => {
-                            let collection = self.collections.get_mut(&status_update.id);
-                            match collection {
-                                Some(collection) => {
-                                    match collection.extra_state {
-                                        CollectionStateExtra::Ingestion(
-                                            ref mut ingestion_state,
-                                        ) => {
-                                            if ingestion_state.hydrated_on.is_empty() {
-                                                tracing::debug!(ingestion_id = %status_update.id, "ingestion is hydrated");
-                                            }
-                                            ingestion_state.hydrated_on.insert(replica_id.expect(
+                    // We don't overwrite removed objects, as we may have received a late
+                    // `StatisticsUpdates` while we were shutting down the storage object.
+                    {
+                        let mut shared_stats = self.source_statistics.lock().expect("poisoned");
+                        for stat in source_stats {
+                            // Don't override it if its been removed.
+                            shared_stats
+                                .source_statistics
+                                .entry(stat.id)
+                                .and_modify(|current| current.stat().incorporate(stat));
+                        }
+                    }
+
+                    {
+                        let mut shared_stats = self.sink_statistics.lock().expect("poisoned");
+                        for stat in sink_stats {
+                            // Don't override it if its been removed.
+                            shared_stats
+                                .entry(stat.id)
+                                .and_modify(|current| current.stat().incorporate(stat));
+                        }
+                    }
+                }
+                (replica_id, StorageResponse::StatusUpdates(mut updates)) => {
+                    for status_update in &mut updates {
+                        // NOTE(aljoscha): We sniff out the hydration status for
+                        // ingestions from status updates. This is the easiest we
+                        // can do right now, without going deeper into changing the
+                        // comms protocol between controller and cluster. We cannot,
+                        // for example use `StorageResponse::FrontierUppers`,
+                        // because those will already get sent when the ingestion is
+                        // just being created.
+                        //
+                        // Sources differ in when they will report as Running. Kafka
+                        // UPSERT sources will only switch to `Running` once their
+                        // state has been initialized from persist, which is the
+                        // first case that we care about right now.
+                        //
+                        // I wouldn't say it's ideal, but it's workable until we
+                        // find something better.
+                        match status_update.status {
+                            Status::Running => {
+                                let collection = self.collections.get_mut(&status_update.id);
+                                match collection {
+                                    Some(collection) => {
+                                        match collection.extra_state {
+                                            CollectionStateExtra::Ingestion(
+                                                ref mut ingestion_state,
+                                            ) => {
+                                                if ingestion_state.hydrated_on.is_empty() {
+                                                    tracing::debug!(ingestion_id = %status_update.id, "ingestion is hydrated");
+                                                }
+                                                ingestion_state.hydrated_on.insert(replica_id.expect(
                                                 "replica id should be present for status running",
                                             ));
-                                        }
-                                        CollectionStateExtra::Export(_) => {
-                                            // TODO(sinks): track sink hydration?
-                                        }
-                                        CollectionStateExtra::None => {
-                                            // Nothing to do
-                                        }
-                                    }
-                                }
-                                None => (), // no collection, let's say that's fine
-                                            // here
-                            }
-                        }
-                        Status::Paused => {
-                            let collection = self.collections.get_mut(&status_update.id);
-                            match collection {
-                                Some(collection) => {
-                                    match collection.extra_state {
-                                        CollectionStateExtra::Ingestion(
-                                            ref mut ingestion_state,
-                                        ) => {
-                                            // TODO: Paused gets send when there
-                                            // are no active replicas. We should
-                                            // change this to send a targeted
-                                            // Pause for each replica, and do
-                                            // more fine-grained hydration
-                                            // tracking here.
-                                            tracing::debug!(ingestion_id = %status_update.id, "ingestion is now paused");
-                                            ingestion_state.hydrated_on.clear();
-                                        }
-                                        CollectionStateExtra::Export(_) => {
-                                            // TODO(sinks): track sink hydration?
-                                        }
-                                        CollectionStateExtra::None => {
-                                            // Nothing to do
+                                            }
+                                            CollectionStateExtra::Export(_) => {
+                                                // TODO(sinks): track sink hydration?
+                                            }
+                                            CollectionStateExtra::None => {
+                                                // Nothing to do
+                                            }
                                         }
                                     }
+                                    None => (), // no collection, let's say that's fine
+                                                // here
                                 }
-                                None => (), // no collection, let's say that's fine
-                                            // here
                             }
+                            Status::Paused => {
+                                let collection = self.collections.get_mut(&status_update.id);
+                                match collection {
+                                    Some(collection) => {
+                                        match collection.extra_state {
+                                            CollectionStateExtra::Ingestion(
+                                                ref mut ingestion_state,
+                                            ) => {
+                                                // TODO: Paused gets send when there
+                                                // are no active replicas. We should
+                                                // change this to send a targeted
+                                                // Pause for each replica, and do
+                                                // more fine-grained hydration
+                                                // tracking here.
+                                                tracing::debug!(ingestion_id = %status_update.id, "ingestion is now paused");
+                                                ingestion_state.hydrated_on.clear();
+                                            }
+                                            CollectionStateExtra::Export(_) => {
+                                                // TODO(sinks): track sink hydration?
+                                            }
+                                            CollectionStateExtra::None => {
+                                                // Nothing to do
+                                            }
+                                        }
+                                    }
+                                    None => (), // no collection, let's say that's fine
+                                                // here
+                                }
+                            }
+                            _ => (),
                         }
-                        _ => (),
-                    }
 
-                    // Set replica_id in the status update if available
-                    if let Some(id) = replica_id {
-                        status_update.replica_id = Some(id);
-                    }
-                }
-                self.record_status_updates(updates);
-            }
-            Some((_replica_id, StorageResponse::StagedBatches(batches))) => {
-                for (ingestion_id, batches) in batches {
-                    match self.pending_oneshot_ingestions.remove(&ingestion_id) {
-                        Some(pending) => {
-                            // Send a cancel command so our command history is correct. And to
-                            // avoid duplicate work once we have active replication.
-                            if let Some(instance) = self.instances.get_mut(&pending.cluster_id) {
-                                instance.send(StorageCommand::CancelOneshotIngestion {
-                                    ingestions: vec![ingestion_id],
-                                });
-                            }
-                            // Send the results down our channel.
-                            (pending.result_tx)(batches)
+                        // Set replica_id in the status update if available
+                        if let Some(id) = replica_id {
+                            status_update.replica_id = Some(id);
                         }
-                        // TODO(cf2): When we support running COPY FROM on multiple
-                        // replicas we can probably just ignore the case of `None`.
-                        None => mz_ore::soft_panic_or_log!("no sender for {ingestion_id}!"),
+                    }
+                    self.record_status_updates(updates);
+                }
+                (_replica_id, StorageResponse::StagedBatches(batches)) => {
+                    for (ingestion_id, batches) in batches {
+                        match self.pending_oneshot_ingestions.remove(&ingestion_id) {
+                            Some(pending) => {
+                                // Send a cancel command so our command history is correct. And to
+                                // avoid duplicate work once we have active replication.
+                                if let Some(instance) = self.instances.get_mut(&pending.cluster_id)
+                                {
+                                    instance.send(StorageCommand::CancelOneshotIngestion {
+                                        ingestions: vec![ingestion_id],
+                                    });
+                                }
+                                // Send the results down our channel.
+                                (pending.result_tx)(batches)
+                            }
+                            // TODO(cf2): When we support running COPY FROM on multiple
+                            // replicas we can probably just ignore the case of `None`.
+                            None => mz_ore::soft_panic_or_log!("no sender for {ingestion_id}!"),
+                        }
                     }
                 }
             }
@@ -2693,7 +2693,7 @@ where
             persist_table_worker,
             txns_read,
             txns_metrics,
-            stashed_response: None,
+            stashed_responses: vec![],
             pending_table_handle_drops_tx,
             pending_table_handle_drops_rx,
             pending_oneshot_ingestions: BTreeMap::default(),
