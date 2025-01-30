@@ -601,8 +601,8 @@ impl From<StatusUpdate> for AppendOnlyUpdate {
 pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with new upper frontiers.
     FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
-    /// Punctuation indicates that no more responses will be transmitted for the specified ids
-    DroppedIds(BTreeSet<GlobalId>),
+    /// Punctuation indicates that no more responses will be transmitted for the specified id
+    DroppedId(GlobalId),
     /// Batches that have been staged in Persist and maybe will be linked into a shard.
     StagedBatches(BTreeMap<uuid::Uuid, Vec<Result<ProtoBatch, String>>>),
 
@@ -617,13 +617,13 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageResponse {
         use proto_storage_response::Kind::*;
         use proto_storage_response::{
-            ProtoDroppedIds, ProtoStagedBatches, ProtoStatisticsUpdates, ProtoStatusUpdates,
+            ProtoDroppedId, ProtoStagedBatches, ProtoStatisticsUpdates, ProtoStatusUpdates,
         };
         ProtoStorageResponse {
             kind: Some(match self {
                 StorageResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
-                StorageResponse::DroppedIds(ids) => DroppedIds(ProtoDroppedIds {
-                    ids: ids.into_proto(),
+                StorageResponse::DroppedId(id) => DroppedId(ProtoDroppedId {
+                    id: Some(id.into_proto()),
                 }),
                 StorageResponse::StatisticsUpdates(source_stats, sink_stats) => {
                     Stats(ProtoStatisticsUpdates {
@@ -669,11 +669,11 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
 
     fn from_proto(proto: ProtoStorageResponse) -> Result<Self, TryFromProtoError> {
         use proto_storage_response::Kind::*;
-        use proto_storage_response::{ProtoDroppedIds, ProtoStatusUpdates};
+        use proto_storage_response::{ProtoDroppedId, ProtoStatusUpdates};
         match proto.kind {
-            Some(DroppedIds(ProtoDroppedIds { ids })) => {
-                Ok(StorageResponse::DroppedIds(ids.into_rust()?))
-            }
+            Some(DroppedId(ProtoDroppedId { id })) => Ok(StorageResponse::DroppedId(
+                id.into_rust_if_some("ProtoDroppedId::id")?,
+            )),
             Some(FrontierUppers(traces)) => {
                 Ok(StorageResponse::FrontierUppers(traces.into_rust()?))
             }
@@ -888,30 +888,22 @@ where
                     Some(Ok(StorageResponse::FrontierUppers(new_uppers)))
                 }
             }
-            StorageResponse::DroppedIds(dropped_ids) => {
-                let mut new_drops = BTreeSet::new();
+            StorageResponse::DroppedId(id) => {
+                let (_, shard_frontiers) = match self.uppers.get_mut(&id) {
+                    Some(value) => value,
+                    None => panic!("Reference to absent collection: {id}"),
+                };
+                let prev = shard_frontiers[shard_id].take();
+                assert!(
+                    prev.is_some(),
+                    "got double drop for {id} from shard {shard_id}"
+                );
 
-                for id in dropped_ids {
-                    let (_, shard_frontiers) = match self.uppers.get_mut(&id) {
-                        Some(value) => value,
-                        None => panic!("Reference to absent collection: {id}"),
-                    };
-                    let prev = shard_frontiers[shard_id].take();
-                    assert!(
-                        prev.is_some(),
-                        "got double drop for {id} from shard {shard_id}"
-                    );
-
-                    if shard_frontiers.iter().all(Option::is_none) {
-                        self.uppers.remove(&id);
-                        new_drops.insert(id);
-                    }
-                }
-
-                if new_drops.is_empty() {
-                    None
+                if shard_frontiers.iter().all(Option::is_none) {
+                    self.uppers.remove(&id);
+                    Some(Ok(StorageResponse::DroppedId(id)))
                 } else {
-                    Some(Ok(StorageResponse::DroppedIds(new_drops)))
+                    None
                 }
             }
             StorageResponse::StatisticsUpdates(source_stats, sink_stats) => {

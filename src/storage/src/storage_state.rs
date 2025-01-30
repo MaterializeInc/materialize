@@ -225,7 +225,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             txns_ctx,
             sink_tokens: BTreeMap::new(),
             sink_write_frontiers: BTreeMap::new(),
-            dropped_ids: BTreeSet::new(),
+            dropped_ids: Vec::new(),
             aggregated_statistics: AggregatedStatistics::new(
                 timely_worker.index(),
                 timely_worker.peers(),
@@ -303,7 +303,7 @@ pub struct StorageState {
     /// equal to this frontier)
     pub sink_write_frontiers: BTreeMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
     /// Collection ids that have been dropped but not yet reported as dropped
-    pub dropped_ids: BTreeSet<GlobalId>,
+    pub dropped_ids: Vec<GlobalId>,
 
     /// Statistics for sources and sinks.
     pub aggregated_statistics: AggregatedStatistics,
@@ -451,9 +451,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
 
             // Rerport any dropped ids
-            if !self.storage_state.dropped_ids.is_empty() {
-                let ids = std::mem::take(&mut self.storage_state.dropped_ids);
-                self.send_storage_response(&response_tx, StorageResponse::DroppedIds(ids));
+            for id in std::mem::take(&mut self.storage_state.dropped_ids) {
+                self.send_storage_response(&response_tx, StorageResponse::DroppedId(id));
             }
 
             self.report_frontier_progress(&response_tx);
@@ -1000,7 +999,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         {
                             if drop_commands.remove(export_id) {
                                 info!(%worker_id, %export_id, "reconcile: dropping subsource");
-                                self.storage_state.dropped_ids.insert(*export_id);
+                                self.storage_state.dropped_ids.push(*export_id);
                             }
                         }
 
@@ -1014,7 +1013,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             // as its progress subsource).
                             for id in ingestion.description.collection_ids() {
                                 drop_commands.remove(&id);
-                                self.storage_state.dropped_ids.insert(id);
+                                self.storage_state.dropped_ids.push(id);
                             }
 
                             false
@@ -1061,7 +1060,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
                             // Make sure that we report back that the ID was
                             // dropped.
-                            self.storage_state.dropped_ids.insert(export.id);
+                            self.storage_state.dropped_ids.push(export.id);
 
                             false
                         } else {
@@ -1309,7 +1308,7 @@ impl StorageState {
             // - The next time `dropped_ids` is processed, we send a response
             //   that this ID has been dropped, but the upstream state has no
             //   record of that object having ever existed.
-            self.dropped_ids.insert(id);
+            self.dropped_ids.push(id);
         }
 
         // Broadcast from one worker to make sure its sequences with the other internal commands.

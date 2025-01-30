@@ -128,8 +128,8 @@ message ProtoStorageResponse {
     repeated ProtoStatusUpdate updates = 1;
   }
 
-  message ProtoDroppedIds {
-    repeated mz_repr.global_id.ProtoGlobalId ids = 1;
+  message ProtoDroppedId {
+    mz_repr.global_id.ProtoGlobalId id = 1;
   }
 
   message ProtoStagedBatches {
@@ -150,7 +150,7 @@ message ProtoStorageResponse {
 
   oneof kind {
     ProtoFrontierUppersKind frontier_uppers = 1;
-    ProtoDroppedIds dropped_ids = 2;
+    ProtoDroppedId dropped_id = 2;
     ProtoStatisticsUpdates stats = 3;
     ProtoStatusUpdates status_updates = 4;
     ProtoStagedBatches staged_batches = 5;
