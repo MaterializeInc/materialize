@@ -183,9 +183,8 @@ where
         let mut status_updates = Vec::new();
         for command in self.history.iter() {
             match command {
-                StorageCommand::RunIngestions(cmds) => {
-                    let updates = cmds.iter().map(|c| make_update(c.id, "source"));
-                    status_updates.extend(updates);
+                StorageCommand::RunIngestion(ingestion) => {
+                    status_updates.push(make_update(ingestion.id, "source"));
                 }
                 StorageCommand::RunSinks(cmds) => {
                     let updates = cmds.iter().map(|c| make_update(c.id, "sink"));
@@ -213,10 +212,8 @@ where
         );
 
         match &command {
-            StorageCommand::RunIngestions(ingestions) => {
-                for ingestion in ingestions {
-                    self.active_ingestions.insert(ingestion.id);
-                }
+            StorageCommand::RunIngestion(ingestion) => {
+                self.active_ingestions.insert(ingestion.id);
             }
             StorageCommand::AllowCompaction(id, frontier) => {
                 if frontier.is_empty() {

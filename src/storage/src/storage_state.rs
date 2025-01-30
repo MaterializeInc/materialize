@@ -74,7 +74,7 @@
 //! clients on the way toward being run.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -955,22 +955,20 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         drop_commands.insert(*id);
                     }
                 }
-                StorageCommand::RunIngestions(ingestions) => {
-                    info!(%worker_id, ?ingestions, "reconcile: received RunIngestions command");
+                StorageCommand::RunIngestion(ingestion) => {
+                    info!(%worker_id, ?ingestion, "reconcile: received RunIngestions command");
 
                     // Ensure that ingestions are forward-rolling alter compatible.
-                    for ingestion in ingestions {
-                        let prev = running_ingestion_descriptions
-                            .insert(ingestion.id, ingestion.description.clone());
+                    let prev = running_ingestion_descriptions
+                        .insert(ingestion.id, ingestion.description.clone());
 
-                        if let Some(prev_ingest) = prev {
-                            // If the new ingestion is not exactly equal to the currently running
-                            // ingestion, we must either track that we need to synthesize an update
-                            // command to change the ingestion, or panic.
-                            prev_ingest
-                                .alter_compatible(ingestion.id, &ingestion.description)
-                                .expect("only alter compatible ingestions permitted");
-                        }
+                    if let Some(prev_ingest) = prev {
+                        // If the new ingestion is not exactly equal to the currently running
+                        // ingestion, we must either track that we need to synthesize an update
+                        // command to change the ingestion, or panic.
+                        prev_ingest
+                            .alter_compatible(ingestion.id, &ingestion.description)
+                            .expect("only alter compatible ingestions permitted");
                     }
                 }
                 StorageCommand::RunOneshotIngestion(oneshot) => {
@@ -1004,72 +1002,70 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
         // We iterate over this backward to ensure that we keep only the most recent ingestion
         // description.
-        for command in commands.iter_mut().rev() {
-            match command {
+        let mut filtered_commands = VecDeque::new();
+        for mut command in commands.into_iter().rev() {
+            let mut should_keep = true;
+            match &mut command {
                 StorageCommand::CreateTimely { .. } => {
                     panic!("CreateTimely must be captured before")
                 }
-                StorageCommand::RunIngestions(ingestions) => {
-                    ingestions.retain_mut(|ingestion| {
-                        // Subsources can be dropped independently of their
-                        // primary source, so we evaluate them in a separate
-                        // loop.
-                        for export_id in ingestion
-                            .description
-                            .source_exports
-                            .keys()
-                            .filter(|export_id| **export_id != ingestion.id)
-                        {
-                            if drop_commands.remove(export_id) {
-                                info!(%worker_id, %export_id, "reconcile: dropping subsource");
-                                self.storage_state.dropped_ids.push(*export_id);
-                            }
+                StorageCommand::RunIngestion(ingestion) => {
+                    // Subsources can be dropped independently of their
+                    // primary source, so we evaluate them in a separate
+                    // loop.
+                    for export_id in ingestion
+                        .description
+                        .source_exports
+                        .keys()
+                        .filter(|export_id| **export_id != ingestion.id)
+                    {
+                        if drop_commands.remove(export_id) {
+                            info!(%worker_id, %export_id, "reconcile: dropping subsource");
+                            self.storage_state.dropped_ids.push(*export_id);
+                        }
+                    }
+
+                    if drop_commands.remove(&ingestion.id)
+                        || self.storage_state.dropped_ids.contains(&ingestion.id)
+                    {
+                        info!(%worker_id, %ingestion.id, "reconcile: dropping ingestion");
+
+                        // If an ingestion is dropped, so too must all of
+                        // its subsources (i.e. ingestion exports, as well
+                        // as its progress subsource).
+                        for id in ingestion.description.collection_ids() {
+                            drop_commands.remove(&id);
+                            self.storage_state.dropped_ids.push(id);
+                        }
+                        should_keep = false;
+                    } else {
+                        let most_recent_defintion =
+                            seen_most_recent_definition.insert(ingestion.id);
+
+                        if most_recent_defintion {
+                            // If this is the most recent definition, this
+                            // is what we will be running when
+                            // reconciliation completes. This definition
+                            // must not include any dropped subsources.
+                            ingestion.description.source_exports.retain(|export_id, _| {
+                                !self.storage_state.dropped_ids.contains(export_id)
+                            });
+
+                            // After clearing any dropped subsources, we can
+                            // state that we expect all of these to exist.
+                            expected_objects.extend(ingestion.description.collection_ids());
                         }
 
-                        if drop_commands.remove(&ingestion.id)
-                            || self.storage_state.dropped_ids.contains(&ingestion.id)
-                        {
-                            info!(%worker_id, %ingestion.id, "reconcile: dropping ingestion");
+                        let running_ingestion = self.storage_state.ingestions.get(&ingestion.id);
 
-                            // If an ingestion is dropped, so too must all of
-                            // its subsources (i.e. ingestion exports, as well
-                            // as its progress subsource).
-                            for id in ingestion.description.collection_ids() {
-                                drop_commands.remove(&id);
-                                self.storage_state.dropped_ids.push(id);
-                            }
-
-                            false
-                        } else {
-                            let most_recent_defintion =
-                                seen_most_recent_definition.insert(ingestion.id);
-
-                            if most_recent_defintion {
-                                // If this is the most recent definition, this
-                                // is what we will be running when
-                                // reconciliation completes. This definition
-                                // must not include any dropped subsources.
-                                ingestion.description.source_exports.retain(|export_id, _| {
-                                    !self.storage_state.dropped_ids.contains(export_id)
-                                });
-
-                                // After clearing any dropped subsources, we can
-                                // state that we expect all of these to exist.
-                                expected_objects.extend(ingestion.description.collection_ids());
-                            }
-
-                            let running_ingestion =
-                                self.storage_state.ingestions.get(&ingestion.id);
-
-                            // We keep only:
-                            // - The most recent version of the ingestion, which
-                            //   is why these commands are run in reverse.
-                            // - Ingestions whose descriptions are not exactly
-                            //   those that are currently running.
-                            most_recent_defintion
-                                && running_ingestion != Some(&ingestion.description)
-                        }
-                    })
+                        // We keep only:
+                        // - The most recent version of the ingestion, which
+                        //   is why these commands are run in reverse.
+                        // - Ingestions whose descriptions are not exactly
+                        //   those that are currently running.
+                        should_keep = most_recent_defintion
+                            && running_ingestion != Some(&ingestion.description)
+                    }
                 }
                 StorageCommand::RunSinks(exports) => {
                     exports.retain_mut(|export| {
@@ -1107,7 +1103,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 | StorageCommand::AllowCompaction(_, _)
                 | StorageCommand::RunOneshotIngestion(_) => (),
             }
+            if should_keep {
+                filtered_commands.push_front(command);
+            }
         }
+        let commands = filtered_commands;
 
         // Make sure all the "drop commands" matched up with a source or sink.
         // This is also what the regular handler logic for `AllowCompaction`
@@ -1216,32 +1216,30 @@ impl StorageState {
                         })
                 }
             }
-            StorageCommand::RunIngestions(ingestions) => {
-                for RunIngestionCommand { id, description } in ingestions {
-                    // Remember the ingestion description to facilitate possible
-                    // reconciliation later.
-                    self.ingestions.insert(id, description.clone());
+            StorageCommand::RunIngestion(RunIngestionCommand { id, description }) => {
+                // Remember the ingestion description to facilitate possible
+                // reconciliation later.
+                self.ingestions.insert(id, description.clone());
 
-                    // Initialize shared frontier reporting.
-                    for id in description.collection_ids() {
-                        self.reported_frontiers
-                            .entry(id)
-                            .or_insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));
-                    }
+                // Initialize shared frontier reporting.
+                for id in description.collection_ids() {
+                    self.reported_frontiers
+                        .entry(id)
+                        .or_insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));
+                }
 
-                    // This needs to be done by one worker, which will broadcasts a
-                    // `CreateIngestionDataflow` command to all workers based on the response that
-                    // contains the resumption upper.
-                    //
-                    // Doing this separately on each worker could lead to differing resume_uppers
-                    // which might lead to all kinds of mayhem.
-                    //
-                    // n.b. the ingestion on each worker uses the description from worker 0––not the
-                    // ingestion in the local storage state. This is something we might have
-                    // interest in fixing in the future, e.g. materialize#19907
-                    if self.timely_worker_index == 0 {
-                        self.async_worker.update_frontiers(id, description);
-                    }
+                // This needs to be done by one worker, which will broadcasts a
+                // `CreateIngestionDataflow` command to all workers based on the response that
+                // contains the resumption upper.
+                //
+                // Doing this separately on each worker could lead to differing resume_uppers
+                // which might lead to all kinds of mayhem.
+                //
+                // n.b. the ingestion on each worker uses the description from worker 0––not the
+                // ingestion in the local storage state. This is something we might have
+                // interest in fixing in the future, e.g. materialize#19907
+                if self.timely_worker_index == 0 {
+                    self.async_worker.update_frontiers(id, description);
                 }
             }
             StorageCommand::RunOneshotIngestion(oneshot) => {
