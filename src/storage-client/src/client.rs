@@ -654,12 +654,11 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     DroppedId(GlobalId),
     /// Batches that have been staged in Persist and maybe will be linked into a shard.
     StagedBatches(BTreeMap<uuid::Uuid, Vec<Result<ProtoBatch, String>>>),
-
     /// A list of statistics updates, currently only for sources.
     StatisticsUpdates(Vec<SourceStatisticsUpdate>, Vec<SinkStatisticsUpdate>),
-    /// A list of status updates for sources and sinks. Periodically sent from
+    /// A status update for a source or a sink. Periodically sent from
     /// storage workers to convey the latest status information about an object.
-    StatusUpdates(Vec<StatusUpdate>),
+    StatusUpdate(StatusUpdate),
 }
 
 impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
@@ -667,7 +666,6 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
         use proto_storage_response::Kind::*;
         use proto_storage_response::{
             ProtoDroppedId, ProtoFrontierUpper, ProtoStagedBatches, ProtoStatisticsUpdates,
-            ProtoStatusUpdates,
         };
         ProtoStorageResponse {
             kind: Some(match self {
@@ -690,9 +688,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                             .collect(),
                     })
                 }
-                StorageResponse::StatusUpdates(updates) => StatusUpdates(ProtoStatusUpdates {
-                    updates: updates.into_proto(),
-                }),
+                StorageResponse::StatusUpdate(update) => StatusUpdate(update.into_proto()),
                 StorageResponse::StagedBatches(staged) => {
                     let batches = staged
                         .into_iter()
@@ -722,7 +718,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
 
     fn from_proto(proto: ProtoStorageResponse) -> Result<Self, TryFromProtoError> {
         use proto_storage_response::Kind::*;
-        use proto_storage_response::{ProtoDroppedId, ProtoFrontierUpper, ProtoStatusUpdates};
+        use proto_storage_response::{ProtoDroppedId, ProtoFrontierUpper};
         match proto.kind {
             Some(DroppedId(ProtoDroppedId { id })) => Ok(StorageResponse::DroppedId(
                 id.into_rust_if_some("ProtoDroppedId::id")?,
@@ -745,9 +741,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                     .map(|update| update.into_rust())
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
             )),
-            Some(StatusUpdates(ProtoStatusUpdates { updates })) => {
-                Ok(StorageResponse::StatusUpdates(updates.into_rust()?))
-            }
+            Some(StatusUpdate(update)) => Ok(StorageResponse::StatusUpdate(update.into_rust()?)),
             Some(StagedBatches(staged)) => {
                 let batches: BTreeMap<_, _> = staged
                     .batches
@@ -963,8 +957,8 @@ where
                     sink_stats,
                 )))
             }
-            StorageResponse::StatusUpdates(updates) => {
-                Some(Ok(StorageResponse::StatusUpdates(updates)))
+            StorageResponse::StatusUpdate(updates) => {
+                Some(Ok(StorageResponse::StatusUpdate(updates)))
             }
             StorageResponse::StagedBatches(batches) => {
                 let mut finished_batches = BTreeMap::new();

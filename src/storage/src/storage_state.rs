@@ -878,10 +878,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Pumps latest status updates from the buffer shared with operators and
     /// reports any updates that need reporting.
     pub fn report_status_updates(&mut self, response_tx: &ResponseSender) {
-        let mut to_report = Vec::new();
-
-        // If we haven't done the initial status report, report all current
-        // statuses
+        // If we haven't done the initial status report, report all current statuses
         if !self.storage_state.initial_status_reported {
             // We pull initially reported status updates to "now", so that they
             // sort as the latest update in internal status collections. This
@@ -898,25 +895,22 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     update.timestamp = now_ts.clone();
                     update
                 });
-            to_report.extend(status_updates);
+            for update in status_updates {
+                self.send_storage_response(response_tx, StorageResponse::StatusUpdate(update));
+            }
             self.storage_state.initial_status_reported = true;
         }
 
         // Pump updates into our state and stage them for reporting.
-        if self.storage_state.shared_status_updates.borrow().len() > 0 {
-            for shared_update in self.storage_state.shared_status_updates.take() {
-                let id = shared_update.id;
+        for shared_update in self.storage_state.shared_status_updates.take() {
+            self.send_storage_response(
+                response_tx,
+                StorageResponse::StatusUpdate(shared_update.clone()),
+            );
 
-                to_report.push(shared_update.clone());
-
-                self.storage_state
-                    .latest_status_updates
-                    .insert(id, shared_update.clone());
-            }
-        }
-
-        if !to_report.is_empty() {
-            self.send_storage_response(response_tx, StorageResponse::StatusUpdates(to_report));
+            self.storage_state
+                .latest_status_updates
+                .insert(shared_update.id, shared_update);
         }
     }
 

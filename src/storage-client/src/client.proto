@@ -130,10 +130,6 @@ message ProtoStorageResponse {
     optional string replica_id = 7;
   }
 
-  message ProtoStatusUpdates {
-    repeated ProtoStatusUpdate updates = 1;
-  }
-
   message ProtoDroppedId {
     mz_repr.global_id.ProtoGlobalId id = 1;
   }
@@ -158,7 +154,7 @@ message ProtoStorageResponse {
     ProtoFrontierUpper frontier_upper = 1;
     ProtoDroppedId dropped_id = 2;
     ProtoStatisticsUpdates stats = 3;
-    ProtoStatusUpdates status_updates = 4;
+    ProtoStatusUpdate status_update = 4;
     ProtoStagedBatches staged_batches = 5;
   }
 }

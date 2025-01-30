@@ -335,12 +335,13 @@ where
             }
         }
 
-        if !status_updates.is_empty() {
-            let response = StorageResponse::StatusUpdates(status_updates);
+        for update in status_updates {
             // NOTE: If we lift this "inject paused status" logic to the
             // controller, we could instead return ReplicaId instead of an
             // Option<ReplicaId>.
-            let _ = self.response_tx.send((None, response));
+            let _ = self
+                .response_tx
+                .send((None, StorageResponse::StatusUpdate(update)));
         }
     }
 
