@@ -648,8 +648,8 @@ impl From<StatusUpdate> for AppendOnlyUpdate {
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageResponse<T = mz_repr::Timestamp> {
-    /// A list of identifiers of traces, with new upper frontiers.
-    FrontierUppers(Vec<(GlobalId, Antichain<T>)>),
+    /// A new upper frontier for the specified identifier.
+    FrontierUpper(GlobalId, Antichain<T>),
     /// Punctuation indicates that no more responses will be transmitted for the specified id
     DroppedId(GlobalId),
     /// Batches that have been staged in Persist and maybe will be linked into a shard.
@@ -666,11 +666,15 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageResponse {
         use proto_storage_response::Kind::*;
         use proto_storage_response::{
-            ProtoDroppedId, ProtoStagedBatches, ProtoStatisticsUpdates, ProtoStatusUpdates,
+            ProtoDroppedId, ProtoFrontierUpper, ProtoStagedBatches, ProtoStatisticsUpdates,
+            ProtoStatusUpdates,
         };
         ProtoStorageResponse {
             kind: Some(match self {
-                StorageResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
+                StorageResponse::FrontierUpper(id, upper) => FrontierUpper(ProtoFrontierUpper {
+                    id: Some(id.into_proto()),
+                    upper: Some(upper.into_proto()),
+                }),
                 StorageResponse::DroppedId(id) => DroppedId(ProtoDroppedId {
                     id: Some(id.into_proto()),
                 }),
@@ -718,13 +722,16 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
 
     fn from_proto(proto: ProtoStorageResponse) -> Result<Self, TryFromProtoError> {
         use proto_storage_response::Kind::*;
-        use proto_storage_response::{ProtoDroppedId, ProtoStatusUpdates};
+        use proto_storage_response::{ProtoDroppedId, ProtoFrontierUpper, ProtoStatusUpdates};
         match proto.kind {
             Some(DroppedId(ProtoDroppedId { id })) => Ok(StorageResponse::DroppedId(
                 id.into_rust_if_some("ProtoDroppedId::id")?,
             )),
-            Some(FrontierUppers(traces)) => {
-                Ok(StorageResponse::FrontierUppers(traces.into_rust()?))
+            Some(FrontierUpper(ProtoFrontierUpper { id, upper })) => {
+                Ok(StorageResponse::FrontierUpper(
+                    id.into_rust_if_some("ProtoFrontierUpper::id")?,
+                    upper.into_rust_if_some("ProtoFrontierUpper::upper")?,
+                ))
             }
             Some(Stats(stats)) => Ok(StorageResponse::StatisticsUpdates(
                 stats
@@ -784,8 +791,8 @@ impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         // TODO(guswynn): test `SourceStatisticsUpdates`
         Union::new(vec![
-            proptest::collection::vec((any::<GlobalId>(), any_antichain()), 1..4)
-                .prop_map(StorageResponse::FrontierUppers)
+            (any::<GlobalId>(), any_antichain())
+                .prop_map(|(id, upper)| StorageResponse::FrontierUpper(id, upper))
                 .boxed(),
         ])
     }
@@ -908,33 +915,25 @@ where
     ) -> Option<Result<StorageResponse<T>, anyhow::Error>> {
         match response {
             // Avoid multiple retractions of minimum time, to present as updates from one worker.
-            StorageResponse::FrontierUppers(list) => {
-                let mut new_uppers = Vec::new();
+            StorageResponse::FrontierUpper(id, new_shard_upper) => {
+                let (frontier, shard_frontiers) = match self.uppers.get_mut(&id) {
+                    Some(value) => value,
+                    None => panic!("Reference to absent collection: {id}"),
+                };
+                let old_upper = frontier.frontier().to_owned();
+                let shard_upper = match &mut shard_frontiers[shard_id] {
+                    Some(shard_upper) => shard_upper,
+                    None => panic!("Reference to absent shard {shard_id} for collection {id}"),
+                };
+                frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
+                frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
+                shard_upper.join_assign(&new_shard_upper);
 
-                for (id, new_shard_upper) in list {
-                    let (frontier, shard_frontiers) = match self.uppers.get_mut(&id) {
-                        Some(value) => value,
-                        None => panic!("Reference to absent collection: {id}"),
-                    };
-                    let old_upper = frontier.frontier().to_owned();
-                    let shard_upper = match &mut shard_frontiers[shard_id] {
-                        Some(shard_upper) => shard_upper,
-                        None => panic!("Reference to absent shard {shard_id} for collection {id}"),
-                    };
-                    frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
-                    frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
-                    shard_upper.join_assign(&new_shard_upper);
-
-                    let new_upper = frontier.frontier();
-                    if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
-                        new_uppers.push((id, new_upper.to_owned()));
-                    }
-                }
-
-                if new_uppers.is_empty() {
-                    None
+                let new_upper = frontier.frontier();
+                if PartialOrder::less_than(&old_upper.borrow(), &new_upper) {
+                    Some(Ok(StorageResponse::FrontierUpper(id, new_upper.to_owned())))
                 } else {
-                    Some(Ok(StorageResponse::FrontierUppers(new_uppers)))
+                    None
                 }
             }
             StorageResponse::DroppedId(id) => {
@@ -1091,34 +1090,6 @@ where
             .expect("invalid Persist usage");
 
         batch.into_transmittable_batch()
-    }
-}
-
-impl RustType<ProtoTrace> for (GlobalId, Antichain<mz_repr::Timestamp>) {
-    fn into_proto(&self) -> ProtoTrace {
-        ProtoTrace {
-            id: Some(self.0.into_proto()),
-            upper: Some(self.1.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
-        Ok((
-            proto.id.into_rust_if_some("ProtoTrace::id")?,
-            proto.upper.into_rust_if_some("ProtoTrace::upper")?,
-        ))
-    }
-}
-
-impl RustType<ProtoFrontierUppersKind> for Vec<(GlobalId, Antichain<mz_repr::Timestamp>)> {
-    fn into_proto(&self) -> ProtoFrontierUppersKind {
-        ProtoFrontierUppersKind {
-            traces: self.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoFrontierUppersKind) -> Result<Self, TryFromProtoError> {
-        proto.traces.into_rust()
     }
 }
 

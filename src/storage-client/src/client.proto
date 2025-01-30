@@ -79,15 +79,6 @@ message ProtoRunSinks {
   repeated ProtoRunSinkCommand sinks = 1;
 }
 
-message ProtoFrontierUppersKind {
-  repeated ProtoTrace traces = 1;
-}
-
-message ProtoTrace {
-  mz_repr.global_id.ProtoGlobalId id = 1;
-  mz_repr.antichain.ProtoU64Antichain upper = 2;
-}
-
 message ProtoStorageCommand {
   message ProtoCreateTimely {
     mz_cluster_client.client.ProtoTimelyConfig config = 1;
@@ -108,6 +99,11 @@ message ProtoStorageCommand {
 }
 
 message ProtoStorageResponse {
+  message ProtoFrontierUpper {
+    mz_repr.global_id.ProtoGlobalId id = 1;
+    mz_repr.antichain.ProtoU64Antichain upper = 2;
+  }
+
   message ProtoStatisticsUpdates {
     repeated mz_storage_client.statistics.ProtoSourceStatisticsUpdate source_updates = 1;
     repeated mz_storage_client.statistics.ProtoSinkStatisticsUpdate sink_updates = 2;
@@ -159,7 +155,7 @@ message ProtoStorageResponse {
   }
 
   oneof kind {
-    ProtoFrontierUppersKind frontier_uppers = 1;
+    ProtoFrontierUpper frontier_upper = 1;
     ProtoDroppedId dropped_id = 2;
     ProtoStatisticsUpdates stats = 3;
     ProtoStatusUpdates status_updates = 4;

@@ -870,8 +870,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
         }
 
-        if !new_uppers.is_empty() {
-            self.send_storage_response(response_tx, StorageResponse::FrontierUppers(new_uppers));
+        for (id, upper) in new_uppers {
+            self.send_storage_response(response_tx, StorageResponse::FrontierUpper(id, upper));
         }
     }
 
