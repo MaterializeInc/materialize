@@ -277,6 +277,7 @@ def main() -> int:
                 # Setting the listen addresses below to 0.0.0.0 is required
                 # to allow Prometheus running in Docker (misc/prometheus)
                 # access these services to scrape metrics.
+                "--http-listen-addr=0.0.0.0:6876",
                 "--internal-http-listen-addr=0.0.0.0:6878",
                 "--orchestrator=process",
                 f"--orchestrator-process-secrets-directory={MZDATA}/secrets",
