@@ -161,10 +161,9 @@ where
 
         let filtered_commands = commands
             .filter_map(|command| match command {
-                StorageCommand::RunIngestions(mut cmds) => {
-                    cmds.retain(|cmd| self.is_active_replica(&cmd.id, &replica_id));
-                    if cmds.len() > 0 {
-                        Some(StorageCommand::RunIngestions(cmds))
+                StorageCommand::RunIngestion(ingestion) => {
+                    if self.is_active_replica(&ingestion.id, &replica_id) {
+                        Some(StorageCommand::RunIngestion(ingestion))
                     } else {
                         None
                     }
@@ -262,24 +261,22 @@ where
         let mut status_updates = Vec::new();
         for command in self.history.iter() {
             match command {
-                StorageCommand::RunIngestions(cmds) => {
-                    for ingestion in cmds.iter() {
-                        // NOTE(aljoscha): We filter out the remap collection because we
-                        // don't get any status updates about it from the replica side. So
-                        // we don't want to synthesize a 'paused' status here.
-                        //
-                        // TODO(aljoscha): I think we want to fix this eventually, and make
-                        // sure we get status updates for the remap shard as well. Currently
-                        // its handling in the source status collection is a bit difficult
-                        // because we don't have updates for it in the status history
-                        // collection.
-                        let subsource_ids = ingestion
-                            .description
-                            .collection_ids()
-                            .filter(|id| id != &ingestion.description.remap_collection_id);
-                        for id in subsource_ids {
-                            status_updates.push(make_update(id, "source"));
-                        }
+                StorageCommand::RunIngestion(ingestion) => {
+                    // NOTE(aljoscha): We filter out the remap collection because we
+                    // don't get any status updates about it from the replica side. So
+                    // we don't want to synthesize a 'paused' status here.
+                    //
+                    // TODO(aljoscha): I think we want to fix this eventually, and make
+                    // sure we get status updates for the remap shard as well. Currently
+                    // its handling in the source status collection is a bit difficult
+                    // because we don't have updates for it in the status history
+                    // collection.
+                    let subsource_ids = ingestion
+                        .description
+                        .collection_ids()
+                        .filter(|id| id != &ingestion.description.remap_collection_id);
+                    for id in subsource_ids {
+                        status_updates.push(make_update(id, "source"));
                     }
                 }
                 StorageCommand::RunSinks(cmds) => {
@@ -304,16 +301,14 @@ where
         self.history.push(command.clone());
 
         match command.clone() {
-            StorageCommand::RunIngestions(ingestions) => {
+            StorageCommand::RunIngestion(ingestion) => {
                 // First absorb into our state, because this might change
                 // scheduling decisions, which need to be respected just below
                 // when sending commands.
-                self.absorb_ingestions(ingestions.clone());
+                self.absorb_ingestion(ingestion.clone());
 
-                for cmd in ingestions.iter() {
-                    for replica in self.active_replicas(&cmd.id) {
-                        replica.send(StorageCommand::RunIngestions(vec![cmd.clone()]));
-                    }
+                for replica in self.active_replicas(&ingestion.id) {
+                    replica.send(StorageCommand::RunIngestion(ingestion.clone()));
                 }
             }
             StorageCommand::RunSinks(sinks) => {
@@ -352,35 +347,33 @@ where
     ///
     /// This does _not_ send commands to replicas, we only record the ingestion
     /// in state and potentially update scheduling decisions.
-    fn absorb_ingestions(&mut self, ingestions: Vec<RunIngestionCommand>) {
-        for ingestion in ingestions {
-            let existing_ingestion_state = self.active_ingestions.get_mut(&ingestion.id);
+    fn absorb_ingestion(&mut self, ingestion: RunIngestionCommand) {
+        let existing_ingestion_state = self.active_ingestions.get_mut(&ingestion.id);
 
-            // Always update our mapping from export to their ingestion.
-            for id in ingestion.description.source_exports.keys() {
-                self.ingestion_exports.insert(id.clone(), ingestion.id);
-            }
+        // Always update our mapping from export to their ingestion.
+        for id in ingestion.description.source_exports.keys() {
+            self.ingestion_exports.insert(id.clone(), ingestion.id);
+        }
 
-            if let Some(ingestion_state) = existing_ingestion_state {
-                // It's an update for an existing ingestion. We don't need to
-                // change anything about our scheduling decisions, no need to
-                // update active_ingestions.
+        if let Some(ingestion_state) = existing_ingestion_state {
+            // It's an update for an existing ingestion. We don't need to
+            // change anything about our scheduling decisions, no need to
+            // update active_ingestions.
 
-                tracing::debug!(
-                    ingestion_id = %ingestion.id,
-                    active_replicas = %ingestion_state.active_replicas.iter().map(|id| id.to_string()).join(", "),
-                    "updating ingestion"
-                );
-            } else {
-                // We create a new ingestion state for this ingestion.
-                let ingestion_state = ActiveIngestion {
-                    active_replicas: BTreeSet::new(),
-                };
-                self.active_ingestions.insert(ingestion.id, ingestion_state);
+            tracing::debug!(
+                ingestion_id = %ingestion.id,
+                active_replicas = %ingestion_state.active_replicas.iter().map(|id| id.to_string()).join(", "),
+                "updating ingestion"
+            );
+        } else {
+            // We create a new ingestion state for this ingestion.
+            let ingestion_state = ActiveIngestion {
+                active_replicas: BTreeSet::new(),
+            };
+            self.active_ingestions.insert(ingestion.id, ingestion_state);
 
-                // Maybe update scheduling decisions.
-                self.update_ingestion_scheduling(false);
-            }
+            // Maybe update scheduling decisions.
+            self.update_ingestion_scheduling(false);
         }
     }
 
@@ -473,7 +466,7 @@ where
 
         if send_commands {
             for (replica_id, ingestion_ids) in commands_by_replica {
-                let commands: Vec<RunIngestionCommand> = ingestion_ids
+                let ingestions: Vec<RunIngestionCommand> = ingestion_ids
                     .into_iter()
                     .map(|id| RunIngestionCommand {
                         id,
@@ -484,9 +477,9 @@ where
                     })
                     .collect();
 
-                if !commands.is_empty() {
+                for ingestion in ingestions {
                     let replica = self.replicas.get_mut(&replica_id).expect("missing replica");
-                    replica.send(StorageCommand::RunIngestions(commands));
+                    replica.send(StorageCommand::RunIngestion(ingestion));
                 }
             }
         }
@@ -508,10 +501,12 @@ where
         }
 
         self.history.iter().rev().find_map(|command| {
-            if let StorageCommand::RunIngestions(cmds) = command {
-                cmds.iter()
-                    .find(|cmd| &cmd.id == id)
-                    .map(|cmd| cmd.description.clone())
+            if let StorageCommand::RunIngestion(ingestion) = command {
+                if &ingestion.id == id {
+                    Some(ingestion.description.clone())
+                } else {
+                    None
+                }
             } else {
                 None
             }
