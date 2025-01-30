@@ -342,13 +342,13 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             "storage_use_continual_feedback_upsert",
             get_default_system_parameters()["storage_use_continual_feedback_upsert"],
         )
-           == "false"
+        == "false"
         else "false"
     )
 
     mz_old = Materialized(
         default_size=Materialized.Size.DEFAULT_SIZE,
-        image=get_new_image_for_source_table_migration_test(),
+        image=get_old_image_for_source_table_migration_test(),
         external_blob_store=True,
         blob_store_is_azure=args.azurite,
         additional_system_parameter_defaults=dict(additional_system_parameter_defaults),
@@ -358,7 +358,6 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         forward_buildkite_shard=True,
         kafka_default_partitions=args.kafka_default_partitions,
         aws_region=args.aws_region,
-        validate_catalog_store=True,
         default_timeout=args.default_timeout,
         volumes_extra=["mzdata:/mzdata"],
         external_blob_store=True,
