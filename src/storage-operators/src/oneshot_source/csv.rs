@@ -26,7 +26,7 @@ use crate::oneshot_source::{
     Encoding, OneshotFormat, OneshotObject, OneshotSource, StorageErrorX, StorageErrorXKind,
 };
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CsvDecoder {
     /// Properties of the CSV Reader.
     params: CopyCsvFormatParams<'static>,
@@ -106,7 +106,7 @@ impl OneshotFormat for CsvDecoder {
         Ok(vec![request])
     }
 
-    fn fetch_work<'a, S: OneshotSource + Sync>(
+    fn fetch_work<'a, S: OneshotSource + Sync + 'static>(
         &'a self,
         source: &'a S,
         request: Self::WorkRequest<S>,

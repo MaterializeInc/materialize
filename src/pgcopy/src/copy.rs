@@ -438,6 +438,7 @@ pub enum CopyFormatParams<'a> {
     Text(CopyTextFormatParams<'a>),
     Csv(CopyCsvFormatParams<'a>),
     Binary,
+    Parquet,
 }
 
 impl RustType<ProtoCopyFormatParams> for CopyFormatParams<'static> {
@@ -448,6 +449,7 @@ impl RustType<ProtoCopyFormatParams> for CopyFormatParams<'static> {
                 Self::Text(f) => Kind::Text(f.into_proto()),
                 Self::Csv(f) => Kind::Csv(f.into_proto()),
                 Self::Binary => Kind::Binary(()),
+                Self::Parquet => Kind::Parquet(ProtoCopyParquetFormatParams::default()),
             }),
         }
     }
@@ -458,6 +460,7 @@ impl RustType<ProtoCopyFormatParams> for CopyFormatParams<'static> {
             Some(Kind::Text(f)) => Ok(Self::Text(f.into_rust()?)),
             Some(Kind::Csv(f)) => Ok(Self::Csv(f.into_rust()?)),
             Some(Kind::Binary(())) => Ok(Self::Binary),
+            Some(Kind::Parquet(ProtoCopyParquetFormatParams {})) => Ok(Self::Parquet),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoCopyFormatParams::kind",
             )),
@@ -484,6 +487,7 @@ impl CopyFormatParams<'static> {
             &CopyFormatParams::Text(_) => "txt",
             &CopyFormatParams::Csv(_) => "csv",
             &CopyFormatParams::Binary => "bin",
+            &CopyFormatParams::Parquet => "parquet",
         }
     }
 
@@ -492,6 +496,7 @@ impl CopyFormatParams<'static> {
             CopyFormatParams::Text(_) => false,
             CopyFormatParams::Csv(params) => params.header,
             CopyFormatParams::Binary => false,
+            CopyFormatParams::Parquet => false,
         }
     }
 }
@@ -509,6 +514,10 @@ pub fn decode_copy_format<'a>(
             io::ErrorKind::Unsupported,
             "cannot decode as binary format",
         )),
+        CopyFormatParams::Parquet => {
+            // TODO(cf2): Support Parquet over STDIN.
+            Err(io::Error::new(io::ErrorKind::Unsupported, "parquet format"))
+        }
     }
 }
 
@@ -523,6 +532,10 @@ pub fn encode_copy_format<'a>(
         CopyFormatParams::Text(params) => encode_copy_row_text(params, row, typ, out),
         CopyFormatParams::Csv(params) => encode_copy_row_csv(params, row, typ, out),
         CopyFormatParams::Binary => encode_copy_row_binary(row, typ, out),
+        CopyFormatParams::Parquet => {
+            // TODO(cf2): Support Parquet over STDIN.
+            Err(io::Error::new(io::ErrorKind::Unsupported, "parquet format"))
+        }
     }
 }
 
@@ -547,6 +560,10 @@ pub fn encode_copy_format_header<'a>(
                 desc.arity()
             ]);
             encode_copy_row_csv(params, &header_row, &typ, out)
+        }
+        CopyFormatParams::Parquet => {
+            // TODO(cf2): Support Parquet over STDIN.
+            Err(io::Error::new(io::ErrorKind::Unsupported, "parquet format"))
         }
     }
 }

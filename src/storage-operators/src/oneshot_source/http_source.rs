@@ -19,7 +19,7 @@ use url::Url;
 
 use crate::oneshot_source::util::IntoRangeHeaderValue;
 use crate::oneshot_source::{
-    Encoding, OneshotObject, OneshotSource, StorageErrorX, StorageErrorXContext,
+    Encoding, OneshotObject, OneshotSource, StorageErrorX, StorageErrorXContext, StorageErrorXKind,
 };
 
 /// Generic oneshot source that fetches a file from a URL on the public internet.
@@ -44,6 +44,8 @@ pub struct HttpObject {
     url: Url,
     /// Name of the file.
     filename: String,
+    /// Size of this file reported by the [`Content-Length`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Length) header
+    size: usize,
     /// Any values reporting from the [`Content-Encoding`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding) header.
     content_encoding: Vec<Encoding>,
 }
@@ -51,6 +53,10 @@ pub struct HttpObject {
 impl OneshotObject for HttpObject {
     fn name(&self) -> &str {
         &self.filename
+    }
+
+    fn size(&self) -> usize {
+        self.size
     }
 
     fn encodings(&self) -> &[Encoding] {
@@ -127,6 +133,12 @@ impl OneshotSource for HttpOneshotSource {
             HttpChecksum::None
         };
 
+        // Get the size of the object from the Conent-Length header.
+        let size = get_header(&reqwest::header::CONTENT_LENGTH)
+            .ok_or(StorageErrorXKind::MissingSize)
+            .and_then(|s| s.parse::<usize>().map_err(StorageErrorXKind::generic))
+            .context("content-length header")?;
+
         // TODO(cf1): We should probably check the content-type as well. At least for advisory purposes.
 
         let filename = self
@@ -138,6 +150,7 @@ impl OneshotSource for HttpOneshotSource {
         let object = HttpObject {
             url: self.origin.clone(),
             filename,
+            size,
             content_encoding: vec![],
         };
         tracing::info!(?object, "found objects");
