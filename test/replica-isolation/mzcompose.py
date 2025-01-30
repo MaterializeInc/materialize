@@ -454,7 +454,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         user="mz_system",
     )
 
-    if ArrangedIntro in disruption.compaction_checks:
+    if any(isinstance(check, ArrangedIntro) for check in disruption.compaction_checks):
         # Disable introspection subscribes because they break the
         # `ArrangedIntro` check by disabling compaction of logging indexes
         # on all replicas if one of the replicas is failing. That's because
