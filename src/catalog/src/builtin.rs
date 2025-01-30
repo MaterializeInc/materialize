@@ -3030,7 +3030,12 @@ pub static MZ_PREPARED_STATEMENT_HISTORY: LazyLock<BuiltinSource> =
         data_source: IntrospectionType::PreparedStatementHistory,
         desc: MZ_PREPARED_STATEMENT_HISTORY_DESC.clone(),
         is_retained_metrics_object: false,
-        access: vec![MONITOR_SELECT],
+        access: vec![
+            SUPPORT_SELECT,
+            ANALYTICS_SELECT,
+            MONITOR_REDACTED_SELECT,
+            MONITOR_SELECT,
+        ],
     });
 
 pub static MZ_SQL_TEXT: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
