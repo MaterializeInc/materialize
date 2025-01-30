@@ -195,9 +195,8 @@ where
             }
         }
 
-        if !status_updates.is_empty() {
-            let response = StorageResponse::StatusUpdates(status_updates);
-            let _ = self.response_tx.send(response);
+        for update in status_updates {
+            let _ = self.response_tx.send(StorageResponse::StatusUpdate(update));
         }
     }
 
