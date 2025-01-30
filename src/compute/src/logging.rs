@@ -40,7 +40,6 @@ use mz_timely_util::activator::RcActivator;
 use mz_timely_util::containers::ColumnBuilder;
 use mz_timely_util::operator::consolidate_pact;
 
-use crate::logging::compute::Logger as ComputeLogger;
 use crate::typedefs::RowRowAgent;
 
 pub use crate::logging::initialize::initialize;
@@ -156,8 +155,6 @@ impl<C, const N: usize> EventQueue<C, N> {
 struct SharedLoggingState {
     /// Activators for arrangement heap size operators.
     arrangement_size_activators: BTreeMap<usize, Activator>,
-    /// Shared compute logger.
-    compute_logger: Option<ComputeLogger>,
 }
 
 /// Helper to pack collections of [`Datum`]s into key and value row.

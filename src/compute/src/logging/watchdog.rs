@@ -13,7 +13,11 @@ use crate::extensions::arrange::MzArrange;
 use crate::logging::Update;
 use crate::typedefs::spines::{ColKeyBuilder, ColValBatcher, ColValBuilder};
 use crate::typedefs::{KeyBatcher, KeySpine, KeyValSpine};
+use differential_dataflow::operators::CountTotal;
 use differential_dataflow::AsCollection;
+use std::cell::RefCell;
+use std::collections::BTreeSet;
+use std::rc::Rc;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::{Scope, Stream};
 
@@ -25,7 +29,8 @@ pub(super) struct Streams<S: Scope> {
     /// Operator id to dataflow id
     pub(super) operator_to_dataflow: Stream<S, Update<(usize, usize)>>,
     /// Dataflow -> limit in bytes
-    pub(super) heap_size_limits: Stream<S, Update<(usize, usize)>>,
+    pub(super) heap_size_limits: Stream<S, Update<(usize, u64)>>,
+    pub(super) dataflows_exceeding_heap_size_limit: Rc<RefCell<BTreeSet<usize>>>,
 }
 
 pub(super) fn construct<S: Scope<Timestamp = mz_repr::Timestamp>>(
@@ -37,6 +42,7 @@ pub(super) fn construct<S: Scope<Timestamp = mz_repr::Timestamp>>(
         batcher_heap_size,
         operator_to_dataflow,
         heap_size_limits,
+        dataflows_exceeding_heap_size_limit,
     } = streams;
 
     let operator_to_heap_size = arrangement_heap_size.concat(&batcher_heap_size);
@@ -61,17 +67,27 @@ pub(super) fn construct<S: Scope<Timestamp = mz_repr::Timestamp>>(
             Some((*dataflow, ()))
         });
 
-    dataflow_to_heap_size.inspect(|x| println!("dataflow_to_heap_size: {:?}", x));
-
     let dataflow_to_heap_size = dataflow_to_heap_size
         .mz_arrange::<KeyBatcher<_, _, _>, ColKeyBuilder<_, _, _>, KeySpine<_, _, _>>(
             "dataflow_to_heap_size",
-        );
+        )
+        .count_total_core::<mz_repr::Diff>();
 
-    let dataflow_to_heap_size = dataflow_to_heap_size
-        .join_core(&heap_size_limits, |dataflow, (), limit| {
-            Some((*dataflow, *limit))
+    let dataflow_to_heap_size_limit = dataflow_to_heap_size
+        .mz_arrange::<ColValBatcher<_, _, _, _>, ColValBuilder<_, _, _, _>, KeyValSpine<_, _, _, _>>(
+            "dataflow_to_heap_size",
+        )
+        .join_core(&heap_size_limits, |dataflow, size, limit| {
+            if *size >= (*limit).try_into().expect("must fit") {
+                Some(*dataflow)
+            } else {
+                None
+            }
         });
 
-    dataflow_to_heap_size.inspect(|x| println!("dataflow_to_heap_size: {:?}", x));
+    dataflow_to_heap_size_limit.inspect(move |(dataflow_id, _, _)| {
+        dataflows_exceeding_heap_size_limit
+            .borrow_mut()
+            .insert(*dataflow_id);
+    });
 }
