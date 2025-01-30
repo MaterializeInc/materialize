@@ -212,7 +212,7 @@ impl<S: OneshotSource> AsyncFileReader for ParquetReaderAdapter<S> {
             let mut reader = ParquetMetaDataReader::new();
             let object_size = self.object.size();
             reader.try_load(self, object_size).await?;
-            reader.finish().map(|metadata| Arc::new(metadata))
+            reader.finish().map(Arc::new)
         })
     }
 }
@@ -266,7 +266,7 @@ impl<'de> Deserialize<'de> for ParquetRowGroup {
                     let struct_array = array_ref
                         .as_any()
                         .downcast_ref::<StructArray>()
-                        .ok_or_else(|| serde_err())?;
+                        .ok_or_else(serde_err)?;
 
                     Ok(struct_array.clone())
                 }

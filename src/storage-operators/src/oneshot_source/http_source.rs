@@ -135,11 +135,8 @@ impl OneshotSource for HttpOneshotSource {
 
         // Get the size of the object from the Conent-Length header.
         let size = get_header(&reqwest::header::CONTENT_LENGTH)
-            .ok_or_else(|| StorageErrorXKind::MissingSize)
-            .and_then(|s| {
-                s.parse::<usize>()
-                    .map_err(|e| StorageErrorXKind::generic(e))
-            })
+            .ok_or(StorageErrorXKind::MissingSize)
+            .and_then(|s| s.parse::<usize>().map_err(StorageErrorXKind::generic))
             .context("content-length header")?;
 
         // TODO(cf1): We should probably check the content-type as well. At least for advisory purposes.
