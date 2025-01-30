@@ -76,7 +76,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
                 UpdateConfiguration(_) => metrics.update_configuration_count.inc(),
                 RunIngestions(x) => metrics.run_ingestions_count.add(x.len().cast_into()),
                 RunSinks(x) => metrics.run_sinks_count.add(x.len().cast_into()),
-                AllowCompaction(x) => metrics.allow_compaction_count.add(x.len().cast_into()),
+                AllowCompaction(_, _) => metrics.allow_compaction_count.inc(),
                 RunOneshotIngestion(_) | CancelOneshotIngestion { .. } => {
                     // TODO(cf2): Add metrics for oneshot ingestions.
                 }
@@ -120,7 +120,9 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
                 RunSinks(cmds) => {
                     final_sinks.extend(cmds.into_iter().map(|c| (c.id, c)));
                 }
-                AllowCompaction(updates) => final_compactions.extend(updates),
+                AllowCompaction(id, since) => {
+                    final_compactions.insert(id, since);
+                }
                 RunOneshotIngestion(oneshots) => {
                     for oneshot in oneshots {
                         final_oneshot_ingestions.insert(oneshot.ingestion_id, oneshot);
@@ -231,10 +233,10 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
 
         let count = u64::cast_from(allow_compaction.len());
         self.metrics.allow_compaction_count.set(count);
-        if !allow_compaction.is_empty() {
-            self.reduced_count += allow_compaction.len();
-            let updates = allow_compaction.into_iter().collect();
-            self.commands.push(StorageCommand::AllowCompaction(updates));
+        for (id, since) in allow_compaction {
+            self.reduced_count += 1;
+            self.commands
+                .push(StorageCommand::AllowCompaction(id, since));
         }
 
         let count = u64::from(initialization_complete);
@@ -464,11 +466,9 @@ mod tests {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
             }]),
-            StorageCommand::AllowCompaction(vec![
-                (GlobalId::User(1), Antichain::new()),
-                (GlobalId::User(2), Antichain::new()),
-                (GlobalId::User(3), Antichain::new()),
-            ]),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::new()),
+            StorageCommand::AllowCompaction(GlobalId::User(3), Antichain::new()),
         ];
 
         for cmd in commands {
@@ -490,11 +490,9 @@ mod tests {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
             }]),
-            StorageCommand::AllowCompaction(vec![
-                (GlobalId::User(1), Antichain::from_elem(1)),
-                (GlobalId::User(2), Antichain::from_elem(2)),
-                (GlobalId::User(3), Antichain::from_elem(3)),
-            ]),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(1)),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(2)),
+            StorageCommand::AllowCompaction(GlobalId::User(3), Antichain::from_elem(3)),
         ];
 
         for cmd in commands.clone() {
@@ -516,7 +514,7 @@ mod tests {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
             }]),
-            StorageCommand::AllowCompaction(vec![(GlobalId::User(2), Antichain::new())]),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::new()),
         ];
 
         for cmd in commands.clone() {
@@ -538,7 +536,7 @@ mod tests {
                 id: GlobalId::User(1),
                 description: sink_description(),
             }]),
-            StorageCommand::AllowCompaction(vec![(GlobalId::User(1), Antichain::new())]),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
         ];
 
         for cmd in commands {
@@ -561,7 +559,7 @@ mod tests {
                 id: GlobalId::User(1),
                 description: sink_desc.clone(),
             }]),
-            StorageCommand::AllowCompaction(vec![(GlobalId::User(1), Antichain::from_elem(42))]),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(42)),
         ];
 
         for cmd in commands {
@@ -589,11 +587,9 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::AllowCompaction(vec![(GlobalId::User(1), Antichain::new())]),
-            StorageCommand::AllowCompaction(vec![
-                (GlobalId::User(2), Antichain::from_elem(1)),
-                (GlobalId::User(2), Antichain::from_elem(2)),
-            ]),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(1)),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(2)),
         ];
 
         for cmd in commands {

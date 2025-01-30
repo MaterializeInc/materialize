@@ -85,7 +85,6 @@ use crossbeam_channel::{RecvError, TryRecvError};
 use fail::fail_point;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
-use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
@@ -1006,8 +1005,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 StorageCommand::CreateTimely { .. } => {
                     panic!("CreateTimely must be captured before")
                 }
-                StorageCommand::AllowCompaction(sinces) => {
-                    info!(%worker_id, ?sinces, "reconcile: received AllowCompaction command");
+                StorageCommand::AllowCompaction(id, since) => {
+                    info!(%worker_id, ?id, ?since, "reconcile: received AllowCompaction command");
 
                     // collect all "drop commands". These are `AllowCompaction`
                     // commands that compact to the empty since. Then, later, we make sure
@@ -1015,8 +1014,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     // assume that the `AllowCompaction` command is ordered after the
                     // `Create*` commands but don't assert that.
                     // WIP: Should we assert?
-                    let drops = sinces.drain_filter_swapping(|(_id, since)| since.is_empty());
-                    drop_commands.extend(drops.map(|(id, _since)| id));
+                    if since.is_empty() {
+                        drop_commands.insert(*id);
+                    }
                 }
                 StorageCommand::RunIngestions(ingestions) => {
                     info!(%worker_id, ?ingestions, "reconcile: received RunIngestions command");
@@ -1188,7 +1188,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 StorageCommand::InitializationComplete
                 | StorageCommand::AllowWrites
                 | StorageCommand::UpdateConfiguration(_)
-                | StorageCommand::AllowCompaction(_) => (),
+                | StorageCommand::AllowCompaction(_, _) => (),
             }
         }
 
@@ -1389,27 +1389,24 @@ impl StorageState {
                     }
                 }
             }
-            StorageCommand::AllowCompaction(list) => {
-                for (id, frontier) in list {
-                    match self.exports.get_mut(&id) {
-                        Some(export_description) => {
-                            // Update our knowledge of the `as_of`, in case we need to internally
-                            // restart a sink in the future.
-                            export_description.as_of.clone_from(&frontier);
-                        }
-                        // reported_frontiers contains both ingestions and their
-                        // exports
-                        None if self.reported_frontiers.contains_key(&id) => (),
-                        None => {
-                            soft_panic_or_log!("AllowCompaction command for non-existent {id}");
-                            continue;
-                        }
+            StorageCommand::AllowCompaction(id, frontier) => {
+                match self.exports.get_mut(&id) {
+                    Some(export_description) => {
+                        // Update our knowledge of the `as_of`, in case we need to internally
+                        // restart a sink in the future.
+                        export_description.as_of.clone_from(&frontier);
                     }
+                    // reported_frontiers contains both ingestions and their
+                    // exports
+                    None if self.reported_frontiers.contains_key(&id) => (),
+                    None => {
+                        soft_panic_or_log!("AllowCompaction command for non-existent {id}");
+                    }
+                }
 
-                    if frontier.is_empty() {
-                        // Indicates that we may drop `id`, as there are no more valid times to read.
-                        self.drop_collection(id);
-                    }
+                if frontier.is_empty() {
+                    // Indicates that we may drop `id`, as there are no more valid times to read.
+                    self.drop_collection(id);
                 }
             }
         }

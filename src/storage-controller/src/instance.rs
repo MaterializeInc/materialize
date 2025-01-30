@@ -202,10 +202,9 @@ where
                         None
                     }
                 }
-                StorageCommand::AllowCompaction(mut cmds) => {
-                    cmds.retain(|cmd| self.is_active_replica(&cmd.0, &replica_id));
-                    if cmds.len() > 0 {
-                        Some(StorageCommand::AllowCompaction(cmds))
+                StorageCommand::AllowCompaction(id, upper) => {
+                    if self.is_active_replica(&id, &replica_id) {
+                        Some(StorageCommand::AllowCompaction(id, upper))
                     } else {
                         None
                     }
@@ -376,19 +375,17 @@ where
                     }
                 }
             }
-            StorageCommand::AllowCompaction(cmds) => {
+            StorageCommand::AllowCompaction(id, frontier) => {
                 // First send out commands and then absorb into our state since
                 // absorbing them might remove entries from active_ingestions.
-                for (id, frontier) in cmds.iter() {
-                    for replica in self.active_replicas(id) {
-                        replica.send(StorageCommand::AllowCompaction(vec![(
-                            id.clone(),
-                            frontier.clone(),
-                        )]));
-                    }
+                for replica in self.active_replicas(&id) {
+                    replica.send(StorageCommand::AllowCompaction(
+                        id.clone(),
+                        frontier.clone(),
+                    ));
                 }
 
-                self.absorb_compactions(cmds);
+                self.absorb_compaction(id, frontier);
             }
             command => {
                 for replica in self.replicas.values_mut() {
@@ -670,15 +667,13 @@ where
     }
 
     /// Updates internal state based on incoming compaction commands.
-    fn absorb_compactions(&mut self, cmds: Vec<(GlobalId, Antichain<T>)>) {
-        tracing::debug!(?self.active_ingestions, ?cmds, "allow_compaction");
+    fn absorb_compaction(&mut self, id: GlobalId, frontier: Antichain<T>) {
+        tracing::debug!(?self.active_ingestions, ?id, ?frontier, "allow_compaction");
 
-        for (id, frontier) in cmds.iter() {
-            if frontier.is_empty() {
-                self.active_ingestions.remove(id);
-                self.ingestion_exports.remove(id);
-                self.active_exports.remove(id);
-            }
+        if frontier.is_empty() {
+            self.active_ingestions.remove(&id);
+            self.ingestion_exports.remove(&id);
+            self.active_exports.remove(&id);
         }
     }
 

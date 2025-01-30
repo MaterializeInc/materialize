@@ -36,10 +36,6 @@ message ProtoCompaction {
   mz_repr.antichain.ProtoU64Antichain frontier = 2;
 }
 
-message ProtoAllowCompaction {
-  repeated ProtoCompaction collections = 1;
-}
-
 message ProtoRunIngestionCommand {
   reserved 3;
   reserved "update";
@@ -88,7 +84,7 @@ message ProtoStorageCommand {
   oneof kind {
     ProtoCreateTimely create_timely = 6;
     ProtoCreateSources create_sources = 1;
-    ProtoAllowCompaction allow_compaction = 2;
+    ProtoCompaction allow_compaction = 2;
     google.protobuf.Empty initialization_complete = 3;
     google.protobuf.Empty allow_writes = 7;
     ProtoRunSinks run_sinks = 4;
