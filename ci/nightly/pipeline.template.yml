@@ -708,7 +708,7 @@ steps:
               composition: testdrive-old-kafka-src-syntax
               run: migration
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
 
   - group: AWS
     key: aws
