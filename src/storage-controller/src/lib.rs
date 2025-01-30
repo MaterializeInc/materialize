@@ -2145,15 +2145,16 @@ where
             instance.rehydrate_failed_replicas();
         }
 
-        let mut updated_frontiers = None;
+        let mut updated_frontiers = BTreeMap::new();
 
         // Take the currently stashed responses so that we can call mut receiver functions in the loop.
         let stashed_responses = std::mem::take(&mut self.stashed_responses);
         for resp in stashed_responses {
             match resp {
-                (_replica_id, StorageResponse::FrontierUppers(updates)) => {
-                    self.update_write_frontiers(&updates);
-                    updated_frontiers = Some(Response::FrontierUpdates(updates));
+                (_replica_id, StorageResponse::FrontierUpper(id, upper)) => {
+                    let update = (id, upper);
+                    self.update_write_frontiers(std::slice::from_ref(&update));
+                    updated_frontiers.insert(update.0, update.1);
                 }
                 (replica_id, StorageResponse::DroppedId(id)) => {
                     let replica_id = replica_id.expect("DroppedId from unknown replica");
@@ -2201,7 +2202,7 @@ where
                         // ingestions from status updates. This is the easiest we
                         // can do right now, without going deeper into changing the
                         // comms protocol between controller and cluster. We cannot,
-                        // for example use `StorageResponse::FrontierUppers`,
+                        // for example use `StorageResponse::FrontierUpper`,
                         // because those will already get sent when the ingestion is
                         // just being created.
                         //
@@ -2280,7 +2281,13 @@ where
             self.drop_sources(storage_metadata, dropped_table_ids)?;
         }
 
-        Ok(updated_frontiers)
+        if updated_frontiers.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(Response::FrontierUpdates(
+                updated_frontiers.into_iter().collect(),
+            )))
+        }
     }
 
     async fn inspect_persist_state(
