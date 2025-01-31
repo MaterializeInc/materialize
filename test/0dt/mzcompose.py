@@ -29,6 +29,7 @@ from materialize.mzcompose.services.materialized import (
     Materialized,
 )
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import (
     CockroachOrPostgresMetadata,
     Postgres,
@@ -49,6 +50,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     CockroachOrPostgresMetadata(),
+    Mz(app_password=""),
     Materialized(
         name="mz_old",
         sanity_restart=False,
@@ -77,13 +79,16 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    for name in buildkite.shard_list(
-        list(c.workflows.keys()), lambda workflow: workflow
-    ):
+    def process(name: str) -> None:
         if name == "default":
-            continue
+            return
         with c.test_case(name):
             c.workflow(name)
+
+    workflows = buildkite.shard_list(
+        list(c.workflows.keys()), lambda workflow: workflow
+    )
+    c.test_parts(workflows, process)
 
 
 def workflow_read_only(c: Composition) -> None:

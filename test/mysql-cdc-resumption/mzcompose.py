@@ -24,11 +24,13 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.alpine import Alpine
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql, create_mysql_server_args
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
     Alpine(),
+    Mz(app_password=""),
     Materialized(),
     MySql(),
     MySql(
@@ -50,6 +52,21 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
+    def process(name: str) -> None:
+        if name == "default":
+            return
+
+        # TODO(def-): Reenable when database-issues#7775 is fixed
+        if name in ("bin-log-manipulations", "short-bin-log-retention"):
+            return
+
+        # clear to avoid issues
+        c.kill("mysql")
+        c.rm("mysql")
+
+        with c.test_case(name):
+            c.workflow(name)
+
     workflows_with_internal_sharding = [
         "disruptions",
         "bin-log-manipulations",
@@ -62,20 +79,7 @@ def workflow_default(c: Composition) -> None:
     print(
         f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
     )
-    for name in sharded_workflows:
-        if name == "default":
-            continue
-
-        # TODO(def-): Reenable when database-issues#7775 is fixed
-        if name in ("bin-log-manipulations", "short-bin-log-retention"):
-            continue
-
-        # clear to avoid issues
-        c.kill("mysql")
-        c.rm("mysql")
-
-        with c.test_case(name):
-            c.workflow(name)
+    c.test_parts(sharded_workflows, process)
 
 
 def workflow_disruptions(c: Composition) -> None:

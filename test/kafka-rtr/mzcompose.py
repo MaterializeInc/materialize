@@ -23,6 +23,7 @@ from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
@@ -33,6 +34,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
+    Mz(app_password=""),
     Materialized(),
     Toxiproxy(),
     Testdrive(no_reset=True, seed=1),
@@ -40,21 +42,17 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    # Otherwise we are running all workflows
-    sharded_workflows = buildkite.shard_list(list(c.workflows), lambda w: w)
-    print(
-        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
-    )
-    for name in sharded_workflows:
+    def process(name: str) -> None:
         if name == "default":
-            continue
-
+            return
         # TODO: Reenable when database-issues#8657 is fixed
         if name == "multithreaded":
-            continue
-
+            return
         with c.test_case(name):
             c.workflow(name)
+
+    workflows = buildkite.shard_list(list(c.workflows), lambda w: w)
+    c.test_parts(workflows, process)
 
 
 #

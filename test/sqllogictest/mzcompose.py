@@ -21,21 +21,24 @@ from pathlib import Path
 
 from materialize import MZ_ROOT, buildkite, ci_util, file_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
 
-SERVICES = [CockroachOrPostgresMetadata(), SqlLogicTest()]
+SERVICES = [CockroachOrPostgresMetadata(), SqlLogicTest(), Mz(app_password="")]
 
 COCKROACH_DEFAULT_PORT = 26257
 
 
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
+    def process(name: str) -> None:
         if name == "default":
-            continue
+            return
 
         with c.test_case(name):
             c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 def workflow_fast_tests(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -85,24 +88,32 @@ def run_sqllogictest(
 
     container_name = "sqllogictest"
 
-    exceptions = []
+    buildkite.get_parallelism_index()
+    buildkite.get_parallelism_count()
 
-    for command, junit_report_path in create_slt_execution_commands(
-        args.replicas, run_config, args, c.name, c.metadata_store()
-    ):
-        try:
-            c.run(container_name, *command)
-        except Exception as e:
-            # Don't fail here so that we can keep running the remaining
-            # commands. We want to run through all SLT files to catch all
-            # current errors before failing the test.
-            exceptions.append(e)
-        finally:
-            ci_util.upload_junit_report(c.name, MZ_ROOT / junit_report_path)
+    j = 0
 
-    if exceptions:
-        print(f"Further exceptions were raised:\n{exceptions[1:]}")
-        raise exceptions[0]
+    for i, step in enumerate(run_config.steps):
+
+        def process(file: str) -> None:
+            nonlocal j
+            # Since we run multiple commands, generate a unique junit report for each
+            junit_report_path = ci_util.junit_report_filename(f"{c.name}-{i}-{j}")
+            cmd = step.to_command(
+                file, args.replicas, junit_report_path, c.metadata_store()
+            )
+            try:
+                c.run(container_name, *cmd)
+            except:
+                ci_util.upload_junit_report(c.name, MZ_ROOT / junit_report_path)
+                j += 1
+                raise
+
+        step.configure(args)
+        sharded_files: list[str] = sorted(
+            buildkite.shard_list(step.file_list, lambda file: file)
+        )
+        c.test_parts(sharded_files, process)
 
 
 class SltRunConfig:
@@ -122,8 +133,7 @@ class SltRunStepConfig:
 
     def to_command(
         self,
-        shard: int,
-        shard_count: int,
+        file: str,
         replicas: int,
         junit_report_path: Path,
         metadata_store: str,
@@ -133,15 +143,13 @@ class SltRunStepConfig:
             f"--junit-report={junit_report_path}",
             f"--postgres-url=postgres://root@{metadata_store}:{metadata_store_port}",
             f"--replicas={replicas}",
-            f"--shard={shard}",
-            f"--shard-count={shard_count}",
         ]
         command = [
             "sqllogictest",
             "-v",
             *self.flags,
             *sqllogictest_config,
-            *self.file_list,
+            file,
         ]
 
         return command
@@ -178,30 +186,6 @@ class DefaultSltRunStepConfig(SltRunStepConfig):
             file_set,
             flags=[],
         )
-
-
-def create_slt_execution_commands(
-    replicas: int,
-    run_config: SltRunConfig,
-    args: Namespace,
-    composition_name: str,
-    metadata_store: str,
-) -> list[tuple[list[str], Path]]:
-    shard = buildkite.get_parallelism_index()
-    shard_count = buildkite.get_parallelism_count()
-
-    commands_and_junit_paths = []
-
-    for i, step in enumerate(run_config.steps):
-        step.configure(args)
-        # Since we run multiple commands, generate a unique junit report for each
-        junit_report_path = ci_util.junit_report_filename(f"{composition_name}-{i}")
-        cmd = step.to_command(
-            shard, shard_count, replicas, junit_report_path, metadata_store
-        )
-        commands_and_junit_paths.append((cmd, junit_report_path))
-
-    return commands_and_junit_paths
 
 
 def compileFastSltConfig() -> SltRunConfig:

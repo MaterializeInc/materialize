@@ -11,6 +11,7 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -36,6 +37,7 @@ SERVICES = [
     *versioned_mz,
     *mz_with_options,
     Testdrive(),
+    Mz(app_password=""),
 ]
 
 
@@ -44,11 +46,14 @@ def workflow_default(c: Composition) -> None:
 
     This workflow just runs all the other ones
     """
-    for name in c.workflows:
+
+    def process(name: str) -> None:
         if name == "default":
-            continue
+            return
         with c.test_case(name):
             c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 def workflow_start_confluents(c: Composition) -> None:

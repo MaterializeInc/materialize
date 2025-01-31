@@ -1091,15 +1091,13 @@ SCENARIOS = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for name in c.workflows:
-        if name == "default":
-            continue
-
-        if name == "minimization-search":
-            continue
-
+    def process(name: str) -> None:
+        if name in ["default", "minimization-search"]:
+            return
         with c.test_case(name):
             c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:

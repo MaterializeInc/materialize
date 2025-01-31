@@ -33,6 +33,7 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 
@@ -118,6 +119,7 @@ SERVICES = [
             "secrets:/secrets",
         ],
     ),
+    Mz(app_password=""),
     Materialized(
         options=[
             # Enable TLS on the public port to verify that balancerd is connecting to the balancerd
@@ -185,11 +187,14 @@ def pg8000_sql_cursor(
 def workflow_default(c: Composition) -> None:
     c.down(destroy_volumes=True)
 
-    for name in c.workflows:
+    def process(name: str) -> None:
         if name in ["default", "plaintext"]:
-            continue
+            return
         with c.test_case(name):
             c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
+
     with c.test_case("plaintext"):
         c.workflow("plaintext")
 

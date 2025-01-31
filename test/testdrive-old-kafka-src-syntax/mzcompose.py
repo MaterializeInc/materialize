@@ -24,6 +24,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import (
     METADATA_STORE,
     CockroachOrPostgresMetadata,
@@ -48,6 +49,7 @@ SERVICES = [
     MySql(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Azurite(),
+    Mz(app_password=""),
     Materialized(external_blob_store=True),
     CockroachOrPostgresMetadata(),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
@@ -229,9 +231,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         try:
             junit_report = ci_util.junit_report_filename(c.name)
             print(f"Passing through arguments to testdrive {passthrough_args}\n")
+
             # do not set default args, they should be set in the td file using set-arg-default to easen the execution
             # without mzcompose
-            for file in args.files:
+            def process(file: str) -> None:
                 c.run_testdrive_files(
                     (
                         "--rewrite-results"
@@ -242,7 +245,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     *passthrough_args,
                     file,
                 )
-                c.sanity_restart_mz()
+
+            c.test_parts(args.files, process)
+            c.sanity_restart_mz()
         finally:
             ci_util.upload_junit_report(
                 "testdrive", Path(__file__).parent / junit_report

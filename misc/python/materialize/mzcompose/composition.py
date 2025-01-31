@@ -36,14 +36,14 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
 from tempfile import TemporaryFile
-from typing import Any, TextIO, cast
+from typing import Any, TextIO, TypeVar, cast
 
 import psycopg
 import sqlparse
 import yaml
 from psycopg import Connection, Cursor
 
-from materialize import MZ_ROOT, mzbuild, spawn, ui
+from materialize import MZ_ROOT, buildkite, mzbuild, spawn, ui
 from materialize.mzcompose import cluster_replica_size_map, loader
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import (
@@ -1564,3 +1564,50 @@ class Composition:
         # It is necessary to append the 'https://' protocol; otherwise, urllib can't parse it correctly.
         cloud_hostname = urllib.parse.urlparse("https://" + cloud_url).hostname
         return str(cloud_hostname)
+
+    T = TypeVar("T")
+
+    def test_parts(self, parts: list[T], process_func: Callable[[T], Any]) -> None:
+        from materialize.test_analytics.config.test_analytics_db_config import (
+            create_test_analytics_config,
+        )
+        from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
+
+        priority: dict[str, int] = {}
+        test_analytics: TestAnalyticsDb | None = None
+
+        if buildkite.is_in_buildkite():
+            print("~~~ Fetching part priorities")
+            test_analytics_config = create_test_analytics_config(self)
+            test_analytics = TestAnalyticsDb(test_analytics_config)
+            try:
+                priority = test_analytics.builds.get_part_priorities(timeout=15)
+                print(f"Priorities: {priority}")
+            except Exception as e:
+                print(f"Failed to fetch part priorities, using default order: {e}")
+
+        sorted_parts = sorted(
+            parts, key=lambda part: priority.get(str(part), 0), reverse=True
+        )
+        exceptions: list[Exception] = []
+
+        try:
+            for part in sorted_parts:
+                try:
+                    process_func(part)
+                except Exception as e:
+                    if buildkite.is_in_buildkite():
+                        assert test_analytics
+                        test_analytics.builds.add_build_job_failure(str(part))
+                    # raise
+                    # We could also keep running, but then runtime is still
+                    # slow when a test fails, and the annotation only shows up
+                    # after the test finished:
+                    exceptions.append(e)
+        finally:
+            if buildkite.is_in_buildkite():
+                assert test_analytics
+                test_analytics.database_connector.submit_update_statements()
+        if exceptions:
+            print(f"Further exceptions were raised:\n{exceptions[1:]}")
+            raise exceptions[0]

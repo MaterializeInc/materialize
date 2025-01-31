@@ -40,6 +40,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import (
     CockroachOrPostgresMetadata,
     Postgres,
@@ -60,6 +61,7 @@ SERVICES = [
     Clusterd(name="clusterd2"),
     Clusterd(name="clusterd3"),
     Clusterd(name="clusterd4"),
+    Mz(app_password=""),
     Materialized(
         # We use mz_panic() in some test scenarios, so environmentd must stay up.
         propagate_crashes=False,
@@ -82,9 +84,7 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for name in buildkite.shard_list(
-        list(c.workflows.keys()), lambda workflow: workflow
-    ):
+    def process(name: str) -> None:
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
         if name in (
@@ -92,9 +92,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "test-incident-70",
             "test-concurrent-connections",
         ):
-            continue
+            return
         with c.test_case(name):
             c.workflow(name)
+
+    files = buildkite.shard_list(list(c.workflows.keys()), lambda workflow: workflow)
+    c.test_parts(files, process)
 
 
 def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
