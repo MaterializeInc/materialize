@@ -36,18 +36,17 @@ use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, ScopeParent};
+use timely::dataflow::{Scope, Stream};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::Container;
 use tracing::error;
 
-use crate::arrangement::manager::SpecializedTraceHandle;
 use crate::compute_state::{ComputeState, HydrationEvent};
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
 use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
-use crate::row_spine::RowRowBuilder;
+use crate::row_spine::{DatumSeq, RowRowBuilder};
 use crate::typedefs::{
     ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
 };
@@ -298,223 +297,6 @@ impl HydrationLogger {
     }
 }
 
-/// An abstraction of an arrangement.
-///
-/// This type exists as an `enum` to support potential experimentation with alternate
-/// representation and layouts.
-#[derive(Clone)]
-pub enum MzArrangement<S: Scope>
-where
-    <S as ScopeParent>::Timestamp: Lattice + Columnation,
-{
-    RowRow(Arranged<S, RowRowAgent<<S as ScopeParent>::Timestamp, Diff>>),
-}
-
-impl<S: Scope> MzArrangement<S>
-where
-    <S as ScopeParent>::Timestamp: Lattice + Columnation,
-{
-    /// The scope of the underlying arrangement's stream.
-    pub fn scope(&self) -> S {
-        match self {
-            MzArrangement::RowRow(inner) => inner.stream.scope(),
-        }
-    }
-
-    /// Panic if the frontier of the underlying arrangement's stream exceeds `expiration` time.
-    pub fn expire_arrangement_at(&mut self, name: &str, expiration: S::Timestamp, token: Weak<()>) {
-        match self {
-            MzArrangement::RowRow(inner) => {
-                inner.stream = inner.stream.expire_stream_at(name, expiration, token);
-            }
-        }
-    }
-
-    /// Brings the underlying arrangement into a region.
-    pub fn enter_region<'a>(
-        &self,
-        region: &Child<'a, S, S::Timestamp>,
-    ) -> MzArrangement<Child<'a, S, S::Timestamp>> {
-        match self {
-            MzArrangement::RowRow(inner) => MzArrangement::RowRow(inner.enter_region(region)),
-        }
-    }
-
-    /// Extracts the underlying arrangement as a stream of updates.
-    pub fn as_collection<L>(&self, mut logic: L) -> Collection<S, Row, Diff>
-    where
-        L: for<'a, 'b> FnMut(&'a DatumVecBorrow<'b>) -> Row + 'static,
-    {
-        let mut datums = DatumVec::new();
-        match self {
-            MzArrangement::RowRow(inner) => inner.as_collection(move |k, v| {
-                let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(k.to_datum_iter());
-                datums_borrow.extend(v.to_datum_iter());
-                logic(&datums_borrow)
-            }),
-        }
-    }
-
-    /// Applies logic to elements of the underlying arrangement and returns the results.
-    pub fn flat_map<D, I, L, T>(
-        &self,
-        key: Option<Row>,
-        mut logic: L,
-        refuel: usize,
-    ) -> timely::dataflow::Stream<S, I::Item>
-    where
-        T: Timestamp + Lattice + Columnation,
-        <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
-        I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
-        D: Data,
-        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff) -> I + 'static,
-    {
-        use differential_dataflow::operators::arrange::TraceAgent;
-        let mut datums = DatumVec::new();
-        match self {
-            MzArrangement::RowRow(inner) => {
-                CollectionBundle::<S, T>::flat_map_core::<TraceAgent<RowRowSpine<_, _>>, Row, _, _, _>(
-                    inner,
-                    key,
-                    move |k, v, t, d| {
-                        let mut datums_borrow = datums.borrow();
-                        datums_borrow.extend(k.to_datum_iter());
-                        datums_borrow.extend(v.to_datum_iter());
-                        logic(&mut datums_borrow, t, d)
-                    },
-                    refuel,
-                )
-            }
-        }
-    }
-}
-
-impl<'a, S: Scope> MzArrangement<Child<'a, S, S::Timestamp>>
-where
-    <S as ScopeParent>::Timestamp: Lattice + Columnation,
-{
-    /// Extracts the underlying arrangement flavor from a region.
-    pub fn leave_region(&self) -> MzArrangement<S> {
-        match self {
-            MzArrangement::RowRow(inner) => MzArrangement::RowRow(inner.leave_region()),
-        }
-    }
-}
-
-impl<S: Scope> MzArrangement<S>
-where
-    S: ScopeParent<Timestamp = mz_repr::Timestamp>,
-{
-    /// Obtains a `SpecializedTraceHandle` for the underlying arrangement.
-    pub fn trace_handle(&self) -> SpecializedTraceHandle {
-        match self {
-            MzArrangement::RowRow(inner) => inner.trace.clone().into(),
-        }
-    }
-}
-
-/// An abstraction of an imported arrangement.
-///
-/// This type exists as an `enum` to support potential experimentation with alternate
-/// representation and layouts.
-#[derive(Clone)]
-pub enum MzArrangementImport<S: Scope, T = mz_repr::Timestamp>
-where
-    T: Timestamp + Lattice + Columnation,
-    <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
-{
-    RowRow(Arranged<S, RowRowEnter<T, Diff, <S as ScopeParent>::Timestamp>>),
-}
-
-impl<S: Scope, T> MzArrangementImport<S, T>
-where
-    T: Timestamp + Lattice + Columnation,
-    <S as ScopeParent>::Timestamp: Lattice + Refines<T> + Columnation,
-{
-    /// The scope of the underlying trace's stream.
-    pub fn scope(&self) -> S {
-        match self {
-            MzArrangementImport::RowRow(inner) => inner.stream.scope(),
-        }
-    }
-
-    /// Brings the underlying trace into a region.
-    pub fn enter_region<'a>(
-        &self,
-        region: &Child<'a, S, S::Timestamp>,
-    ) -> MzArrangementImport<Child<'a, S, S::Timestamp>, T> {
-        match self {
-            MzArrangementImport::RowRow(inner) => {
-                MzArrangementImport::RowRow(inner.enter_region(region))
-            }
-        }
-    }
-
-    /// Extracts the underlying trace as a stream of updates.
-    pub fn as_collection<L>(&self, mut logic: L) -> Collection<S, Row, Diff>
-    where
-        L: for<'a, 'b> FnMut(&'a DatumVecBorrow<'b>) -> Row + 'static,
-    {
-        let mut datums = DatumVec::new();
-        match self {
-            MzArrangementImport::RowRow(inner) => inner.as_collection(move |k, v| {
-                let mut datums_borrow = datums.borrow();
-                datums_borrow.extend(k.to_datum_iter());
-                datums_borrow.extend(v.to_datum_iter());
-                logic(&datums_borrow)
-            }),
-        }
-    }
-
-    /// Applies logic to elements of the underlying arrangement and returns the results.
-    pub fn flat_map<D, I, L>(
-        &self,
-        key: Option<Row>,
-        mut logic: L,
-        refuel: usize,
-    ) -> timely::dataflow::Stream<S, I::Item>
-    where
-        I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
-        D: Data,
-        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff) -> I + 'static,
-    {
-        let mut datums = DatumVec::new();
-        match self {
-            MzArrangementImport::RowRow(inner) => CollectionBundle::<S, T>::flat_map_core::<
-                RowRowEnter<T, Diff, S::Timestamp>,
-                Row,
-                _,
-                _,
-                _,
-            >(
-                inner,
-                key,
-                move |k, v, t, d| {
-                    let mut datums_borrow = datums.borrow();
-                    datums_borrow.extend(k.to_datum_iter());
-                    datums_borrow.extend(v.to_datum_iter());
-                    logic(&mut datums_borrow, t, d)
-                },
-                refuel,
-            ),
-        }
-    }
-}
-
-impl<'a, S: Scope, T> MzArrangementImport<Child<'a, S, S::Timestamp>, T>
-where
-    T: Timestamp + Lattice + Columnation,
-    <S as ScopeParent>::Timestamp: Lattice + Refines<T>,
-{
-    /// Extracts the underlying arrangement flavor from a region.
-    pub fn leave_region(&self) -> MzArrangementImport<S, T> {
-        match self {
-            MzArrangementImport::RowRow(inner) => MzArrangementImport::RowRow(inner.leave_region()),
-        }
-    }
-}
-
 /// Describes flavor of arrangement: local or imported trace.
 #[derive(Clone)]
 pub enum ArrangementFlavor<S: Scope, T = mz_repr::Timestamp>
@@ -524,8 +306,8 @@ where
 {
     /// A dataflow-local arrangement.
     Local(
-        MzArrangement<S>,
-        Arranged<S, ErrAgent<<S as ScopeParent>::Timestamp, Diff>>,
+        Arranged<S, RowRowAgent<S::Timestamp, Diff>>,
+        Arranged<S, ErrAgent<S::Timestamp, Diff>>,
     ),
     /// An imported trace from outside the dataflow.
     ///
@@ -533,8 +315,8 @@ where
     /// can refer back to and depend on the original instance.
     Trace(
         GlobalId,
-        MzArrangementImport<S, T>,
-        Arranged<S, ErrEnter<T, <S as ScopeParent>::Timestamp>>,
+        Arranged<S, RowRowEnter<T, Diff, S::Timestamp>>,
+        Arranged<S, ErrEnter<T, S::Timestamp>>,
     ),
 }
 
@@ -549,13 +331,20 @@ where
     /// If you have logic that could be applied to each record, consider using the
     /// `flat_map` methods which allows this and can reduce the work done.
     pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
+        let mut datums = DatumVec::new();
+        let logic = move |k: DatumSeq, v: DatumSeq| {
+            let mut datums_borrow = datums.borrow();
+            datums_borrow.extend(k);
+            datums_borrow.extend(v);
+            SharedRow::pack(&**datums_borrow)
+        };
         match &self {
             ArrangementFlavor::Local(oks, errs) => (
-                oks.as_collection(move |borrow| SharedRow::pack(&**borrow)),
+                oks.as_collection(logic),
                 errs.as_collection(|k, &()| k.clone()),
             ),
             ArrangementFlavor::Trace(_, oks, errs) => (
-                oks.as_collection(move |borrow| SharedRow::pack(&**borrow)),
+                oks.as_collection(logic),
                 errs.as_collection(|k, &()| k.clone()),
             ),
         }
@@ -563,42 +352,43 @@ where
 
     /// Constructs and applies logic to elements of `self` and returns the results.
     ///
-    /// `constructor` takes a permutation and produces the logic to apply on elements. The logic
-    /// conceptually receives `(&Row, &Row)` pairs in the form of a slice. Only after borrowing
-    /// the elements and applying the permutation the datums will be in the expected order.
+    /// The `logic` receives a vector of datums, a timestamp, and a diff, and produces
+    /// an iterator of `(D, S::Timestamp, Diff)` updates.
     ///
     /// If `key` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used to
     /// leap directly to exactly those records.
-    pub fn flat_map<D, I, C, L>(
+    pub fn flat_map<D, I, L>(
         &self,
         key: Option<Row>,
-        constructor: C,
-    ) -> (
-        timely::dataflow::Stream<S, I::Item>,
-        Collection<S, DataflowError, Diff>,
-    )
+        mut logic: L,
+    ) -> (Stream<S, I::Item>, Collection<S, DataflowError, Diff>)
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
-        C: FnOnce() -> L,
-        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff) -> I + 'static,
+        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, S::Timestamp, Diff) -> I + 'static,
     {
         // Set a number of tuples after which the operator should yield.
         // This allows us to remain responsive even when enumerating a substantial
         // arrangement, as well as provides time to accumulate our produced output.
         let refuel = 1000000;
 
+        let mut datums = DatumVec::new();
+        let logic = move |k: DatumSeq, v: DatumSeq, t, d| {
+            let mut datums_borrow = datums.borrow();
+            datums_borrow.extend(k);
+            datums_borrow.extend(v);
+            logic(&mut datums_borrow, t, d)
+        };
+
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
-                let logic = constructor();
-                let oks = oks.flat_map(key, logic, refuel);
+                let oks = CollectionBundle::<S, T>::flat_map_core(oks, key, logic, refuel);
                 let errs = errs.as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
-                let logic = constructor();
-                let oks = oks.flat_map(key, logic, refuel);
+                let oks = CollectionBundle::<S, T>::flat_map_core(oks, key, logic, refuel);
                 let errs = errs.as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
@@ -613,8 +403,8 @@ where
     /// The scope containing the collection bundle.
     pub fn scope(&self) -> S {
         match self {
-            ArrangementFlavor::Local(oks, _errs) => oks.scope(),
-            ArrangementFlavor::Trace(_gid, oks, _errs) => oks.scope(),
+            ArrangementFlavor::Local(oks, _errs) => oks.stream.scope(),
+            ArrangementFlavor::Trace(_gid, oks, _errs) => oks.stream.scope(),
         }
     }
 
@@ -806,41 +596,34 @@ where
     /// It is important that `logic` still guard against data that does not satisfy
     /// this constraint, as this method does not statically know that it will have
     /// that arrangement.
-    pub fn flat_map<D, I, C, L>(
+    pub fn flat_map<D, I, L>(
         &self,
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
-        constructor: C,
-    ) -> (
-        timely::dataflow::Stream<S, I::Item>,
-        Collection<S, DataflowError, Diff>,
-    )
+        mut logic: L,
+    ) -> (Stream<S, I::Item>, Collection<S, DataflowError, Diff>)
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
-        C: FnOnce() -> L,
-        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, &'a S::Timestamp, &'a Diff) -> I + 'static,
+        L: for<'a> FnMut(&'a mut DatumVecBorrow<'_>, S::Timestamp, Diff) -> I + 'static,
     {
-        // If `key_val` is set, we should have use the corresponding arrangement.
+        // If `key_val` is set, we should have to use the corresponding arrangement.
         // If there isn't one, that implies an error in the contract between
         // key-production and available arrangements.
         if let Some((key, val)) = key_val {
-            let flavor = self
-                .arrangement(&key)
-                .expect("Should have ensured during planning that this arrangement exists.");
-            flavor.flat_map(val, constructor)
+            self.arrangement(&key)
+                .expect("Should have ensured during planning that this arrangement exists.")
+                .flat_map(val, logic)
         } else {
             use timely::dataflow::operators::Map;
             let (oks, errs) = self
                 .collection
                 .clone()
                 .expect("Invariant violated: CollectionBundle contains no collection.");
-            let mut logic = constructor();
             let mut datums = DatumVec::new();
-            (
-                oks.inner
-                    .flat_map(move |(v, t, d)| logic(&mut datums.borrow_with(&v), &t, &d)),
-                errs,
-            )
+            let oks = oks
+                .inner
+                .flat_map(move |(v, t, d)| logic(&mut datums.borrow_with(&v), t, d));
+            (oks, errs)
         }
     }
 
@@ -856,7 +639,7 @@ where
         key: Option<K>,
         mut logic: L,
         refuel: usize,
-    ) -> timely::dataflow::Stream<S, I::Item>
+    ) -> Stream<S, I::Item>
     where
         for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = K>,
         for<'a> Tr::Val<'a>: ToDatumIter,
@@ -864,8 +647,7 @@ where
         K: PartialEq + 'static,
         I: IntoIterator<Item = (D, Tr::Time, Tr::Diff)>,
         D: Data,
-        L: for<'a, 'b> FnMut(Tr::Key<'_>, Tr::Val<'_>, &'a S::Timestamp, &'a mz_repr::Diff) -> I
-            + 'static,
+        L: FnMut(Tr::Key<'_>, Tr::Val<'_>, S::Timestamp, mz_repr::Diff) -> I + 'static,
     {
         use differential_dataflow::consolidation::ConsolidatingContainerBuilder as CB;
 
@@ -963,7 +745,7 @@ where
             let key = key_val.map(|(k, _v)| k);
             return self.as_specific_collection(key.as_deref());
         }
-        let (stream, errors) = self.flat_map(key_val, || {
+        let (stream, errors) = self.flat_map(key_val, {
             let mut datum_vec = DatumVec::new();
             // Wrap in an `Rc` so that lifetimes work out.
             let until = std::rc::Rc::new(until);
@@ -1074,7 +856,10 @@ where
         oks: Collection<S, Row, i64>,
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
-    ) -> (MzArrangement<S>, Collection<S, DataflowError, i64>) {
+    ) -> (
+        Arranged<S, RowRowAgent<S::Timestamp, Diff>>,
+        Collection<S, DataflowError, i64>,
+    ) {
         // The following `unary_fallible` implements a `map_fallible`, but produces columnar updates
         // for the ok stream. The `map_fallible` cannot be used here because the closure cannot
         // return references, which is what we need to push into columnar streams. Instead, we use
@@ -1116,7 +901,7 @@ where
             .mz_arrange_core::<_, Col2ValBatcher<_, _,_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                 ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, S::Timestamp, Diff>),name
             );
-        (MzArrangement::RowRow(oks), errs.as_collection())
+        (oks, errs.as_collection())
     }
 }
 
@@ -1158,7 +943,7 @@ where
     ) where
         I: IntoIterator<Item = (D, C::Time, C::Diff)>,
         D: Data,
-        L: for<'a, 'b> FnMut(C::Key<'_>, C::Val<'b>, &'a C::Time, &'a C::Diff) -> I + 'static,
+        L: FnMut(C::Key<'_>, C::Val<'_>, C::Time, C::Diff) -> I + 'static,
         K: PartialEq + Sized,
         for<'a> C::Key<'a>: IntoOwned<'a, Owned = K>,
     {
@@ -1190,7 +975,7 @@ where
                     });
                     consolidate(&mut buffer);
                     for (time, diff) in buffer.drain(..) {
-                        for datum in logic(key, val, &time, &diff) {
+                        for datum in logic(key, val, time, diff) {
                             session.give(datum);
                             work += 1;
                         }
@@ -1210,7 +995,7 @@ where
                     });
                     consolidate(&mut buffer);
                     for (time, diff) in buffer.drain(..) {
-                        for datum in logic(key, val, &time, &diff) {
+                        for datum in logic(key, val, time, diff) {
                             session.give(datum);
                             work += 1;
                         }

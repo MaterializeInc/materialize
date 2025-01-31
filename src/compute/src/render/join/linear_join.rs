@@ -36,9 +36,7 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::{Refines, Timestamp};
 
 use crate::extensions::arrange::MzArrangeCore;
-use crate::render::context::{
-    ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport, ShutdownToken,
-};
+use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownToken};
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::render::RenderTimestamp;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
@@ -199,9 +197,9 @@ where
     /// Streamed data as a collection.
     Collection(Collection<G, Row, Diff>),
     /// A dataflow-local arrangement.
-    Local(MzArrangement<G>),
+    Local(Arranged<G, RowRowAgent<G::Timestamp, Diff>>),
     /// An imported arrangement.
-    Trace(MzArrangementImport<G, T>),
+    Trace(Arranged<G, RowRowEnter<T, Diff, G::Timestamp>>),
 }
 
 impl<G, T> Context<G, T>
@@ -401,14 +399,11 @@ where
 
             errors.push(errs.as_collection());
 
-            // TODO(vmarcos): We should implement further arrangement specialization here (database-issues#6659).
-            // By knowing how types propagate through joins we could specialize intermediate
-            // arrangements as well, either in values or eventually in keys.
             let arranged = keyed
                 .mz_arrange_core::<_, Col2ValBatcher<_, _,_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                     ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, S::Timestamp, Diff>),"JoinStage"
                 );
-            joined = JoinedFlavor::Local(MzArrangement::RowRow(arranged));
+            joined = JoinedFlavor::Local(arranged);
         }
 
         // Demultiplex the four different cross products of arrangement types we might have.
@@ -416,33 +411,26 @@ where
             .arrangement(&lookup_key[..])
             .expect("Arrangement absent despite explicit construction");
 
-        use MzArrangement as A;
-        use MzArrangementImport as I;
-
         match joined {
             JoinedFlavor::Collection(_) => {
                 unreachable!("JoinedFlavor::Collection variant avoided at top of method");
             }
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
-                    let (oks, errs2) = match (local, oks) {
-                        (A::RowRow(prev_keyed), A::RowRow(next_input)) => self
-                            .differential_join_inner::<_, RowRowAgent<_, _>, RowRowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                    };
+                    let (oks, errs2) = self
+                        .differential_join_inner::<_, RowRowAgent<_, _>, RowRowAgent<_, _>>(
+                            local, oks, closure,
+                        );
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.extend(errs2);
                     oks
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                    let (oks, errs2) = match (local, oks) {
-                        (A::RowRow(prev_keyed), I::RowRow(next_input)) => self
-                            .differential_join_inner::<_, RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                    };
+                    let (oks, errs2) = self
+                        .differential_join_inner::<_, RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
+                            local, oks, closure,
+                        );
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.extend(errs2);
@@ -451,24 +439,20 @@ where
             },
             JoinedFlavor::Trace(trace) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
-                    let (oks, errs2) = match (trace, oks) {
-                        (I::RowRow(prev_keyed), A::RowRow(next_input)) => self
-                            .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                    };
+                    let (oks, errs2) = self
+                        .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
+                            trace, oks, closure,
+                        );
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.extend(errs2);
                     oks
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                    let (oks, errs2) = match (trace, oks) {
-                        (I::RowRow(prev_keyed), I::RowRow(next_input)) => self
-                            .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
-                                prev_keyed, next_input, closure,
-                            ),
-                    };
+                    let (oks, errs2) = self
+                        .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
+                            trace, oks, closure,
+                        );
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.extend(errs2);
@@ -518,14 +502,10 @@ where
                         let mut row_builder = binding.borrow_mut();
                         let temp_storage = RowArena::new();
 
-                        let key = key.to_datum_iter();
-                        let old = old.to_datum_iter();
-                        let new = new.to_datum_iter();
-
                         let mut datums_local = datums.borrow();
-                        datums_local.extend(key);
-                        datums_local.extend(old);
-                        datums_local.extend(new);
+                        datums_local.extend(key.to_datum_iter());
+                        datums_local.extend(old.to_datum_iter());
+                        datums_local.extend(new.to_datum_iter());
 
                         closure
                             .apply(&mut datums_local, &temp_storage, &mut row_builder)
@@ -553,14 +533,10 @@ where
                     let mut row_builder = binding.borrow_mut();
                     let temp_storage = RowArena::new();
 
-                    let key = key.to_datum_iter();
-                    let old = old.to_datum_iter();
-                    let new = new.to_datum_iter();
-
                     let mut datums_local = datums.borrow();
-                    datums_local.extend(key);
-                    datums_local.extend(old);
-                    datums_local.extend(new);
+                    datums_local.extend(key.to_datum_iter());
+                    datums_local.extend(old.to_datum_iter());
+                    datums_local.extend(new.to_datum_iter());
 
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
