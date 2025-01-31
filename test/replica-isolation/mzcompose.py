@@ -70,6 +70,8 @@ class AllowCompactionCheck:
         assert self.ids is not None
         log: str = c.invoke("logs", self.host, capture=True).stdout
         self.satisfied = all([self._log_contains_id(log, x) for x in self.ids])
+        if not self.satisfied:
+            print(log)
 
     def replica_id(self, c: Composition) -> str:
         cursor = c.sql_cursor()
