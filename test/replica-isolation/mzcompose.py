@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Any
+from typing import Any, List
 
 from psycopg import Cursor
 
@@ -69,7 +69,8 @@ class AllowCompactionCheck:
         self.find_ids(c)
         assert self.ids is not None
         log: str = c.invoke("logs", self.host, capture=True).stdout
-        self.satisfied = all([self._log_contains_id(log, x) for x in self.ids])
+        log_list: List[str] = log.splitlines()
+        self.satisfied = all([self._log_contains_id(log_list, x) for x in self.ids])
         if not self.satisfied:
             print(log)
 
@@ -93,11 +94,9 @@ class AllowCompactionCheck:
         return str(get_single_value_from_cursor(cursor))
 
     @staticmethod
-    def _log_contains_id(log: str, the_id: str) -> bool:
-        for line in [
-            x for x in log.splitlines() if "ClusterClient send=AllowCompaction" in x
-        ]:
-            if the_id in line:
+    def _log_contains_id(log: List[str], the_id: str) -> bool:
+        for line in log:
+            if "ClusterClient send=AllowCompaction" in line and the_id in line:
                 return True
         return False
 
