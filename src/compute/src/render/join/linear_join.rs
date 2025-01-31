@@ -13,6 +13,7 @@
 
 use std::time::{Duration, Instant};
 
+use columnar::Columnar;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
@@ -25,20 +26,22 @@ use mz_dyncfg::ConfigSet;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::containers::{columnar_exchange, Col2ValBatcher, ColumnBuilder};
+use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::columnation::Columnation;
-use timely::container::CapacityContainerBuilder;
+use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::{Refines, Timestamp};
 
-use crate::extensions::arrange::MzArrange;
+use crate::extensions::arrange::MzArrangeCore;
 use crate::render::context::{
     ArrangementFlavor, CollectionBundle, Context, MzArrangement, MzArrangementImport, ShutdownToken,
 };
 use crate::render::join::mz_join_core::mz_join_core;
-use crate::row_spine::{RowRowBatcher, RowRowBuilder, RowRowSpine};
+use crate::render::RenderTimestamp;
+use crate::row_spine::{RowRowBuilder, RowRowSpine};
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 /// Available linear join implementations.
@@ -204,7 +207,9 @@ where
 impl<G, T> Context<G, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation,
+    G::Timestamp: Lattice + Refines<T> + RenderTimestamp,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
+    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
     T: Timestamp + Lattice + Columnation,
 {
     pub(crate) fn render_join(
@@ -356,37 +361,52 @@ where
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
             let name = "LinearJoinKeyPreparation";
-            type CB<C> = CapacityContainerBuilder<C>;
-            let (keyed, errs) = stream.map_fallible::<CB<_>, CB<_>, _, _, _>(name, {
-                // Reuseable allocation for unpacking.
-                let mut datums = DatumVec::new();
-                move |row| {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
-                    let temp_storage = RowArena::new();
-                    let datums_local = datums.borrow_with(&row);
-                    row_builder.packer().try_extend(
-                        stream_key
-                            .iter()
-                            .map(|e| e.eval(&datums_local, &temp_storage)),
-                    )?;
-                    let key = row_builder.clone();
-                    row_builder
-                        .packer()
-                        .extend(stream_thinning.iter().map(|e| datums_local[*e]));
-                    let value = row_builder.clone();
-                    Ok((key, value))
-                }
-            });
+            let (keyed, errs) = stream
+                .inner
+                .unary_fallible::<ColumnBuilder<((Row, Row), S::Timestamp, Diff)>, _, _, _>(
+                    Pipeline,
+                    name,
+                    |_, _| {
+                        Box::new(move |input, ok, errs| {
+                            let temp_storage = RowArena::new();
+                            let mut key_buf = Row::default();
+                            let mut val_buf = Row::default();
+                            let mut datums = DatumVec::new();
+                            while let Some((time, data)) = input.next() {
+                                let mut ok_session = ok.session_with_builder(&time);
+                                let mut err_session = errs.session(&time);
+                                for (row, time, diff) in data.iter() {
+                                    temp_storage.clear();
+                                    let datums_local = datums.borrow_with(row);
+                                    let datums = stream_key
+                                        .iter()
+                                        .map(|e| e.eval(&datums_local, &temp_storage));
+                                    let result = key_buf.packer().try_extend(datums);
+                                    match result {
+                                        Ok(()) => {
+                                            val_buf.packer().extend(
+                                                stream_thinning.iter().map(|e| datums_local[*e]),
+                                            );
+                                            ok_session.give(((&key_buf, &val_buf), time, diff));
+                                        }
+                                        Err(e) => {
+                                            err_session.give((e.into(), time.clone(), *diff));
+                                        }
+                                    }
+                                }
+                            }
+                        })
+                    },
+                );
 
-            errors.push(errs);
+            errors.push(errs.as_collection());
 
             // TODO(vmarcos): We should implement further arrangement specialization here (database-issues#6659).
             // By knowing how types propagate through joins we could specialize intermediate
             // arrangements as well, either in values or eventually in keys.
             let arranged = keyed
-                .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                    "JoinStage",
+                .mz_arrange_core::<_, Col2ValBatcher<_, _,_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                    ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, S::Timestamp, Diff>),"JoinStage"
                 );
             joined = JoinedFlavor::Local(MzArrangement::RowRow(arranged));
         }

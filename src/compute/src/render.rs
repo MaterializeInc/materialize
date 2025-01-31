@@ -110,6 +110,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::task::Poll;
 
+use columnar::Columnar;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
@@ -498,6 +499,7 @@ impl<'g, G, T> Context<Child<'g, G, T>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     T: Refines<G::Timestamp> + RenderTimestamp,
+    <T as Columnar>::Container: Clone + Send,
 {
     pub(crate) fn import_index(
         &mut self,
@@ -647,6 +649,7 @@ impl<'g, G, T> Context<Child<'g, G, T>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     T: RenderTimestamp,
+    <T as Columnar>::Container: Clone + Send,
 {
     pub(crate) fn export_index_iterative(
         &self,
@@ -889,6 +892,8 @@ impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: RenderTimestamp,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
+    for<'a> <G::Timestamp as Columnar>::Ref<'a>: Ord + Copy,
 {
     /// Renders a non-recursive plan to a differential dataflow, producing the collection of
     /// results.
@@ -1293,7 +1298,11 @@ where
 
 #[allow(dead_code)] // Some of the methods on this trait are unused, but useful to have.
 /// A timestamp type that can be used for operations within MZ's dataflow layer.
-pub trait RenderTimestamp: Timestamp + Lattice + Refines<mz_repr::Timestamp> + Columnation {
+pub trait RenderTimestamp:
+    Timestamp + Lattice + Refines<mz_repr::Timestamp> + Columnation + Columnar
+where
+    <Self as Columnar>::Container: Clone + Send,
+{
     /// The system timestamp component of the timestamp.
     ///
     /// This is useful for manipulating the system time, as when delaying
@@ -1429,6 +1438,7 @@ impl<S> WithStartSignal for MzArrangementImport<S>
 where
     S: Scope,
     S::Timestamp: RenderTimestamp,
+    <S::Timestamp as Columnar>::Container: Clone + Send,
 {
     fn with_start_signal(self, signal: StartSignal) -> Self {
         match self {
@@ -1443,6 +1453,7 @@ impl<S, Tr> WithStartSignal for Arranged<S, Tr>
 where
     S: Scope,
     S::Timestamp: RenderTimestamp,
+    <S::Timestamp as Columnar>::Container: Clone + Send,
     Tr: TraceReader + Clone,
 {
     fn with_start_signal(self, signal: StartSignal) -> Self {

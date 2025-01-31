@@ -11,10 +11,7 @@
 //!
 //! Consult [TopKPlan] documentation for details.
 
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::rc::Rc;
-
+use columnar::Columnar;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
@@ -31,6 +28,9 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::{Datum, DatumVec, Diff, Row, ScalarType, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::rc::Rc;
 use timely::container::columnation::Columnation;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
@@ -53,6 +53,7 @@ impl<G> Context<G>
 where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
 {
     pub(crate) fn render_topk(
         &self,

@@ -2824,6 +2824,7 @@ impl RowArena {
         Ok(self.push_unary_row(row))
     }
 
+    /// Clear the contents of the arena.
     pub fn clear(&self) {
         self.inner.borrow_mut().clear();
     }
