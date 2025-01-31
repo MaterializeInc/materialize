@@ -238,7 +238,7 @@ where
         // complicated API to traverse it. This is left for future work if the naive trace
         // maintenance implemented in this operator becomes problematic.
         let mut remap_upper = Antichain::from_elem(IntoTime::minimum());
-        let mut remap_since = as_of;
+        let mut remap_since = as_of.clone();
         let mut remap_trace = Vec::new();
 
         // A stash of source updates for which we don't know the corresponding binding yet.
@@ -248,6 +248,10 @@ where
 
         let mut binding_buffer = Vec::new();
         let mut interesting_times = Vec::new();
+
+        // Accumulation buffer for `remap_input` updates.
+        use timely::progress::ChangeBatch;
+        let mut remap_accum_buffer: ChangeBatch<(IntoTime, FromTime)> = ChangeBatch::new();
 
         // The operator drains `remap_input` and organizes new bindings that are not beyond
         // `remap_input`'s frontier into the time ordered `remap_trace`.
@@ -268,8 +272,18 @@ where
             let mut session = output.session(cap);
 
             // STEP 1. Accept new bindings into `pending_remap`.
+            // Advance all `into` times by `as_of`, and consolidate all updates at that frontier.
             while let Some((_, data)) = remap_input.next() {
-                for (from, into, diff) in data.drain(..) {
+                for (from, mut into, diff) in data.drain(..) {
+                    into.advance_by(as_of.borrow());
+                    remap_accum_buffer.update((into, from), diff);
+                }
+            }
+            // Drain consolidated bindings into the `pending_remap` heap.
+            // Only do this once any of the `remap_input` frontier has passed `as_of`.
+            // For as long as the input frontier is less-equal `as_of`, we have no finalized times.
+            if !PartialOrder::less_equal(&frontiers[0].frontier(), &as_of.borrow()) {
+                for ((into, from), diff) in remap_accum_buffer.drain() {
                     pending_remap.push(Reverse((into, from, diff)));
                 }
             }
