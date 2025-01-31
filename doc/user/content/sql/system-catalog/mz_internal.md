@@ -36,7 +36,7 @@ Entries in this view may be cleared on restart (e.g., during Materialize mainten
 {{< /warning >}}
 
 The `mz_recent_activity_log` view contains a log of the SQL statements
-that have been issued to Materialize in the last three days, along
+that have been issued to Materialize in the last 24 hours, along
 with various metadata about them.
 
 Entries in this log may be sampled. The sampling rate is controlled by
