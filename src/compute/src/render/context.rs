@@ -1051,7 +1051,7 @@ where
                     .clone()
                     .expect("Collection constructed above");
                 let (oks, errs_keyed) =
-                    Self::specialized_arrange(&name, oks, key.clone(), thinning.clone());
+                    Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
                 let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
                 let errs = errs.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
                     &format!("{}-errors", name),
@@ -1063,49 +1063,55 @@ where
         self
     }
 
-    /// Builds a specialized arrangement to provided types. The specialization for key and
-    /// value types of the arrangement is based on the bit length derived from the corresponding
-    /// type descriptions.
-    fn specialized_arrange(
+    /// Builds an arrangement from a collection, using the specified key and value thinning.
+    ///
+    /// The arrangement's key is based on the `key` expressions, and the value the input with
+    /// the `thinning` applied to it. It selects which of the input columns are included in the
+    /// value of the arrangement. The thinning is in support of permuting arrangements such that
+    /// columns in the key are not included in the value.
+    fn arrange_collection(
         name: &String,
         oks: Collection<S, Row, i64>,
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
     ) -> (MzArrangement<S>, Collection<S, DataflowError, i64>) {
-        let (oks, errs) =
-            oks.inner
-                .unary_fallible::<ColumnBuilder<((Row, Row), S::Timestamp, i64)>, _, _, _>(
-                    Pipeline,
-                    "FormArrangementKey",
-                    move |_, _| {
-                        Box::new(move |input, ok, err| {
-                            let mut key_buf = Row::default();
-                            let mut val_buf = Row::default();
-                            let mut datums = DatumVec::new();
-                            let temp_storage = RowArena::new();
-                            while let Some((time, data)) = input.next() {
-                                let mut ok_session = ok.session_with_builder(&time);
-                                let mut err_session = err.session(&time);
-                                for (row, time, diff) in data.iter() {
-                                    temp_storage.clear();
-                                    let datums = datums.borrow_with(row);
-                                    let val_datum_iter = thinning.iter().map(|c| datums[*c]);
-                                    match key_buf.packer().try_extend(
-                                        key.iter().map(|k| k.eval(&datums, &temp_storage)),
-                                    ) {
-                                        Ok(()) => {
-                                            val_buf.packer().extend(val_datum_iter);
-                                            ok_session.give(((&*key_buf, &*val_buf), time, diff));
-                                        }
-                                        Err(e) => {
-                                            err_session.give((e.into(), time.clone(), *diff));
-                                        }
+        // The following `unary_fallible` implements a `map_fallible`, but produces columnar updates
+        // for the ok stream. The `map_fallible` cannot be used here because the closure cannot
+        // return references, which is what we need to push into columnar streams. Instead, we use
+        // a bespoke operator that also optimizes reuse of allocations across individual updates.
+        let (oks, errs) = oks
+            .inner
+            .unary_fallible::<ColumnBuilder<((Row, Row), S::Timestamp, i64)>, _, _, _>(
+                Pipeline,
+                "FormArrangementKey",
+                move |_, _| {
+                    Box::new(move |input, ok, err| {
+                        let mut key_buf = Row::default();
+                        let mut val_buf = Row::default();
+                        let mut datums = DatumVec::new();
+                        let temp_storage = RowArena::new();
+                        while let Some((time, data)) = input.next() {
+                            let mut ok_session = ok.session_with_builder(&time);
+                            let mut err_session = err.session(&time);
+                            for (row, time, diff) in data.iter() {
+                                temp_storage.clear();
+                                let datums = datums.borrow_with(row);
+                                let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
+                                match key_buf.packer().try_extend(key_iter) {
+                                    Ok(()) => {
+                                        let val_datum_iter = thinning.iter().map(|c| datums[*c]);
+                                        val_buf.packer().extend(val_datum_iter);
+                                        ok_session.give(((&*key_buf, &*val_buf), time, diff));
+                                    }
+                                    Err(e) => {
+                                        err_session.give((e.into(), time.clone(), *diff));
                                     }
                                 }
                             }
-                        })
-                    },
-                );
+                        }
+                    })
+                },
+            );
         let oks = oks
             .mz_arrange_core::<_, Col2ValBatcher<_, _,_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                 ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, S::Timestamp, Diff>),name
