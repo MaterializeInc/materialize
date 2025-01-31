@@ -325,6 +325,31 @@ where
     T: Timestamp + Lattice + Columnation,
     S::Timestamp: Lattice + Refines<T> + Columnation,
 {
+    /// Presents `self` as a stream of updates.
+    ///
+    /// This method presents the contents as they are, without further computation.
+    /// If you have logic that could be applied to each record, consider using the
+    /// `flat_map` methods which allows this and can reduce the work done.
+    pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
+        let mut datums = DatumVec::new();
+        let logic = move |k: DatumSeq, v: DatumSeq| {
+            let mut datums_borrow = datums.borrow();
+            datums_borrow.extend(k);
+            datums_borrow.extend(v);
+            SharedRow::pack(&**datums_borrow)
+        };
+        match &self {
+            ArrangementFlavor::Local(oks, errs) => (
+                oks.as_collection(logic),
+                errs.as_collection(|k, &()| k.clone()),
+            ),
+            ArrangementFlavor::Trace(_, oks, errs) => (
+                oks.as_collection(logic),
+                errs.as_collection(|k, &()| k.clone()),
+            ),
+        }
+    }
+
     /// Constructs and applies logic to elements of `self` and returns the results.
     ///
     /// The `logic` receives a vector of datums, a timestamp, and a diff, and produces
@@ -551,15 +576,11 @@ where
                 .collection
                 .clone()
                 .expect("The unarranged collection doesn't exist."),
-            Some(key) => {
-                let arranged = self.arranged.get(key).unwrap_or_else(|| {
-                    panic!("The collection arranged by {:?} doesn't exist.", key)
-                });
-                let (ok, err) = arranged.flat_map(None, |borrow, t, r| {
-                    Some((SharedRow::pack(borrow.iter()), t, r))
-                });
-                (ok.as_collection(), err)
-            }
+            Some(key) => self
+                .arranged
+                .get(key)
+                .unwrap_or_else(|| panic!("The collection arranged by {:?} doesn't exist.", key))
+                .as_collection(),
         }
     }
 
