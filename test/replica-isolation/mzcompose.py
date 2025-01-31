@@ -57,6 +57,7 @@ class AllowCompactionCheck:
         self.replica = replica
         self.host = host
         self.ids: list[str] | None = None
+        self.missing_ids: list[str] = []
         self.satisfied = False
 
     def find_ids(self, c: Composition) -> None:
@@ -69,6 +70,7 @@ class AllowCompactionCheck:
         self.find_ids(c)
         assert self.ids is not None
         log: str = c.invoke("logs", self.host, capture=True).stdout
+        self.missing_ids = []
         self.satisfied = all([self._log_contains_id(log, x) for x in self.ids])
 
     def replica_id(self, c: Composition) -> str:
@@ -90,13 +92,13 @@ class AllowCompactionCheck:
         )
         return str(get_single_value_from_cursor(cursor))
 
-    @staticmethod
-    def _log_contains_id(log: str, the_id: str) -> bool:
+    def _log_contains_id(self, log: str, the_id: str) -> bool:
         for line in [
             x for x in log.splitlines() if "ClusterClient send=AllowCompaction" in x
         ]:
             if the_id in line:
                 return True
+        self.missing_ids.append(the_id)
         return False
 
     @staticmethod
@@ -138,7 +140,9 @@ class MaterializedView(AllowCompactionCheck):
         self.ids = [self._format_id(get_single_value_from_cursor(cursor))]
 
     def print_error(self) -> None:
-        print(f"!! AllowCompaction not found for materialized view with id {self.ids}")
+        print(
+            f"!! AllowCompaction not found for materialized view with ids {self.missing_ids}"
+        )
 
 
 class ArrangedIntro(AllowCompactionCheck):
@@ -160,7 +164,9 @@ class ArrangedIntro(AllowCompactionCheck):
         self.ids = [self._format_id(x[0]) for x in cursor.fetchall()]
 
     def print_error(self) -> None:
-        print(f"!! AllowCompaction not found for introspection with ids {self.ids}")
+        print(
+            f"!! AllowCompaction not found for introspection with ids {self.missing_ids}"
+        )
 
 
 class ArrangedIndex(AllowCompactionCheck):
@@ -182,7 +188,9 @@ class ArrangedIndex(AllowCompactionCheck):
         self.ids = [self._format_id(x[0]) for x in cursor.fetchall()]
 
     def print_error(self) -> None:
-        print(f"!! AllowCompaction not found for index arrangement with id {self.ids}")
+        print(
+            f"!! AllowCompaction not found for index arrangement with ids {self.missing_ids}"
+        )
 
 
 def populate(c: Composition) -> None:
