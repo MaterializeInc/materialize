@@ -653,6 +653,7 @@ mod mint {
 /// Implementation of the `write` operator.
 mod write {
     use super::*;
+    use differential_dataflow::lattice::Lattice;
 
     /// Render the `write` operator.
     ///
@@ -776,7 +777,15 @@ mod write {
                                 }
                                 state.maybe_write_batch().await
                             }
-                            Event::Progress(_frontier) => None,
+                            Event::Progress(frontier) => {
+                                state.description_frontier.join_assign(&frontier);
+                                if let Some(ts) = state.description_frontier().as_option() {
+                                    let stepped = Antichain::from_elem(ts.step_back().unwrap_or(Timestamp::MIN));
+                                    state.corrections.ok.advance_since(stepped.clone());
+                                    state.corrections.err.advance_since(stepped);
+                                }
+                                None
+                            },
                         }
                     }
                     // All inputs are exhausted, so we can shut down.
@@ -814,6 +823,9 @@ mod write {
         persist_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
         /// The current valid batch description and associated output capability, if any.
         batch_description: Option<(BatchDescription, Capability<Timestamp>)>,
+        /// The latest frontier on the batch description input. This is a lower bound on any
+        /// descriptions we may be assigned in the future.
+        description_frontier: Antichain<Timestamp>,
         /// A request to force a consolidation of `corrections` once both `desired_frontiers` and
         /// `persist_frontiers` become greater than the given frontier.
         ///
@@ -850,6 +862,7 @@ mod write {
                 desired_frontiers: OkErr::new_frontiers(),
                 persist_frontiers: OkErr::new_frontiers(),
                 batch_description: None,
+                description_frontier: Antichain::from_elem(Timestamp::MIN),
                 force_consolidation_after,
             }
         }
@@ -904,6 +917,14 @@ mod write {
             self.maybe_force_consolidation();
         }
 
+        /// A lower bound on any data that may be emitted in the future.
+        fn description_frontier(&self) -> &Antichain<Timestamp> {
+            self.batch_description
+                .as_ref()
+                .map(|(d, _)| &d.lower)
+                .unwrap_or(&self.description_frontier)
+        }
+
         /// If the current consolidation request has become applicable, apply it.
         fn maybe_force_consolidation(&mut self) {
             let Some(request) = &self.force_consolidation_after else {
@@ -939,8 +960,11 @@ mod write {
                 }
             }
 
-            self.corrections.ok.advance_since(desc.lower.clone());
-            self.corrections.err.advance_since(desc.lower.clone());
+            if let Some(ts) = self.description_frontier().as_option() {
+                let stepped = Antichain::from_elem(ts.step_back().unwrap_or(Timestamp::MIN));
+                self.corrections.ok.advance_since(stepped.clone());
+                self.corrections.err.advance_since(stepped);
+            }
 
             self.batch_description = Some((desc, cap));
             self.trace("set batch description");
@@ -966,7 +990,18 @@ mod write {
 
             let oks = ok_updates.map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r));
             let errs = err_updates.map(|(d, t, r)| ((SourceData(Err(d)), ()), t, r));
-            let mut updates = oks.chain(errs).peekable();
+            let mut lagging = 0;
+            let lower = desc.lower.clone();
+            let mut updates = oks
+                .chain(errs)
+                .map(|(kv, mut t, d)| {
+                    if !lower.less_equal(&t) {
+                        lagging += 1;
+                    }
+                    t.advance_by(lower.borrow());
+                    (kv, t, d)
+                })
+                .peekable();
 
             // Don't write empty batches.
             if updates.peek().is_none() {
@@ -981,6 +1016,8 @@ mod write {
                 .await
                 .expect("valid usage")
                 .into_transmittable_batch();
+
+            assert_eq!(lagging, 0);
 
             self.trace("wrote a batch");
             Some((batch, cap))
