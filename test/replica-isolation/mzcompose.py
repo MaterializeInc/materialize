@@ -454,7 +454,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         user="mz_system",
     )
 
-    if ArrangedIntro in disruption.compaction_checks:
+    if any(isinstance(check, ArrangedIntro) for check in disruption.compaction_checks):
         # Disable introspection subscribes because they break the
         # `ArrangedIntro` check by disabling compaction of logging indexes
         # on all replicas if one of the replicas is failing. That's because
@@ -504,8 +504,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         disruption.disruption(c)
 
         validate(c)
-        # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/8932 is fixed
-        # validate_introspection_compaction(c, disruption.compaction_checks)
+        validate_introspection_compaction(c, disruption.compaction_checks)
 
 
 def get_single_value_from_cursor(cursor: Cursor) -> Any:
