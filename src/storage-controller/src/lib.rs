@@ -1898,30 +1898,28 @@ where
                 self.update_write_frontiers(&updates);
                 updated_frontiers = Some(Response::FrontierUpdates(updates));
             }
-            Some(StorageResponse::DroppedIds(ids)) => {
-                for id in ids.iter() {
-                    tracing::debug!("DroppedIds for collections {id}");
+            Some(StorageResponse::DroppedId(id)) => {
+                tracing::debug!("DroppedId for collection {id}");
 
-                    if let Some(_collection) = self.collections.remove(id) {
-                        // Nothing to do, we already dropped read holds in
-                        // `drop_sources_unvalidated`.
-                    } else if let Some(export) = self.exports.get_mut(id) {
-                        // TODO: Current main never drops export state, so we
-                        // also don't do that, because it would be yet more
-                        // refactoring. Instead, we downgrade to the empty
-                        // frontier, which satisfies StorageCollections just as
-                        // much.
-                        tracing::info!("downgrading read hold of export {id} to empty frontier!");
-                        export
-                            .read_hold
-                            .try_downgrade(Antichain::new())
-                            .expect("must be possible");
-                    } else {
-                        soft_panic_or_log!(
-                            "DroppedIds for ID {id} but we have neither ingestion nor export \
-                             under that ID"
-                        );
-                    }
+                if let Some(_collection) = self.collections.remove(&id) {
+                    // Nothing to do, we already dropped read holds in
+                    // `drop_sources_unvalidated`.
+                } else if let Some(export) = self.exports.get_mut(&id) {
+                    // TODO: Current main never drops export state, so we
+                    // also don't do that, because it would be yet more
+                    // refactoring. Instead, we downgrade to the empty
+                    // frontier, which satisfies StorageCollections just as
+                    // much.
+                    tracing::info!("downgrading read hold of export {id} to empty frontier!");
+                    export
+                        .read_hold
+                        .try_downgrade(Antichain::new())
+                        .expect("must be possible");
+                } else {
+                    soft_panic_or_log!(
+                        "DroppedId for ID {id} but we have neither ingestion nor export \
+                         under that ID"
+                    );
                 }
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
@@ -2598,7 +2596,7 @@ where
                 // TODO: This can happen because subsources report back an upper
                 // but we don't store them in our `ingestions` field, _nor_ do
                 // we acquire read holds for them. Also because we don't get
-                // `DroppedIds` messages for them, so we wouldn't know when to
+                // `DroppedId` messages for them, so we wouldn't know when to
                 // clean up read holds.
                 info!(
                     "Reference to absent collection {id}, new_upper={:?}",
