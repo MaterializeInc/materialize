@@ -665,7 +665,8 @@ where
 
     builder.build(move |_| {
         // Remap bindings beyond the upper
-        let mut accepted_times = Vec::new();
+        use timely::progress::ChangeBatch;
+        let mut accepted_times: ChangeBatch<(G::Timestamp, FromTime)> = ChangeBatch::new();
         // The upper frontier of the bindings
         let mut upper = Antichain::from_elem(Timestamp::minimum());
         // Remap bindings not beyond upper
@@ -677,19 +678,25 @@ where
             while let Some((_, data)) = bindings.next() {
                 accepted_times.extend(data.drain(..).map(|(from, mut into, diff)| {
                     into.advance_by(as_of.borrow());
-                    (from, into, diff)
+                    ((into, from), diff)
                 }));
             }
             // Extract ready bindings
             let new_upper = frontiers[0].frontier();
             if PartialOrder::less_than(&upper.borrow(), &new_upper) {
                 upper = new_upper.to_owned();
-
-                accepted_times.sort_unstable_by(|a, b| a.1.cmp(&b.1));
-                // The times are totally ordered so we can binary search to find the prefix that is
-                // not beyond the upper and extract it into a batch.
-                let idx = accepted_times.partition_point(|(_, t, _)| !upper.less_equal(t));
-                ready_times.extend(accepted_times.drain(0..idx));
+                // Drain consolidated accepted times not greater or equal to `upper` into `ready_times`.
+                // Retain accepted times greater or equal to `upper` in
+                let mut pending_times = std::mem::take(&mut accepted_times).into_inner();
+                // These should already be sorted, as part of `.into_inner()`, but sort defensively in case.
+                pending_times.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+                for ((into, from), diff) in pending_times.drain(..) {
+                    if !upper.less_equal(&into) {
+                        ready_times.push_back((from, into, diff));
+                    } else {
+                        accepted_times.update((into, from), diff);
+                    }
+                }
             }
 
             // The received times only accumulate correctly for times beyond the as_of.
