@@ -3030,7 +3030,12 @@ pub static MZ_PREPARED_STATEMENT_HISTORY: LazyLock<BuiltinSource> =
         data_source: IntrospectionType::PreparedStatementHistory,
         desc: MZ_PREPARED_STATEMENT_HISTORY_DESC.clone(),
         is_retained_metrics_object: false,
-        access: vec![MONITOR_SELECT],
+        access: vec![
+            SUPPORT_SELECT,
+            ANALYTICS_SELECT,
+            MONITOR_REDACTED_SELECT,
+            MONITOR_SELECT,
+        ],
     });
 
 pub static MZ_SQL_TEXT: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
@@ -3133,8 +3138,8 @@ pub static MZ_RECENT_ACTIVITY_LOG_THINNED: LazyLock<BuiltinView> = LazyLock::new
         oid: oid::VIEW_MZ_RECENT_ACTIVITY_LOG_THINNED_OID,
         column_defs: None,
         sql:
-        "SELECT * FROM mz_internal.mz_activity_log_thinned WHERE prepared_at + INTERVAL '3 days' > mz_now()
-AND began_at + INTERVAL '3 days' > mz_now()",
+        "SELECT * FROM mz_internal.mz_activity_log_thinned WHERE prepared_at + INTERVAL '1 day' > mz_now()
+AND began_at + INTERVAL '1 day' > mz_now()",
         access: vec![MONITOR_SELECT],
     }
 });
