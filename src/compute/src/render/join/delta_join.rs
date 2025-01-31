@@ -391,14 +391,10 @@ where
                 let mut row_builder = binding.borrow_mut();
                 let temp_storage = RowArena::new();
 
-                let key = key.to_datum_iter();
-                let stream_row = stream_row.to_datum_iter();
-                let lookup_row = lookup_row.to_datum_iter();
-
                 let mut datums_local = datums.borrow();
-                datums_local.extend(key);
-                datums_local.extend(stream_row);
-                datums_local.extend(lookup_row);
+                datums_local.extend(key.iter());
+                datums_local.extend(stream_row.iter());
+                datums_local.extend(lookup_row.to_datum_iter());
 
                 let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
                 let diff = diff1.clone() * diff2.clone();
@@ -440,14 +436,10 @@ where
                 let mut row_builder = binding.borrow_mut();
                 let temp_storage = RowArena::new();
 
-                let key = key.to_datum_iter();
-                let stream_row = stream_row.to_datum_iter();
-                let lookup_row = lookup_row.to_datum_iter();
-
                 let mut datums_local = datums.borrow();
-                datums_local.extend(key);
-                datums_local.extend(stream_row);
-                datums_local.extend(lookup_row);
+                datums_local.extend(key.iter());
+                datums_local.extend(stream_row.iter());
+                datums_local.extend(lookup_row.to_datum_iter());
 
                 let row = closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
@@ -513,12 +505,9 @@ where
                                             let time = time.into_owned();
                                             let temp_storage = RowArena::new();
 
-                                            let key = key.to_datum_iter();
-                                            let val = val.to_datum_iter();
-
                                             let mut datums_local = datums.borrow();
-                                            datums_local.extend(key);
-                                            datums_local.extend(val);
+                                            datums_local.extend(key.to_datum_iter());
+                                            datums_local.extend(val.to_datum_iter());
 
                                             if !initial_closure.is_identity() {
                                                 match initial_closure

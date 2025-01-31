@@ -502,14 +502,10 @@ where
                         let mut row_builder = binding.borrow_mut();
                         let temp_storage = RowArena::new();
 
-                        let key = key.to_datum_iter();
-                        let old = old.to_datum_iter();
-                        let new = new.to_datum_iter();
-
                         let mut datums_local = datums.borrow();
-                        datums_local.extend(key);
-                        datums_local.extend(old);
-                        datums_local.extend(new);
+                        datums_local.extend(key.to_datum_iter());
+                        datums_local.extend(old.to_datum_iter());
+                        datums_local.extend(new.to_datum_iter());
 
                         closure
                             .apply(&mut datums_local, &temp_storage, &mut row_builder)
@@ -537,14 +533,10 @@ where
                     let mut row_builder = binding.borrow_mut();
                     let temp_storage = RowArena::new();
 
-                    let key = key.to_datum_iter();
-                    let old = old.to_datum_iter();
-                    let new = new.to_datum_iter();
-
                     let mut datums_local = datums.borrow();
-                    datums_local.extend(key);
-                    datums_local.extend(old);
-                    datums_local.extend(new);
+                    datums_local.extend(key.to_datum_iter());
+                    datums_local.extend(old.to_datum_iter());
+                    datums_local.extend(new.to_datum_iter());
 
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)

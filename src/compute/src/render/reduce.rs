@@ -95,7 +95,7 @@ where
                 _,
             ) = input
                 .enter_region(inner)
-                .flat_map(input_key.map(|k| (k, None)), || {
+                .flat_map(input_key.map(|k| (k, None)), {
                     // Determine the columns we'll need from the row.
                     let mut demand = Vec::new();
                     demand.extend(key_plan.demand());
