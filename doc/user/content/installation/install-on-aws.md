@@ -170,7 +170,7 @@ node instance type, etc.), see the
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   Apply complete! Resources: 76 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 78 added, 0 changed, 0 destroyed.
 
    Outputs:
 
@@ -191,14 +191,14 @@ node instance type, etc.), see the
 
 1. Configure `kubectl` to connect to your EKS cluster, replacing:
 
-   - `<your-cluster-name>` with the name of your EKS cluster (specified in
+   - `<your-eks-cluster-name>` with the name of your EKS cluster (specified in
      [Terraform output](#terraform-output))
 
    - `<your-region>` with the region of your EKS cluster. By default, the
      sample Terraform module uses `us-east-1`.
 
    ```bash
-   aws eks update-kubeconfig --name <your-cluster-name> --region <your-region>
+   aws eks update-kubeconfig --name <your-eks-cluster-name> --region <your-region>
    ```
 
    To verify that you have configured correctly, run the following command:
@@ -248,8 +248,8 @@ node instance type, etc.), see the
          namespace      = "materialize-environment"
          database_name  = "demo_db"
          cpu_request    = "2"
-         memory_request = "8Gi"
-         memory_limit   = "8Gi"
+         memory_request = "2Gi"
+         memory_limit   = "2Gi"
        }
    ]
    EOF
