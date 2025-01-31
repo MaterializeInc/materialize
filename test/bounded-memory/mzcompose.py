@@ -1087,6 +1087,62 @@ SCENARIOS = [
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
+    Scenario(
+        name="mv-hydration-800mb",
+        pre_restart=dedent(
+            """
+            > CREATE SOURCE tpch
+              FROM LOAD GENERATOR TPCH (SCALE FACTOR 1, TICK INTERVAL '1s')
+              FOR TABLES (lineitem)
+
+            > SELECT count(*) > 0 FROM lineitem
+            true
+
+            > CREATE MATERIALIZED VIEW mv
+              IN CLUSTER clusterd AS
+              SELECT * FROM lineitem
+
+            > SELECT count(*) > 0 FROM mv
+            true
+            """
+        ),
+        post_restart=dedent(
+            """
+            > SELECT count(*) > 0 FROM mv
+            true
+            """
+        ),
+        materialized_memory="2Gb",
+        clusterd_memory="1.5Gb",
+    ),
+    Scenario(
+        name="mv-hydration-4gb",
+        pre_restart=dedent(
+            """
+            > CREATE SOURCE tpch
+              FROM LOAD GENERATOR TPCH (SCALE FACTOR 5, TICK INTERVAL '1s')
+              FOR TABLES (lineitem)
+
+            > SELECT count(*) > 0 FROM lineitem
+            true
+
+            > CREATE MATERIALIZED VIEW mv
+              IN CLUSTER clusterd AS
+              SELECT * FROM lineitem
+
+            > SELECT count(*) > 0 FROM mv
+            true
+            """
+        ),
+        post_restart=dedent(
+            """
+            > SELECT count(*) > 0 FROM mv
+            true
+            """
+        ),
+        materialized_memory="2Gb",
+        clusterd_memory="7Gb",
+    ),
 ]
 
 
