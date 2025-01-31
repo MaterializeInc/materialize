@@ -48,6 +48,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             config.mysql_source_snapshot_max_execution_time(),
             config.mysql_source_snapshot_lock_wait_timeout(),
             config.mysql_source_tcp_keepalive(),
+            config.mysql_source_connect_timeout(),
         ),
         keep_n_source_status_history_entries: config.keep_n_source_status_history_entries(),
         keep_n_sink_status_history_entries: config.keep_n_sink_status_history_entries(),

@@ -526,6 +526,7 @@ impl RustType<ProtoMySqlSourceTimeouts> for mz_mysql_util::TimeoutConfig {
             tcp_keepalive: self.tcp_keepalive.into_proto(),
             snapshot_max_execution_time: self.snapshot_max_execution_time.into_proto(),
             snapshot_lock_wait_timeout: self.snapshot_lock_wait_timeout.into_proto(),
+            connect_timeout: self.connect_timeout.into_proto(),
         }
     }
 
@@ -534,6 +535,7 @@ impl RustType<ProtoMySqlSourceTimeouts> for mz_mysql_util::TimeoutConfig {
             tcp_keepalive: proto.tcp_keepalive.into_rust()?,
             snapshot_max_execution_time: proto.snapshot_max_execution_time.into_rust()?,
             snapshot_lock_wait_timeout: proto.snapshot_lock_wait_timeout.into_rust()?,
+            connect_timeout: proto.connect_timeout.into_rust()?,
         })
     }
 }

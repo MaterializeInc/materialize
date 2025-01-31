@@ -1058,6 +1058,14 @@ pub static MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT: VarDefinition = VarDefinitio
     false,
 );
 
+/// Sets the timeout for establishing an authenticated connection to MySQL
+pub static MYSQL_SOURCE_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
+    "mysql_source_connect_timeout",
+    value!(Duration; mz_mysql_util::DEFAULT_CONNECT_TIMEOUT),
+    "Sets the timeout for establishing an authenticated connection to MySQL",
+    false,
+);
+
 /// Controls the check interval for connections to SSH bastions via `mz_ssh_util`.
 pub static SSH_CHECK_INTERVAL: VarDefinition = VarDefinition::new(
     "ssh_check_interval",
