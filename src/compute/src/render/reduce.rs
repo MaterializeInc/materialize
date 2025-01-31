@@ -22,7 +22,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::cursor::IntoOwned;
-use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
+use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Diff as _};
 use mz_compute_types::plan::reduce::{
     reduction_type, AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan,
@@ -47,7 +47,7 @@ use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
-use crate::render::context::{CollectionBundle, Context, MzArrangement};
+use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
 use crate::render::{ArrangementFlavor, Pairer};
@@ -55,8 +55,8 @@ use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
 };
 use crate::typedefs::{
-    ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowArrangement, RowRowSpine,
-    RowSpine, RowValSpine,
+    ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowAgent, RowRowArrangement,
+    RowRowSpine, RowSpine, RowValSpine,
 };
 
 impl<G, T> Context<G, T>
@@ -206,7 +206,7 @@ where
         errors: &mut Vec<Collection<S, DataflowError, Diff>>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> MzArrangement<S>
+    ) -> Arranged<S, RowRowAgent<S::Timestamp, Diff>>
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -216,7 +216,7 @@ where
             // If we have no aggregations or just a single type of reduction, we
             // can go ahead and render them directly.
             ReducePlan::Distinct => {
-                let (arranged_output, errs) = self.dispatch_build_distinct(collection, mfp_after);
+                let (arranged_output, errs) = self.build_distinct(collection, mfp_after);
                 errors.push(errs);
                 arranged_output
             }
@@ -224,17 +224,17 @@ where
                 let (arranged_output, errs) =
                     self.build_accumulable(collection, expr, key_arity, mfp_after);
                 errors.push(errs);
-                MzArrangement::RowRow(arranged_output)
+                arranged_output
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(expr)) => {
                 let (output, errs) = self.build_monotonic(collection, expr, mfp_after);
                 errors.push(errs);
-                MzArrangement::RowRow(output)
+                output
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(expr)) => {
                 let (output, errs) = self.build_bucketed(collection, expr, key_arity, mfp_after);
                 errors.push(errs);
-                MzArrangement::RowRow(output)
+                output
             }
             ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
                 index,
@@ -257,13 +257,13 @@ where
                 if validating {
                     errors.push(errs.expect("validation should have occurred as it was requested"));
                 }
-                MzArrangement::RowRow(output)
+                output
             }
             ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
                 let (output, errs) =
                     self.build_basic_aggregates(collection, aggrs, key_arity, mfp_after);
                 errors.push(errs);
-                MzArrangement::RowRow(output)
+                output
             }
             // Otherwise, we need to render something different for each type of
             // reduction, and then stitch them together.
@@ -282,15 +282,13 @@ where
                     let r#type = ReductionType::try_from(&plan)
                         .expect("only representable reduction types were used above");
 
-                    let arrangement = match self.render_reduce_plan_inner(
+                    let arrangement = self.render_reduce_plan_inner(
                         plan,
                         collection.clone(),
                         errors,
                         key_arity,
                         None,
-                    ) {
-                        MzArrangement::RowRow(arranged) => arranged,
-                    };
+                    );
                     to_collate.push((r#type, arrangement));
                 }
 
@@ -302,7 +300,7 @@ where
                     mfp_after,
                 );
                 errors.push(errs);
-                MzArrangement::RowRow(oks)
+                oks
             }
         };
         arrangement
@@ -508,56 +506,19 @@ where
         (oks, errs.as_collection(|_, v| v.clone()))
     }
 
-    fn dispatch_build_distinct<S>(
-        &self,
-        collection: Collection<S, (Row, Row), Diff>,
-        mfp_after: Option<SafeMfpPlan>,
-    ) -> (MzArrangement<S>, Collection<S, DataflowError, Diff>)
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
-        let (arrangement, errs) = self
-            .build_distinct::<RowRowBatcher<_, _>, RowRowBuilder<_, _,>, RowRowSpine<_, _>, RowErrBuilder<_,_>, RowErrSpine<_, _>, _>(collection, "", mfp_after);
-        (MzArrangement::RowRow(arrangement), errs)
-    }
-
     /// Build the dataflow to compute the set of distinct keys.
-    fn build_distinct<Ba1, Bu1, T1, Bu2, T2, S>(
+    fn build_distinct<S>(
         &self,
         collection: Collection<S, (Row, Row), Diff>,
-        tag: &str,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        Arranged<S, TraceAgent<T1>>,
+        Arranged<S, TraceAgent<RowRowSpine<S::Timestamp, Diff>>>,
         Collection<S, DataflowError, Diff>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
-        for<'a> T1: Trace<Val<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff> + 'static,
-        for<'a> T1::Key<'a>: IntoOwned<'a, Owned = Row>,
-        T1::Batch: Batch,
-        Ba1: Batcher<Input = Vec<((Row, Row), G::Timestamp, Diff)>, Time = G::Timestamp> + 'static,
-        Ba1::Output: Container + PushInto<((Row, Row), T1::Time, T1::Diff)>,
-        Bu1: Builder<Time = G::Timestamp, Input = Ba1::Output, Output = T1::Batch>,
-        for<'a> T1::Key<'a>: std::fmt::Debug + ToDatumIter,
-        Arranged<S, TraceAgent<T1>>: ArrangementSize,
-        T2: for<'a> Trace<
-                Key<'a> = T1::Key<'a>,
-                Val<'a> = &'a DataflowError,
-                Time = G::Timestamp,
-                Diff = Diff,
-            > + 'static,
-        T2::Batch: Batch,
-        Bu2: Builder<Time = G::Timestamp, Output = T2::Batch>,
-        Bu2::Input: Container + PushInto<((Row, DataflowError), T2::Time, T2::Diff)>,
-        Arranged<S, TraceAgent<T2>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
-
-        let (input_name, output_name) = (
-            format!("Arranged DistinctBy{}", tag),
-            format!("DistinctBy{}", tag),
-        );
 
         // Allocations for the two closures.
         let mut datums1 = DatumVec::new();
@@ -566,9 +527,9 @@ where
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
         let (output, errors) = collection
-            .mz_arrange::<Ba1, Bu1, T1>(&input_name)
-            .reduce_pair::<_, Row, Row, Bu1, T1, _, _, Bu2, T2>(
-                &output_name,
+            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _,>, RowRowSpine<_, _>>("Arranged DistinctBy")
+            .reduce_pair::<_, _, _, RowRowBuilder<_, _,>, RowRowSpine<_, _>, _, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
+                "DistinctBy",
                 "DistinctByErrorCheck",
                 move |key, _input, output| {
                     let temp_storage = RowArena::new();

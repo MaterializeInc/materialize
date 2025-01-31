@@ -154,9 +154,7 @@ use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors,
 };
-use crate::render::context::{
-    ArrangementFlavor, Context, MzArrangement, MzArrangementImport, ShutdownToken,
-};
+use crate::render::context::{ArrangementFlavor, Context, ShutdownToken};
 use crate::render::continual_task::ContinualTaskCtx;
 use crate::row_spine::{RowRowBatcher, RowRowBuilder};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher};
@@ -517,28 +515,31 @@ where
             );
 
             let token = traces.to_drop().clone();
-            // Import the specialized trace handle as a specialized arrangement import.
-            //
-            // Note that we incorporate probe setup as part of this process, since a specialized
-            // arrangement import requires us to enter a scope, but we can only enter after the
-            // probe is attached.
-            let (ok_arranged, ok_button) = traces.oks_mut().import_frontier(
-                &self.scope,
+
+            let (oks, ok_button) = traces.oks_mut().import_frontier_core(
+                &self.scope.parent,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
-                input_probe,
             );
+            let oks = Arranged {
+                stream: oks.stream.probe_with(&input_probe),
+                trace: oks.trace,
+            };
+
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                 &self.scope.parent,
                 &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
             );
-            let err_arranged = err_arranged.enter(&self.scope);
 
-            let ok_arranged = ok_arranged.with_start_signal(start_signal.clone());
-            let err_arranged = err_arranged.with_start_signal(start_signal);
+            let ok_arranged = oks
+                .enter(&self.scope)
+                .with_start_signal(start_signal.clone());
+            let err_arranged = err_arranged
+                .enter(&self.scope)
+                .with_start_signal(start_signal);
 
             self.update_id(
                 Id::Global(idx.on_id),
@@ -595,7 +596,7 @@ where
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
                     let token = Rc::new(());
                     let shutdown_token = Rc::downgrade(&token);
-                    oks.expire_arrangement_at(
+                    oks.stream = oks.stream.expire_stream_at(
                         &format!("{}_export_index_oks", self.debug_name),
                         expiration,
                         Weak::clone(&shutdown_token),
@@ -608,9 +609,6 @@ where
                     needed_tokens.push(token);
                 }
 
-                // Obtain a specialized handle matching the specialized arrangement.
-                let oks_trace = oks.trace_handle();
-
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
                     errs.stream.log_dataflow_errors(logger, idx_id);
@@ -618,7 +616,7 @@ where
 
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks_trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
@@ -675,7 +673,12 @@ where
 
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
-                let mut oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
+                let mut oks = oks
+                    .as_collection(|k, v| (k.into_owned(), v.into_owned()))
+                    .leave()
+                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, _>(
+                        "Arrange export iterative",
+                    );
 
                 let mut errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
@@ -689,7 +692,7 @@ where
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
                     let token = Rc::new(());
                     let shutdown_token = Rc::downgrade(&token);
-                    oks.expire_arrangement_at(
+                    oks.stream = oks.stream.expire_stream_at(
                         &format!("{}_export_index_iterative_oks", self.debug_name),
                         expiration,
                         Weak::clone(&shutdown_token),
@@ -702,8 +705,6 @@ where
                     needed_tokens.push(token);
                 }
 
-                let oks_trace = oks.trace_handle();
-
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
                     errs.stream.log_dataflow_errors(logger, idx_id);
@@ -711,7 +712,7 @@ where
 
                 compute_state.traces.set(
                     idx_id,
-                    TraceBundle::new(oks_trace, errs.trace).with_drop(needed_tokens),
+                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
@@ -733,24 +734,6 @@ where
                 );
             }
         };
-    }
-
-    /// Dispatches the rearranging of an arrangement coming from an iterative scope
-    /// according to specialized key-value arrangement types.
-    fn dispatch_rearrange_iterative(
-        &self,
-        oks: MzArrangement<Child<'g, G, T>>,
-        name: &str,
-    ) -> MzArrangement<G> {
-        match oks {
-            MzArrangement::RowRow(inner) => {
-                let oks = inner
-                    .as_collection(|k, v| (k.into_owned(), v.into_owned()))
-                    .leave()
-                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, _>(name);
-                MzArrangement::RowRow(oks)
-            }
-        }
     }
 }
 
@@ -1226,14 +1209,12 @@ where
         match bundle.arranged.values_mut().next() {
             Some(arrangement) => {
                 use ArrangementFlavor::*;
-                use MzArrangement as A;
-                use MzArrangementImport as AI;
 
                 match arrangement {
-                    Local(A::RowRow(a), _) => {
+                    Local(a, _) => {
                         a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
                     }
-                    Trace(_, AI::RowRow(a), _) => {
+                    Trace(_, a, _) => {
                         a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
                     }
                 }
@@ -1432,21 +1413,6 @@ pub(crate) trait WithStartSignal {
     /// Note that this operator needs to buffer all incoming data, so it has some memory footprint,
     /// depending on the amount and shape of its inputs.
     fn with_start_signal(self, signal: StartSignal) -> Self;
-}
-
-impl<S> WithStartSignal for MzArrangementImport<S>
-where
-    S: Scope,
-    S::Timestamp: RenderTimestamp,
-    <S::Timestamp as Columnar>::Container: Clone + Send,
-{
-    fn with_start_signal(self, signal: StartSignal) -> Self {
-        match self {
-            MzArrangementImport::RowRow(arr) => {
-                MzArrangementImport::RowRow(arr.with_start_signal(signal))
-            }
-        }
-    }
 }
 
 impl<S, Tr> WithStartSignal for Arranged<S, Tr>
