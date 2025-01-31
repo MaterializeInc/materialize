@@ -131,7 +131,7 @@ impl SourceRender for PostgresSourceConnection {
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Option<Stream<G, Infallible>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<MzOffset>>>,
@@ -256,7 +256,7 @@ impl SourceRender for PostgresSourceConnection {
 
         (
             data_collections,
-            Some(uppers),
+            uppers,
             health,
             stats_stream,
             probe_stream,

@@ -325,26 +325,22 @@ where
     let name = format!("SourceGenericStats({})", source_id);
     let mut builder = OperatorBuilderRc::new(name, scope.clone());
 
-    let (_, derived_progress) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (mut health_output, derived_health) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut export_collections = BTreeMap::new();
     let mut export_handles = vec![];
-    // Loop invariant: The operator contains export_handles.len() inputs and
-    // export_handles.len() + 2 outputs
+    // Loop invariant: The operator contains `export_handles.len()` inputs and
+    // `export_handles.len() + 1` outputs.
     for (id, export) in exports {
         // This output is not connected to any of the existing inputs.
         let connection = vec![Antichain::new(); export_handles.len()];
         let (export_output, new_export) =
             builder.new_output_connection::<CapacityContainerBuilder<_>>(connection);
 
-        // This input's frontier flow into the progress collection and the corresponding output
-        let mut connection = vec![Antichain::from_elem(Default::default()), Antichain::new()];
-        // No frontier implications for other outputs
-        for _ in 0..export_handles.len() {
-            connection.push(Antichain::new());
-        }
-        // Standard frontier implication for the corresponding output of this input
+        // The input is not connected to any of the existing outputs.
+        let outputs_count = export_handles.len() + 1;
+        let mut connection = vec![Antichain::new(); outputs_count];
+        // Standard frontier implication for the corresponding output of this input.
         connection.push(Antichain::from_elem(Default::default()));
         let export_input = builder.new_input_connection(&export.inner, Pipeline, connection);
         export_handles.push((id, export_input, export_output));
@@ -368,7 +364,7 @@ where
         .set(mz_persist_client::metrics::encode_ts_metric(&resume_upper));
 
     builder.build(move |mut caps| {
-        let mut health_cap = Some(caps.remove(1));
+        let mut health_cap = Some(caps.remove(0));
         move |frontiers| {
             let mut statuses_by_idx = BTreeMap::new();
             let mut health_output = health_output.activate();
@@ -432,8 +428,6 @@ where
             }
         }
     });
-
-    let progress = progress.unwrap_or(derived_progress);
 
     let probe_stream = match probes {
         Some(stream) => stream,

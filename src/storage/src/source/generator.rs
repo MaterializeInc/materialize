@@ -141,7 +141,7 @@ impl GeneratorKind {
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Option<Stream<G, Infallible>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
@@ -206,7 +206,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Option<Stream<G, Infallible>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<MzOffset>>>,
@@ -236,7 +236,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    Option<Stream<G, Infallible>>,
+    Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,
     Vec<PressOnDropButton>,
@@ -261,13 +261,14 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
         data_collections.insert(*id, data_stream.as_collection());
     }
 
+    let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (health_output, health_stream) = builder.new_output();
     let (stats_output, stats_stream) = builder.new_output();
 
     let busy_signal = Arc::clone(&config.busy_signal);
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
-            let [mut cap, health_cap, stats_cap]: [_; 3] = caps.try_into().unwrap();
+            let [mut cap, mut progress_cap, health_cap, stats_cap] = caps.try_into().unwrap();
 
             // We only need this until we reported ourselves as Running.
             let mut health_cap = Some(health_cap);
@@ -344,6 +345,11 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                             continue;
                         }
 
+                        // Once we see the load generator start producing data for some offset,
+                        // we report progress beyond that offset, to ensure that a binding can be
+                        // minted for the data and it doesn't accumulate in reclocking.
+                        let _ = progress_cap.try_downgrade(&(offset + 1));
+
                         let outputs = match output_map.get(&output_type) {
                             Some(outputs) => outputs,
                             // We don't have an output index for this output type, so drop it
@@ -392,6 +398,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                         }
 
                         cap.downgrade(&offset);
+                        let _ = progress_cap.try_downgrade(&offset);
 
                         // We only sleep if we have surpassed the resume offset so that we can
                         // quickly go over any historical updates that a generator might choose to
@@ -440,7 +447,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 
     (
         data_collections,
-        None,
+        progress_stream,
         health_stream,
         stats_stream,
         vec![button.press_on_drop()],
