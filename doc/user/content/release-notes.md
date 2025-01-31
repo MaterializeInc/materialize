@@ -8,6 +8,6 @@ menu:
     identifier: "release-notes"
 ---
 
-## v25.1.0 (Upcoming)
+## v25.1.1 (Upcoming)
 
 {{% self-managed/self-managed-details %}}
