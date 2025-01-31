@@ -103,27 +103,21 @@ where
         instance
     }
 
+    /// Returns the number of replicas of this storage instance.
+    pub fn replica_count(&self) -> usize {
+        self.replicas.len()
+    }
+
     /// Returns the IDs of all replicas connected to this storage instance.
     pub fn replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
         self.replicas.keys().copied()
     }
 
     /// Adds a new replica to this storage instance.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this storage instance has storage objects installed and already has a replica
-    /// connected.
     pub fn add_replica(&mut self, id: ReplicaId, config: ReplicaConfig) {
         // Reduce the history to limit the amount of commands sent to the new replica, and to
         // enable the `objects_installed` assert below.
         self.history.reduce();
-
-        let objects_installed = self.history.iter().any(|cmd| cmd.installs_objects());
-        assert!(
-            !objects_installed || self.replicas.is_empty(),
-            "replication not supported for storage objects",
-        );
 
         self.epoch.bump_replica();
         let metrics = self.metrics.for_replica(id);
@@ -202,17 +196,7 @@ where
     }
 
     /// Sends a command to this storage instance.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the storage instance has multiple replicas connected and the given command
-    /// instructs the installation of storage objects.
     pub fn send(&mut self, command: StorageCommand<T>) {
-        assert!(
-            !command.installs_objects() || self.replicas.len() <= 1,
-            "replication not supported for storage objects"
-        );
-
         match &command {
             StorageCommand::RunIngestions(ingestions) => {
                 for ingestion in ingestions {
