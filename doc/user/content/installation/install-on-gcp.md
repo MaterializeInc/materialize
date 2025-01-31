@@ -338,7 +338,7 @@ node instance type, etc.), see the
          name           = "demo"
          namespace      = "materialize-environment"
          database_name  = "demo_db"
-         cpu_request    = "2"
+         cpu_request    = "1"
          memory_request = "2Gi"
          memory_limit   = "2Gi"
        }
