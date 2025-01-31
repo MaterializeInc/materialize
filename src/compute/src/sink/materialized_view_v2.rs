@@ -901,13 +901,6 @@ mod write {
 
         /// Apply the effects of a previous `persist` frontier advancement.
         fn apply_persist_frontier_advancement(&mut self) {
-            let frontier = self.persist_frontiers.frontier();
-
-            // We will only emit times at or after the `persist` frontier, so now is a good time to
-            // advance the times of stashed updates.
-            self.corrections.ok.advance_since(frontier.clone());
-            self.corrections.err.advance_since(frontier.clone());
-
             self.maybe_force_consolidation();
         }
 
@@ -945,6 +938,9 @@ mod write {
                     return;
                 }
             }
+
+            self.corrections.ok.advance_since(desc.lower.clone());
+            self.corrections.err.advance_since(desc.lower.clone());
 
             self.batch_description = Some((desc, cap));
             self.trace("set batch description");
