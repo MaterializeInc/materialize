@@ -152,7 +152,7 @@ operators:
       Performs one of `INNER` / `LEFT` / `RIGHT` / `FULL OUTER` / `CROSS` join on the two inputs, using the given predicate.
     uses_memory: True
     memory_details: |
-      Uses memory proportional to the input sizes, unless [the inputs have appropriate indexes](/transform-data/optimization/#join). Certain joins with more than 2 inputs use additional memory, see in the optimized plan.
+      Uses memory proportional to the input sizes, unless [the inputs have appropriate indexes](/transform-data/optimization/#join). Certain joins with more than 2 inputs use additional memory, see details in the optimized plan.
     expansive: True
     expansive_details: |
       For `CrossJoin`s, Cartesian product of the inputs (|N| x |M|). Note that, in many cases, a join that shows up as a cross join in the RAW PLAN will actually be turned into an inner join in the OPTIMIZED PLAN, by making use of an equality WHERE condition.
@@ -210,8 +210,8 @@ operators:
       Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.
     uses_memory: True
     memory_details: |
-      `SUM`, `COUNT`, and some other aggregations use a moderate amount of memory. `MIN` and `MAX` aggregates can use
-      significantly more memory. This can be improved by including group size hints in the query, see
+      `SUM`, `COUNT`, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size).
+      `MIN` and `MAX` aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
       [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
     expansive: False
     example: "`Reduce group_by=[#0] aggregates=[max((#0 * #1))]`"
@@ -233,13 +233,15 @@ operators:
 
       4. `Reduce::Collation` corresponds to an arbitrary mix of reductions of different types, which will be performed separately and then joined together.
 
-      5. `Reduce::Basic` (e.g., window functions, `list_agg`) corresponds to a single hard-to-incrementalize aggregation.
+      5. `Reduce::Basic` (e.g., window functions, `list_agg`) corresponds to a single non-incremental aggregation.
 
     uses_memory: True
     memory_details: |
-      Can use significant amount as the operator can significantly overestimate
-      the size. For `MIN` and `MAX` aggregates, consult
+      `Distinct` and `Accumulable` aggregates use a moderate amount of memory (proportional to twice the output size).
+      `MIN` and `MAX` aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
       [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
+      `Basic` aggregates use memory proportional to the input + output size.
+      `Collation` aggregates use memory that is the sum of their constituents, plus some memory for the join at the end.
     expansive: False
     example: "`Reduce::Accumulable 8`"
 
@@ -253,8 +255,8 @@ operators:
       empty input collection.
     uses_memory: True
     memory_details: |
-      Can use significant amount as the operator can significantly overestimate
-      the size. For `MIN` and `MAX` aggregates, consult
+      `SUM`, `COUNT`, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size).
+      `MIN` and `MAX` aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
       [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
     expansive: False
     example: "`Reduce group_by=[#0] aggregates=[max((#0 * #1))]`"
@@ -265,7 +267,7 @@ operators:
       Alias for a `Reduce` with an empty aggregate list.
     uses_memory: True
     memory_details: |
-      Uses memory proportional to the input and output size.
+      Uses memory proportional to twice the output size.
     expansive: False
     example: "`Distinct`"
 
@@ -275,7 +277,7 @@ operators:
       Removes duplicate copies of input rows.
     uses_memory: True
     memory_details: |
-      Uses memory proportional to the input and output size, twice.
+      Uses memory proportional to twice the output size.
     expansive: False
     example: "`Distinct`"
 
@@ -286,7 +288,7 @@ operators:
     uses_memory: True
     memory_details: |
       Can use significant amount as the operator can significantly overestimate
-      the size. Consult
+      the group sizes. Consult
       [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
     expansive: False
     example: "`TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5`"
@@ -305,8 +307,8 @@ operators:
       3. `TopK::Basic`, a generic `TopK` plan.
     uses_memory: True
     memory_details: |
-      Can use significant amount as the operator can significantly overestimate
-      the size. Consult
+      `MonotonicTop1` or `MonotonicTopK` uses a moderate amount of memory. Other TopKs use significantly more memory as the operator can significantly overestimate
+      the group sizes. Consult
       [`mz_introspection.mz_expected_group_size_advice`](/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice).
     expansive: False
     example: "`TopK::Basic 10`"
