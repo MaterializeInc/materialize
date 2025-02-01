@@ -2929,7 +2929,19 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     ), f"index sinces did not match {index_since1} vs {index_since2})"
 
 
-RE_WORKLOAD_CLASS_LABEL = re.compile(r'workload_class="(?P<value>\w+)"')
+def find_proxy_port(logs: str, cluster_id: str, port_name: str) -> int | None:
+    """Extract a proxy port from the given logs."""
+
+    RE_PROXY_LINE = re.compile(
+        rf".*INFO mz_orchestrator_process: cluster-{cluster_id}-replica-.*:"
+        rf" {port_name} tcp proxy listening on 0.0.0.0:(?P<port>\d+)"
+    )
+
+    for line in logs.splitlines():
+        if match := RE_PROXY_LINE.match(line):
+            return int(match.group("port"))
+
+    return None
 
 
 def workflow_test_workload_class_in_metrics(c: Composition) -> None:
@@ -2938,9 +2950,24 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
     exposed by envd and clusterd.
     """
 
+    RE_WORKLOAD_CLASS_LABEL = re.compile(r'workload_class="(?P<value>\w+)"')
+
     c.down(destroy_volumes=True)
     c.up("materialized")
-    c.up("clusterd1")
+
+    # Create a cluster and wait for it to come up.
+    c.sql(
+        """
+        CREATE CLUSTER test SIZE '1';
+        SET cluster = test;
+        SELECT * FROM mz_introspection.mz_dataflow_operators;
+        """
+    )
+
+    # Find the internal-http port of the test cluster.
+    cluster_id = c.sql_query("SELECT id FROM mz_clusters WHERE name = 'test'")[0][0]
+    logs = c.invoke("logs", "materialized", capture=True).stdout
+    clusterd_port = find_proxy_port(logs, cluster_id, "internal-http")
 
     def check_workload_class(expected: str | None):
         """
@@ -2955,7 +2982,7 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
             "materialized", "curl", "localhost:6878/metrics", capture=True
         ).stdout
         clusterd_metrics = c.exec(
-            "clusterd1", "curl", "localhost:6878/metrics", capture=True
+            "materialized", "curl", f"localhost:{clusterd_port}/metrics", capture=True
         ).stdout
 
         envd_classes = {
@@ -2979,21 +3006,6 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
             assert clusterd_classes == {
                 expected
             }, f"clusterd: expected workload class '{expected}', found {clusterd_classes}"
-
-    c.sql(
-        """
-        ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
-        CREATE CLUSTER test REPLICAS (r1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 1
-        ));
-        """,
-        port=6877,
-        user="mz_system",
-    )
 
     check_workload_class(None)
 
