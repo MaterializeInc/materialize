@@ -203,9 +203,9 @@ In this case, the index on `teachers(name)` might work better, as the `WHERE t.n
 
 #### Optimize Multi-Way Joins with Delta Joins
 
-Materialize has access to a join execution strategy we call `DeltaQuery`, a.k.a. **delta joins**, that aggressively re-uses indexes and maintains no intermediate results. Materialize considers this plan only if all the necessary indexes already exist, in which case the additional memory cost of the join is zero. This is typically possible when you index all the join keys.
+Materialize has access to a join execution strategy we call **delta joins**, which aggressively re-uses indexes and maintains no intermediate results in memory. Materialize considers this plan only if all the necessary indexes already exist, in which case the additional memory cost of the join is zero. This is typically possible when you index all the join keys (including primary keys and foreign keys that are involved in the join). Delta joins are relevant only for joins of more than 2 inputs.
 
-From the previous example, add the name of the course rather than just the course ID.
+Let us extend the previous example by also querying for the name of the course rather than just the course ID, needing a 3-input join.
 
 ```mzsql
 CREATE VIEW course_schedule AS
