@@ -109,7 +109,7 @@ impl SourceRender for MySqlSourceConnection {
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Option<Stream<G, Infallible>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<GtidPartition>>>,
@@ -231,7 +231,7 @@ impl SourceRender for MySqlSourceConnection {
 
         (
             data_collections,
-            Some(uppers),
+            uppers,
             health,
             stats_stream,
             Some(probe_stream),

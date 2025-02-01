@@ -44,7 +44,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    Option<Stream<G, Infallible>>,
+    Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
     Stream<G, ProgressStatisticsUpdate>,
     Vec<PressOnDropButton>,
@@ -235,7 +235,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
 
     (
         data_collections,
-        Some(progress_stream),
+        progress_stream,
         status,
         stats_stream,
         vec![button.press_on_drop(), stats_button],

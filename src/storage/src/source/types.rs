@@ -76,10 +76,8 @@ pub trait SourceRender {
     /// First, a source must produce a collection that is produced by the rendered dataflow and
     /// must contain *definite*[^1] data for all times beyond the resumption frontier.
     ///
-    /// Second, a source may produce an optional progress stream that will be used to drive
-    /// reclocking. This is useful for sources that can query the highest offsets of the external
-    /// source before reading the data for those offsets. In those cases it is preferable to
-    /// produce this additional stream.
+    /// Second, a source must produce a progress stream that will be used to drive reclocking.
+    /// The frontier of this stream decides for which upstream offsets bindings can be minted.
     ///
     /// Third, a source must produce a stream of health status updates.
     ///
@@ -95,7 +93,7 @@ pub trait SourceRender {
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Option<Stream<G, Infallible>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<Self::Time>>>,

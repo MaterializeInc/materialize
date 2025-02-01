@@ -188,7 +188,7 @@ impl SourceRender for KafkaSourceConnection {
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Option<Stream<G, Infallible>>,
+        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
         Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<KafkaTimestamp>>>,
@@ -224,7 +224,7 @@ impl SourceRender for KafkaSourceConnection {
 
         (
             data_collections,
-            Some(progress),
+            progress,
             health,
             stats,
             Some(probes),
