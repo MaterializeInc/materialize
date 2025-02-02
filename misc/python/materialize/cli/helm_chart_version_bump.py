@@ -21,7 +21,12 @@ def main() -> int:
         prog="helm-chart-version-bump",
         description="Bump environmentd/orchestratord versions in helm chart.",
     )
-    parser.add_argument("version", type=str, help="Version to bump to.")
+    parser.add_argument(
+        "--helm-chart-version",
+        type=str,
+        help="Helm-chart version to bump to, no change if not set.",
+    )
+    parser.add_argument("version", type=str, help="Materialize version to bump to.")
     args = parser.parse_args()
 
     yaml = YAML()
@@ -56,6 +61,15 @@ def main() -> int:
             ),
         ),
     ]
+
+    if args.helm_chart_version:
+        mods.append(
+            (
+                MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml",
+                lambda docs: docs[0].update({"version": args.helm_chart_version}),
+            )
+        )
+
     for file, mod in mods:
         with open(file) as f:
             docs = list(yaml.load_all(f))
