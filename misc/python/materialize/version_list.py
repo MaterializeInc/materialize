@@ -29,6 +29,7 @@ MZ_ROOT = Path(os.environ["MZ_ROOT"])
 
 LTS_VERSIONS = [
     MzVersion.parse_mz("v0.130.1"),  # v25.1.0
+    MzVersion.parse_mz("v0.130.3"),  # v25.1.1
     # Put new versions at the bottom
 ]
 
