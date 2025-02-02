@@ -43,7 +43,7 @@ psycopg-binary==3.2.3
 # See also https://github.com/mitmproxy/pdoc/issues/741
 pydantic==2.8.2
 pyelftools==0.31
-pyjwt==2.9.0
+pyjwt==2.10.1
 PyMySQL==1.1.1
 pytest==8.3.4
 pytest-split==0.10.0
