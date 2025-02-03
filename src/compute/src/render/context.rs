@@ -22,6 +22,7 @@ use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Data};
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION;
 use mz_compute_types::plan::{AvailableCollections, LirId};
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_repr::fixed_length::ToDatumIter;
@@ -97,6 +98,24 @@ where
     /// The expiration time for dataflows in this context. The output's frontier should never advance
     /// past this frontier, except the empty frontier.
     pub dataflow_expiration: Antichain<T>,
+    /// The flags active in this context.
+    pub flags: ContextFlags,
+}
+
+/// Flags influencing the behavior of a context.
+#[derive(Clone, Debug)]
+pub struct ContextFlags {
+    /// Whether to use the fueled `flat_map` for creating specific collections.
+    pub enable_fueled_as_specific_collection: bool,
+}
+
+impl From<&mz_dyncfg::ConfigSet> for ContextFlags {
+    fn from(config: &mz_dyncfg::ConfigSet) -> Self {
+        Self {
+            enable_fueled_as_specific_collection:
+                ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION.get(config),
+        }
+    }
 }
 
 impl<S: Scope> Context<S>
@@ -135,6 +154,8 @@ where
             )
         };
 
+        let flags = ContextFlags::from(&compute_state.worker_config);
+
         Self {
             scope,
             debug_name: dataflow.debug_name.clone(),
@@ -147,6 +168,7 @@ where
             compute_logger,
             linear_join_spec: compute_state.linear_join_spec,
             dataflow_expiration,
+            flags,
         }
     }
 }
@@ -230,6 +252,7 @@ where
             linear_join_spec: self.linear_join_spec.clone(),
             bindings,
             dataflow_expiration: self.dataflow_expiration.clone(),
+            flags: self.flags.clone(),
         }
     }
 }
@@ -327,9 +350,12 @@ where
 {
     /// Presents `self` as a stream of updates.
     ///
+    /// Deprecated: This function is not fueled and hence risks flattening the whole arrangement.
+    ///
     /// This method presents the contents as they are, without further computation.
     /// If you have logic that could be applied to each record, consider using the
     /// `flat_map` methods which allows this and can reduce the work done.
+    #[deprecated(note = "Use `flat_map` instead.")]
     pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
         let mut datums = DatumVec::new();
         let logic = move |k: DatumSeq, v: DatumSeq| {
@@ -562,9 +588,14 @@ where
     /// doing any unthinning transformation.
     /// Therefore, it should be used when the appropriate transformation
     /// was planned as part of a following MFP.
+    ///
+    /// If `key` is specified, the function converts the arrangement to a collection. It uses either
+    /// the fueled `flat_map` or `as_collection` method, depending on the flag
+    /// [`ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION`].
     pub fn as_specific_collection(
         &self,
         key: Option<&[MirScalarExpr]>,
+        flags: &ContextFlags,
     ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
         // Any operator that uses this method was told to use a particular
         // collection during LIR planning, where we should have made
@@ -576,11 +607,20 @@ where
                 .collection
                 .clone()
                 .expect("The unarranged collection doesn't exist."),
-            Some(key) => self
-                .arranged
-                .get(key)
-                .unwrap_or_else(|| panic!("The collection arranged by {:?} doesn't exist.", key))
-                .as_collection(),
+            Some(key) => {
+                let arranged = self.arranged.get(key).unwrap_or_else(|| {
+                    panic!("The collection arranged by {:?} doesn't exist.", key)
+                });
+                if flags.enable_fueled_as_specific_collection {
+                    let (ok, err) = arranged.flat_map(None, |borrow, t, r| {
+                        Some((SharedRow::pack(borrow.iter()), t, r))
+                    });
+                    (ok.as_collection(), err)
+                } else {
+                    #[allow(deprecated)]
+                    arranged.as_collection()
+                }
+            }
         }
     }
 
@@ -723,6 +763,7 @@ where
         mut mfp: MapFilterProject,
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
         until: Antichain<mz_repr::Timestamp>,
+        flags: &ContextFlags,
     ) -> (
         Collection<S, mz_repr::Row, Diff>,
         Collection<S, DataflowError, Diff>,
@@ -743,7 +784,7 @@ where
 
         if mfp_plan.is_identity() && !has_key_val {
             let key = key_val.map(|(k, _v)| k);
-            return self.as_specific_collection(key.as_deref());
+            return self.as_specific_collection(key.as_deref(), flags);
         }
         let (stream, errors) = self.flat_map(key_val, {
             let mut datum_vec = DatumVec::new();
@@ -801,6 +842,7 @@ where
         input_key: Option<Vec<MirScalarExpr>>,
         input_mfp: MapFilterProject,
         until: Antichain<mz_repr::Timestamp>,
+        flags: &ContextFlags,
     ) -> Self {
         if collections == Default::default() {
             return self;
@@ -820,8 +862,12 @@ where
                 .iter()
                 .any(|(key, _, _)| !self.arranged.contains_key(key));
         if form_raw_collection && self.collection.is_none() {
-            self.collection =
-                Some(self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until));
+            self.collection = Some(self.as_collection_core(
+                input_mfp,
+                input_key.map(|k| (k, None)),
+                until,
+                flags,
+            ));
         }
         for (key, _, thinning) in collections.arranged {
             if !self.arranged.contains_key(&key) {

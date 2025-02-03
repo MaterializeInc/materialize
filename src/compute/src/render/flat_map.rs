@@ -40,7 +40,8 @@ where
     ) -> CollectionBundle<G> {
         let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
-        let (ok_collection, err_collection) = input.as_specific_collection(input_key.as_deref());
+        let (ok_collection, err_collection) =
+            input.as_specific_collection(input_key.as_deref(), &self.flags);
         let stream = ok_collection.inner;
         let (oks, errs) = stream.unary_fallible(Pipeline, "FlatMapStage", move |_, _| {
             Box::new(move |input, ok_output, err_output| {
