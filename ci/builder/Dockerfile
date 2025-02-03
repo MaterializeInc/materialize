@@ -156,8 +156,8 @@ RUN gpg --import crosstool.asc \
     && rm crosstool.asc \
     && echo "trusted-key 09f6dd5f1f30ef2e" >> ~/.gnupg/gpg.conf \
     && mkdir crosstool \
-    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.26.0.tar.xz > crosstool.tar.xz \
-    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.26.0.tar.xz.sig > crosstool.sig \
+    && curl -fsSL https://github.com/crosstool-ng/crosstool-ng/releases/download/crosstool-ng-1.26.0/crosstool-ng-1.26.0.tar.xz > crosstool.tar.xz \
+    && curl -fsSL https://github.com/crosstool-ng/crosstool-ng/releases/download/crosstool-ng-1.26.0/crosstool-ng-1.26.0.tar.xz.sig > crosstool.sig \
     && gpg --verify crosstool.sig crosstool.tar.xz \
     && tar -xf crosstool.tar.xz -C crosstool --strip-components=1 \
     && rm crosstool.sig crosstool.tar.xz \
