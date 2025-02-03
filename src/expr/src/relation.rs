@@ -3428,13 +3428,154 @@ impl JoinImplementation {
 ///
 /// A candidate is described by a collection and a key, and may have various liabilities.
 /// Primarily, the candidate may risk substantial inflation of records, which is something
-/// that concerns us greatly. Additionally the candidate may be unarranged, and we would
+/// that concerns us greatly. Additionally, the candidate may be unarranged, and we would
 /// prefer candidates that do not require additional memory. Finally, we prefer lower id
-/// collections in the interest of consistent tie-breaking.
+/// collections in the interest of consistent tie-breaking. For more characteristics, see
+/// comments on individual fields.
+///
+/// This has more than one version. `new` instantiates the appropriate version based on a
+/// feature flag.
 #[derive(
     Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
 )]
-pub struct JoinInputCharacteristics {
+pub enum JoinInputCharacteristics {
+    /// Old version, with `enable_join_prioritize_arranged` turned off.
+    V1(JoinInputCharacteristicsV1),
+    /// Newer version, with `enable_join_prioritize_arranged` turned on.
+    V2(JoinInputCharacteristicsV2),
+}
+
+impl JoinInputCharacteristics {
+    /// Creates a new instance with the given characteristics.
+    pub fn new(
+        unique_key: bool,
+        key_length: usize,
+        arranged: bool,
+        cardinality: Option<usize>,
+        filters: FilterCharacteristics,
+        input: usize,
+        enable_join_prioritize_arranged: bool,
+    ) -> Self {
+        if enable_join_prioritize_arranged {
+            Self::V2(JoinInputCharacteristicsV2::new(
+                unique_key,
+                key_length,
+                arranged,
+                cardinality,
+                filters,
+                input,
+            ))
+        } else {
+            Self::V1(JoinInputCharacteristicsV1::new(
+                unique_key,
+                key_length,
+                arranged,
+                cardinality,
+                filters,
+                input,
+            ))
+        }
+    }
+
+    /// Turns the instance into a String to be printed in EXPLAIN.
+    pub fn explain(&self) -> String {
+        match self {
+            Self::V1(jic) => jic.explain(),
+            Self::V2(jic) => jic.explain(),
+        }
+    }
+
+    /// Whether the join input described by `self` is arranged.
+    pub fn arranged(&self) -> bool {
+        match self {
+            Self::V1(jic) => jic.arranged,
+            Self::V2(jic) => jic.arranged,
+        }
+    }
+
+    /// Returns the `FilterCharacteristics` for the join input described by `self`.
+    pub fn filters(&mut self) -> &mut FilterCharacteristics {
+        match self {
+            Self::V1(jic) => &mut jic.filters,
+            Self::V2(jic) => &mut jic.filters,
+        }
+    }
+}
+
+/// Newer version of `JoinInputCharacteristics`, with `enable_join_prioritize_arranged` turned on.
+#[derive(
+    Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
+)]
+pub struct JoinInputCharacteristicsV2 {
+    /// An excellent indication that record count will not increase.
+    pub unique_key: bool,
+    /// Cross joins are bad.
+    /// (`key_length > 0` also implies that it is not a cross join. However, we need to note cross
+    /// joins in a separate field, because not being a cross join is more important than `arranged`,
+    /// but otherwise `key_length` is less important than `arranged`.)
+    pub not_cross: bool,
+    /// Indicates that there will be no additional in-memory footprint.
+    pub arranged: bool,
+    /// A weaker signal that record count will not increase.
+    pub key_length: usize,
+    /// Estimated cardinality (lower is better)
+    pub cardinality: Option<std::cmp::Reverse<usize>>,
+    /// Characteristics of the filter that is applied at this input.
+    pub filters: FilterCharacteristics,
+    /// We want to prefer input earlier in the input list, for stability of ordering.
+    pub input: std::cmp::Reverse<usize>,
+}
+
+impl JoinInputCharacteristicsV2 {
+    /// Creates a new instance with the given characteristics.
+    pub fn new(
+        unique_key: bool,
+        key_length: usize,
+        arranged: bool,
+        cardinality: Option<usize>,
+        filters: FilterCharacteristics,
+        input: usize,
+    ) -> Self {
+        Self {
+            unique_key,
+            not_cross: key_length > 0,
+            arranged,
+            key_length,
+            cardinality: cardinality.map(std::cmp::Reverse),
+            filters,
+            input: std::cmp::Reverse(input),
+        }
+    }
+
+    /// Turns the instance into a String to be printed in EXPLAIN.
+    pub fn explain(&self) -> String {
+        let mut e = "".to_owned();
+        if self.unique_key {
+            e.push_str("U");
+        }
+        // Don't need to print `not_cross`, because that is visible in the printed key.
+        // if !self.not_cross {
+        //     e.push_str("C");
+        // }
+        for _ in 0..self.key_length {
+            e.push_str("K");
+        }
+        if self.arranged {
+            e.push_str("A");
+        }
+        if let Some(std::cmp::Reverse(cardinality)) = self.cardinality {
+            e.push_str(&format!("|{cardinality}|"));
+        }
+        e.push_str(&self.filters.explain());
+        e
+    }
+}
+
+/// Old version of `JoinInputCharacteristics`, with `enable_join_prioritize_arranged` turned off.
+#[derive(
+    Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
+)]
+pub struct JoinInputCharacteristicsV1 {
     /// An excellent indication that record count will not increase.
     pub unique_key: bool,
     /// A weaker signal that record count will not increase.
@@ -3449,7 +3590,7 @@ pub struct JoinInputCharacteristics {
     pub input: std::cmp::Reverse<usize>,
 }
 
-impl JoinInputCharacteristics {
+impl JoinInputCharacteristicsV1 {
     /// Creates a new instance with the given characteristics.
     pub fn new(
         unique_key: bool,
