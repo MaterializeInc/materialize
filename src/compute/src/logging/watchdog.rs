@@ -70,7 +70,7 @@ pub(super) fn construct<S: Scope<Timestamp = mz_repr::Timestamp>>(
     let operator_to_heap_size = operator_to_heap_size
         .as_collection()
         .mz_arrange::<KeyBatcher<_, _, _>, ColKeyBuilder<_, _, _>, KeySpine<_, _, _>>(
-            "operator_to_dataflow",
+            "operator_to_heap_size",
         );
 
     let operator_to_dataflow = operator_to_dataflow
@@ -94,7 +94,7 @@ pub(super) fn construct<S: Scope<Timestamp = mz_repr::Timestamp>>(
         )
         .count_total_core::<mz_repr::Diff>()
         .mz_arrange::<ColValBatcher<_, _, _, _>, ColValBuilder<_, _, _, _>, KeyValSpine<_, _, _, _>>(
-            "dataflow_to_heap_size",
+            "dataflow_to_heap_size_count",
         )
         .join_core(&heap_size_limits, |dataflow, size, limit| {
             if *size >= (*limit).try_into().expect("must fit") {
