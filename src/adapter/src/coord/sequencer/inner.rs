@@ -3444,7 +3444,7 @@ impl Coordinator {
         ctx: ExecuteContext,
         plan: plan::AlterSinkPlan,
     ) {
-        // 1. Put a read hold on the new relation
+        // Put a read hold on the new relation
         let id_bundle = crate::CollectionIdBundle {
             storage_ids: BTreeSet::from_iter([plan.sink.from]),
             compute_ids: BTreeMap::new(),

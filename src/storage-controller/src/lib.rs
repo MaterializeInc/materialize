@@ -3079,17 +3079,31 @@ where
             return Err(StorageError::IdentifierMissing(id));
         };
 
-        info!(
-            sink_id = %id,
-            from_id = %description.sink.from,
-            as_of = ?description.sink.as_of,
-            "run_export"
-        );
-
         let from_storage_metadata = self
             .storage_collections
             .collection_metadata(description.sink.from)?;
         let to_storage_metadata = self.storage_collections.collection_metadata(id)?;
+
+        // Choose an as-of frontier for this execution of the sink. If the write frontier of the sink
+        // is strictly larger than its read hold, it must have at least written out its snapshot, and we can skip
+        // reading it; otherwise assume we may have to replay from the beginning.
+        let export_state = self.storage_collections.collection_frontiers(id)?;
+        let mut as_of = description.sink.as_of.clone();
+        as_of.join_assign(&export_state.implied_capability);
+        let with_snapshot = if PartialOrder::less_than(&as_of, &export_state.write_frontier) {
+            false
+        } else {
+            description.sink.with_snapshot
+        };
+
+        info!(
+            sink_id = %id,
+            from_id = %description.sink.from,
+            write_frontier = ?export_state.write_frontier,
+            ?as_of,
+            ?with_snapshot,
+            "run_export"
+        );
 
         let cmd = RunSinkCommand {
             id,
@@ -3098,11 +3112,11 @@ where
                 from_desc: description.sink.from_desc.clone(),
                 connection: description.sink.connection.clone(),
                 envelope: description.sink.envelope,
-                as_of: description.sink.as_of.clone(),
+                as_of,
                 version: description.sink.version,
                 partition_strategy: description.sink.partition_strategy.clone(),
                 from_storage_metadata,
-                with_snapshot: description.sink.with_snapshot,
+                with_snapshot,
                 to_storage_metadata,
             },
         };
