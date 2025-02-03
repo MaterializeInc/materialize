@@ -739,25 +739,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .expect("Cannot error if target_replica_ids is None")
     }
 
-    /// Update the tracked hydration status for an operator according to a received status update.
-    fn update_dataflow_limit_status(&mut self, replica_id: ReplicaId, status: DataflowLimitStatus) {
-        tracing::warn!(
-            "Dataflow limit exceeded on replica {}: {:?}",
-            replica_id,
-            status
-        );
-        if let Some(subscribe) = self.subscribes.get(&status.collection_id) {
-            self.deliver_response(ComputeControllerResponse::SubscribeResponse(
-                status.collection_id,
-                SubscribeBatch {
-                    lower: subscribe.frontier.clone(),
-                    upper: subscribe.frontier.clone(),
-                    updates: Err("Dataflow limit exceeded".to_string()),
-                },
-            ))
-        }
-    }
-
     /// Clean up collection state that is not needed anymore.
     ///
     /// Three conditions need to be true before we can remove state for a collection:
@@ -2029,6 +2010,40 @@ where
             }
             StatusResponse::DataflowLimitExceeded(status) => {
                 self.update_dataflow_limit_status(replica_id, status)
+            }
+        }
+    }
+
+    /// Update the tracked hydration status for an operator according to a received status update.
+    fn update_dataflow_limit_status(&mut self, replica_id: ReplicaId, status: DataflowLimitStatus) {
+        tracing::warn!(
+            "Dataflow limit exceeded on replica {}: {:?}",
+            replica_id,
+            status
+        );
+        if let Some(subscribe) = self.subscribes.get(&status.collection_id) {
+            self.deliver_response(ComputeControllerResponse::SubscribeResponse(
+                status.collection_id,
+                SubscribeBatch {
+                    lower: subscribe.frontier.clone(),
+                    upper: subscribe.frontier.clone(),
+                    updates: Err("Dataflow limit exceeded".to_string()),
+                },
+            ))
+        } else {
+            // Look for a matching peek
+            let mut peek_uuid = None;
+            for (uuid, peek) in self.peeks.iter() {
+                if peek.read_hold.id() == status.collection_id {
+                    peek_uuid = Some(*uuid);
+                    break;
+                }
+            }
+            if let Some(uuid) = peek_uuid {
+                self.cancel_peek(
+                    uuid,
+                    PeekResponse::Error("Dataflow limit exceeded".to_string()),
+                );
             }
         }
     }
