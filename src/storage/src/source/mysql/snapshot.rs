@@ -405,20 +405,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
                 let mut snapshot_staged = 0;
                 for (table, outputs) in &reader_snapshot_table_info {
-                    // MySQL supports invisible columns, which must be requested explicitly in the projection
-                    // to be retrieved.
-                    let columns = outputs
-                        .iter()
-                        .flat_map(|info| {
-                            info.desc
-                                .columns
-                                .iter()
-                                .map(|col_info| format!("`{}`", col_info.name))
-                        })
-                        .join(", ");
-                    let query = format!("SELECT {} FROM {}", columns, table);
-                    trace!(%id, "timely-{worker_id} reading snapshot from \
-                                 table '{table}'");
+                    let query = build_snapshot_query(outputs);
+                    trace!(%id, "timely-{worker_id} reading snapshot query='{}'", query);
                     let mut results = tx.exec_stream(query, ()).await?;
                     let mut count = 0;
                     while let Some(row) = results.try_next().await? {
@@ -529,6 +517,22 @@ where
     Ok(total)
 }
 
+/// Builds the SQL query to be used for creating the snapshot using the first entry in outputs.
+///
+/// Expect `outputs` to contain entries for a single table, and to have at least 1 entry.
+/// Expect that each MySqlTableDesc entry contains all columns described in information_schema.columns.
+#[must_use]
+fn build_snapshot_query(outputs: &[SourceOutputInfo]) -> String {
+    let info = outputs.first().expect("MySQL table info");
+    let columns = info
+        .desc
+        .columns
+        .iter()
+        .map(|col| format!("`{}`", col.name))
+        .join(", ");
+    format!("SELECT {} FROM {}", columns, info.table_name)
+}
+
 #[derive(Default)]
 struct TableStatistics {
     count_latency: f64,
@@ -552,4 +556,49 @@ where
     stats.count = count_row.ok_or_else(|| anyhow::anyhow!("failed to COUNT(*) {table}"))?;
 
     Ok(stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_mysql_util::{MySqlColumnDesc, MySqlTableDesc};
+    use timely::progress::Antichain;
+
+    #[mz_ore::test]
+    fn snapshot_query_duplicate_table() {
+        let schema_name = "myschema".to_string();
+        let table_name = "mytable".to_string();
+        let table = MySqlTableName(schema_name.clone(), table_name.clone());
+        let columns = ["c1", "c2", "c3"]
+            .iter()
+            .map(|col| MySqlColumnDesc {
+                name: col.to_string(),
+                column_type: None,
+                meta: None,
+            })
+            .collect::<Vec<_>>();
+        let desc = MySqlTableDesc {
+            schema_name: schema_name.clone(),
+            name: table_name.clone(),
+            columns,
+            keys: BTreeSet::default(),
+        };
+        let info = SourceOutputInfo {
+            output_index: 1, // ignored
+            table_name: table.clone(),
+            desc,
+            text_columns: vec![],
+            exclude_columns: vec![],
+            initial_gtid_set: Antichain::default(),
+            resume_upper: Antichain::default(),
+        };
+        let query = build_snapshot_query(&[info.clone(), info]);
+        assert_eq!(
+            format!(
+                "SELECT `c1`, `c2`, `c3` FROM `{}`.`{}`",
+                &schema_name, &table_name
+            ),
+            query
+        );
+    }
 }
