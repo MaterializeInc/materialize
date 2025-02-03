@@ -1001,7 +1001,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         if let Some(prev_export) = prev {
                             prev_export
                                 .alter_compatible(export.id, &export.description)
-                                .expect("only alter compatible ingestions permitted");
+                                .expect("only alter compatible exports permitted");
                         }
                     }
                 }

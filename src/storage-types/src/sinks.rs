@@ -76,7 +76,7 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
             connection,
             envelope,
             version: _,
-            // The as of of the descriptions may differ.
+            // The as-of of the descriptions may differ.
             as_of: _,
             from_storage_metadata,
             partition_strategy,

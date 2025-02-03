@@ -73,6 +73,7 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -98,6 +99,9 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::vec::VecExt;
+use mz_persist_client::write::WriteHandle;
+use mz_persist_client::Diagnostics;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -107,6 +111,7 @@ use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, Da
 use mz_storage_types::sinks::{
     KafkaSinkConnection, KafkaSinkFormatType, SinkEnvelope, SinkPartitionStrategy, StorageSinkDesc,
 };
+use mz_storage_types::sources::SourceData;
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -156,6 +161,23 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
     ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
         let mut scope = input.scope();
 
+        let write_handle = {
+            let persist = Arc::clone(&storage_state.persist_clients);
+            let shard_meta = sink.to_storage_metadata.clone();
+            async move {
+                let client = persist.open(shard_meta.persist_location).await?;
+                let handle = client
+                    .open_writer(
+                        shard_meta.data_shard,
+                        Arc::new(shard_meta.relation_desc),
+                        Arc::new(UnitSchema),
+                        Diagnostics::from_purpose("sink handle"),
+                    )
+                    .await?;
+                Ok(handle)
+            }
+        };
+
         let write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
         storage_state
             .sink_write_frontiers
@@ -186,6 +208,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
             sink,
             metrics,
             statistics,
+            write_handle,
             write_frontier,
         );
 
@@ -618,6 +641,8 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
     metrics: KafkaSinkMetrics,
     statistics: SinkStatistics,
+    write_handle: impl Future<Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, Diff>>>
+        + 'static,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> (Stream<G, HealthStatusMessage>, PressOnDropButton) {
     let scope = input.scope();
@@ -643,6 +668,8 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
             fail::fail_point!("kafka_sink_creation_error", |_| Err(
                 ContextCreationError::Other(anyhow::anyhow!("synthetic error"))
             ));
+
+            let mut write_handle = write_handle.await?;
 
             let metrics = Arc::new(metrics);
 
@@ -774,6 +801,28 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                         debug!("{name}: committing transaction for {}", progress.pretty());
                         producer.commit_transaction(progress.clone()).await?;
                         transaction_begun = false;
+                        let mut expect_upper = write_handle.shared_upper();
+                        loop {
+                            if PartialOrder::less_equal(&progress, &expect_upper) {
+                                // The frontier has already been advanced as far as necessary.
+                                break;
+                            }
+                            // TODO(sinks): include the high water mark in the output topic for
+                            // the messages we've published, if and when we allow reads to the sink
+                            // directly, to allow monitoring the progress of the sink in terms of
+                            // the output system.
+                            const EMPTY: &[((SourceData, ()), Timestamp, Diff)] = &[];
+                            match write_handle
+                                .compare_and_append(EMPTY, expect_upper, progress.clone())
+                                .await
+                                .expect("valid usage")
+                            {
+                                Ok(()) => break,
+                                Err(mismatch) => {
+                                    expect_upper = mismatch.current;
+                                }
+                            }
+                        }
                         write_frontier.borrow_mut().clone_from(&progress);
                         match progress.into_option() {
                             Some(new_upper) => upper = new_upper,

@@ -1320,7 +1320,7 @@ impl Coordinator {
                     storage_sink_from_entry.name(),
                     storage_sink_from_entry.conn_id(),
                 ))
-                .expect("indexes can only be built on items with descs")
+                .expect("sinks can only be built on items with descs")
                 .into_owned(),
             connection: sink
                 .connection
