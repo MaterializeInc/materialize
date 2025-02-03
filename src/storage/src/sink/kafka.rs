@@ -125,7 +125,7 @@ use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::sync::watch;
 use tokio::time::{self, MissedTickBehavior};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::kafka::KafkaSinkMetrics;
@@ -771,7 +771,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                             producer.send(&message, time, diff)?;
                         }
 
-                        info!("{name}: committing transaction for {}", progress.pretty());
+                        debug!("{name}: committing transaction for {}", progress.pretty());
                         producer.commit_transaction(progress.clone()).await?;
                         transaction_begun = false;
                         write_frontier.borrow_mut().clone_from(&progress);
