@@ -45,6 +45,27 @@ pub(super) fn construct<S: Scope<Timestamp = mz_repr::Timestamp>>(
         dataflows_exceeding_heap_size_limit,
     } = streams;
 
+    // The following dataflow computes:
+    // ```
+    // arrangement_heap_size    batcher_heap_size  operator_to_dataflow   heap_size_limits
+    //           |                    |                    |                    |
+    //           |----->concat<------ |                 arrange              arrange
+    //                    |                                |                    |
+    //               arrange: op_to_heap_size              |                    |
+    //                    |                                |                    |
+    //                    |-->join: dataflow_to_heap_size<-|                    |
+    //                                    |                                     |
+    //                                arrange                                   |
+    //                                    |                                     |
+    //                               count_total_core                           |
+    //                                    |                                     |
+    //                                arrange                                   |
+    //                                    |                                     |
+    //                                    |------------>join<-------------------|
+    //                                                    |
+    //                                                result
+    // ```
+
     let operator_to_heap_size = arrangement_heap_size.concat(&batcher_heap_size);
     let operator_to_heap_size = operator_to_heap_size
         .as_collection()
@@ -58,22 +79,20 @@ pub(super) fn construct<S: Scope<Timestamp = mz_repr::Timestamp>>(
             "operator_to_dataflow",
         );
 
-    let heap_size_limits = heap_size_limits
-        .as_collection()
-        .mz_arrange::<ColValBatcher<_, _, _, _>, ColValBuilder<_, _, _, _>, KeyValSpine<_, _, _, _>>("heap_size_limits");
-
     let dataflow_to_heap_size = operator_to_heap_size
         .join_core(&operator_to_dataflow, |_op, (), dataflow| {
             Some((*dataflow, ()))
         });
 
-    let dataflow_to_heap_size = dataflow_to_heap_size
+    let heap_size_limits = heap_size_limits
+        .as_collection()
+        .mz_arrange::<ColValBatcher<_, _, _, _>, ColValBuilder<_, _, _, _>, KeyValSpine<_, _, _, _>>("heap_size_limits");
+
+    let dataflow_to_heap_size_limit =  dataflow_to_heap_size
         .mz_arrange::<KeyBatcher<_, _, _>, ColKeyBuilder<_, _, _>, KeySpine<_, _, _>>(
             "dataflow_to_heap_size",
         )
-        .count_total_core::<mz_repr::Diff>();
-
-    let dataflow_to_heap_size_limit = dataflow_to_heap_size
+        .count_total_core::<mz_repr::Diff>()
         .mz_arrange::<ColValBatcher<_, _, _, _>, ColValBuilder<_, _, _, _>, KeyValSpine<_, _, _, _>>(
             "dataflow_to_heap_size",
         )
