@@ -1007,16 +1007,64 @@ fn merge_chains_up_to<D: Data>(
 
 /// Merge the given cursors into one chain.
 fn merge_cursors<D: Data>(cursors: Vec<Cursor<D>>) -> Chain<D> {
-    // Possible optimization: For two cursors, we could do a simple 2-way merge, avoiding the
-    // overhead of a binary heap.
     match cursors.len() {
         0 => Chain::default(),
         1 => {
             let [cur] = cursors.try_into().unwrap();
             Chain::from(cur)
         }
+        2 => {
+            let [a, b] = cursors.try_into().unwrap();
+            merge_2(a, b)
+        }
         _ => merge_many(cursors),
     }
+}
+
+/// Merge the given two cursors using a 2-way merge.
+///
+/// This function is a specialization of `merge_many` that avoids the overhead of a binary heap.
+fn merge_2<D: Data>(cursor1: Cursor<D>, cursor2: Cursor<D>) -> Chain<D> {
+    let mut rest1 = Some(cursor1);
+    let mut rest2 = Some(cursor2);
+    let mut merged = Chain::default();
+
+    loop {
+        match (rest1, rest2) {
+            (Some(c1), Some(c2)) => {
+                let (d1, t1, r1) = c1.get();
+                let (d2, t2, r2) = c2.get();
+
+                match (t1, d1).cmp(&(t2, d2)) {
+                    Ordering::Less => {
+                        merged.push((d1, t1, r1));
+                        rest1 = c1.step();
+                        rest2 = Some(c2);
+                    }
+                    Ordering::Greater => {
+                        merged.push((d2, t2, r2));
+                        rest1 = Some(c1);
+                        rest2 = c2.step();
+                    }
+                    Ordering::Equal => {
+                        let r = r1 + r2;
+                        if r != 0 {
+                            merged.push((d1, t1, r));
+                        }
+                        rest1 = c1.step();
+                        rest2 = c2.step();
+                    }
+                }
+            }
+            (Some(c), None) | (None, Some(c)) => {
+                merged.push_cursor(c);
+                break;
+            }
+            (None, None) => break,
+        }
+    }
+
+    merged
 }
 
 /// Merge the given cursors using a k-way merge with a binary heap.
