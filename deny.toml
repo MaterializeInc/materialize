@@ -247,9 +247,6 @@ ignore = [
     "RUSTSEC-2024-0388",
     # `instant` is unmaintained, and the author recommends using the maintained [`web-time`] crate instead.
     "RUSTSEC-2024-0384",
-    # columnar: `Read` on uninitialized buffer may cause UB (ColumnarReadExt::read_typed_vec())
-    "RUSTSEC-2021-0087",
-
 ]
 
 # Must be manually kept in sync with about.toml.
