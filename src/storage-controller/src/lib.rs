@@ -2042,7 +2042,8 @@ where
                 for (ingestion_id, batches) in batches {
                     match self.pending_oneshot_ingestions.remove(&ingestion_id) {
                         Some(pending) => {
-                            // Send a cancel command so our command history is correct.
+                            // Send a cancel command so our command history is correct. And to
+                            // avoid duplicate work once we have active replication.
                             if let Some(instance) = self.instances.get_mut(&pending.cluster_id) {
                                 instance.send(StorageCommand::CancelOneshotIngestion {
                                     ingestions: vec![ingestion_id],
