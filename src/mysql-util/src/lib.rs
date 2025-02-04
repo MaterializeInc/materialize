@@ -114,8 +114,7 @@ pub enum MySqlError {
     MySql(#[from] mysql_async::Error),
 }
 
-/// Quotes MySQL identifiers
-/// See https://github.com/mysql/mysql-sys/blob/master/functions/quote_identifier.sql
+/// Quotes MySQL identifiers. [See MySQL quote_identifier()](https://github.com/mysql/mysql-sys/blob/master/functions/quote_identifier.sql)
 pub fn quote_identifier(identifier: &str) -> String {
     let mut escaped = identifier.replace("`", "``");
     escaped.insert(0, '`');
