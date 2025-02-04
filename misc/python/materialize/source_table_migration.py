@@ -56,12 +56,6 @@ def _verify_source(
             raise e
 
 
-def check_source_table_migration_test_sensible() -> None:
-    assert MzVersion.parse_cargo() < MzVersion.parse_mz(
-        "v0.139.0"
-    ), "migration test probably no longer needed"
-
-
 _last_version: MzVersion | None = None
 
 
