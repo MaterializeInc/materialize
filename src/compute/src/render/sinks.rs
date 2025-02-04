@@ -83,7 +83,12 @@ where
             let (permutation, thinning) = permutation_for_arrangement(key, unthinned_arity);
             let mut mfp = MapFilterProject::new(unthinned_arity);
             mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
-            bundle.as_collection_core(mfp, Some((key.clone(), None)), self.until.clone())
+            bundle.as_collection_core(
+                mfp,
+                Some((key.clone(), None)),
+                self.until.clone(),
+                &self.config_set,
+            )
         };
 
         // Attach logging of dataflow errors.

@@ -1068,12 +1068,17 @@ where
                             mfp,
                             Some((key, row)),
                             self.until.clone(),
+                            &self.config_set,
                         );
                         CollectionBundle::from_collections(oks, errs)
                     }
                     mz_compute_types::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) =
-                            collection.as_collection_core(mfp, None, self.until.clone());
+                        let (oks, errs) = collection.as_collection_core(
+                            mfp,
+                            None,
+                            self.until.clone(),
+                            &self.config_set,
+                        );
                         CollectionBundle::from_collections(oks, errs)
                     }
                 }
@@ -1088,8 +1093,12 @@ where
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) =
-                        input.as_collection_core(mfp, input_key_val, self.until.clone());
+                    let (oks, errs) = input.as_collection_core(
+                        mfp,
+                        input_key_val,
+                        self.until.clone(),
+                        &self.config_set,
+                    );
                     CollectionBundle::from_collections(oks, errs)
                 }
             }
@@ -1131,7 +1140,7 @@ where
             }
             Negate { input } => {
                 let input = expect_input(input);
-                let (oks, errs) = input.as_specific_collection(None);
+                let (oks, errs) = input.as_specific_collection(None, &self.config_set);
                 CollectionBundle::from_collections(oks.negate(), errs)
             }
             Threshold {
@@ -1148,7 +1157,8 @@ where
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for input in inputs.into_iter() {
-                    let (os, es) = expect_input(input).as_specific_collection(None);
+                    let (os, es) =
+                        expect_input(input).as_specific_collection(None, &self.config_set);
                     oks.push(os);
                     errs.push(es);
                 }
@@ -1166,7 +1176,13 @@ where
                 input_mfp,
             } => {
                 let input = expect_input(input);
-                input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
+                input.ensure_collections(
+                    keys,
+                    input_key,
+                    input_mfp,
+                    self.until.clone(),
+                    &self.config_set,
+                )
             }
         }
     }

@@ -251,7 +251,7 @@ where
                 // TODO: extract closure from the first stage in the join plan, should it exist.
                 // TODO: apply that closure in `flat_map_ref` rather than calling `.collection`.
                 let (joined, errs) = inputs[linear_plan.source_relation]
-                    .as_specific_collection(linear_plan.source_key.as_deref());
+                    .as_specific_collection(linear_plan.source_key.as_deref(), &self.config_set);
                 errors.push(errs.enter_region(inner));
                 let mut joined = joined.enter_region(inner);
 
