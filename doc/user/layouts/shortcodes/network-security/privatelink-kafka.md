@@ -134,11 +134,14 @@ If no validation error is returned, move to the next step.
 
 ## Create a source connection
 
-In Materialize, create a source connection that uses the AWS PrivateLink connection you just configured:
+In Materialize, create a source connection that uses the AWS PrivateLink
+connection you just configured:
 
 ```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
     BROKERS (
+        -- The port **must exactly match** the port assigned to the broker in
+        -- the TCP listerner of the NLB.
         'b-1.hostname-1:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9001, AVAILABILITY ZONE 'use1-az2'),
         'b-2.hostname-2:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9002, AVAILABILITY ZONE 'use1-az1'),
         'b-3.hostname-3:9096' USING AWS PRIVATELINK privatelink_svc (PORT 9003, AVAILABILITY ZONE 'use1-az4')
@@ -151,4 +154,14 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 );
 ```
 
-The `(PORT <port_number>)` value must match the port that you used when creating the **TCP listener** in the Network Load Balancer. Be sure to specify the correct availability zone for each broker.
+### Troubleshooting
+
+If you run into connectivity issues during source creation, make sure that:
+
+* The `(PORT <port_number>)` value **exactly matches** the port assigned to the
+  corresponding broker in the **TCP listener** of the Network Load Balancer.
+  Misalignment between ports and broker addresses is the most common cause for
+  connectivity issues.
+
+* For **in-region connections**, the correct availability zone is specified for
+  each broker.
