@@ -93,7 +93,9 @@ use futures::TryStreamExt;
 use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
-use mz_mysql_util::{pack_mysql_row, query_sys_var, MySqlError, ER_NO_SUCH_TABLE};
+use mz_mysql_util::{
+    pack_mysql_row, query_sys_var, quote_identifier, MySqlError, ER_NO_SUCH_TABLE,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
@@ -524,11 +526,20 @@ where
 #[must_use]
 fn build_snapshot_query(outputs: &[SourceOutputInfo]) -> String {
     let info = outputs.first().expect("MySQL table info");
+    if outputs.len() > 1
+        && !outputs
+            .iter()
+            .skip(1)
+            .map(|other_info| &other_info.desc.columns)
+            .all(|other_columns| *other_columns == info.desc.columns)
+    {
+        panic!("Mismatch in table descriptions for {}", info.table_name);
+    }
     let columns = info
         .desc
         .columns
         .iter()
-        .map(|col| format!("`{}`", col.name))
+        .map(|col| quote_identifier(&col.name))
         .join(", ");
     format!("SELECT {} FROM {}", columns, info.table_name)
 }
