@@ -1176,7 +1176,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: persist
               args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --concurrency=4, --rate=500, --max-txn-length=16, --unreliability=0.1]
-        skip: "reenable when database-issues#8637 is fixed"
+        skip: "reenable when database-issues#8623 is fixed"
 
       - id: txn-wal-maelstrom
         label: Maelstrom coverage of txn-wal

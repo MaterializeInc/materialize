@@ -1001,6 +1001,7 @@ class WhereExpression(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("> SET statement_timeout='120s'")
         column_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
         print(f"> CREATE TABLE t1 ({column_list});")
 
