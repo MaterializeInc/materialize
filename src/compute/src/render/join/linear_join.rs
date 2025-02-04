@@ -166,8 +166,7 @@ impl YieldSpec {
         let options = s.split(',').map(|o| o.trim());
         for option in options {
             let mut iter = option.split(':').map(|p| p.trim());
-            let parts : [_; 3]= std::array::from_fn(|_| iter.next());
-            match parts {
+            match std::array::from_fn(|_| iter.next()) {
                 [Some("work"), Some(amount), None] => {
                     let amount = amount.parse().ok()?;
                     after_work = Some(amount);
