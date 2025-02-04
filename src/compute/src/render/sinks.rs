@@ -87,7 +87,7 @@ where
                 mfp,
                 Some((key.clone(), None)),
                 self.until.clone(),
-                &self.flags,
+                &self.config_set,
             )
         };
 

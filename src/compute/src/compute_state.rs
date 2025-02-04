@@ -132,7 +132,9 @@ pub struct ComputeState {
     /// point in the stream of compute commands. Storing per-worker configuration ensures that
     /// because each worker's configuration is only updated once that worker observes the
     /// respective `UpdateConfiguration` command.
-    pub worker_config: ConfigSet,
+    ///
+    /// Reference-counted to avoid cloning for `Context`.
+    pub worker_config: Rc<ConfigSet>,
 
     /// Receiver of operator hydration events.
     pub hydration_rx: mpsc::Receiver<HydrationEvent>,
@@ -215,7 +217,7 @@ impl ComputeState {
             worker_metrics,
             tracing_handle,
             context,
-            worker_config: mz_dyncfgs::all_dyncfgs(),
+            worker_config: mz_dyncfgs::all_dyncfgs().into(),
             hydration_rx,
             hydration_tx,
             suspended_collections: Default::default(),

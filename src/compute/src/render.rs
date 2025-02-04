@@ -1068,7 +1068,7 @@ where
                             mfp,
                             Some((key, row)),
                             self.until.clone(),
-                            &self.flags,
+                            &self.config_set,
                         );
                         CollectionBundle::from_collections(oks, errs)
                     }
@@ -1077,7 +1077,7 @@ where
                             mfp,
                             None,
                             self.until.clone(),
-                            &self.flags,
+                            &self.config_set,
                         );
                         CollectionBundle::from_collections(oks, errs)
                     }
@@ -1097,7 +1097,7 @@ where
                         mfp,
                         input_key_val,
                         self.until.clone(),
-                        &self.flags,
+                        &self.config_set,
                     );
                     CollectionBundle::from_collections(oks, errs)
                 }
@@ -1140,7 +1140,7 @@ where
             }
             Negate { input } => {
                 let input = expect_input(input);
-                let (oks, errs) = input.as_specific_collection(None, &self.flags);
+                let (oks, errs) = input.as_specific_collection(None, &self.config_set);
                 CollectionBundle::from_collections(oks.negate(), errs)
             }
             Threshold {
@@ -1157,7 +1157,8 @@ where
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for input in inputs.into_iter() {
-                    let (os, es) = expect_input(input).as_specific_collection(None, &self.flags);
+                    let (os, es) =
+                        expect_input(input).as_specific_collection(None, &self.config_set);
                     oks.push(os);
                     errs.push(es);
                 }
@@ -1180,7 +1181,7 @@ where
                     input_key,
                     input_mfp,
                     self.until.clone(),
-                    &self.flags,
+                    &self.config_set,
                 )
             }
         }

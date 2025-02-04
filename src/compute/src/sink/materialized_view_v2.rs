@@ -212,7 +212,7 @@ where
         &desired,
         &persist,
         &descs,
-        compute_state.worker_config.clone(),
+        Rc::clone(&compute_state.worker_config),
     );
 
     let append_token = append::render(sink_id, persist_api, active_worker_id, &descs, &batches);
@@ -670,7 +670,7 @@ mod write {
         desired: &DesiredStreams<S>,
         persist: &PersistStreams<S>,
         descs: &Stream<S, BatchDescription>,
-        worker_config: ConfigSet,
+        worker_config: Rc<ConfigSet>,
     ) -> (BatchesStream<S>, PressOnDropButton)
     where
         S: Scope<Timestamp = Timestamp>,

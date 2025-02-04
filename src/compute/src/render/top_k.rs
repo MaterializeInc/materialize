@@ -60,7 +60,7 @@ where
         input: CollectionBundle<G>,
         top_k_plan: TopKPlan,
     ) -> CollectionBundle<G> {
-        let (ok_input, err_input) = input.as_specific_collection(None, &self.flags);
+        let (ok_input, err_input) = input.as_specific_collection(None, &self.config_set);
 
         // We create a new region to compartmentalize the topk logic.
         let (ok_result, err_collection) = ok_input.scope().region_named("TopK", |inner| {
