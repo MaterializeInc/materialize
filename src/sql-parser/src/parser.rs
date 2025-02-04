@@ -2321,16 +2321,9 @@ impl<'a> Parser<'a> {
             TO => true,
             _ => unreachable!(),
         };
-        let connection_type = match self.expect_one_of_keywords(&[
-            AWS,
-            KAFKA,
-            CONFLUENT,
-            POSTGRES,
-            SSH,
-            SQL,
-            MYSQL,
-            YUGABYTE,
-        ])? {
+        let connection_type = match self
+            .expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH, SQL, MYSQL, YUGABYTE])?
+        {
             AWS => {
                 if self.parse_keyword(PRIVATELINK) {
                     CreateConnectionType::AwsPrivatelink
@@ -2351,7 +2344,7 @@ impl<'a> Parser<'a> {
             SQL => {
                 self.expect_keyword(SERVER)?;
                 CreateConnectionType::SqlServer
-            },
+            }
             MYSQL => CreateConnectionType::MySql,
             YUGABYTE => CreateConnectionType::Yugabyte,
             _ => unreachable!(),
