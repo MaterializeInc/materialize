@@ -138,7 +138,10 @@ mod tests {
     #[mz_ore::test]
     fn test_identifier_quoting() {
         let expected = vec!["`a`", "`naughty``sql`", "```;naughty;sql;```"];
-        let input = ["a", "naughty`sql", "`;naughty;sql;`"].iter().map(|raw_str| quote_identifier(&raw_str)).collect::<Vec<_>>();
+        let input = ["a", "naughty`sql", "`;naughty;sql;`"]
+            .iter()
+            .map(|raw_str| quote_identifier(&raw_str))
+            .collect::<Vec<_>>();
         assert_eq!(expected, input);
     }
 }

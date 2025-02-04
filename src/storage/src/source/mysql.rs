@@ -339,7 +339,12 @@ impl MySqlTableName {
 
 impl fmt::Display for MySqlTableName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.{}", quote_identifier(&self.0), quote_identifier(&self.1))
+        write!(
+            f,
+            "{}.{}",
+            quote_identifier(&self.0),
+            quote_identifier(&self.1)
+        )
     }
 }
 
