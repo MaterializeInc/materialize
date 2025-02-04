@@ -140,7 +140,7 @@ mod tests {
         let expected = vec!["`a`", "`naughty``sql`", "```;naughty;sql;```"];
         let input = ["a", "naughty`sql", "`;naughty;sql;`"]
             .iter()
-            .map(|raw_str| quote_identifier(&raw_str))
+            .map(|raw_str| quote_identifier(raw_str))
             .collect::<Vec<_>>();
         assert_eq!(expected, input);
     }
