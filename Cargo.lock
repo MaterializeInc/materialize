@@ -6721,6 +6721,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-self-managed-debug"
+version = "0.130.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "futures",
+ "k8s-openapi",
+ "kube",
+ "mz-build-info",
+ "mz-ore",
+ "serde",
+ "serde_json",
+ "tabled",
+ "tokio",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-server-core"
 version = "0.0.0"
 dependencies = [
