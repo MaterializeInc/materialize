@@ -316,11 +316,7 @@ impl Config {
                 }
 
                 Ok(MySqlConn {
-                    // TODO(maz) - do we still apply the mysql connection timeout here?
-                    conn: Conn::new(opts_builder)
-                        .run_in_task_if(self.in_task, || "mysql_connect".to_string())
-                        .await
-                        .map_err(MySqlError::from)?,
+                    conn: self.connect_with_timeout(opts_builder).await?,
                     _ssh_tunnel_handle: Some(tunnel),
                 })
             }
@@ -363,6 +359,7 @@ impl Config {
             mz_ore::future::timeout(connect_timeout, connection_future)
                 .await
                 .map_err(|err| match err {
+                    // match instead of impl From<> for MySqlError so we can capture the timeout value
                     TimeoutError::DeadlineElapsed => MySqlError::ConnectionTimeout(connect_timeout),
                     TimeoutError::Inner(e) => MySqlError::from(e),
                 })
