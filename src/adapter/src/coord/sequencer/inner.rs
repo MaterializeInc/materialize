@@ -92,7 +92,7 @@ use smallvec::SmallVec;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use tokio::sync::{oneshot, watch};
-use tracing::{warn, Instrument, Span};
+use tracing::{info, warn, Instrument, Span};
 
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
@@ -3486,6 +3486,15 @@ impl Coordinator {
             }
         };
 
+        info!(
+            "preparing alter sink for {}: frontiers={:?} export={:?}",
+            plan.global_id,
+            self.controller
+                .storage_collections
+                .collections_frontiers(vec![plan.global_id, plan.sink.from]),
+            self.controller.storage.export(plan.global_id)
+        );
+
         // Now we must wait for the sink to make enough progress such that there is overlap between
         // the new `from` collection's read hold and the sink's write frontier.
         self.install_storage_watch_set(
@@ -3512,6 +3521,17 @@ impl Coordinator {
                 ctx.retire(Err(err));
                 return;
             }
+        }
+        {
+            let plan = &ctx.plan;
+            info!(
+                "finishing alter sink for {}: frontiers={:?} export={:?}",
+                plan.global_id,
+                self.controller
+                    .storage_collections
+                    .collections_frontiers(vec![plan.global_id, plan.sink.from]),
+                self.controller.storage.export(plan.global_id)
+            );
         }
 
         let plan::AlterSinkPlan {
