@@ -1,6 +1,6 @@
-# Limiting a query's heap space usage
+# Guard rails for cluster reliability
 
-- Associated: #31246 (MVP)
+- Associated: MaterializeInc/materialize#31246 (MVP)
 
 <!--
 The goal of a design document is to thoroughly discover problems and
@@ -22,14 +22,15 @@ The answer to this question should link to at least one open GitHub
 issue describing the problem.
 -->
 
-At the moment, any user with `SELECT`/`SUBSCRIBE` permission can run a query that exhausts all memory resources on a cluster.
-Restricting access using RBAC can be a solution, but is a binary coice: It either allows or disallows running queries.
-Ideally, we would have a way to limit the resources a query can consume, so that the user can run queries with confidence.
-Here, we describe considerations for a solution that limits the heap space usage of a query.
+Materialize offers little mechanisms to ensure a cluster stays up once it is running, which is at odds with the requirements for operational systems.
+Users expect an operational system to be always available, and giving the mechanisms to prevent users from compromising the system.
+The underlying issue is that Materialize does not offer performance isolation within a replica.
+Any user with the ability to create dataflows, or read from external storage, can create objects that consume the remaining resources and cause unavailability.
 
-Measuring heap size usage is inherently difficult as we cannot attribute all memory usage to a single query.
-Any operator can allocate and deallocate memory, and we do not want to (or cannot) instrument all operators.
-We can only measure instrumented dataflow operators, and with a time delay, which renders all solutions approximate.
+Materialize offers coarse-grained mechanisms to prevent some of the issues.
+RBAC can express a policy that prevents users from issuing queries, or creating expensive objects.
+It does not, however, allow fine-grained permissions: A query that reads from an index causes much less work than a query that requires its own dataflow.
+In this design, we look at a spectrum of solutions to address this issue.
 
 
 ## Success Criteria
@@ -44,7 +45,7 @@ outcomes we hope result from this work. Feel free to list both qualitative
 and quantitative measurements.
 -->
 
-A solution needs to limit the heap size usage of a query to a configurable value, and enforce it with high probability.
+Materialize offers a range of mechanisms that allow users to prevent undesired operations on a cluster.
 
 ## Out of Scope
 
@@ -81,6 +82,40 @@ unsure, reach out to your manager for help.
 Remember to document any dependencies that may need to break or change as a
 result of this work.
 -->
+
+User's needs aren't uniform; a solution working for one customer might be too limiting for another.
+We propose a set of mechanisms that offer a spectrum of solutions:
+* We add a RBAC permission `CREATE DATAFLOW`, which is required to create dataflows.
+  If the permission is absent, select and subscribe queries can only read from existing objects.
+* We add a RBAC permission `READ EXTERNAL`, which is required to read data from external storage (persist).
+  The permission controls both dataflows reading from external sources, and peeks that directly read from external storage.
+* We implement a mechanism to limit the resources of a dataflow serving a query with a probability.
+
+### `CREATE DATAFLOW` permission
+
+The `CREATE DATAFLOW` permission controls whether a query can render its own dataflow.
+Without the permission, Materialize will reject a query that it cannot otherwise fulfill.
+The permission applies to a cluster.
+
+Implementing this requires additional plumbing.
+At the moment, we evaluate the RBAC permissions before sequencing a plan.
+However, we only learn during sequencing whether an object needs to render a dataflow.
+
+### `READ EXTERNAL` permission
+
+The `READ EXTERNAL` permission controls whether a query can read from external storage.
+If a query can only be fulfilled by reading data from external storage, Materialize checks that the issuer has the permission on the target cluster.
+
+The permission would apply to all objects, i.e., indexes, materialized views, and queries.
+Similar considerations as with `CREATE DATAFLOW` regarding the implementation apply here, too.
+
+### Limiting a query's heap size
+
+Measuring heap size usage is inherently difficult as we cannot attribute all memory usage to a single query.
+Any operator can allocate and deallocate memory, and we do not want to (or cannot) instrument all operators.
+We can only measure instrumented dataflow operators, and with a time delay, which renders all solutions approximate.
+
+A solution needs to limit the heap size usage of a query to a configurable value, and enforce it with high probability.
 
 To measure the heap size of a query, we hook into the arrangement heap size infrastructure.
 It already provides the system with a view of the heap size of each arrangement and its merge batcher.
@@ -129,6 +164,9 @@ explicitly mention it in this section and provide details on why you'd
 like to skip or delay it.
 -->
 
+
+### Limiting a query's heap size
+
 On a high level, we add a session variable `max_query_heap_size`, encoding an optional byte size value.
 If set, we instruct the replica to notify the controller if a dataflow would exceed its limits.
 The controller can then decide to terminate the query, or let it continue.
@@ -147,7 +185,7 @@ competitive research. One of our company values is to "do the reading" and
 to "write things down." This is your opportunity to demonstrate both!
 -->
 
-### Instrument the memory allocator
+### Heap size: Instrument the memory allocator
 
 As an alternative to measure through arrangement size reporting, we could instrument the memory allocator and Timely scheduler and track (de)allocations on a per-dataflow basis.
 The current utilization would then be the sum of all allocations minus deallocations.
@@ -159,7 +197,7 @@ A solution on the allocator level would need to track all allocations and deallo
 
 This solution would not be able to enforce limits faster than the MVP, as it would still need to report the current utilization to the controller.
 
-### Drop dataflow from within
+### Heap size: Drop dataflow from within
 
 The design proposal requires the controller to terminate a query if it exceeds its limits, which means another network round-trip.
 We could give the replica permission to drop dataflows they detect as exceeding their limits.
@@ -179,7 +217,7 @@ questions. All open questions should be answered by the time a design
 document is merged.
 -->
 
-### Delayed response
+### Heap size: Delayed response
 
 Any solution that depends on instrospection data has a delay between the problem occurring and its detection.
 We can work towards reducing the delay, but we cannot eliminate it.
