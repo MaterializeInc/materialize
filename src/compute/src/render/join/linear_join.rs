@@ -165,13 +165,14 @@ impl YieldSpec {
 
         let options = s.split(',').map(|o| o.trim());
         for option in options {
-            let parts: Vec<_> = option.split(':').map(|p| p.trim()).collect();
-            match &parts[..] {
-                ["work", amount] => {
+            let mut iter = option.split(':').map(|p| p.trim());
+            let parts : [_; 3]= std::array::from_fn(|_| iter.next());
+            match parts {
+                [Some("work"), Some(amount), None] => {
                     let amount = amount.parse().ok()?;
                     after_work = Some(amount);
                 }
-                ["time", millis] => {
+                [Some("time"), Some(millis), None] => {
                     let millis = millis.parse().ok()?;
                     let duration = Duration::from_millis(millis);
                     after_time = Some(duration);
