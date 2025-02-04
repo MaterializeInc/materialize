@@ -526,14 +526,12 @@ where
 #[must_use]
 fn build_snapshot_query(outputs: &[SourceOutputInfo]) -> String {
     let info = outputs.first().expect("MySQL table info");
-    if outputs.len() > 1
-        && !outputs
-            .iter()
-            .skip(1)
-            .map(|other_info| &other_info.desc.columns)
-            .all(|other_columns| *other_columns == info.desc.columns)
-    {
-        panic!("Mismatch in table descriptions for {}", info.table_name);
+    for output in &outputs[1..] {
+        assert!(
+            info.desc.columns == output.desc.columns,
+            "Mismatch in table descriptions for {}",
+            info.table_name
+        );
     }
     let columns = info
         .desc
