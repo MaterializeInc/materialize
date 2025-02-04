@@ -379,7 +379,7 @@ start by selecting the relevant option.
    command to create an **in-region** or **cross-region** AWS PrivateLink
    connection.
 
-    **In-region connections**
+    ↕️ **In-region connections**
 
     To connect to an AWS PrivateLink endpoint service in the **same region** as your
     Materialize environment:
@@ -402,7 +402,7 @@ start by selecting the relevant option.
       subnet, look for **Availability Zone ID** (e.g., `use1-az6`),
       not **Availability Zone** (e.g., `us-east-1d`).
 
-    **Cross-region connections**
+    ↔️ **Cross-region connections**
 
     To connect to an AWS PrivateLink endpoint service in a **different region** to
     the one where your Materialize environment is deployed:
