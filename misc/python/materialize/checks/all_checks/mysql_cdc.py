@@ -483,7 +483,7 @@ class MySqlBitType(Check):
 @externally_idempotent(False)
 class MySqlInvisibleColumn(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version > MzVersion.parse_mz("v0.132.0-dev")
+        return self.base_version > MzVersion.parse_mz("v0.133.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
