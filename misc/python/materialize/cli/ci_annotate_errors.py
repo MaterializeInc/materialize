@@ -161,6 +161,7 @@ IGNORE_RE = re.compile(
     # For 0dt upgrades
     | halting\ process:\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out)
     | zippy-materialized.* \| .* halting\ process:\ Server\ started\ with\ requested\ generation
+    | there\ have\ been\ DDL\ that\ we\ need\ to\ react\ to;\ rebooting\ in\ read-only\ mode
     # Don't care for ssh problems
     | fatal:\ userauth_pubkey
     # Fences without incrementing deploy generation
