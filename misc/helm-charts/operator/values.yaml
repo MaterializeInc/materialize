@@ -168,30 +168,6 @@ operator:
         credits_per_hour: "64"
         disk_limit: "962560MiB"
         memory_limit: "481280MiB"
-      128C:
-        workers: 62
-        scale: 4
-        cpu_exclusive: true
-        cpu_limit: 62
-        credits_per_hour: "128"
-        disk_limit: "962560MiB"
-        memory_limit: "481280MiB"
-      256C:
-        workers: 62
-        scale: 8
-        cpu_exclusive: true
-        cpu_limit: 62
-        credits_per_hour: "256"
-        disk_limit: "962560MiB"
-        memory_limit: "481280MiB"
-      512C:
-        workers: 62
-        scale: 16
-        cpu_exclusive: true
-        cpu_limit: 62
-        credits_per_hour: "512"
-        disk_limit: "962560MiB"
-        memory_limit: "481280MiB"
     defaultSizes:
       default: 25cc
       system: 25cc
