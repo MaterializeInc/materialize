@@ -1028,7 +1028,7 @@ where
     /// Add a `(K, V, D)` to the staged batch.
     pub async fn add(&mut self, k: &K, v: &V, d: &D) {
         self.builder
-            .add(&k, &v, &self.initial_ts, d)
+            .add(k, v, &self.initial_ts, d)
             .await
             .expect("invalid Persist usage");
     }
