@@ -15,7 +15,7 @@ retried until it produces the desired result.
 import glob
 from pathlib import Path
 
-from materialize import ci_util, spawn
+from materialize import MZ_ROOT, ci_util, spawn
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azure import Azurite
@@ -304,7 +304,9 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
     matching_files = []
     for filter in args.files:
         matching_files.extend(
-            glob.glob(filter, root_dir="test/testdrive-old-kafka-src-syntax")
+            glob.glob(
+                filter, root_dir=MZ_ROOT / "test" / "testdrive-old-kafka-src-syntax"
+            )
         )
     matching_files = [file for file in matching_files if file != "session.td"]
 
