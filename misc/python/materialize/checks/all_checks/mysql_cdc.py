@@ -480,5 +480,106 @@ class MySqlBitType(Check):
         )
 
 
+@externally_idempotent(False)
+class MySqlInvisibleColumn(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version > MzVersion.parse_mz("v0.132.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                # create the database if it does not exist yet but do not drop it
+                CREATE DATABASE IF NOT EXISTS public;
+                USE public;
+
+                CREATE USER mysql4 IDENTIFIED BY 'mysql';
+                GRANT REPLICATION SLAVE ON *.* TO mysql4;
+                GRANT ALL ON public.* TO mysql4;
+
+                DROP TABLE IF EXISTS mysql_invisible_table;
+
+                CREATE TABLE mysql_invisible_table (f1 INT, f2 FLOAT INVISIBLE, f3 DATE INVISIBLE, f4 TEXT INVISIBLE);
+
+                INSERT INTO mysql_invisible_table (f1, f2, f3, f4) VALUES (1, 0.1, '2025-01-01', 'one');
+
+                > CREATE SECRET mysql_invisible_pass AS 'mysql';
+                > CREATE CONNECTION mysql_invisible_conn TO MYSQL (
+                    HOST 'mysql',
+                    USER mysql4,
+                    PASSWORD SECRET mysql_invisible_pass
+                  )
+
+                > CREATE SOURCE mysql_invisible_source
+                  FROM MYSQL CONNECTION mysql_invisible_conn;
+                > CREATE TABLE mysql_invisible_table FROM SOURCE mysql_invisible_source (REFERENCE public.mysql_invisible_table);
+
+                # Return all rows
+                > CREATE MATERIALIZED VIEW mysql_invisible_view AS
+                  SELECT * FROM mysql_invisible_table
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                INSERT INTO mysql_invisible_table (f1, f2, f3, f4) VALUES (2, 0.2, '2025-02-02', 'two');
+                """,
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                INSERT INTO mysql_invisible_table (f1, f2, f3, f4) VALUES (3, 0.3, '2025-03-03', 'three');
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                f"""
+                > SELECT * FROM mysql_invisible_table;
+                1 0.1 2025-01-01 one
+                2 0.2 2025-02-02 two
+                3 0.3 2025-03-03 three
+
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                ALTER TABLE mysql_invisible_table ALTER COLUMN f2 SET VISIBLE;
+                INSERT INTO mysql_invisible_table (f1, f2, f3, f4) VALUES (4, 0.4, '2025-04-04', 'four');
+
+                > SELECT * FROM mysql_invisible_table;
+                1 0.1 2025-01-01 one
+                2 0.2 2025-02-02 two
+                3 0.3 2025-03-03 three
+                4 0.4 2025-04-04 four
+
+                # Rollback the last INSERTs so that validate() can be called multiple times
+                $ mysql-execute name=mysql
+                DELETE FROM mysql_invisible_table WHERE f1 = 4;
+                ALTER TABLE mysql_invisible_table ALTER COLUMN f2 SET INVISIBLE;
+
+                > SELECT * FROM mysql_invisible_table;
+                1 0.1 2025-01-01 one
+                2 0.2 2025-02-02 two
+                3 0.3 2025-03-03 three
+                """
+            )
+        )
+
+
 def remove_target_cluster_from_explain(sql: str) -> str:
     return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)
