@@ -591,7 +591,7 @@ impl Catalog {
 
         let updates = txn.get_and_commit_op_updates();
         let builtin_updates = state.apply_updates(updates)?;
-        assert_eq!(builtin_updates, Vec::new());
+        assert!(builtin_updates.is_empty());
         let commit_ts = txn.upper();
         txn.commit(commit_ts).await?;
         drop(storage);

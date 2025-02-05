@@ -130,7 +130,7 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
@@ -2189,29 +2189,39 @@ impl Coordinator {
             if migrated_builtin_table_updates.is_empty() {
                 futures::future::ready(()).boxed()
             } else {
-                let mut appends: BTreeMap<GlobalId, Vec<(Row, Diff)>> = BTreeMap::new();
+                // Group all updates per-table.
+                let mut grouped_appends: BTreeMap<GlobalId, Vec<TableData>> = BTreeMap::new();
                 for update in migrated_builtin_table_updates {
                     let gid = self.catalog().get_entry(&update.id).latest_global_id();
-                    appends
-                        .entry(gid)
-                        .or_default()
-                        .push((update.row, update.diff));
-                }
-                for (_, updates) in &mut appends {
-                    differential_dataflow::consolidation::consolidate(updates);
+                    grouped_appends.entry(gid).or_default().push(update.data);
                 }
                 info!(
                     "coordinator init: rehydrating migrated builtin tables in read-only mode: {:?}",
-                    appends.keys().collect::<Vec<_>>()
+                    grouped_appends.keys().collect::<Vec<_>>()
                 );
-                let appends = appends
-                    .into_iter()
-                    .map(|(id, updates)| (id, vec![TableData::Rows(updates)]))
-                    .collect();
+
+                // Consolidate Row data, staged batches must already be consolidated.
+                let mut all_appends = Vec::with_capacity(grouped_appends.len());
+                for (item_id, table_data) in grouped_appends.into_iter() {
+                    let mut all_rows = Vec::new();
+                    let mut all_data = Vec::new();
+                    for data in table_data {
+                        match data {
+                            TableData::Rows(rows) => all_rows.extend(rows),
+                            TableData::Batches(_) => all_data.push(data),
+                        }
+                    }
+                    differential_dataflow::consolidation::consolidate(&mut all_rows);
+                    all_data.push(TableData::Rows(all_rows));
+
+                    // TODO(parkmycar): Use SmallVec throughout.
+                    all_appends.push((item_id, all_data));
+                }
+
                 let fut = self
                     .controller
                     .storage
-                    .append_table(min_timestamp, boot_ts.step_forward(), appends)
+                    .append_table(min_timestamp, boot_ts.step_forward(), all_appends)
                     .expect("cannot fail to append");
                 async {
                     fut.await
@@ -2459,27 +2469,35 @@ impl Coordinator {
             debug!("coordinator init: resetting system table {full_name} ({table_id})");
 
             // Fetch the current contents of the table for retraction.
-            let current_contents_fut = self
+            let stream_fut = self
                 .controller
                 .storage_collections
-                .snapshot(system_table.table.global_id_writes(), read_ts);
-            // Fetch a snapshot of the current tables concurrently.
+                .snapshot_and_stream(system_table.table.global_id_writes(), read_ts);
+            let batch_fut = self
+                .controller
+                .storage_collections
+                .create_update_builder(system_table.table.global_id_writes());
+
             let task = spawn(|| format!("snapshot-{table_id}"), async move {
-                let current_contents = current_contents_fut
+                // Create a TimestamplessUpdateBuilder.
+                let mut batch = batch_fut
+                    .await
+                    .unwrap_or_terminate("cannot fail to create a batch for a BuiltinTable");
+                tracing::info!(?table_id, "starting snapshot");
+                // Start a stream of unconsolidated updates from the builtin table.
+                let mut contents = stream_fut
                     .await
                     .unwrap_or_terminate("cannot fail to fetch snapshot");
-                let contents_len = current_contents.len();
-                debug!("coordinator init: table ({table_id}) size {contents_len}");
 
-                // Retract the current contents.
-                current_contents
-                    .into_iter()
-                    .map(|(row, diff)| BuiltinTableUpdate {
-                        id: table_id,
-                        row,
-                        diff: diff.neg(),
-                    })
-                    .collect::<Vec<_>>()
+                // Retract the current contents, spilling into our builder.
+                while let Some((data, _t, d)) = contents.next().await {
+                    let d_invert = d.neg();
+                    batch.add(&data, &(), &d_invert).await;
+                }
+                tracing::info!(?table_id, "finished snapshot");
+
+                let batch = batch.finish().await;
+                BuiltinTableUpdate::batch(table_id, batch)
             });
             retraction_tasks.push(task);
         }
@@ -2487,7 +2505,7 @@ impl Coordinator {
         let retractions_res = futures::future::join_all(retraction_tasks).await;
         for retractions in retractions_res {
             let retractions = retractions.expect("cannot fail to fetch snapshot");
-            builtin_table_updates.extend(retractions);
+            builtin_table_updates.push(retractions);
         }
 
         let audit_join_start = Instant::now();
@@ -2511,11 +2529,12 @@ impl Coordinator {
             .expect("One-shot shouldn't be dropped during bootstrap")
             .unwrap_or_terminate("cannot fail to append");
 
-        debug!("coordinator init: sending builtin table updates");
+        info!("coordinator init: sending builtin table updates");
         let (_builtin_updates_fut, write_ts) = self
             .builtin_table_update()
             .execute(builtin_table_updates)
             .await;
+        info!(?write_ts, "our write ts");
         if let Some(write_ts) = write_ts {
             self.apply_local_write(write_ts).await;
         }
@@ -3738,11 +3757,7 @@ impl Coordinator {
                     .expect("all collections happen after Jan 1 1970");
                 if collection_timestamp < cutoff_ts {
                     debug!("pruning storage event {row:?}");
-                    let builtin_update = BuiltinTableUpdate {
-                        id: item_id,
-                        row,
-                        diff: -1,
-                    };
+                    let builtin_update = BuiltinTableUpdate::row(item_id, row, -1);
                     expired.push(builtin_update);
                 }
             }

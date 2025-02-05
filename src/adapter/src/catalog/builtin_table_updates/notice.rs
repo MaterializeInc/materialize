@@ -174,11 +174,11 @@ impl CatalogState {
             // push `created_at` column
             packer.push(Datum::TimestampTz(created_at));
 
-            updates.push(BuiltinTableUpdate {
-                id: self.resolve_builtin_table(&MZ_OPTIMIZER_NOTICES),
-                row: row.clone(),
+            updates.push(BuiltinTableUpdate::row(
+                self.resolve_builtin_table(&MZ_OPTIMIZER_NOTICES),
+                row.clone(),
                 diff,
-            });
+            ));
         }
     }
 }
