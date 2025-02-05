@@ -9,6 +9,7 @@
 
 //! Preflight checks for deployments.
 
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -154,33 +155,83 @@ pub async fn preflight_0dt(
     if catalog_generation < deploy_generation {
         info!("this deployment is a new generation; booting in read only mode");
 
-        let (caught_up_trigger, caught_up_receiver) = trigger::channel();
+        let (caught_up_trigger, mut caught_up_receiver) = trigger::channel();
 
         // Spawn a background task to handle promotion to leader.
         mz_ore::task::spawn(|| "preflight_0dt", async move {
-            info!("waiting for deployment to be caught up");
+            let (initial_next_user_item_id, initial_next_replica_id) = get_next_ids(
+                boot_ts,
+                persist_client.clone(),
+                environment_id.clone(),
+                deploy_generation,
+                Arc::clone(&catalog_metrics),
+                bootstrap_args.clone(),
+            )
+            .await;
+
+            info!(
+                %initial_next_user_item_id,
+                %initial_next_replica_id,
+                "waiting for deployment to be caught up");
 
             let caught_up_max_wait_fut = async {
                 tokio::time::sleep(caught_up_max_wait).await;
                 ()
             };
+            let mut caught_up_max_wait_fut = pin!(caught_up_max_wait_fut);
 
-            let skip_catchup = deployment_state.set_catching_up();
+            let mut skip_catchup = deployment_state.set_catching_up();
 
-            tokio::select! {
-                () = caught_up_receiver => {
-                    info!("deployment caught up");
-                }
-                () = skip_catchup => {
-                    info!("skipping waiting for deployment to catch up due to administrator request");
-                }
-                () = caught_up_max_wait_fut => {
-                    if panic_after_timeout {
-                        panic!("not caught up within {:?}", caught_up_max_wait);
+            let mut check_ddl_changes_interval = tokio::time::interval(Duration::from_secs(5 * 60));
+            check_ddl_changes_interval
+                .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            loop {
+                tokio::select! {
+                    () = &mut caught_up_receiver => {
+                        info!("deployment caught up");
+                        break;
                     }
-                    info!("not caught up within {:?}, proceeding now", caught_up_max_wait);
+                    () = &mut skip_catchup => {
+                        info!("skipping waiting for deployment to catch up due to administrator request");
+                        break;
+                    }
+                    () = &mut caught_up_max_wait_fut => {
+                        if panic_after_timeout {
+                            panic!("not caught up within {:?}", caught_up_max_wait);
+                        }
+                        info!("not caught up within {:?}, proceeding now", caught_up_max_wait);
+                        break;
+                    }
+                    _ = check_ddl_changes_interval.tick() => {
+                        check_ddl_changes(
+                            boot_ts,
+                            persist_client.clone(),
+                            environment_id.clone(),
+                            deploy_generation,
+                            Arc::clone(&catalog_metrics),
+                            bootstrap_args.clone(),
+                            initial_next_user_item_id,
+                            initial_next_replica_id,
+                        )
+                        .await;
+                    }
                 }
             }
+
+            // Check for DDL changes one last time before announcing as ready to
+            // promote.
+            check_ddl_changes(
+                boot_ts,
+                persist_client.clone(),
+                environment_id.clone(),
+                deploy_generation,
+                Arc::clone(&catalog_metrics),
+                bootstrap_args.clone(),
+                initial_next_user_item_id,
+                initial_next_replica_id,
+            )
+            .await;
 
             // Announce that we're ready to promote.
             let promoted = deployment_state.set_ready_to_promote();
@@ -189,6 +240,19 @@ pub async fn preflight_0dt(
 
             // Take over the catalog.
             info!("promoted; attempting takeover");
+
+            // NOTE: There _is_ a window where DDL can happen in the old
+            // environment, between checking above, us announcing as ready to
+            // promote, and cloud giving us the go-ahead signal. Its size
+            // depends on how quickly cloud will trigger promotion once we
+            // report as ready.
+            //
+            // We could add another check here, right before cutting over, but I
+            // think this requires changes in Cloud: with this additional check,
+            // it can now happen that cloud gives us the promote signal but we
+            // then notice there were changes and restart. Could would have to
+            // notice this and give us the promote signal again, once we're
+            // ready again.
 
             let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
                 persist_client.clone(),
@@ -224,4 +288,76 @@ pub async fn preflight_0dt(
     } else {
         exit!(0, "this deployment has been fenced out");
     }
+}
+
+/// Check if there have been any DDL that create new collections or replicas,
+/// restart in read-only mode if so, in order to pick up those new items and
+/// start hydrating them before cutting over.
+async fn check_ddl_changes(
+    boot_ts: Timestamp,
+    persist_client: PersistClient,
+    environment_id: EnvironmentId,
+    deploy_generation: u64,
+    catalog_metrics: Arc<Metrics>,
+    bootstrap_args: BootstrapArgs,
+    initial_next_user_item_id: u64,
+    initial_next_replica_id: u64,
+) {
+    let (next_user_item_id, next_replica_id) = get_next_ids(
+        boot_ts,
+        persist_client.clone(),
+        environment_id.clone(),
+        deploy_generation,
+        Arc::clone(&catalog_metrics),
+        bootstrap_args.clone(),
+    )
+    .await;
+
+    tracing::info!(
+        %initial_next_user_item_id,
+        %initial_next_replica_id,
+        %next_user_item_id,
+        %next_replica_id,
+        "checking if there was any relevant DDL");
+
+    if next_user_item_id > initial_next_user_item_id || next_replica_id > initial_next_replica_id {
+        halt!("there have been DDL that we need to react to; rebooting in read-only mode")
+    }
+}
+
+/// Gets and returns the next user item ID and user replica ID that would be
+/// allocated as of the current catalog state.
+async fn get_next_ids(
+    boot_ts: Timestamp,
+    persist_client: PersistClient,
+    environment_id: EnvironmentId,
+    deploy_generation: u64,
+    catalog_metrics: Arc<Metrics>,
+    bootstrap_args: BootstrapArgs,
+) -> (u64, u64) {
+    let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
+        persist_client,
+        environment_id.organization_id(),
+        BUILD_INFO.semver_version(),
+        Some(deploy_generation),
+        catalog_metrics,
+    )
+    .await
+    .expect("incompatible catalog/persist version");
+
+    let (mut catalog, _audit_logs) = openable_adapter_storage
+        .open_savepoint(boot_ts, &bootstrap_args)
+        .await
+        .unwrap_or_terminate("can open in savepoint mode");
+
+    let next_user_item_id = catalog
+        .get_next_user_item_id()
+        .await
+        .expect("can access catalog");
+    let next_replica_item_id = catalog
+        .get_next_user_replica_id()
+        .await
+        .expect("can access catalog");
+
+    (next_user_item_id, next_replica_item_id)
 }
