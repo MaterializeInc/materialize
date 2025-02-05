@@ -58,6 +58,7 @@ use std::rc::Rc;
 
 use differential_dataflow::AsCollection;
 use itertools::Itertools;
+use mz_mysql_util::quote_identifier;
 use mz_ore::cast::CastFrom;
 use mz_repr::Diff;
 use mz_repr::GlobalId;
@@ -338,7 +339,12 @@ impl MySqlTableName {
 
 impl fmt::Display for MySqlTableName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "`{}`.`{}`", self.0, self.1)
+        write!(
+            f,
+            "{}.{}",
+            quote_identifier(&self.0),
+            quote_identifier(&self.1)
+        )
     }
 }
 

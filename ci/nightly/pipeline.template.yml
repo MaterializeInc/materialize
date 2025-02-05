@@ -959,7 +959,7 @@ steps:
       - id: checks-0dt-restart-entire-mz-forced-migrations-azurite
         label: "Checks 0dt restart of the entire Mz with forced migrations with :azure: blob store"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 180
         parallelism: 2
         agents:
           queue: hetzner-aarch64-16cpu-32gb

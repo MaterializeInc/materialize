@@ -114,6 +114,14 @@ pub enum MySqlError {
     MySql(#[from] mysql_async::Error),
 }
 
+/// Quotes MySQL identifiers. [See MySQL quote_identifier()](https://github.com/mysql/mysql-sys/blob/master/functions/quote_identifier.sql)
+pub fn quote_identifier(identifier: &str) -> String {
+    let mut escaped = identifier.replace("`", "``");
+    escaped.insert(0, '`');
+    escaped.push('`');
+    escaped
+}
+
 // NOTE: this error was renamed between MySQL 5.7 and 8.0
 // https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html#error_er_source_fatal_error_reading_binlog
 // https://dev.mysql.com/doc/mysql-errors/5.7/en/server-error-reference.html#error_er_master_fatal_error_reading_binlog
@@ -121,3 +129,18 @@ pub const ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE: u16 = 1236;
 
 // https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html#error_er_no_such_table
 pub const ER_NO_SUCH_TABLE: u16 = 1146;
+
+#[cfg(test)]
+mod tests {
+
+    use super::quote_identifier;
+    #[mz_ore::test]
+    fn test_identifier_quoting() {
+        let expected = vec!["`a`", "`naughty``sql`", "```;naughty;sql;```"];
+        let input = ["a", "naughty`sql", "`;naughty;sql;`"]
+            .iter()
+            .map(|raw_str| quote_identifier(raw_str))
+            .collect::<Vec<_>>();
+        assert_eq!(expected, input);
+    }
+}
