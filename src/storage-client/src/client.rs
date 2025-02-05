@@ -19,12 +19,15 @@ use std::fmt::Debug;
 use std::iter;
 
 use async_trait::async_trait;
+use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
 use mz_ore::assert_none;
-use mz_persist_client::batch::ProtoBatch;
+use mz_persist_client::batch::{BatchBuilder, ProtoBatch};
+use mz_persist_client::write::WriteHandle;
+use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use mz_storage_types::controller::CollectionMetadata;
@@ -38,6 +41,7 @@ use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use timely::progress::frontier::{Antichain, MutableAntichain};
+use timely::progress::Timestamp;
 use timely::PartialOrder;
 use tonic::{Request, Status as TonicStatus, Streaming};
 
@@ -987,6 +991,61 @@ impl TableData {
             TableData::Rows(rows) => rows.is_empty(),
             TableData::Batches(batches) => batches.is_empty(),
         }
+    }
+}
+
+/// A collection of timestamp-less updates. As updates are added to the builder
+/// they are automatically spilled to blob storage.
+pub struct TimestamplessUpdateBuilder<K, V, T, D>
+where
+    K: Codec,
+    V: Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Codec64,
+{
+    builder: BatchBuilder<K, V, T, D>,
+    initial_ts: T,
+}
+
+impl<K, V, T, D> TimestamplessUpdateBuilder<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: TimestampManipulation + Lattice + Codec64 + Sync,
+    D: Semigroup + Ord + Codec64 + Send + Sync,
+{
+    /// Create a new [`TimestamplessUpdateBuilder`] for the shard associated
+    /// with the provided [`WriteHandle`].
+    pub fn new(handle: &WriteHandle<K, V, T, D>) -> Self {
+        let initial_ts = T::minimum();
+        let builder = handle.builder(Antichain::from_elem(initial_ts.clone()));
+        TimestamplessUpdateBuilder {
+            builder,
+            initial_ts,
+        }
+    }
+
+    /// Add a `(K, V, D)` to the staged batch.
+    pub async fn add(&mut self, k: &K, v: &V, d: &D) {
+        self.builder
+            .add(&k, &v, &self.initial_ts, d)
+            .await
+            .expect("invalid Persist usage");
+    }
+
+    /// Finish the builder and return a [`ProtoBatch`] which can later be linked into a shard.
+    ///
+    /// The returned batch has nonsensical lower and upper bounds and must be re-written before
+    /// appending into the destination shard.
+    pub async fn finish(self) -> ProtoBatch {
+        let finish_ts = StepForward::step_forward(&self.initial_ts);
+        let batch = self
+            .builder
+            .finish(Antichain::from_elem(finish_ts))
+            .await
+            .expect("invalid Persist usage");
+
+        batch.into_transmittable_batch()
     }
 }
 
