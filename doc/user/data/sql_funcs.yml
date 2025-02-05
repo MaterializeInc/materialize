@@ -276,6 +276,9 @@
   - signature: 'btrim(s: str, c: str) -> str'
     description: Trim any character in `c` from both sides of `s`.
 
+  - signature: 'bit_count(b: bytea) -> int'
+    description: Returns the number of bits set in the bit string (aka _popcount_).
+
   - signature: 'bit_length(s: str) -> int'
     description: Number of bits in `s`.
 
@@ -307,6 +310,9 @@
   - signature: 'encode(b: bytea, format: text) -> text'
     description: Encode `b` using the specified textual representation
     url: /sql/functions/encode
+
+  - signature: 'get_bit(b: bytea, n: int) -> int'
+    description: Return the `n`th bit from `b`, where the left-most bit in `b` is at the 0th position.
 
   - signature: 'get_byte(b: bytea, n: int) -> int'
     description: Return the `n`th byte from `b`, where the left-most byte in `b` is at the 0th position.
