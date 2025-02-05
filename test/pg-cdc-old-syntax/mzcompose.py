@@ -17,7 +17,7 @@ import time
 import pg8000
 from pg8000 import Connection
 
-from materialize import buildkite
+from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service, ServiceConfig
 from materialize.mzcompose.services.materialized import Materialized
@@ -303,7 +303,9 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     matching_files = []
     for filter in args.filter:
-        matching_files.extend(glob.glob(filter, root_dir="test/pg-cdc-old-syntax"))
+        matching_files.extend(
+            glob.glob(filter, root_dir=MZ_ROOT / "test" / "pg-cdc-old-syntax")
+        )
     sharded_files: list[str] = sorted(
         buildkite.shard_list(matching_files, lambda file: file)
     )
@@ -378,7 +380,9 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     matching_files = []
     for filter in args.filter:
-        matching_files.extend(glob.glob(filter, root_dir="test/pg-cdc-old-syntax"))
+        matching_files.extend(
+            glob.glob(filter, root_dir=MZ_ROOT / "test" / "pg-cdc-old-syntax")
+        )
     sharded_files: list[str] = sorted(
         buildkite.shard_list(matching_files, lambda file: file)
     )

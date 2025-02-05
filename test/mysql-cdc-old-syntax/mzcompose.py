@@ -15,7 +15,7 @@ import glob
 import threading
 from textwrap import dedent
 
-from materialize import buildkite
+from materialize import MZ_ROOT, buildkite
 from materialize.mysql_util import (
     retrieve_invalid_ssl_context_for_mysql,
     retrieve_ssl_context_for_mysql,
@@ -112,7 +112,9 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     matching_files = []
     for filter in args.filter:
-        matching_files.extend(glob.glob(filter, root_dir="test/mysql-cdc-old-syntax"))
+        matching_files.extend(
+            glob.glob(filter, root_dir=MZ_ROOT / "test" / "mysql-cdc-old-syntax")
+        )
     sharded_files: list[str] = sorted(
         buildkite.shard_list(matching_files, lambda file: file)
     )
@@ -299,7 +301,9 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     matching_files = []
     for filter in args.filter:
-        matching_files.extend(glob.glob(filter, root_dir="test/mysql-cdc-old-syntax"))
+        matching_files.extend(
+            glob.glob(filter, root_dir=MZ_ROOT / "test" / "mysql-cdc-old-syntax")
+        )
 
     sharded_files: list[str] = sorted(
         buildkite.shard_list(matching_files, lambda file: file)

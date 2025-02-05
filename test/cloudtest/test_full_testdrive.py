@@ -11,7 +11,7 @@ import glob
 
 import pytest
 
-from materialize import buildkite
+from materialize import MZ_ROOT, buildkite
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
 
@@ -24,7 +24,9 @@ def test_full_testdrive(mz: MaterializeApplication) -> None:
     parser.add_argument("--file-pattern", default="*.td", type=str)
     args, _ = parser.parse_known_args()
 
-    matching_files = glob.glob(f"testdrive/{args.file_pattern}", root_dir="test")
+    matching_files = glob.glob(
+        f"testdrive/{args.file_pattern}", root_dir=MZ_ROOT / "test"
+    )
 
     # TODO: database-issues#7827 (test requires fivetran running in cloudtest)
     matching_files.remove("testdrive/fivetran-destination.td")
