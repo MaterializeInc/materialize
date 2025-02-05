@@ -1893,17 +1893,16 @@ impl MySqlConnection<InlinedConnection> {
             }
         };
 
-        opts = storage_configuration
-            .parameters
-            .mysql_source_timeouts
-            .apply_to_opts(opts)?;
-
         Ok(mz_mysql_util::Config::new(
-            opts.into(),
+            opts,
             tunnel,
             storage_configuration.parameters.ssh_timeout_config,
             in_task,
-        ))
+            storage_configuration
+                .parameters
+                .mysql_source_timeouts
+                .clone(),
+        )?)
     }
 
     async fn validate(

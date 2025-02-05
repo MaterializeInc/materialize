@@ -1169,6 +1169,7 @@ impl SystemVars {
             &MYSQL_SOURCE_TCP_KEEPALIVE,
             &MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME,
             &MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT,
+            &MYSQL_SOURCE_CONNECT_TIMEOUT,
             &SSH_CHECK_INTERVAL,
             &SSH_CONNECT_TIMEOUT,
             &SSH_KEEPALIVES_IDLE,
@@ -1827,6 +1828,11 @@ impl SystemVars {
         *self.expect_value(&MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT)
     }
 
+    /// Returns the `mysql_source_connect_timeout` configuration parameter.
+    pub fn mysql_source_connect_timeout(&self) -> Duration {
+        *self.expect_value(&MYSQL_SOURCE_CONNECT_TIMEOUT)
+    }
+
     /// Returns the `ssh_check_interval` configuration parameter.
     pub fn ssh_check_interval(&self) -> Duration {
         *self.expect_value(&SSH_CHECK_INTERVAL)
@@ -2233,6 +2239,7 @@ impl SystemVars {
             || name == MYSQL_SOURCE_TCP_KEEPALIVE.name()
             || name == MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME.name()
             || name == MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT.name()
+            || name == MYSQL_SOURCE_CONNECT_TIMEOUT.name()
             || name == ENABLE_STORAGE_SHARD_FINALIZATION.name()
             || name == SSH_CHECK_INTERVAL.name()
             || name == SSH_CONNECT_TIMEOUT.name()

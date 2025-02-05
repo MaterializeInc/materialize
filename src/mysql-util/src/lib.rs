@@ -10,9 +10,11 @@
 //! MySQL utility library.
 
 mod tunnel;
+use std::time::Duration;
+
 pub use tunnel::{
-    Config, MySqlConn, TimeoutConfig, TunnelConfig, DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT,
-    DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME, DEFAULT_TCP_KEEPALIVE,
+    Config, MySqlConn, TimeoutConfig, TunnelConfig, DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT, DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME, DEFAULT_TCP_KEEPALIVE,
 };
 
 mod desc;
@@ -112,6 +114,8 @@ pub enum MySqlError {
     /// A mysql_async error.
     #[error(transparent)]
     MySql(#[from] mysql_async::Error),
+    #[error("connection attempt timed out after {0:?}")]
+    ConnectionTimeout(Duration),
 }
 
 /// Quotes MySQL identifiers. [See MySQL quote_identifier()](https://github.com/mysql/mysql-sys/blob/master/functions/quote_identifier.sql)

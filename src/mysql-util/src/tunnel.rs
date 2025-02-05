@@ -14,8 +14,9 @@ use std::time::Duration;
 
 use mysql_async::{Conn, Opts, OptsBuilder};
 
-use mz_ore::future::{InTask, OreFutureExt};
+use mz_ore::future::{InTask, TimeoutError};
 use mz_ore::option::OptionExt;
+use mz_ore::task::{spawn, JoinHandleExt};
 use mz_repr::CatalogItemId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
@@ -51,6 +52,7 @@ pub enum TunnelConfig {
 pub const DEFAULT_TCP_KEEPALIVE: Duration = Duration::from_secs(60);
 pub const DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME: Duration = Duration::ZERO;
 pub const DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(3600);
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimeoutConfig {
@@ -60,6 +62,11 @@ pub struct TimeoutConfig {
 
     // Socket-related configs
     pub tcp_keepalive: Option<Duration>,
+
+    // Connection timeout.  This timeout covers creating an authenticated connection
+    // (e.g. includes network connection, TLS handshake, authentication, etc.).
+    // If the connection has not been established in that time, it is considered an error.
+    pub connect_timeout: Option<Duration>,
     // There are other timeout options on `mysql_async::OptsBuilder`
     // (e.g. `conn_ttl` and `wait_timeout`) that could be exposed
     // but they only apply to connection pools, which we are not currently using.
@@ -71,6 +78,7 @@ impl Default for TimeoutConfig {
             snapshot_max_execution_time: Some(DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME),
             snapshot_lock_wait_timeout: Some(DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT),
             tcp_keepalive: Some(DEFAULT_TCP_KEEPALIVE),
+            connect_timeout: Some(DEFAULT_CONNECT_TIMEOUT),
         }
     }
 }
@@ -80,6 +88,7 @@ impl TimeoutConfig {
         snapshot_max_execution_time: Duration,
         snapshot_lock_wait_timeout: Duration,
         tcp_keepalive: Duration,
+        connect_timeout: Duration,
     ) -> Self {
         // Verify values are within valid ranges
         // Note we error log but do not fail as this is called in a non-fallible
@@ -119,10 +128,23 @@ impl TimeoutConfig {
             Ok(_) => Some(tcp_keepalive),
         };
 
+        let connect_timeout = match u32::try_from(connect_timeout.as_millis()) {
+            Err(_) => {
+                error!(
+                    "connect_timeout is too large: {}. Maximum is {}.",
+                    connect_timeout.as_millis(),
+                    u32::MAX,
+                );
+                Some(DEFAULT_CONNECT_TIMEOUT)
+            }
+            Ok(_) => Some(connect_timeout),
+        };
+
         Self {
             snapshot_max_execution_time,
             snapshot_lock_wait_timeout,
             tcp_keepalive,
+            connect_timeout,
         }
     }
 
@@ -192,21 +214,25 @@ pub struct Config {
     // connection.
     in_task: InTask,
     ssh_timeout_config: SshTimeoutConfig,
+    mysql_timeout_config: TimeoutConfig,
 }
 
 impl Config {
     pub fn new(
-        inner: Opts,
+        builder: OptsBuilder,
         tunnel: TunnelConfig,
         ssh_timeout_config: SshTimeoutConfig,
         in_task: InTask,
-    ) -> Self {
-        Self {
-            inner,
+        mysql_timeout_config: TimeoutConfig,
+    ) -> Result<Self, MySqlError> {
+        let opts = mysql_timeout_config.apply_to_opts(builder)?;
+        Ok(Self {
+            inner: opts.into(),
             tunnel,
             in_task,
             ssh_timeout_config,
-        }
+            mysql_timeout_config,
+        })
     }
 
     pub async fn connect(
@@ -242,16 +268,18 @@ impl Config {
         &self,
         ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<MySqlConn, MySqlError> {
+        let mut opts_builder = OptsBuilder::from_opts(self.inner.clone());
+
         match &self.tunnel {
             TunnelConfig::Direct { resolved_ips } => {
-                let opts_builder = OptsBuilder::from_opts(self.inner.clone()).resolved_ips(
+                opts_builder = opts_builder.resolved_ips(
                     resolved_ips
                         .clone()
                         .map(|ips| ips.into_iter().collect::<Vec<_>>()),
                 );
 
                 Ok(MySqlConn {
-                    conn: Conn::new(opts_builder).await.map_err(MySqlError::from)?,
+                    conn: self.connect_with_timeout(opts_builder).await?,
                     _ssh_tunnel_handle: None,
                 })
             }
@@ -271,7 +299,7 @@ impl Config {
                 let tunnel_addr = tunnel.local_addr();
                 // Override the connection host and port for the actual TCP connection to point to
                 // the local tunnel instead.
-                let mut opts_builder = OptsBuilder::from_opts(self.inner.clone())
+                opts_builder = opts_builder
                     .ip_or_hostname(tunnel_addr.ip().to_string())
                     .tcp_port(tunnel_addr.port());
 
@@ -289,10 +317,7 @@ impl Config {
                 }
 
                 Ok(MySqlConn {
-                    conn: Conn::new(opts_builder)
-                        .run_in_task_if(self.in_task, || "mysql_connect".to_string())
-                        .await
-                        .map_err(MySqlError::from)?,
+                    conn: self.connect_with_timeout(opts_builder).await?,
                     _ssh_tunnel_handle: Some(tunnel),
                 })
             }
@@ -301,8 +326,7 @@ impl Config {
 
                 // Override the connection host for the actual TCP connection to point to
                 // the privatelink hostname instead.
-                let mut opts_builder =
-                    OptsBuilder::from_opts(self.inner.clone()).ip_or_hostname(privatelink_host);
+                let mut opts_builder = opts_builder.ip_or_hostname(privatelink_host);
 
                 if let Some(ssl_opts) = self.inner.ssl_opts() {
                     if !ssl_opts.skip_domain_validation() {
@@ -318,13 +342,35 @@ impl Config {
                 }
 
                 Ok(MySqlConn {
-                    conn: Conn::new(opts_builder)
-                        .run_in_task_if(self.in_task, || "msyql_connect".to_string())
-                        .await
-                        .map_err(MySqlError::from)?,
+                    conn: self.connect_with_timeout(opts_builder).await?,
                     _ssh_tunnel_handle: None,
                 })
             }
+        }
+    }
+
+    async fn connect_with_timeout(
+        &self,
+        opts_builder: OptsBuilder,
+    ) -> Result<mysql_async::Conn, MySqlError> {
+        let connection_future = if let InTask::Yes = self.in_task {
+            spawn(|| "mysql_connect".to_string(), Conn::new(opts_builder))
+                .abort_on_drop()
+                .wait_and_assert_finished()
+        } else {
+            Conn::new(opts_builder)
+        };
+
+        if let Some(connect_timeout) = self.mysql_timeout_config.connect_timeout {
+            mz_ore::future::timeout(connect_timeout, connection_future)
+                .await
+                .map_err(|err| match err {
+                    // match instead of impl From<> for MySqlError so we can capture the timeout value
+                    TimeoutError::DeadlineElapsed => MySqlError::ConnectionTimeout(connect_timeout),
+                    TimeoutError::Inner(e) => MySqlError::from(e),
+                })
+        } else {
+            connection_future.await.map_err(MySqlError::from)
         }
     }
 }

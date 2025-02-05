@@ -25,6 +25,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 
 def create_mysql(mysql_version: str) -> MySql:
@@ -53,6 +54,7 @@ SERVICES = [
     create_mysql(MySql.DEFAULT_VERSION),
     create_mysql_replica(MySql.DEFAULT_VERSION),
     TestCerts(),
+    Toxiproxy(),
     Testdrive(default_timeout="60s"),
 ]
 
@@ -357,3 +359,25 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
             """
         ),
     )
+
+
+def workflow_source_timeouts(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    Test source connect timeout using toxiproxy to drop network traffic.
+    """
+    mysql_version = get_targeted_mysql_version(parser)
+    with c.override(
+        Materialized(
+            sanity_restart=False,
+            additional_system_parameter_defaults={
+                "log_filter": "mz_storage::source::mysql=trace,info"
+            },
+        ),
+        Toxiproxy(),
+        create_mysql(mysql_version),
+    ):
+        c.up("materialized", "mysql", "toxiproxy")
+        c.run_testdrive_files(
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            "proxied/*.td",
+        )

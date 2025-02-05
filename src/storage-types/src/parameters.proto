@@ -61,6 +61,7 @@ message ProtoMySqlSourceTimeouts {
   optional mz_proto.ProtoDuration tcp_keepalive = 1;
   optional mz_proto.ProtoDuration snapshot_max_execution_time = 2;
   optional mz_proto.ProtoDuration snapshot_lock_wait_timeout = 3;
+  optional mz_proto.ProtoDuration connect_timeout = 4;
 }
 
 message ProtoKafkaTimeouts {
