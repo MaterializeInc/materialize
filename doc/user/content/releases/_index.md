@@ -29,10 +29,9 @@ may occasionally deploy additional releases to fix urgent bugs as well.
 
 When your region is upgraded, clients connected to the region will experience a
 short period of unavailability. During this period, connection requests may fail
-and queries may stall. Most regions experience less than 10 seconds of
-unavailability. Regions with a large number of database objects (i.e., sources,
-views, indexes, etc.) may experience a longer period of unavailability, but
-typically less than 30 seconds.
+and queries may stall. Most regions experience a brief period of unavailability;
+regions with a large number of database objects (i.e., sources, views, indexes,
+etc.) may experience a longer period.
 
 We do not currently make public commitments about the precise timing of region
 upgrades. If you have specific needs around the timing of upgrades, please [file
