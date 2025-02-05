@@ -377,5 +377,5 @@ def workflow_source_timeouts(c: Composition, parser: WorkflowArgumentParser) -> 
         c.up("materialized", "mysql", "toxiproxy")
         c.run_testdrive_files(
             f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
-            "proxied/connect_timeout.td",
+            "proxied/*.td",
         )
