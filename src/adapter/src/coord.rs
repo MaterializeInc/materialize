@@ -2462,24 +2462,34 @@ impl Coordinator {
             let current_contents_fut = self
                 .controller
                 .storage_collections
-                .snapshot(system_table.table.global_id_writes(), read_ts);
+                .snapshot_and_stream(system_table.table.global_id_writes(), read_ts);
             // Fetch a snapshot of the current tables concurrently.
             let task = spawn(|| format!("snapshot-{table_id}"), async move {
-                let current_contents = current_contents_fut
+                let contents_stream = current_contents_fut
                     .await
                     .unwrap_or_terminate("cannot fail to fetch snapshot");
-                let contents_len = current_contents.len();
-                debug!("coordinator init: table ({table_id}) size {contents_len}");
 
-                // Retract the current contents.
-                current_contents
-                    .into_iter()
-                    .map(|(row, diff)| BuiltinTableUpdate {
-                        id: table_id,
-                        row,
-                        diff: diff.neg(),
+                // Retract the current contents by negating all of the diffs.
+                let updates: Vec<_> = contents_stream
+                    .map(|(data, _ts, diff)| {
+                        let row = match data.0 {
+                            Ok(row) => row,
+                            Err(err) => panic!("found dataflow error in builtin table, {err:?}"),
+                        };
+                        BuiltinTableUpdate {
+                            id: table_id,
+                            row,
+                            diff: diff.neg(),
+                        }
                     })
-                    .collect::<Vec<_>>()
+                    .collect()
+                    .await;
+                debug!(
+                    "coordinator init: table ({table_id}) size {}",
+                    updates.len()
+                );
+
+                updates
             });
             retraction_tasks.push(task);
         }

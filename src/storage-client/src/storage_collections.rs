@@ -189,6 +189,22 @@ pub trait StorageCollections: Debug {
     where
         Self::Timestamp: Codec64 + TimelyTimestamp + Lattice;
 
+    /// Generates a snapshot of the contents of collection `id` at `as_of` and
+    /// streams out all of the updates in bounded memory.
+    ///
+    /// The output is __not__ consolidated.
+    fn snapshot_and_stream(
+        &self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> BoxFuture<
+        'static,
+        Result<
+            BoxStream<'static, (SourceData, Self::Timestamp, Diff)>,
+            StorageError<Self::Timestamp>,
+        >,
+    >;
+
     /// Update the given [`StorageTxn`] with the appropriate metadata given the
     /// IDs to add and drop.
     ///
@@ -1071,58 +1087,61 @@ where
         .boxed()
     }
 
-    // TODO: This appears to have become unused at some point. Figure out if the
-    // caller is coming back or if we should delete it.
-    #[allow(dead_code)]
-    async fn snapshot_and_stream(
+    fn snapshot_and_stream(
         &self,
         id: GlobalId,
         as_of: T,
-    ) -> Result<BoxStream<(SourceData, T, Diff)>, StorageError<T>> {
+        txns_read: &TxnsRead<T>,
+    ) -> BoxFuture<'static, Result<BoxStream<'static, (SourceData, T, Diff)>, StorageError<T>>>
+    {
         use futures::stream::StreamExt;
 
-        let metadata = &self.collection_metadata(id)?;
+        let metadata = match self.collection_metadata(id) {
+            Ok(metadata) => metadata.clone(),
+            Err(e) => return async { Err(e) }.boxed(),
+        };
+        let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
+            assert_eq!(txns_id, txns_read.txns_id());
+            txns_read.clone()
+        });
+        let persist = Arc::clone(&self.persist);
 
-        // See the comments in Self::snapshot for what's going on here.
-        match metadata.txns_shard.as_ref() {
-            None => {
-                let as_of = Antichain::from_elem(as_of);
-                let persist = Arc::clone(&self.persist);
-                let mut read_handle = Self::read_handle_for_snapshot(persist, metadata, id).await?;
-                let contents = read_handle.snapshot_and_stream(as_of).await;
-                match contents {
-                    Ok(contents) => {
-                        Ok(Box::pin(contents.map(|((result_k, result_v), t, diff)| {
-                            let () = result_v.expect("invalid empty value");
-                            let data = result_k.expect("invalid key data");
-                            (data, t, diff)
-                        })))
-                    }
-                    Err(_) => Err(StorageError::ReadBeforeSince(id)),
+        async move {
+            let mut read_handle = Self::read_handle_for_snapshot(persist, &metadata, id).await?;
+            let stream = match txns_read {
+                None => {
+                    // We're not using txn-wal for tables, so we can take a snapshot directly.
+                    read_handle
+                        .snapshot_and_stream(Antichain::from_elem(as_of))
+                        .await
+                        .map_err(|_| StorageError::ReadBeforeSince(id))?
+                        .boxed()
                 }
-            }
-            Some(txns_id) => {
-                assert_eq!(txns_id, self.txns_read.txns_id());
-                self.txns_read.update_gt(as_of.clone()).await;
-                let data_snapshot = self
-                    .txns_read
-                    .data_snapshot(metadata.data_shard, as_of.clone())
-                    .await;
-                let persist = Arc::clone(&self.persist);
-                let mut handle = Self::read_handle_for_snapshot(persist, metadata, id).await?;
-                let contents = data_snapshot.snapshot_and_stream(&mut handle).await;
-                match contents {
-                    Ok(contents) => {
-                        Ok(Box::pin(contents.map(|((result_k, result_v), t, diff)| {
-                            let () = result_v.expect("invalid empty value");
-                            let data = result_k.expect("invalid key data");
-                            (data, t, diff)
-                        })))
-                    }
-                    Err(_) => Err(StorageError::ReadBeforeSince(id)),
+                Some(txns_read) => {
+                    txns_read.update_gt(as_of.clone()).await;
+                    let data_snapshot = txns_read
+                        .data_snapshot(metadata.data_shard, as_of.clone())
+                        .await;
+                    data_snapshot
+                        .snapshot_and_stream(&mut read_handle)
+                        .await
+                        .map_err(|_| StorageError::ReadBeforeSince(id))?
+                        .boxed()
                 }
-            }
+            };
+
+            // Map our stream, unwrapping Persist internal errors.
+            let stream = stream
+                .map(|((k, _v), t, d)| {
+                    // TODO(parkmycar): We should accumulate the errors and pass them on to the
+                    // caller.
+                    let data = k.expect("error while streaming from Persist");
+                    (data, t, d)
+                })
+                .boxed();
+            Ok(stream)
         }
+        .boxed()
     }
 
     fn set_read_policies_inner(
@@ -1595,6 +1614,23 @@ where
         };
 
         Ok(cursor)
+    }
+
+    fn snapshot_and_stream(
+        &self,
+        id: GlobalId,
+        as_of: Self::Timestamp,
+    ) -> BoxFuture<
+        'static,
+        Result<
+            BoxStream<'static, (SourceData, Self::Timestamp, Diff)>,
+            StorageError<Self::Timestamp>,
+        >,
+    >
+    where
+        Self::Timestamp: TimelyTimestamp + Lattice + Codec64 + 'static,
+    {
+        self.snapshot_and_stream(id, as_of, &self.txns_read)
     }
 
     fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
