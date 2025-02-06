@@ -849,7 +849,8 @@ impl Coordinator {
                     .resolve_builtin_table_updates(retractions);
                 updates.extend(retractions);
             }
-            self.builtin_table_update().background(updates);
+            // We don't care about when the write finishes.
+            let _notify = self.builtin_table_update().background(updates);
         }
 
         self.drop_introspection_subscribes(replica_id);

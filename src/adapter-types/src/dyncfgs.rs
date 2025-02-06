@@ -117,6 +117,13 @@ pub const ENABLE_EXPRESSION_CACHE: Config<bool> = Config::new(
     "Use a cache to store optimized expressions to help speed up start times.",
 );
 
+/// Amount of time we'll wait between explict group commit triggers before running another.
+pub const GROUP_COMMIT_BATCH_DURATION: Config<Duration> = Config::new(
+    "group_commit_batch_duration",
+    Duration::from_millis(250),
+    "Amount of time we'll wait between group commit triggers to let writes batch.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -135,4 +142,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&DEFAULT_SINK_PARTITION_STRATEGY)
         .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
         .add(&ENABLE_EXPRESSION_CACHE)
+        .add(&GROUP_COMMIT_BATCH_DURATION)
 }

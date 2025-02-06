@@ -24,7 +24,7 @@ use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller_types::ClusterId;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
@@ -52,6 +52,7 @@ use uuid::Uuid;
 
 use crate::catalog::CatalogState;
 use crate::client::RecordFirstRowStream;
+use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::in_memory_oracle::InMemoryTimestampOracle;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
@@ -79,6 +80,9 @@ where
     transaction: TransactionStatus<T>,
     pcx: Option<PlanContext>,
     metrics: SessionMetrics,
+    #[derivative(Debug = "ignore")]
+    builtin_updates: Option<BuiltinTableAppendNotify>,
+
     /// The role metadata of the current session.
     ///
     /// Invariant: role_metadata must be `Some` after the user has
@@ -320,6 +324,7 @@ impl<T: TimestampManipulation> Session<T> {
             transaction: TransactionStatus::Default,
             pcx: None,
             metrics,
+            builtin_updates: None,
             prepared_statements: BTreeMap::new(),
             portals: BTreeMap::new(),
             role_metadata: None,
@@ -865,6 +870,24 @@ impl<T: TimestampManipulation> Session<T> {
     /// Returns the [`SessionMetrics`] instance associated with this [`Session`].
     pub fn metrics(&self) -> &SessionMetrics {
         &self.metrics
+    }
+
+    /// Sets the [`BuiltinTableAppendNotify`] for this session.
+    pub fn set_builtin_table_updates(&mut self, fut: BuiltinTableAppendNotify) {
+        let prev = self.builtin_updates.replace(fut);
+        mz_ore::soft_assert_or_log!(prev.is_none(), "replacing old builtin table notify");
+    }
+
+    /// Takes the stashed [`BuiltinTableAppendNotify`] and waits for the writes to complete.
+    pub async fn clear_builtin_table_updates(&mut self) {
+        if let Some(fut) = self.builtin_updates.take() {
+            // Record how long we blocked for, if we blocked at all.
+            let histogram = self
+                .metrics()
+                .session_startup_table_writes_seconds()
+                .clone();
+            fut.wall_time().observe(histogram).await;
+        }
     }
 }
 

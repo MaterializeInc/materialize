@@ -281,7 +281,7 @@ impl Coordinator {
 
                 let resp = Ok(StartupResponse {
                     role_id,
-                    write_notify: Box::pin(notify),
+                    write_notify: notify,
                     session_defaults,
                     catalog: self.owned_catalog(),
                 });

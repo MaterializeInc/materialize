@@ -208,7 +208,7 @@ pub(crate) mod statement_logging;
 pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
-mod appends;
+pub mod appends;
 mod catalog_serving;
 mod caught_up;
 pub mod cluster_scheduling;
@@ -3870,7 +3870,6 @@ pub fn serve(
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
-        let (group_commit_tx, group_commit_rx) = appends::notifier();
         let (strict_serializable_reads_tx, strict_serializable_reads_rx) =
             mpsc::unbounded_channel();
 
@@ -4115,6 +4114,10 @@ pub fn serve(
             &mz_sql::session::vars::SUPERUSER_RESERVED_CONNECTIONS,
             connection_limit_callback,
         );
+
+        let dyncfgs = catalog.system_config().dyncfgs();
+        let group_commit_metrics = metrics.group_commit_metrics();
+        let (group_commit_tx, group_commit_rx) = appends::notifier(dyncfgs, group_commit_metrics);
 
         let parent_span = tracing::Span::current();
         let thread = thread::Builder::new()

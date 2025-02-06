@@ -212,11 +212,6 @@ impl Client {
             catalog,
         } = response;
 
-        // Before we do ANYTHING, we need to wait for our BuiltinTable writes to complete. We wait
-        // for the writes here, as opposed to during the Startup command, because we don't want to
-        // block the coordinator on a Builtin Table write.
-        write_notify.await;
-
         let session = client.session();
         session.initialize_role_metadata(role_id);
         let vars_mut = session.vars_mut();
@@ -230,6 +225,15 @@ impl Client {
         session
             .vars_mut()
             .end_transaction(EndTransactionAction::Commit);
+
+        // Stash the future that notifies us of builtin table writes completing, we'll block on
+        // this future before allowing queries from this session against relevant relations.
+        //
+        // Note: We stash the future as opposed to waiting on it here to prevent blocking session
+        // creation on builtin table updates. This improves the latency for session creation and
+        // reduces scheduling load on any dataflows that read from these builtin relations, since
+        // it allows updates to be batched.
+        session.set_builtin_table_updates(write_notify);
 
         let catalog = catalog.for_session(session);
 
@@ -601,6 +605,15 @@ impl SessionClient {
         outer_ctx_extra: Option<ExecuteContextExtra>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
+
+        // Before processing any queries we want to make sure our builtin tables writes that
+        // contain a record of this Session have completed.
+        //
+        // TODO(parkmycar): It would be great if we could push this waiting down a layer, after
+        // we've planned a query. This way we could only block if a query depends on a relevant
+        // internal table.
+        self.session().clear_builtin_table_updates().await;
+
         let response = self
             .send_with_cancel(
                 |tx, session| Command::Execute {

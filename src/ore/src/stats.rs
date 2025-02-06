@@ -20,9 +20,9 @@
 /// see `histogram_seconds_buckets` below.
 ///
 /// Note that any changes to this range may modify buckets for existing metrics.
-const HISTOGRAM_SECOND_BUCKETS: [f64; 19] = [
-    0.000_128, 0.000_256, 0.000_512, 0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128, 0.256,
-    0.512, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0,
+const HISTOGRAM_SECOND_BUCKETS: [f64; 23] = [
+    0.000_008, 0.000_016, 0.000_032, 0.000_064, 0.000_128, 0.000_256, 0.000_512, 0.001, 0.002,
+    0.004, 0.008, 0.016, 0.032, 0.064, 0.128, 0.256, 0.512, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0,
 ];
 
 /// Returns a `Vec` of time buckets that are both present in our standard
