@@ -2670,22 +2670,6 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         let mut state =
             ReplicaCollectionState::new(metrics, as_of, introspection, input_read_holds);
 
-        // We need to consider the edge case where the as-of is the empty frontier. Such an as-of
-        // is not useful for indexes, because they wouldn't be readable. For write-only
-        // collections, an empty as-of means that the collection has been fully written and no new
-        // dataflow needs to be created for it. Consequently, no hydration will happen either.
-        //
-        // Based on this, we could set the hydration flag in two ways:
-        //  * `false`, as in "the dataflow was never created"
-        //  * `true`, as in "the dataflow completed immediately"
-        //
-        // Since hydration is often used as a measure of dataflow progress and we don't want to
-        // give the impression that certain dataflows are somehow stuck when they are not, we go
-        // go with the second interpretation here.
-        if state.as_of.is_empty() {
-            state.set_hydrated();
-        }
-
         // In an effort to keep the produced wallclock lag introspection data small and
         // predictable, we disable wallclock lag tracking for transient collections, i.e. slow-path
         // select indexes and subscribes.
@@ -2774,12 +2758,8 @@ struct ReplicaCollectionState<T: ComputeControllerTimestamp> {
     ///
     /// If this is `None`, no metrics are collected.
     metrics: Option<ReplicaCollectionMetrics>,
-    /// Time at which this collection was installed.
-    created_at: Instant,
     /// As-of frontier with which this collection was installed on the replica.
     as_of: Antichain<T>,
-    /// Whether the collection is hydrated.
-    hydrated: bool,
     /// Tracks introspection state for this collection.
     introspection: ReplicaCollectionIntrospection<T>,
     /// Read holds on storage inputs to this collection.
@@ -2807,9 +2787,7 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
             input_frontier: as_of.clone(),
             output_frontier: as_of.clone(),
             metrics,
-            created_at: Instant::now(),
             as_of,
-            hydrated: false,
             introspection,
             input_read_holds,
             wallclock_lag_max: Some(Duration::ZERO),
@@ -2818,17 +2796,22 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
 
     /// Returns whether this collection is hydrated.
     fn hydrated(&self) -> bool {
-        self.hydrated
-    }
-
-    /// Marks the collection as hydrated and updates metrics and introspection accordingly.
-    fn set_hydrated(&mut self) {
-        if let Some(metrics) = &self.metrics {
-            let duration = self.created_at.elapsed().as_secs_f64();
-            metrics.initial_output_duration_seconds.set(duration);
-        }
-
-        self.hydrated = true;
+        // If the observed frontier is greater than the collection's as-of, the collection has
+        // produced some output and is therefore hydrated.
+        //
+        // We need to consider the edge case where the as-of is the empty frontier. Such an as-of
+        // is not useful for indexes, because they wouldn't be readable. For write-only
+        // collections, an empty as-of means that the collection has been fully written and no new
+        // dataflow needs to be created for it. Consequently, no hydration will happen either.
+        //
+        // Based on this, we could respond in two ways:
+        //  * `false`, as in "the dataflow was never created"
+        //  * `true`, as in "the dataflow completed immediately"
+        //
+        // Since hydration is often used as a measure of dataflow progress and we don't want to
+        // give the impression that certain dataflows are somehow stuck when they are not, we go
+        // with the second interpretation here.
+        self.as_of.is_empty() || PartialOrder::less_than(&self.as_of, &self.output_frontier)
     }
 
     /// Updates the replica write frontier of this collection.
@@ -2884,12 +2867,6 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionState<T> {
         }
 
         self.output_frontier = new_frontier;
-
-        // If the observed frontier is greater than the collection's as-of, the collection has
-        // produced some output and is therefore hydrated now.
-        if !self.hydrated() && PartialOrder::less_than(&self.as_of, &self.output_frontier) {
-            self.set_hydrated();
-        }
     }
 }
 

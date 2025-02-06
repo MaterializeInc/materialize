@@ -2511,8 +2511,8 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
-    def get_initial_output_duration(self, collection_id: str) -> float | None:
-        metrics = self.with_name("mz_dataflow_initial_output_duration_seconds")
+    def get_wallclock_lag_count(self, collection_id: str) -> float | None:
+        metrics = self.with_name("mz_dataflow_wallclock_lag_seconds_count")
         values = [
             v for k, v in metrics.items() if f'collection_id="{collection_id}"' in k
         ]
@@ -2814,11 +2814,11 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_peeks_total("canceled")
     assert count == 0, f"got {count}"
 
-    # mz_dataflow_initial_output_duration_seconds
-    duration = metrics.get_initial_output_duration(index_id)
-    assert duration, f"got {duration}"
-    duration = metrics.get_initial_output_duration(mv_id)
-    assert duration, f"got {duration}"
+    # mz_dataflow_wallclock_lag_seconds_count
+    count = metrics.get_wallclock_lag_count(index_id)
+    assert count, f"got {count}"
+    count = metrics.get_wallclock_lag_count(mv_id)
+    assert count, f"got {count}"
 
     # Drop the dataflows.
     c.sql(
@@ -2830,13 +2830,12 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
 
     # Wait for the controller to asynchronously drop the dataflows and update
     # metrics. We can inspect the controller's view of things in
-    # `mz_compute_hydration_statuses`, which is updated at the same time as
-    # these metrics are.
+    # `mz_frontiers`, which is updated at the same time as these metrics are.
     c.testdrive(
         input=dedent(
             """
             > SELECT *
-              FROM mz_internal.mz_compute_hydration_statuses
+              FROM mz_internal.mz_frontiers
               WHERE object_id LIKE 'u%'
             """
         )
@@ -2844,8 +2843,8 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
 
     # Check that the per-collection metrics have been cleaned up.
     metrics = fetch_metrics()
-    assert metrics.get_initial_output_duration(index_id) is None
-    assert metrics.get_initial_output_duration(mv_id) is None
+    assert metrics.get_wallclock_lag_count(index_id) is None
+    assert metrics.get_wallclock_lag_count(mv_id) is None
 
 
 def workflow_test_optimizer_metrics(c: Composition) -> None:
