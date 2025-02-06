@@ -120,7 +120,7 @@ pub const ENABLE_EXPRESSION_CACHE: Config<bool> = Config::new(
 /// Amount of time we'll wait between explict group commit triggers before running another.
 pub const GROUP_COMMIT_BATCH_DURATION: Config<Duration> = Config::new(
     "group_commit_batch_duration",
-    Duration::from_millis(250),
+    Duration::from_millis(100),
     "Amount of time we'll wait between group commit triggers to let writes batch.",
 );
 

@@ -122,6 +122,7 @@ def get_default_system_parameters(
         "unsafe_enable_table_keys": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
+        "group_commit_batch_duration": "25ms",
         "kafka_default_metadata_fetch_interval": "1s",
         "mysql_offset_known_interval": "1s",
         "persist_record_schema_id": (
