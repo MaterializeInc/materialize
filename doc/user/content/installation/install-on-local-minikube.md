@@ -110,7 +110,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
           --namespace=materialize --create-namespace \
           --version v25.1.1 \
           --set operator.cloudProvider.region=minikube \
-          -f values.yaml
+          -f sample-values.yaml
       ```
 
    1. Verify the installation and check the status:
