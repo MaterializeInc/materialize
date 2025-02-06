@@ -57,22 +57,6 @@ This tutorial uses `kubectl`. To install, refer to the [`kubectl` documentationq
 For help with `kubectl` commands, see [kubectl Quick
 reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-### Sample configuration files
-
-Download the following sample configuration files from the Materialize repo:
-
-- `values.yaml`
-- `postgres.yaml`
-- `minio.yaml`
-- `materialize.yaml`
-
-```shell
-curl -o values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/operator/values.yaml
-curl -o sample-postgres.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/postgres.yaml
-curl -o sample-minio.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/minio.yaml
-curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/materialize.yaml
-```
-
 ## Installation
 
 1. Start Docker if it is not already running.
@@ -85,12 +69,37 @@ curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc
    minikube start
    ```
 
+1. To help you get started for local evaluation/testing, Materialize provides
+   some sample configuration files. Download the sample configuration files from
+   the Materialize repo:
+
+   ```shell
+   curl -o sample-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/operator/values.yaml
+   curl -o sample-postgres.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/postgres.yaml
+   curl -o sample-minio.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/minio.yaml
+   curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/materialize.yaml
+   ```
+
+   - `sample-values.yaml`: Used to configure the Materialize Operator.
+   - `sample-postgres.yaml`: Used to configure PostgreSQL as the metadata
+     database.
+   - `sample-minio.yaml`: Used to configure minIO as the blob storage.
+   - `sample-materialize.yaml`: Used to configure Materialize instance.
+
+   These configuration files are for demonstration/evaluation purposes only and
+   not intended for production use.
+
 1. Install the Materialize Helm chart.
 
    1. Add the Materialize Helm chart repository.
 
       ```shell
       helm repo add materialize https://materializeinc.github.io/materialize
+      ```
+
+   1. Update the repository.
+
+      ```shell
       helm repo update materialize
       ```
 
@@ -224,14 +233,20 @@ curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc
       grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
       done;
       ```
-      {{< note >}}
+
+      {{< annotation type="Kubernetes issue 78446" >}}
+
       Due to a [known Kubernetes
       issue](https://github.com/kubernetes/kubernetes/issues/78446), interrupted
       long-running requests through a standard port-forward cause the port
-      forward to hang. The command above automatically restarts the port
-      forwarding if an error occurs, ensuring a more stable connection. It
-      detects failures by monitoring for `"portforward.go"` error messages.
-      {{< /note >}}
+      forward to hang, and the Console will display **"We're having trouble
+      reaching your environment."** error message. The command above
+      automatically restarts the port forwarding if an error occurs, ensuring a
+      more stable connection. It detects failures by monitoring for
+      "portforward.go" error messages. You can refresh the Console page to
+      reconnect.
+
+      {{< /annotation>}}
 
    1. Open a browser to
       [http://localhost:8080](http://localhost:8080).
