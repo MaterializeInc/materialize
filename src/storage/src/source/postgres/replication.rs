@@ -91,7 +91,7 @@ use mz_postgres_util::PostgresError;
 use mz_postgres_util::{simple_query_opt, Client};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
-use mz_storage_types::dyncfgs::PG_OFFSET_KNOWN_INTERVAL;
+use mz_storage_types::dyncfgs::{PG_OFFSET_KNOWN_INTERVAL, PG_SCHEMA_VALIDATION_INTERVAL};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceTimestamp;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
@@ -111,7 +111,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 use tracing::{error, trace};
@@ -408,8 +408,18 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     return Ok(());
                 }
             };
-
             let mut stream = pin!(stream.peekable());
+
+            // Run the periodic schema validation on a separate task using a separate client,
+            // to prevent it from blocking the replication reading progress.
+            let ssh_tunnel_manager = &config.config.connection_context.ssh_tunnel_manager;
+            let client = connection_config.connect("schema validation", ssh_tunnel_manager).await?;
+            let mut schema_errors = spawn_schema_validator(
+                client,
+                &config,
+                connection.publication.clone(),
+                table_info.clone(),
+            );
 
             let mut errored = HashSet::new();
             // Instead of downgrading the capability for every transaction we process we only do it
@@ -421,7 +431,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // compatible with `columnation`, to Vec<u8> data that is.
             let mut col_temp: Vec<Vec<u8>> = vec![];
             let mut row_temp = vec![];
-            let mut last_schema_validation = Instant::now();
             while let Some(event) = stream.as_mut().next().await {
                 use LogicalReplicationMessage::*;
                 use ReplicationMessage::*;
@@ -500,68 +509,48 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             "timely-{worker_id} received keepalive lsn={}",
                             keepalive.wal_end()
                         );
-                        let validation_interval = mz_storage_types::dyncfgs::PG_SCHEMA_VALIDATION_INTERVAL.get(config.config.config_set());
-                        if last_schema_validation.elapsed() > validation_interval {
-                            trace!(%id, "timely-{worker_id} validating schemas");
-                            let upstream_info = {
-                                match mz_postgres_util::publication_info(&*metadata_client, &connection.publication)
-                                    .await
-                                {
-                                    Ok(info) => info.into_iter().map(|t| (t.oid, t)).collect(),
-                                    // If the replication stream cannot be obtained in a definite way there is
-                                    // nothing else to do. These errors are not retractable.
-                                    Err(PostgresError::PublicationMissing(publication)) => {
-                                        let err = DefiniteError::PublicationDropped(publication);
-                                        for (oid, outputs) in table_info.iter() {
-                                            for output_index in outputs.keys() {
-                                                let update = (
-                                                    (
-                                                        *oid,
-                                                        *output_index,
-                                                        Err(DataflowError::from(err.clone())),
-                                                    ),
-                                                    data_cap_set[0].time().clone(),
-                                                    1,
-                                                );
-                                                data_output.give_fueled(&data_cap_set[0], update).await;
-                                            }
-                                        }
-                                        definite_error_handle.give(
-                                            &definite_error_cap_set[0],
-                                            ReplicationError::Definite(Rc::new(err)),
-                                        );
-                                        return Ok(());
-                                    }
-                                    Err(e) => Err(TransientError::from(e))?,
-                                }
-                            };
-                            for (&oid, outputs) in table_info.iter() {
-                                for (output_index, info) in outputs {
-                                    if errored.contains(output_index) {
-                                        trace!(%id, "timely-{worker_id} output index {output_index} \
-                                            for oid {oid} skipped");
-                                        continue;
-                                    }
-                                    match verify_schema(oid, &info.desc, &upstream_info, &*info.casts) {
-                                        Ok(()) => {
-                                            trace!(%id, "timely-{worker_id} schema of output \
-                                                index {output_index} for oid {oid} valid");
-                                        }
-                                        Err(err) => {
-                                            trace!(%id, "timely-{worker_id} schema of output \
-                                                index {output_index} for oid {oid} invalid");
+
+                        // Take the opportunity to report any schema validation errors.
+                        while let Ok(error) = schema_errors.try_recv() {
+                            use SchemaValidationError::*;
+                            match error {
+                                Postgres(PostgresError::PublicationMissing(publication)) => {
+                                    let err = DefiniteError::PublicationDropped(publication);
+                                    for (oid, outputs) in table_info.iter() {
+                                        for output_index in outputs.keys() {
                                             let update = (
-                                                (oid, *output_index, Err(err.into())),
+                                                (
+                                                    *oid,
+                                                    *output_index,
+                                                    Err(DataflowError::from(err.clone())),
+                                                ),
                                                 data_cap_set[0].time().clone(),
                                                 1,
                                             );
                                             data_output.give_fueled(&data_cap_set[0], update).await;
-                                            errored.insert(*output_index);
                                         }
                                     }
+                                    definite_error_handle.give(
+                                        &definite_error_cap_set[0],
+                                        ReplicationError::Definite(Rc::new(err)),
+                                    );
+                                    return Ok(());
+                                }
+                                Postgres(pg_error) => Err(TransientError::from(pg_error))?,
+                                Schema { oid, output_index, error } => {
+                                    if errored.contains(&output_index) {
+                                        continue;
+                                    }
+
+                                    let update = (
+                                        (oid, output_index, Err(error.into())),
+                                        data_cap_set[0].time().clone(),
+                                        1,
+                                    );
+                                    data_output.give_fueled(&data_cap_set[0], update).await;
+                                    errored.insert(output_index);
                                 }
                             }
-                            last_schema_validation = Instant::now();
                         }
                         data_upper = std::cmp::max(data_upper, keepalive.wal_end().into());
                     }
@@ -1103,4 +1092,71 @@ async fn ensure_replication_timeline_id(
             actual: timeline_id,
         }))
     }
+}
+
+enum SchemaValidationError {
+    Postgres(PostgresError),
+    Schema {
+        oid: u32,
+        output_index: usize,
+        error: DefiniteError,
+    },
+}
+
+fn spawn_schema_validator(
+    client: Client,
+    config: &RawSourceCreationConfig,
+    publication: String,
+    table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
+) -> mpsc::UnboundedReceiver<SchemaValidationError> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let source_id = config.id;
+    let config_set = Arc::clone(config.config.config_set());
+
+    mz_ore::task::spawn(|| format!("schema-validator:{}", source_id), async move {
+        while !tx.is_closed() {
+            trace!(%source_id, "validating schemas");
+
+            let validation_start = Instant::now();
+
+            let upstream_info =
+                match mz_postgres_util::publication_info(&*client, &publication).await {
+                    Ok(info) => info.into_iter().map(|t| (t.oid, t)).collect(),
+                    Err(error) => {
+                        let _ = tx.send(SchemaValidationError::Postgres(error));
+                        continue;
+                    }
+                };
+
+            for (&oid, outputs) in table_info.iter() {
+                for (&output_index, output_info) in outputs {
+                    let expected_desc = &output_info.desc;
+                    let casts = &output_info.casts;
+                    if let Err(error) = verify_schema(oid, expected_desc, &upstream_info, casts) {
+                        trace!(
+                            %source_id,
+                            "schema of output index {output_index} for oid {oid} invalid",
+                        );
+                        let _ = tx.send(SchemaValidationError::Schema {
+                            oid,
+                            output_index,
+                            error,
+                        });
+                    } else {
+                        trace!(
+                            %source_id,
+                            "schema of output index {output_index} for oid {oid} valid",
+                        );
+                    }
+                }
+            }
+
+            let interval = PG_SCHEMA_VALIDATION_INTERVAL.get(&config_set);
+            let elapsed = validation_start.elapsed();
+            let wait = interval.saturating_sub(elapsed);
+            tokio::time::sleep(wait).await;
+        }
+    });
+
+    rx
 }
