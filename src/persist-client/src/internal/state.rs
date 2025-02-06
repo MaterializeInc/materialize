@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{ensure, Context};
+use anyhow::ensure;
 use async_stream::{stream, try_stream};
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -55,7 +55,6 @@ use crate::error::InvalidUsage;
 use crate::internal::encoding::{parse_id, LazyInlineBatchPart, LazyPartStats, LazyProto};
 use crate::internal::gc::GcReq;
 use crate::internal::machine::retry_external;
-use crate::internal::metrics::SchemaMetrics;
 use crate::internal::paths::{BlobKey, PartId, PartialBatchKey, PartialRollupKey, WriterKey};
 use crate::internal::trace::{
     ActiveCompaction, ApplyMergeResult, FueledMergeReq, FueledMergeRes, Trace,
@@ -1311,17 +1310,10 @@ where
         &mut self,
         key_schema: &K::Schema,
         val_schema: &V::Schema,
-        metrics: &SchemaMetrics,
     ) -> ControlFlow<NoOpStateTransition<Option<SchemaId>>, Option<SchemaId>> {
         fn encode_data_type(data_type: &DataType) -> Bytes {
             let proto = data_type.into_proto();
             prost::Message::encode_to_vec(&proto).into()
-        }
-
-        fn decode_data_type(buf: Bytes) -> Result<DataType, anyhow::Error> {
-            let proto: mz_persist_types::arrow::ProtoDataType =
-                prost::Message::decode(buf).context("decoding schema DataType")?;
-            DataType::from_proto(proto).context("converting ProtoDataType into DataType")
         }
 
         // Look for an existing registered SchemaId for these schemas.
@@ -1339,65 +1331,12 @@ where
             K::decode_schema(&x.key) == *key_schema && V::decode_schema(&x.val) == *val_schema
         });
         match existing_id {
-            Some((schema_id, encoded_schemas)) => {
-                let schema_id = *schema_id;
-                let new_k_datatype = mz_persist_types::columnar::data_type::<K>(key_schema)
-                    .expect("valid key schema");
-                let new_v_datatype = mz_persist_types::columnar::data_type::<V>(val_schema)
-                    .expect("valid val schema");
-
-                let new_k_encoded_datatype = encode_data_type(&new_k_datatype);
-                let new_v_encoded_datatype = encode_data_type(&new_v_datatype);
-
-                // Check if the generated Arrow DataTypes have changed.
-                if encoded_schemas.key_data_type != new_k_encoded_datatype
-                    || encoded_schemas.val_data_type != new_v_encoded_datatype
-                {
-                    let old_k_datatype =
-                        decode_data_type(Bytes::clone(&encoded_schemas.key_data_type))
-                            .expect("failed to roundtrip Arrow DataType");
-                    let old_v_datatype =
-                        decode_data_type(Bytes::clone(&encoded_schemas.val_data_type))
-                            .expect("failed to roundtrip Arrow DataType");
-
-                    let k_atleast_as_nullable =
-                        crate::schema::is_atleast_as_nullable(&old_k_datatype, &new_k_datatype);
-                    let v_atleast_as_nullable =
-                        crate::schema::is_atleast_as_nullable(&old_v_datatype, &new_v_datatype);
-
-                    // If the Arrow DataType for `k` or `v` has changed, but it's only become more
-                    // nullable, then we allow in-place re-writing of the schema.
-                    match (k_atleast_as_nullable, v_atleast_as_nullable) {
-                        // TODO(parkmycar): Remove this one-time migration after v0.127 ships.
-                        (Ok(()), Ok(())) => {
-                            let key = Bytes::clone(&encoded_schemas.key);
-                            let val = Bytes::clone(&encoded_schemas.val);
-                            self.schemas.insert(
-                                schema_id,
-                                EncodedSchemas {
-                                    key,
-                                    key_data_type: new_k_encoded_datatype,
-                                    val,
-                                    val_data_type: new_v_encoded_datatype,
-                                },
-                            );
-                            metrics.one_time_migration_more_nullable.inc();
-                            Continue(Some(schema_id))
-                        }
-                        (k_err, _) => {
-                            tracing::info!(
-                                "register schemas, Arrow DataType changed\nkey: {:?}\nold: {:?}\nnew: {:?}",
-                                k_err,
-                                old_k_datatype,
-                                new_k_datatype,
-                            );
-                            Break(NoOpStateTransition(None))
-                        }
-                    }
-                } else {
-                    // Everything matches.
-                    Break(NoOpStateTransition(Some(schema_id)))
-                }
+            Some((schema_id, _)) => {
+                // TODO: Validate that the decoded schemas still produce records
+                // of the recorded DataType, to detect shenanigans. Probably
+                // best to wait until we've turned on Schema2 in prod and thus
+                // committed to the current mappings.
+                Break(NoOpStateTransition(Some(*schema_id)))
             }
             None if self.is_tombstone() => {
                 // TODO: Is this right?
