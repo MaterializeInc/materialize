@@ -5,6 +5,6 @@
     {{ $type }}
   </div>
   <div>
-    {{ .Inner | $.Page.RenderString }}
+    {{ .Inner | replaceRE "^\\s+" "" | $.Page.RenderString }}
   </div>
 </div>
