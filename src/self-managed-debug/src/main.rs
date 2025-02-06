@@ -31,10 +31,10 @@ pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version
 #[clap(name = "self-managed-debug", next_line_help = true, version = VERSION.as_str())]
 pub struct Args {
     // === Kubernetes options. ===
-    #[clap(long, env = "KUBERNETES_CONTEXT")]
-    kubernetes_context: Option<String>,
-    #[clap(long, value_delimiter = ',', num_args = 1..)]
-    kubernetes_namespaces: Vec<String>,
+    #[clap(long = "k8s-context", env = "KUBERNETES_CONTEXT")]
+    k8s_context: Option<String>,
+    #[clap(long = "k8s-namespace", required = true, action = clap::ArgAction::Append)]
+    k8s_namespaces: Vec<String>,
 }
 
 #[tokio::main]
@@ -55,22 +55,28 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
-    let client = create_k8s_client(args.kubernetes_context.clone()).await?;
-    // TODO: Make namespaces mandatory
-    // TODO: Print a warning if namespace doesn't exist
-    for namespace in args.kubernetes_namespaces {
-        let _ = match dump_k8s_pod_logs(client.clone(), &namespace).await {
-            Ok(file_names) => Some(file_names),
-            Err(e) => {
-                eprintln!(
-                    "Failed to write k8s pod logs for namespace {}: {}",
-                    namespace, e
-                );
-                None
+    match create_k8s_client(args.k8s_context).await {
+        Ok(client) => {
+            for namespace in args.k8s_namespaces {
+                let _ = match dump_k8s_pod_logs(client.clone(), &namespace).await {
+                    Ok(file_names) => Some(file_names),
+                    Err(e) => {
+                        eprintln!(
+                            "Failed to write k8s pod logs for namespace {}: {}",
+                            namespace, e
+                        );
+                        if let Some(_) = e.downcast_ref::<kube::Error>() {
+                            eprintln!("Ensure that {} exists.", namespace);
+                        }
+                        None
+                    }
+                };
             }
-        };
-    }
-
+        }
+        Err(e) => {
+            eprintln!("Failed to create k8s client: {}", e);
+        }
+    };
     // TODO: Compress files to ZIP
     Ok(())
 }
