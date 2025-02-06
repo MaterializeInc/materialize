@@ -1846,8 +1846,6 @@ where
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
         for (id, mut description, write_handle, since_handle, metadata) in to_register {
-            tracing::info!(%id, desc = ?description.data_source, "REGISTERING");
-
             // Ensure that the ingestion has an export for its primary source if applicable.
             // This is done in an awkward spot to appease the borrow checker.
             // TODO(database-issues#8620): This will be removed once sources no longer export
