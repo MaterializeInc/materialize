@@ -92,7 +92,9 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
                 "connection",
             ),
             (envelope == &other.envelope, "envelope"),
-            (with_snapshot == &other.with_snapshot, "with_snapshot"),
+            // This can legally change from true to false once the snapshot has been
+            // written out.
+            (*with_snapshot || !other.with_snapshot, "with_snapshot"),
             (
                 partition_strategy == &other.partition_strategy,
                 "partition_strategy",
