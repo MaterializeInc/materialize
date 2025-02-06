@@ -95,6 +95,11 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
       ```shell
       helm repo add materialize https://materializeinc.github.io/materialize
+      ```
+
+   1. Update the repository.
+
+      ```shell
       helm repo update materialize
       ```
 
