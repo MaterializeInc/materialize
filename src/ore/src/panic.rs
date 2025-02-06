@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{env, thread};
 
+use chrono::Utc;
 use itertools::Itertools;
 #[cfg(feature = "async")]
 use tokio::task_local;
@@ -85,6 +86,7 @@ pub fn install_enhanced_handler() {
             return;
         }
 
+        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string();
         let thread = thread::current();
         let thread_name = thread.name().unwrap_or("<unnamed>");
 
@@ -139,7 +141,9 @@ pub fn install_enhanced_handler() {
         // may be writing to the stderr stream outside of the Rust runtime.
         //
         // See https://github.com/rust-lang/rust/issues/64413 for details.
-        let buf = format!("thread '{thread_name}' panicked at {location}:\n{msg}\n{backtrace}");
+        let buf = format!(
+            "{timestamp}  thread '{thread_name}' panicked at {location}:\n{msg}\n{backtrace}"
+        );
 
         // Ideal path: spawn a thread that attempts to lock the Rust-managed
         // stderr stream and write the panic message there. Acquiring the stderr
