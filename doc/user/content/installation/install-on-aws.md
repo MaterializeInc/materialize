@@ -96,17 +96,17 @@ node instance type, etc.), see the
 
 1. Clone the [Materialize's sample Terraform
    repo](https://github.com/MaterializeInc/terraform-google-materialize) and
-   checkout the `v0.2.1` tag.
+   checkout the `v0.2.2` tag.
 
    {{< tabs >}}
    {{< tab "Clone via SSH" >}}
    ```bash
-   git clone --depth 1 -b v0.2.1 git@github.com:MaterializeInc/terraform-aws-materialize.git
+   git clone --depth 1 -b v0.2.2 git@github.com:MaterializeInc/terraform-aws-materialize.git
    ```
    {{< /tab >}}
    {{< tab "Clone via HTTPS" >}}
    ```bash
-   git clone --depth 1 -b v0.2.1 https://github.com/MaterializeInc/terraform-aws-materialize.git
+   git clone --depth 1 -b v0.2.2 https://github.com/MaterializeInc/terraform-aws-materialize.git
    ```
    {{< /tab >}}
    {{< /tabs >}}
