@@ -53,22 +53,6 @@ documentationq](https://kubernetes.io/docs/tasks/tools/).
 For help with `kubectl` commands, see [kubectl Quick
 reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-### Sample configuration files
-
-Download the following sample configuration files from the Materialize repo:
-
-- `values.yaml`
-- `postgres.yaml`
-- `minio.yaml`
-- `materialize.yaml`
-
-```shell
-curl -o values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/operator/values.yaml
-curl -o sample-postgres.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/postgres.yaml
-curl -o sample-minio.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/minio.yaml
-curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/materialize.yaml
-```
-
 ## Installation
 
 1. Start Docker if it is not already running.
