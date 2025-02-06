@@ -22,6 +22,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -33,6 +34,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
+    Mz(app_password=""),
     Materialized(
         options=[
             "--orchestrator-process-scratch-directory=/scratch",
@@ -64,11 +66,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.compaction_disabled:
         materialized_environment_extra[0] = "MZ_PERSIST_COMPACTION_DISABLED=true"
 
-    for name in c.workflows:
+    def process(name: str) -> None:
         if name in ["default", "load-test", "large-scale"]:
-            continue
+            return
+
         with c.test_case(name):
             c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -136,7 +141,8 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         try:
             junit_report = ci_util.junit_report_filename(c.name)
-            for file in args.files:
+
+            def process(file: str) -> None:
                 c.run_testdrive_files(
                     f"--junit-report={junit_report}",
                     f"--var=replicas={args.replicas}",
@@ -144,7 +150,9 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
                     f"--var=default-storage-size={materialized.default_storage_size}",
                     file,
                 )
-                c.sanity_restart_mz()
+
+            c.test_parts(args.files, process)
+            c.sanity_restart_mz()
         finally:
             ci_util.upload_junit_report(
                 "testdrive", Path(__file__).parent / junit_report

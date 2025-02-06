@@ -26,6 +26,7 @@ from psycopg.errors import (
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -38,6 +39,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
+    Mz(app_password=""),
     Materialized(),
     Testdrive(
         entrypoint_extra=[
@@ -864,8 +866,11 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
 
 
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
+    def process(name: str) -> None:
         if name == "default":
-            continue
+            return
+
         with c.test_case(name):
             c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)

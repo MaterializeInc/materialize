@@ -58,11 +58,13 @@ from materialize.mzcompose.services.fivetran_destination_tester import (
     FivetranDestinationTester,
 )
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
 
 ROOT = Path(__file__).parent
 
 SERVICES = [
+    Mz(app_password=""),
     Materialized(),
     Testdrive(
         no_reset=True,

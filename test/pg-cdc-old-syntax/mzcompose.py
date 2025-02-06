@@ -22,6 +22,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.service import Service, ServiceConfig
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import (
     METADATA_STORE,
     CockroachOrPostgresMetadata,
@@ -93,6 +94,7 @@ def create_postgres(
 
 
 SERVICES = [
+    Mz(app_password=""),
     Materialized(
         volumes_extra=["secrets:/share/secrets"],
         additional_system_parameter_defaults={
@@ -323,19 +325,42 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     with c.override(create_postgres(pg_version=pg_version)):
         c.up("materialized", "test-certs", "postgres")
-        c.run_testdrive_files(
-            f"--var=ssl-ca={ssl_ca}",
-            f"--var=ssl-cert={ssl_cert}",
-            f"--var=ssl-key={ssl_key}",
-            f"--var=ssl-wrong-cert={ssl_wrong_cert}",
-            f"--var=ssl-wrong-key={ssl_wrong_key}",
-            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-            *sharded_files,
+        c.test_parts(
+            sharded_files,
+            lambda file: c.run_testdrive_files(
+                f"--var=ssl-ca={ssl_ca}",
+                f"--var=ssl-cert={ssl_cert}",
+                f"--var=ssl-key={ssl_key}",
+                f"--var=ssl-wrong-cert={ssl_wrong_cert}",
+                f"--var=ssl-wrong-key={ssl_wrong_key}",
+                f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+                f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+                file,
+            ),
         )
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    def process(name: str) -> None:
+        if name in ("default", "migration"):
+            return
+
+        # TODO: Flaky, reenable when database-issues#7611 is fixed
+        if name == "statuses":
+            return
+
+        # TODO: Flaky, reenable when database-issues#8447 is fixed
+        if name == "silent-connection-drop":
+            return
+
+        c.kill("postgres")
+        c.rm("postgres")
+        c.kill("materialized")
+        c.rm("materialized")
+
+        with c.test_case(name):
+            c.workflow(name, *parser.args)
+
     workflows_with_internal_sharding = ["cdc"]
     sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
         [
@@ -348,25 +373,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(
         f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
     )
-    for name in sharded_workflows:
-        if name in ("default", "migration"):
-            continue
-
-        # TODO: Flaky, reenable when database-issues#7611 is fixed
-        if name == "statuses":
-            continue
-
-        # TODO: Flaky, reenable when database-issues#8447 is fixed
-        if name == "silent-connection-drop":
-            continue
-
-        c.kill("postgres")
-        c.rm("postgres")
-        c.kill("materialized")
-        c.rm("materialized")
-
-        with c.test_case(name):
-            c.workflow(name, *parser.args)
+    c.test_parts(sharded_workflows, process)
 
 
 def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:

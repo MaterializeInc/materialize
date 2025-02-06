@@ -24,6 +24,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import (
     METADATA_STORE,
     CockroachOrPostgresMetadata,
@@ -55,6 +56,7 @@ def create_mysql_replica(mysql_version: str) -> MySql:
 
 
 SERVICES = [
+    Mz(app_password=""),
     Materialized(
         external_blob_store=True,
         additional_system_parameter_defaults={
@@ -83,6 +85,12 @@ def get_targeted_mysql_version(parser: WorkflowArgumentParser) -> str:
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    def process(name: str) -> None:
+        if name in ("default", "migration"):
+            return
+        with c.test_case(name):
+            c.workflow(name, *parser.args)
+
     workflows_with_internal_sharding = ["cdc"]
     sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
         [w for w in c.workflows if w not in workflows_with_internal_sharding],
@@ -91,12 +99,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(
         f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
     )
-    for name in sharded_workflows:
-        if name in ("default", "migration"):
-            continue
-
-        with c.test_case(name):
-            c.workflow(name, *parser.args)
+    c.test_parts(sharded_workflows, process)
 
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -128,18 +131,21 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.sources_and_sinks_ignored_from_validation.add("drop_table")
 
-        c.run_testdrive_files(
-            f"--var=ssl-ca={valid_ssl_context.ca}",
-            f"--var=ssl-client-cert={valid_ssl_context.client_cert}",
-            f"--var=ssl-client-key={valid_ssl_context.client_key}",
-            f"--var=ssl-wrong-ca={wrong_ssl_context.ca}",
-            f"--var=ssl-wrong-client-cert={wrong_ssl_context.client_cert}",
-            f"--var=ssl-wrong-client-key={wrong_ssl_context.client_key}",
-            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
-            "--var=mysql-user-password=us3rp4ssw0rd",
-            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-            *sharded_files,
+        c.test_parts(
+            sharded_files,
+            lambda file: c.run_testdrive_files(
+                f"--var=ssl-ca={valid_ssl_context.ca}",
+                f"--var=ssl-client-cert={valid_ssl_context.client_cert}",
+                f"--var=ssl-client-key={valid_ssl_context.client_key}",
+                f"--var=ssl-wrong-ca={wrong_ssl_context.ca}",
+                f"--var=ssl-wrong-client-cert={wrong_ssl_context.client_cert}",
+                f"--var=ssl-wrong-client-key={wrong_ssl_context.client_key}",
+                f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+                "--var=mysql-user-password=us3rp4ssw0rd",
+                f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+                f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+                file,
+            ),
         )
 
 

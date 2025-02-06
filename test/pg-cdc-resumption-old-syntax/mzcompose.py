@@ -17,12 +17,14 @@ from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.alpine import Alpine
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 SERVICES = [
     Alpine(),
+    Mz(app_password=""),
     Materialized(),
     Postgres(),
     Toxiproxy(),
@@ -31,9 +33,9 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    for name in c.workflows:
+    def process(name: str) -> None:
         if name == "default":
-            continue
+            return
 
         # clear to avoid issues
         c.kill("postgres")
@@ -41,6 +43,8 @@ def workflow_default(c: Composition) -> None:
 
         with c.test_case(name):
             c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 def workflow_disruptions(c: Composition) -> None:

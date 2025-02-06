@@ -15,6 +15,7 @@ from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 from materialize.version_list import (
@@ -25,17 +26,21 @@ mz_options: dict[MzVersion, str] = {}
 
 SERVICES = [
     Cockroach(setup_materialize=True),
+    Mz(app_password=""),
     Materialized(external_metadata_store=True, metadata_store="cockroach"),
     Testdrive(no_reset=True, metadata_store="cockroach"),
 ]
 
 
 def workflow_default(c: Composition) -> None:
-    for i, name in enumerate(c.workflows):
+    def process(name: str) -> None:
         if name == "default":
-            continue
+            return
+
         with c.test_case(name):
             c.workflow(name)
+
+    c.test_parts(list(c.workflows.keys()), process)
 
 
 def workflow_test_version_skips(c: Composition) -> None:
