@@ -3133,7 +3133,6 @@ pub struct SchemaMetrics {
     pub(crate) migration_new_count: IntCounter,
     pub(crate) migration_new_seconds: Counter,
     pub(crate) migration_migrate_seconds: Counter,
-    pub(crate) one_time_migration_more_nullable: IntCounter,
 }
 
 impl SchemaMetrics {
@@ -3204,10 +3203,6 @@ impl SchemaMetrics {
             migration_migrate_seconds: registry.register(metric!(
                 name: "mz_persist_schema_migration_migrate_seconds",
                 help: "seconds spent applying migration logic",
-            )),
-            one_time_migration_more_nullable: registry.register(metric!(
-                name: "mz_persist_one_time_migration_more_nullable",
-                help: "count of running the onetime more nullable migration",
             )),
         }
     }
