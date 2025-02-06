@@ -872,13 +872,13 @@ impl<T: TimestampManipulation> Session<T> {
         &self.metrics
     }
 
-    /// Sets the [`BuiltinTableAppendNotify`] for this session.
+    /// Sets the `BuiltinTableAppendNotify` for this session.
     pub fn set_builtin_table_updates(&mut self, fut: BuiltinTableAppendNotify) {
         let prev = self.builtin_updates.replace(fut);
         mz_ore::soft_assert_or_log!(prev.is_none(), "replacing old builtin table notify");
     }
 
-    /// Takes the stashed [`BuiltinTableAppendNotify`] and waits for the writes to complete.
+    /// Takes the stashed `BuiltinTableAppendNotify` and waits for the writes to complete.
     pub async fn clear_builtin_table_updates(&mut self) {
         if let Some(fut) = self.builtin_updates.take() {
             // Record how long we blocked for, if we blocked at all.
