@@ -53,22 +53,6 @@ documentationq](https://kubernetes.io/docs/tasks/tools/).
 For help with `kubectl` commands, see [kubectl Quick
 reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-### Sample configuration files
-
-Download the following sample configuration files from the Materialize repo:
-
-- `values.yaml`
-- `postgres.yaml`
-- `minio.yaml`
-- `materialize.yaml`
-
-```shell
-curl -o values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/operator/values.yaml
-curl -o sample-postgres.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/postgres.yaml
-curl -o sample-minio.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/minio.yaml
-curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/materialize.yaml
-```
-
 ## Installation
 
 1. Start Docker if it is not already running.
@@ -81,22 +65,48 @@ curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc
    kind create cluster
    ```
 
+1. To help you get started for local evaluation/testing, Materialize provides
+   some sample configuration files. Download the sample configuration files from
+   the Materialize repo:
+
+   ```shell
+   curl -o sample-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/operator/values.yaml
+   curl -o sample-postgres.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/postgres.yaml
+   curl -o sample-minio.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/minio.yaml
+   curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/materialize.yaml
+   ```
+
+   - `sample-values.yaml`: Used to configure the Materialize Operator.
+   - `sample-postgres.yaml`: Used to configure PostgreSQL as the metadata
+     database.
+   - `sample-minio.yaml`: Used to configure minIO as the blob storage.
+   - `sample-materialize.yaml`: Used to configure Materialize instance.
+
+   These configuration files are for demonstration/evaluation purposes only and
+   not intended for production use.
+
 1. Install the Materialize Helm chart.
 
    1. Add the Materialize Helm chart repository.
 
       ```shell
       helm repo add materialize https://materializeinc.github.io/materialize
+      ```
+
+   1. Update the repository.
+
+      ```shell
       helm repo update materialize
       ```
 
-   1. Install the Materialize Operator.
+   1. Install the Materialize Operator. The operator will be installed in the
+      `materialize` namespace.
 
       ```shell
       helm install my-materialize-operator materialize/materialize-operator \
           --namespace=materialize --create-namespace \
           --version v25.1.1 \
-          -f values.yaml
+          -f sample-values.yaml
       ```
 
    1. Verify the installation and check the status:
@@ -137,14 +147,14 @@ curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc
         ```
 
 1. Optional. Install the following metrics service for certain system metrics
-   but not required.
+   but not required. The service will be installed in the `kube-system`
+   namespace.
 
    ```shell
    kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
    ```
 
 1. Install Materialize into a new `materialize-environment` namespace:
-
 
    1. Use the `sample-materialize.yaml` file to create the
       `materialize-environment` namespace and install Materialize:
@@ -202,16 +212,16 @@ curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc
        If you run into an error during deployment, refer to the
        [Troubleshooting](/self-hosted/troubleshooting) guide.
 
-1. Open the Materialize console in your browser:
+1. Open the Materialize Console in your browser:
 
-   1. From the previous `kubectl` output, find the Materialize console service.
+   1. From the previous `kubectl` output, find the Materialize Console service.
 
       ```none
       NAME                           TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
       service/mzlvmx9h6dpx-console   ClusterIP   None         <none>        8080 TCP   32s
       ```
 
-   1. Forward the Materialize console service to your local machine (substitute
+   1. Forward the Materialize Console service to your local machine (substitute
       your service name for `mzlvmx9h6dpx-console`):
 
       ```shell
@@ -220,17 +230,25 @@ curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc
       grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
       done;
       ```
-      {{< note >}}
-      Due to a [known Kubernetes issue](https://github.com/kubernetes/kubernetes/issues/78446),
-      interrupted long-running requests through a standard port-forward cause the port forward to hang. The command above
-      automatically restarts the port forwarding if an error occurs, ensuring a more stable
-      connection. It detects failures by monitoring for "portforward.go" error messages.
-      {{< /note >}}
+
+     {{< annotation type="Kubernetes issue 78446" >}}
+
+      Due to a [known Kubernetes
+      issue](https://github.com/kubernetes/kubernetes/issues/78446), interrupted
+      long-running requests through a standard port-forward cause the port
+      forward to hang, and the Console will display **"We're having trouble
+      reaching your environment."** error message. The command above
+      automatically restarts the port forwarding if an error occurs, ensuring a
+      more stable connection. It detects failures by monitoring for
+      "portforward.go" error messages. You can refresh the Console page to
+      reconnect.
+
+      {{< /annotation>}}
 
    1. Open a browser to
       [http://localhost:8080](http://localhost:8080).
 
-      ![Image of  self-managed Materialize console running on local kind](/images/self-managed/self-managed-console-kind.png)
+      ![Image of  self-managed Materialize Console running on local kind](/images/self-managed/self-managed-console-kind.png)
 
 ## See also
 
