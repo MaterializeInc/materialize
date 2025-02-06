@@ -375,7 +375,7 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
             ),
         )
 
-    num_rows = 300_000  # out of disk with 400_000 rows
+    num_rows = 100_000  # out of memory with 200_000 rows
     batch_size = 10_000
     for i in range(0, num_rows, batch_size):
         batch_num = min(batch_size, num_rows - i)
