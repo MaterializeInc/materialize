@@ -350,6 +350,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::fetch::FETCH_SEMAPHORE_COST_ADJUSTMENT)
         .add(&crate::fetch::FETCH_SEMAPHORE_PERMIT_ADJUSTMENT)
         .add(&crate::internal::cache::BLOB_CACHE_MEM_LIMIT_BYTES)
+        .add(&crate::internal::cache::BLOB_CACHE_SCALE_WITH_THREADS)
+        .add(&crate::internal::cache::BLOB_CACHE_SCALE_FACTOR_BYTES)
         .add(&crate::internal::compact::COMPACTION_MINIMUM_TIMEOUT)
         .add(&crate::internal::compact::COMPACTION_USE_MOST_RECENT_SCHEMA)
         .add(&crate::internal::compact::COMPACTION_CHECK_PROCESS_FLAG)
