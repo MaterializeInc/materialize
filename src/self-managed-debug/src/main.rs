@@ -10,31 +10,24 @@
 //! Debug tool for self managed environments.
 
 use std::fmt::Debug;
-
+use std::fs::File;
+use std::io::Write;
 use std::process;
-
 use std::sync::LazyLock;
 
 use chrono::{Duration, Utc};
 use clap::Parser;
 use k8s_openapi::api::apps::v1::{Deployment, ReplicaSet, StatefulSet};
+use k8s_openapi::api::core::v1::{ContainerStatus, Pod, Service};
 use k8s_openapi::api::networking::v1::{NetworkPolicy, NetworkPolicyPeer, NetworkPolicyPort};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
+use kube::api::{Api, ListParams, LogParams, ObjectMeta};
 use kube::config::KubeConfigOptions;
 use kube::{Client, Config};
-use tabled::{Style, Table, Tabled};
-
 use mz_build_info::{build_info, BuildInfo};
-
 use mz_ore::cli::{self, CliConfig};
-
-use k8s_openapi::api::core::v1::{ContainerStatus, Pod, Service};
-
-use kube::api::{Api, ListParams, LogParams, ObjectMeta};
 use mz_ore::error::ErrorExt;
-
-use std::fs::File;
-use std::io::Write;
+use tabled::{Style, Table, Tabled};
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
@@ -98,9 +91,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-/**
- * Creates a k8s client given a context. If no context is provided, the default context is used.
- */
+/// Creates a k8s client given a context. If no context is provided, the default context is used.
 async fn create_k8s_client(context: Option<String>) -> Result<Client, anyhow::Error> {
     let kubeconfig_options = KubeConfigOptions {
         context,
@@ -114,10 +105,8 @@ async fn create_k8s_client(context: Option<String>) -> Result<Client, anyhow::Er
     Ok(client)
 }
 
-/**
- * Write k8s pod logs to a file per pod as mz-pod-logs.<namespace>.<pod-name>.log.
- * Returns a list of file names on success.
- */
+/// Write k8s pod logs to a file per pod as mz-pod-logs.<namespace>.<pod-name>.log.
+/// Returns a list of file names on success.
 async fn dump_k8s_pod_logs(
     client: Client,
     namespace: &String,

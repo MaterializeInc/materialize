@@ -6722,7 +6722,7 @@ dependencies = [
 
 [[package]]
 name = "mz-self-managed-debug"
-version = "0.130.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
