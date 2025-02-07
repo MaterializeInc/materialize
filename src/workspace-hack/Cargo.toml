@@ -83,9 +83,9 @@ native-tls = { version = "0.2.11", default-features = false, features = ["alpn"]
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
 num = { version = "0.4.3" }
-num-bigint = { version = "0.4.3" }
+num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
-num-traits = { version = "0.2.15", features = ["i128", "libm"] }
+num-traits = { version = "0.2.19", features = ["i128", "libm"] }
 openssl = { version = "0.10.70", features = ["vendored"] }
 openssl-sys = { version = "0.9.105", default-features = false, features = ["vendored"] }
 ordered-float = { version = "4.2.0", features = ["serde"] }
@@ -216,9 +216,9 @@ native-tls = { version = "0.2.11", default-features = false, features = ["alpn"]
 nix = { version = "0.26.1" }
 nom = { version = "7.1.2" }
 num = { version = "0.4.3" }
-num-bigint = { version = "0.4.3" }
+num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
-num-traits = { version = "0.2.15", features = ["i128", "libm"] }
+num-traits = { version = "0.2.19", features = ["i128", "libm"] }
 openssl = { version = "0.10.70", features = ["vendored"] }
 openssl-sys = { version = "0.9.105", default-features = false, features = ["vendored"] }
 ordered-float = { version = "4.2.0", features = ["serde"] }
