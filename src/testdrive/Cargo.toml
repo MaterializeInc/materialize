@@ -31,7 +31,7 @@ itertools = "0.12.1"
 junit-report = "0.8.3"
 maplit = "1.0.2"
 md-5 = "0.10.5"
-mysql_async = { version = "0.34.1", default-features = false, features = ["minimal"] }
+mysql_async = { version = "0.35.1", default-features = false, features = ["minimal"] }
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-build-info = { path = "../build-info" }

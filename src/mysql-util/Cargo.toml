@@ -20,10 +20,10 @@ mz-ore = { path = "../ore", features = ["async"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-ssh-util = { path = "../ssh-util" }
-mysql_common = { version = "0.32.4", default-features = false, features = [
+mysql_common = { version = "0.34.1", default-features = false, features = [
     "chrono",
 ] }
-mysql_async = { version = "0.34.1", default-features = false, features = [
+mysql_async = { version = "0.35.1", default-features = false, features = [
     "minimal",
     "tracing",
 ] }
