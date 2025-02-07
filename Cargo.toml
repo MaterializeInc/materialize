@@ -311,10 +311,6 @@ launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 
-# Waiting on https://github.com/openssh-rust/openssh/pull/120 to make it into
-# a release.
-openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
-
 # Removes dependencies required for WASM support that create duplicated deps.
 reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }

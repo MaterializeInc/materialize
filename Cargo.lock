@@ -6956,7 +6956,7 @@ dependencies = [
  "itertools 0.12.1",
  "mz-ore",
  "openssh",
- "openssh-mux-client 0.17.6",
+ "openssh-mux-client",
  "openssl",
  "rand 0.8.5",
  "scopeguard",
@@ -7789,34 +7789,17 @@ dependencies = [
 
 [[package]]
 name = "openssh"
-version = "0.9.9"
-source = "git+https://github.com/MaterializeInc/openssh.git#34404a274c5e1a7addd48940656fa12b7531e793"
+version = "0.11.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea0bb128ba90e86bc55dae66031935f361cda4cbc1f011547c55a7d80079bc3e"
 dependencies = [
- "dirs",
  "libc",
  "once_cell",
- "openssh-mux-client 0.15.5",
+ "openssh-mux-client",
  "shell-escape",
  "tempfile",
- "thiserror 1.0.61",
+ "thiserror 2.0.11",
  "tokio",
- "tokio-pipe",
-]
-
-[[package]]
-name = "openssh-mux-client"
-version = "0.15.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88eac793af6170bcd6d4f39c3b7ba3f4227cab5680d7189ba30f9d174600b75f"
-dependencies = [
- "once_cell",
- "sendfd",
- "serde",
- "ssh_format 0.12.0",
- "thiserror 1.0.61",
- "tokio",
- "tokio-io-utility",
- "typed-builder 0.10.0",
 ]
 
 [[package]]
@@ -7831,10 +7814,10 @@ dependencies = [
  "openssh-mux-client-error",
  "sendfd",
  "serde",
- "ssh_format 0.14.1",
+ "ssh_format",
  "tokio",
  "tokio-io-utility",
- "typed-builder 0.20.0",
+ "typed-builder",
 ]
 
 [[package]]
@@ -10041,15 +10024,6 @@ dependencies = [
 
 [[package]]
 name = "ssh_format"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8701239872766d43b8a5f9a560ff7f002b48064fadea87f44a70507069fb482"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "ssh_format"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "24ab31081d1c9097c327ec23550858cb5ffb4af6b866c1ef4d728455f01f3304"
@@ -10679,16 +10653,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-pipe"
-version = "0.2.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f213a84bffbd61b8fa0ba8a044b4bbe35d471d0b518867181e82bd5c15542784"
-dependencies = [
- "libc",
- "tokio",
-]
-
-[[package]]
 name = "tokio-postgres"
 version = "0.7.11"
 source = "git+https://github.com/MaterializeInc/rust-postgres#7d2f14e35e97973995c39662cde618036a0f9484"
@@ -11144,17 +11108,6 @@ name = "typed-arena"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
-
-[[package]]
-name = "typed-builder"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89851716b67b937e393b3daa8423e67ddfc4bbbf1654bcf05488e95e0828db0c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.107",
-]
 
 [[package]]
 name = "typed-builder"
