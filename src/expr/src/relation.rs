@@ -3340,16 +3340,9 @@ impl AggregateExpr {
         match self {
             AggregateExpr {
                 func: AggregateFunc::Count,
-                expr:
-                    MirScalarExpr::Literal(
-                        Ok(row),
-                        mz_repr::ColumnType {
-                            scalar_type: mz_repr::ScalarType::Bool,
-                            nullable: false,
-                        },
-                    ),
+                expr,
                 distinct: false,
-            } => row.unpack_first() == mz_repr::Datum::True,
+            } => expr.is_literal_true(),
             _ => false,
         }
     }
