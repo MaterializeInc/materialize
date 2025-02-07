@@ -11,7 +11,7 @@ authors = ["Materialize, Inc."]
 workspace = true
 
 [dependencies]
-anyhow = { version = "1.0.66", optional = true }
+anyhow = { version = "1.0.95", optional = true }
 # NB: ore is meant to be an extension of the Rust stdlib. To keep it
 # lightweight, dependencies on external crates should be avoided if possible. If
 # an external crate is required, it must be optional and feature-gated.
@@ -95,7 +95,7 @@ sentry-tracing = { version = "0.29.1", optional = true }
 yansi = { version = "0.5.1", optional = true }
 
 [dev-dependencies]
-anyhow = { version = "1.0.66" }
+anyhow = { version = "1.0.95" }
 criterion = { version = "0.5.1", features = ["async_tokio"] }
 mz-ore = { path = "../ore", features = ["id_gen"] }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }

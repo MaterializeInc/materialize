@@ -14,7 +14,7 @@ name = "row"
 harness = false
 
 [dependencies]
-anyhow = "1.0.66"
+anyhow = "1.0.95"
 arrow = { version = "53.3.0", default-features = false }
 async-trait = "0.1.83"
 aws-config = { version = "1.2.0", default-features = false, features = ["sso"] }

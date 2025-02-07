@@ -13,7 +13,7 @@ workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.66"
+anyhow = "1.0.95"
 camino = "1"
 cargo_toml = "0.19.1"
 clap = { version = "4.5.23", features = ["derive", "env"] }
