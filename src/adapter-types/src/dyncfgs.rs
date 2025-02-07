@@ -32,6 +32,12 @@ pub const WITH_0DT_DEPLOYMENT_MAX_WAIT: Config<Duration> = Config::new(
     "How long to wait at most for clusters to be hydrated, when doing a zero-downtime deployment.",
 );
 
+pub const WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL: Config<Duration> = Config::new(
+    "with_0dt_deployment_ddl_check_interval",
+    Duration::from_secs(5 * 60),
+    "How often to check for DDL changes during zero-downtime deployment.",
+);
+
 pub const ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT: Config<bool> = Config::new(
     "enable_0dt_deployment_panic_after_timeout",
     false,
@@ -117,6 +123,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ALLOW_USER_SESSIONS)
         .add(&ENABLE_0DT_DEPLOYMENT)
         .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
+        .add(&WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL)
         .add(&ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)
         .add(&WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL)
         .add(&ENABLE_0DT_CAUGHT_UP_CHECK)
