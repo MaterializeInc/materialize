@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
+anyhow = "1.0.95"
 async-trait = "0.1.83"
 crossbeam-channel = "0.5.8"
 differential-dataflow = "0.13.5"

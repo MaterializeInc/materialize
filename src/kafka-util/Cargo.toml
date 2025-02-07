@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
+anyhow = "1.0.95"
 aws-config = { version = "1.2.0", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.1.1" }
 aws-sigv4 = { version = "1.2.0" }

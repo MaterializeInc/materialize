@@ -11,11 +11,10 @@ workspace = true
 
 [dependencies]
 mz-repr = { path = "../repr" }
-regex = "1.7.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-anyhow = "1.0.66"
+anyhow = "1.0.95"
 mz-ore = { path = "../ore", features = ["cli"] }
 postgres = "0.19.5"
 

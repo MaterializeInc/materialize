@@ -28,7 +28,7 @@ name = "benches"
 harness = false
 
 [dependencies]
-anyhow = { version = "1.0.66", features = ["backtrace"] }
+anyhow = { version = "1.0.95", features = ["backtrace"] }
 arrayvec = "0.7.4"
 arrow = { version = "53.3.0", default-features = false }
 async-stream = "0.3.3"

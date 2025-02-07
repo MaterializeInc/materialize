@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
+anyhow = "1.0.95"
 async-trait = { version = "0.1.83" }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 openssl = { version = "0.10.48", features = ["vendored"] }

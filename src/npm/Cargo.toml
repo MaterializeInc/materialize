@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.66"
+anyhow = "1.0.95"
 flate2 = "1.0.24"
 hex = "0.4.3"
 hex-literal = "0.3.4"
