@@ -32,8 +32,8 @@ futures = "0.3.25"
 indexmap = { version = "2.0.0", default-features = false, features = ["std"] }
 itertools = { version = "0.12.1" }
 maplit = "1.0.2"
-mysql_async = { version = "0.34.1", default-features = false, features = ["minimal", "binlog"] }
-mysql_common = { version = "0.32.4", default-features = false, features = ["chrono"] }
+mysql_async = { version = "0.35.1", default-features = false, features = ["minimal", "binlog"] }
+mysql_common = { version = "0.34.1", default-features = false, features = ["chrono"] }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-dyncfg = { path = "../dyncfg" }

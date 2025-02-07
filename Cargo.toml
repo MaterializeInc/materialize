@@ -294,11 +294,6 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
 
-# Waiting on a release that includes:
-# * https://github.com/blackbeam/mysql_async/pull/300
-# * https://github.com/blackbeam/mysql_async/pull/307
-mysql_async = { git = "https://github.com/MaterializeInc/mysql_async" }
-
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 

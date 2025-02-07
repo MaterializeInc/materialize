@@ -50,7 +50,6 @@ skip = [
     # This is very Unfortunate as we don't actually use these platforms.
     { name = "hermit-abi", version = "0.2.6" },
     { name = "redox_syscall", version = "0.2.10" },
-    { name = "rustix", version = "0.38.21" },
 
     # Will require updating many crates
     { name = "indexmap", version = "1.9.1" },
@@ -129,6 +128,9 @@ skip = [
     { name = "reqwest", version = "0.11.24" },
     { name = "rustls-pemfile", version = "1.0.4" },
     { name = "winreg", version = "0.50.0" },
+    { name = "thiserror", version = "1.0.61" },
+    { name = "thiserror-impl", version = "1.0.61" },
+    { name = "twox-hash", version = "1.6.3" },
 ]
 
 # Use `tracing` instead.
@@ -167,7 +169,6 @@ wrappers = [
     "globset",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
-    "mio",
     "native-tls",
     "os_info",
     "postgres",
@@ -197,24 +198,23 @@ name = "rustls"
 [[bans.deny]]
 name = "lazy_static"
 wrappers = [
-  "bindgen",
-  "bstr",
-  "console",
-  "dynfmt",
-  "findshlibs",
-  "insta",
-  "jsonpath-rust",
-  "launchdarkly-server-sdk",
-  "launchdarkly-server-sdk-evaluation",
-  "mysql_async",
-  "mysql_common",
-  "native-tls",
-  "prometheus",
-  "proptest",
-  "rayon-core",
-  "schannel",
-  "sharded-slab",
-  "which",
+    "bindgen",
+    "bstr",
+    "console",
+    "dynfmt",
+    "findshlibs",
+    "insta",
+    "jsonpath-rust",
+    "launchdarkly-server-sdk",
+    "launchdarkly-server-sdk-evaluation",
+    "mysql_common",
+    "native-tls",
+    "prometheus",
+    "proptest",
+    "rayon-core",
+    "schannel",
+    "sharded-slab",
+    "which",
 ]
 
 # The `uncased` crate serves the same purpose as `unicase` and is more
