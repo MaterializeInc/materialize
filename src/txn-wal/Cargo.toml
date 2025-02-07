@@ -30,7 +30,7 @@ uuid = { version = "1.7.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-crossbeam-channel = "0.5.8"
+crossbeam-channel = "0.5.14"
 rand = { version = "0.8.5", default-features = false, features = ["small_rng"] }
 
 [build-dependencies]
