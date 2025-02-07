@@ -1521,7 +1521,7 @@ where
 // This function is inspired by `NaiveDateTime::timestamp_nanos`,
 // with extra checking.
 fn checked_timestamp_nanos(dt: NaiveDateTime) -> Option<i64> {
-    let subsec_nanos = dt.timestamp_subsec_nanos();
+    let subsec_nanos = dt.and_utc().timestamp_subsec_nanos();
     if subsec_nanos >= 1_000_000_000 {
         return None;
     }
