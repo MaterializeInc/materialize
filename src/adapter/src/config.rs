@@ -11,8 +11,7 @@ use std::collections::BTreeMap;
 
 use mz_build_info::BuildInfo;
 use mz_ore::metric;
-use mz_ore::metrics::{MetricsRegistry, UIntGauge};
-use mz_ore::now::NowFn;
+use mz_ore::metrics::MetricsRegistry;
 use mz_sql::catalog::EnvironmentId;
 use prometheus::IntCounter;
 
@@ -35,8 +34,6 @@ pub struct SystemParameterSyncConfig {
     build_info: &'static BuildInfo,
     /// Parameter sync metrics.
     metrics: Metrics,
-    /// Function to return the current time.
-    now_fn: NowFn,
     /// The SDK key.
     ld_sdk_key: String,
     /// A map from parameter names to LaunchDarkly feature keys
@@ -51,7 +48,6 @@ impl SystemParameterSyncConfig {
         env_id: EnvironmentId,
         build_info: &'static BuildInfo,
         registry: &MetricsRegistry,
-        now_fn: NowFn,
         ld_sdk_key: String,
         ld_key_map: BTreeMap<String, String>,
     ) -> Self {
@@ -59,7 +55,6 @@ impl SystemParameterSyncConfig {
             env_id,
             build_info,
             metrics: Metrics::register_into(registry),
-            now_fn,
             ld_sdk_key,
             ld_key_map,
         }
@@ -68,22 +63,12 @@ impl SystemParameterSyncConfig {
 
 #[derive(Debug, Clone)]
 pub(super) struct Metrics {
-    pub last_cse_time_seconds: UIntGauge,
-    pub last_sse_time_seconds: UIntGauge,
     pub params_changed: IntCounter,
 }
 
 impl Metrics {
     pub(super) fn register_into(registry: &MetricsRegistry) -> Self {
         Self {
-            last_cse_time_seconds: registry.register(metric!(
-                name: "mz_parameter_frontend_last_cse_time_seconds",
-                help: "The last known time when the LaunchDarkly client sent an event to the LaunchDarkly server (as unix timestamp).",
-            )),
-            last_sse_time_seconds: registry.register(metric!(
-                name: "mz_parameter_frontend_last_sse_time_seconds",
-                help: "The last known time when the LaunchDarkly client received an event from the LaunchDarkly server (as unix timestamp).",
-            )),
             params_changed: registry.register(metric!(
                 name: "mz_parameter_frontend_params_changed",
                 help: "The number of parameter changes pulled from the LaunchDarkly frontend.",

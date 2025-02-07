@@ -24,12 +24,12 @@ fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 governor = "0.6.3"
 hex = "0.4.3"
+hyper = { version = "0.14.32", features = ["client", "http1"] }
+hyper-tls = "0.5.0"
 http = "1.1.0"
 ipnet = "2.11.0"
 itertools = "0.12.1"
-launchdarkly-server-sdk = { version = "1.0.0", default-features = false, features = [
-    "hypertls",
-] }
+launchdarkly-server-sdk = { version = "2.4.1", default-features = false }
 maplit = "1.0.2"
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }

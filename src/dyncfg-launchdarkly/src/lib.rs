@@ -49,14 +49,13 @@ where
         let _ = dyn_into_flag(entry.val())?;
     }
     let ld_client = if let Some(key) = launchdarkly_sdk_key {
-        let client = ld::Client::build(ld::ConfigBuilder::new(key).build())?;
+        let client = ld::Client::build(ld::ConfigBuilder::new(key).build()?)?;
         client.start_with_default_executor();
         let init = async {
             let max_backoff = Duration::from_secs(60);
             let mut backoff = Duration::from_secs(5);
-            while !client.initialized_async().await {
+            while client.wait_for_initialization(backoff).await != Some(true) {
                 tracing::warn!("SyncedConfigSet failed to initialize");
-                tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(max_backoff);
             }
         };

@@ -361,7 +361,6 @@ impl Listeners {
                 config.environment_id.clone(),
                 &BUILD_INFO,
                 &config.metrics_registry,
-                config.now.clone(),
                 ld_sdk_key,
                 config.launchdarkly_key_map,
             ))

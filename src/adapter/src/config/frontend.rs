@@ -8,16 +8,13 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_cloud_provider::CloudProvider;
-use mz_ore::now::NowFn;
 use mz_sql::catalog::EnvironmentId;
-use tokio::time;
 
 use crate::config::{Metrics, SynchronizedParameters, SystemParameterSyncConfig};
 
@@ -37,8 +34,6 @@ pub struct SystemParameterFrontend {
     ld_key_map: BTreeMap<String, String>,
     /// Frontend metrics.
     ld_metrics: Metrics,
-    /// Function to return the current time.
-    now_fn: NowFn,
 }
 
 impl SystemParameterFrontend {
@@ -53,7 +48,6 @@ impl SystemParameterFrontend {
             ld_ctx: ld_ctx(&sync_config.env_id, sync_config.build_info)?,
             ld_key_map: sync_config.ld_key_map.clone(),
             ld_metrics: sync_config.metrics.clone(),
-            now_fn: sync_config.now_fn.clone(),
         })
     }
 
@@ -90,43 +84,29 @@ impl SystemParameterFrontend {
     }
 }
 
-fn ld_config(sync_config: &SystemParameterSyncConfig) -> ld::Config {
+fn ld_config(sync_config: &SystemParameterSyncConfig) -> Result<ld::Config, ld::ConfigBuildError> {
     ld::ConfigBuilder::new(&sync_config.ld_sdk_key)
-        .event_processor(ld::EventProcessorBuilder::new().on_success({
-            let last_cse_time_seconds = sync_config.metrics.last_cse_time_seconds.clone();
-            Arc::new(move |result| {
-                if let Ok(ts) = u64::try_from(result.time_from_server / 1000) {
-                    last_cse_time_seconds.set(ts);
-                } else {
-                    tracing::warn!("Cannot convert time_from_server / 1000 from u128 to u64");
-                }
-            })
-        }))
+        .event_processor(
+            ld::EventProcessorBuilder::new().https_connector(hyper_tls::HttpsConnector::new()),
+        )
+        .data_source(&ld::StreamingDataSourceBuilder::<
+            hyper_tls::HttpsConnector<hyper::client::HttpConnector>,
+        >::new())
         .build()
 }
 
 async fn ld_client(sync_config: &SystemParameterSyncConfig) -> Result<ld::Client, anyhow::Error> {
-    let ld_client = ld::Client::build(ld_config(sync_config))?;
+    let ld_client = ld::Client::build(ld_config(sync_config)?)?;
 
     tracing::info!("waiting for SystemParameterFrontend to initialize");
 
-    // Start and initialize LD client for the frontend. The callback passed
-    // will export the last time when an SSE event from the LD server was
-    // received in a Prometheus metric.
-    ld_client.start_with_default_executor_and_callback({
-        let last_sse_time_seconds = sync_config.metrics.last_sse_time_seconds.clone();
-        let now_fn = sync_config.now_fn.clone();
-        Arc::new(move |_ev| {
-            let ts = now_fn() / 1000;
-            last_sse_time_seconds.set(ts);
-        })
-    });
+    // Start and initialize LD client for the frontend.
+    ld_client.start_with_default_executor();
 
     let max_backoff = Duration::from_secs(60);
     let mut backoff = Duration::from_secs(5);
-    while !ld_client.initialized_async().await {
+    while ld_client.wait_for_initialization(backoff).await != Some(true) {
         tracing::warn!("SystemParameterFrontend failed to initialize");
-        time::sleep(backoff).await;
         backoff = (backoff * 2).min(max_backoff);
     }
 
