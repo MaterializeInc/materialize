@@ -115,7 +115,9 @@ so it is executed.""",
     if os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
         bazel_remote_cache = "https://bazel-remote-pa.dev.materialize.com"
     else:
-        bazel_remote_cache = "https://bazel-remote.dev.materialize.com"
+        # TODO: Reenable when bazel remote cache is larger or cleared
+        bazel_remote_cache = ""
+        # bazel_remote_cache = "https://bazel-remote.dev.materialize.com"
     raw = raw.replace("$BAZEL_REMOTE_CACHE", bazel_remote_cache)
 
     pipeline = yaml.safe_load(raw)
