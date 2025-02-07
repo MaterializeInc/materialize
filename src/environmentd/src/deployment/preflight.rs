@@ -189,14 +189,16 @@ pub async fn preflight_0dt(
             check_ddl_changes_interval
                 .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+            let mut should_skip_catchup = false;
             loop {
                 tokio::select! {
-                    () = &mut caught_up_receiver => {
-                        info!("deployment caught up");
-                        break;
-                    }
                     () = &mut skip_catchup => {
                         info!("skipping waiting for deployment to catch up due to administrator request");
+                        should_skip_catchup = true;
+                        break;
+                    }
+                    () = &mut caught_up_receiver => {
+                        info!("deployment caught up");
                         break;
                     }
                     () = &mut caught_up_max_wait_fut => {
@@ -224,17 +226,19 @@ pub async fn preflight_0dt(
 
             // Check for DDL changes one last time before announcing as ready to
             // promote.
-            check_ddl_changes(
-                boot_ts,
-                persist_client.clone(),
-                environment_id.clone(),
-                deploy_generation,
-                Arc::clone(&catalog_metrics),
-                bootstrap_args.clone(),
-                initial_next_user_item_id,
-                initial_next_replica_id,
-            )
-            .await;
+            if !should_skip_catchup {
+                check_ddl_changes(
+                    boot_ts,
+                    persist_client.clone(),
+                    environment_id.clone(),
+                    deploy_generation,
+                    Arc::clone(&catalog_metrics),
+                    bootstrap_args.clone(),
+                    initial_next_user_item_id,
+                    initial_next_replica_id,
+                )
+                .await;
+            }
 
             // Announce that we're ready to promote.
             let promoted = deployment_state.set_ready_to_promote();
