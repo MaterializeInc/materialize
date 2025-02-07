@@ -46,7 +46,7 @@ mz-regexp = { path = "../regexp" }
 mz-repr = { path = "../repr" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-pretty = { path = "../sql-pretty" }
-num = "0.4.0"
+num = "0.4.3"
 num_enum = "0.5.7"
 ordered-float = { version = "4.2.0", features = ["serde"] }
 paste = "1.0.11"
