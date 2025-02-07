@@ -126,7 +126,7 @@ time = { version = "0.3.17", features = ["local-offset", "macros", "quickcheck",
 tokio = { version = "1.38.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.16", features = ["net", "sync"] }
-tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
+tokio-util = { version = "0.7.13", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.3", default-features = false, features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
@@ -261,7 +261,7 @@ time-macros = { version = "0.2.6", default-features = false, features = ["format
 tokio = { version = "1.38.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.16", features = ["net", "sync"] }
-tokio-util = { version = "0.7.4", features = ["codec", "compat", "io", "time"] }
+tokio-util = { version = "0.7.13", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.3", default-features = false, features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
