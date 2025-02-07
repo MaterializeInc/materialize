@@ -6956,7 +6956,7 @@ dependencies = [
  "itertools 0.12.1",
  "mz-ore",
  "openssh",
- "openssh-mux-client",
+ "openssh-mux-client 0.17.6",
  "openssl",
  "rand 0.8.5",
  "scopeguard",
@@ -7562,6 +7562,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "non-zero-byte-slice"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89daa1daa11c9df05d1181bcd0936d8066f8543144d77b09808eb78d65e38024"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "nonzero_ext"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7786,7 +7795,7 @@ dependencies = [
  "dirs",
  "libc",
  "once_cell",
- "openssh-mux-client",
+ "openssh-mux-client 0.15.5",
  "shell-escape",
  "tempfile",
  "thiserror 1.0.61",
@@ -7803,11 +7812,39 @@ dependencies = [
  "once_cell",
  "sendfd",
  "serde",
- "ssh_format",
+ "ssh_format 0.12.0",
  "thiserror 1.0.61",
  "tokio",
  "tokio-io-utility",
- "typed-builder",
+ "typed-builder 0.10.0",
+]
+
+[[package]]
+name = "openssh-mux-client"
+version = "0.17.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d091692d0a7d9035a3cdc5f8c3572abe401e64e30eac5404e517fb54e554c9bc"
+dependencies = [
+ "cfg-if",
+ "non-zero-byte-slice",
+ "once_cell",
+ "openssh-mux-client-error",
+ "sendfd",
+ "serde",
+ "ssh_format 0.14.1",
+ "tokio",
+ "tokio-io-utility",
+ "typed-builder 0.20.0",
+]
+
+[[package]]
+name = "openssh-mux-client-error"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9879168afb48a235200e30d93df320b7191568cda8621df02f145c1c0f1af95a"
+dependencies = [
+ "ssh_format_error",
+ "thiserror 2.0.11",
 ]
 
 [[package]]
@@ -10012,6 +10049,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ssh_format"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24ab31081d1c9097c327ec23550858cb5ffb4af6b866c1ef4d728455f01f3304"
+dependencies = [
+ "serde",
+ "ssh_format_error",
+]
+
+[[package]]
+name = "ssh_format_error"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be3c6519de7ca611f71ef7e8a56eb57aa1c818fecb5242d0a0f39c83776c210c"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11098,6 +11154,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.107",
+]
+
+[[package]]
+name = "typed-builder"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e14ed59dc8b7b26cacb2a92bad2e8b1f098806063898ab42a3bd121d7d45e75"
+dependencies = [
+ "typed-builder-macro",
+]
+
+[[package]]
+name = "typed-builder-macro"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "560b82d656506509d43abe30e0ba64c56b1953ab3d4fe7ba5902747a7a3cedd5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.98",
 ]
 
 [[package]]
