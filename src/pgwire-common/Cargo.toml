@@ -14,7 +14,7 @@ workspace = true
 async-trait = "0.1.83"
 byteorder = "1.4.3"
 bytes = "1.3.0"
-bytesize = "1.1.0"
+bytesize = "1.3.0"
 derivative = "2.2.0"
 mz-ore = { path = "../ore", features = ["network"], default-features = false }
 mz-server-core = { path = "../server-core", default-features = false }
