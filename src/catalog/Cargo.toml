@@ -20,7 +20,7 @@ clap = { version = "4.5.23", features = ["derive"] }
 derivative = "2.2.0"
 differential-dataflow = "0.13.5"
 futures = "0.3.25"
-ipnet = "2.5.0"
+ipnet = "2.11.0"
 itertools = "0.12.1"
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
