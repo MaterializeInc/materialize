@@ -40,6 +40,9 @@ spec:
         - "--cloud-provider={{ .Values.operator.cloudProvider.type }}"
         - "--region={{ .Values.operator.cloudProvider.region }}"
         - "--secrets-controller={{ .Values.operator.secretsController }}"
+        # (SangJunBak) For self-managed, we disable statement logging due to performance issues
+        # https://github.com/MaterializeInc/cloud/issues/10755
+        - "--disable-statement-logging"
         {{- range $key, $value := include "materialize-operator.selectorLabels" . | fromYaml }}
         - "--orchestratord-pod-selector-labels={{ $key }}={{ $value }}"
         {{- end }}
@@ -69,7 +72,7 @@ spec:
         {{- if .Values.operator.features.createConsole }}
         - "--create-console"
         {{- end }}
-        - "--console-image-tag-default=25.1.0-beta.3"
+        - "--console-image-tag-default=25.1.1"
         {{- range $key, $value := .Values.operator.features.consoleImageTagMapOverride }}
         - "--console-image-tag-map={{ $key }}={{ $value }}"
         {{- end }}
