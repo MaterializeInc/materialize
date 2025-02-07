@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ skip-if
+SELECT mz_version_num() < 13300;
+
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=20
 
