@@ -1428,7 +1428,8 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          # Ran out of memory retrieving query results.
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlancer
