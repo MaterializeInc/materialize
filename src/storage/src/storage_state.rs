@@ -232,7 +232,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             ),
             shared_status_updates: Default::default(),
             latest_status_updates: Default::default(),
-            reported_status_updates: Default::default(),
+            initial_status_reported: Default::default(),
             internal_cmd_tx,
             internal_cmd_rx,
             read_only_tx,
@@ -320,10 +320,9 @@ pub struct StorageState {
     /// The latest status update for each object.
     pub latest_status_updates: BTreeMap<GlobalId, StatusUpdate>,
 
-    /// The latest status update that has been _reported_ back to the
-    /// controller. This will be reset when a new client connects, so that we
-    /// can determine what updates we have to report again.
-    pub reported_status_updates: BTreeMap<GlobalId, StatusUpdate>,
+    /// Whether we have reported the initial status after connecting to a new client.
+    /// This is reset to false when a new client connects.
+    pub initial_status_reported: bool,
 
     /// Sender for cluster-internal storage commands. These can be sent from
     /// within workers/operators and will be distributed to all workers. For
@@ -841,6 +840,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
     pub fn report_status_updates(&mut self, response_tx: &ResponseSender) {
         let mut to_report = Vec::new();
 
+        // If we haven't done the initial status report, report all current
+        // statuses
+        if !self.storage_state.initial_status_reported {
+            to_report.extend(self.storage_state.latest_status_updates.values().cloned());
+            self.storage_state.initial_status_reported = true;
+        }
+
         // Pump updates into our state and stage them for reporting.
         if self.storage_state.shared_status_updates.borrow().len() > 0 {
             for shared_update in self.storage_state.shared_status_updates.take() {
@@ -851,31 +857,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 self.storage_state
                     .latest_status_updates
                     .insert(id, shared_update.clone());
-                self.storage_state
-                    .reported_status_updates
-                    .insert(id, shared_update);
             }
         }
 
-        // We reset what we have reported when a new client/controller connects,
-        // such that we can re-send our latest status updates.
-        //
-        // And here we report any status where our latest known status differs
-        // from what has been reported.
-        for (id, latest_update) in self.storage_state.latest_status_updates.iter() {
-            let reported_update = self.storage_state.reported_status_updates.get(id);
-            if let Some(reported_update) = reported_update {
-                if reported_update == latest_update {
-                    continue;
-                }
-            }
-            to_report.push(latest_update.clone());
-            self.storage_state
-                .reported_status_updates
-                .insert(id.clone(), latest_update.clone());
-        }
-
-        if to_report.len() > 0 {
+        if !to_report.is_empty() {
             self.send_storage_response(response_tx, StorageResponse::StatusUpdates(to_report));
         }
     }
@@ -1184,8 +1169,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
             *frontier = Antichain::from_elem(<_>::minimum());
         }
 
-        // Reset the reported status updates for the remaining objects.
-        self.storage_state.reported_status_updates.clear();
+        // Reset the initial status reported flag when a new client connects
+        self.storage_state.initial_status_reported = false;
 
         // Execute the modified commands.
         for command in commands {
@@ -1340,7 +1325,7 @@ impl StorageState {
         self.ingestions.remove(&id);
         self.exports.remove(&id);
 
-        let _ = self.reported_status_updates.remove(&id);
+        let _ = self.latest_status_updates.remove(&id);
 
         // This will stop reporting of frontiers.
         //
