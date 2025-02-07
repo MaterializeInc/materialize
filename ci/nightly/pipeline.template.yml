@@ -62,6 +62,26 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
         sanitizer: skip
 
+      # TODO(def-) Move this back to tests pipeline if we start having
+      # macOS-only failures, or once we have more reliable macOS agents
+      - id: lint-macos
+        label: ":rust: macOS Clippy"
+        command: cargo clippy --all-targets -- -D warnings
+        env:
+          CARGO_INCREMENTAL: "0"
+          RUSTUP_TOOLCHAIN: $RUST_VERSION
+        inputs:
+          - Cargo.lock
+          - Cargo.toml
+          - "**/Cargo.toml"
+          - "**/*.rs"
+        depends_on: []
+        timeout_in_minutes: 30
+        agents:
+          queue: mac
+        coverage: skip
+        sanitizer: skip
+
   - id: miri-test
     label: ":rust: Miri test (full)"
     depends_on: []
