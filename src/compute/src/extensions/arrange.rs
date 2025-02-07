@@ -7,16 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::hash::Hash;
 use std::rc::Rc;
 
+use columnar::Columnar;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
+use mz_timely_util::containers::{Column, ColumnBuilder};
 use timely::container::columnation::Columnation;
-use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
+use timely::dataflow::channels::pact::{Exchange, ExchangeCore, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, ScopeParent, StreamCore};
 use timely::progress::Timestamp;
@@ -75,7 +78,6 @@ where
     where
         P: ParallelizationContract<<Self::Scope as ScopeParent>::Timestamp, Self::Input>,
         Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
-        // Ba::Input: Container + Clone + 'static,
         Bu: Builder<
             Time = <Self::Scope as ScopeParent>::Timestamp,
             Input = Ba::Output,
@@ -133,6 +135,82 @@ where
         let exchange =
             Exchange::new(move |update: &((K, V), G::Timestamp, R)| (update.0).0.hashed().into());
         self.mz_arrange_core::<_, Ba, Bu, _>(exchange, name)
+    }
+}
+
+/// An exchange function for columnar tuples of the form `((K, V), T, D)`. Rust has a hard
+/// time to figure out the lifetimes of the elements when specified as a closure, so we rather
+/// specify it as a function.
+#[inline(always)]
+pub fn columnar_exchange<K, V, T, D>(((k, _), _, _): &<((K, V), T, D) as Columnar>::Ref<'_>) -> u64
+where
+    K: Columnar,
+    for<'a> K::Ref<'a>: Hash,
+    V: Columnar,
+    D: Columnar,
+    T: Columnar,
+{
+    k.hashed()
+}
+
+impl<G, K, V, R> MzArrange for StreamCore<G, Column<((K, V), G::Timestamp, R)>>
+where
+    G: Scope,
+    G::Timestamp: Lattice + Columnar,
+    K: ExchangeData + Hashable + Columnar,
+    V: ExchangeData + Columnar,
+    R: ExchangeData + Columnar,
+    <K as Columnar>::Container: Clone + Send,
+    <V as Columnar>::Container: Clone + Send,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
+    <R as Columnar>::Container: Clone + Send,
+    for<'a> K::Ref<'a>: Hash,
+{
+    fn mz_arrange<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    where
+        Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
+        Bu: Builder<
+            Time = <Self::Scope as ScopeParent>::Timestamp,
+            Input = Ba::Output,
+            Output = Tr::Batch,
+        >,
+        Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
+        Tr::Batch: Batch,
+        Arranged<G, TraceAgent<Tr>>: ArrangementSize,
+    {
+        let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+            columnar_exchange::<K, V, G::Timestamp, R>,
+        );
+        self.mz_arrange_core::<_, Ba, Bu, _>(exchange, name)
+    }
+}
+
+impl<G, K, V, R> MzArrange for Collection<G, (K, V), R, Column<((K, V), G::Timestamp, R)>>
+where
+    G: Scope,
+    G::Timestamp: Lattice + Columnar,
+    K: ExchangeData + Hashable + Columnar,
+    V: ExchangeData + Columnar,
+    R: ExchangeData + Columnar,
+    <K as Columnar>::Container: Clone + Send,
+    <V as Columnar>::Container: Clone + Send,
+    <G::Timestamp as Columnar>::Container: Clone + Send,
+    <R as Columnar>::Container: Clone + Send,
+    for<'a> K::Ref<'a>: Hash,
+{
+    fn mz_arrange<Ba, Bu, Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
+    where
+        Ba: Batcher<Input = Self::Input, Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
+        Bu: Builder<
+            Time = <Self::Scope as ScopeParent>::Timestamp,
+            Input = Ba::Output,
+            Output = Tr::Batch,
+        >,
+        Tr: Trace + TraceReader<Time = <Self::Scope as ScopeParent>::Timestamp> + 'static,
+        Tr::Batch: Batch,
+        Arranged<G, TraceAgent<Tr>>: ArrangementSize,
+    {
+        self.inner.mz_arrange::<Ba, Bu, _>(name)
     }
 }
 

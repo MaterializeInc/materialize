@@ -9,11 +9,7 @@
 
 //! Reusable containers.
 
-use std::hash::Hash;
-
-use columnar::Columnar;
 use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
-use differential_dataflow::Hashable;
 use timely::container::columnation::TimelyStack;
 
 pub mod array;
@@ -288,21 +284,6 @@ pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<
     ColMerger<(K, V), T, R>,
 >;
 pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
-
-/// An exchange function for columnar tuples of the form `((K, V), T, D)`. Rust has a hard
-/// time to figure out the lifetimes of the elements when specified as a closure, so we rather
-/// specify it as a function.
-#[inline(always)]
-pub fn columnar_exchange<K, V, T, D>(((k, _), _, _): &<((K, V), T, D) as Columnar>::Ref<'_>) -> u64
-where
-    K: Columnar,
-    for<'a> K::Ref<'a>: Hash,
-    V: Columnar,
-    D: Columnar,
-    T: Columnar,
-{
-    k.hashed()
-}
 
 /// Types for consolidating, merging, and extracting columnar update collections.
 pub mod batcher {
