@@ -76,6 +76,8 @@ pub struct MaterializeControllerArgs {
     enable_security_context: bool,
     #[clap(long)]
     enable_internal_statement_logging: bool,
+    #[clap(long, default_value = "false")]
+    disable_statement_logging: bool,
 
     #[clap(long)]
     orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
