@@ -3348,7 +3348,7 @@ impl AggregateExpr {
                             nullable: false,
                         },
                     ),
-                ..
+                distinct: false,
             } => row.unpack_first() == mz_repr::Datum::True,
             _ => false,
         }
