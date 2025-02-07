@@ -14,7 +14,7 @@ anyhow = "1.0.95"
 async-trait = "0.1.83"
 clap = { version = "4.5.23", features = ["env", "derive"] }
 derivative = "2.2.0"
-futures-core = "0.3.21"
+futures-core = "0.3.31"
 http = "1.1.0"
 humantime = { version = "2.1.0" }
 mz-build-info = { path = "../build-info", default-features = false }
