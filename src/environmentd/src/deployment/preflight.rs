@@ -192,6 +192,8 @@ pub async fn preflight_0dt(
             let mut should_skip_catchup = false;
             loop {
                 tokio::select! {
+                    biased;
+
                     () = &mut skip_catchup => {
                         info!("skipping waiting for deployment to catch up due to administrator request");
                         should_skip_catchup = true;
