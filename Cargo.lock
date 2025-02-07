@@ -6555,7 +6555,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arrow",
- "bitflags 1.3.2",
+ "bitflags 2.4.1",
  "bytes",
  "cfg-if",
  "chrono",
@@ -6776,7 +6776,7 @@ dependencies = [
  "anyhow",
  "array-concat",
  "aws-sdk-sts",
- "bitflags 1.3.2",
+ "bitflags 2.4.1",
  "chrono",
  "clap",
  "datadriven",
