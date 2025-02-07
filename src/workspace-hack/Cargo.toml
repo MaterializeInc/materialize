@@ -32,7 +32,7 @@ axum-core = { version = "0.4.3", default-features = false, features = ["tracing"
 bstr = { version = "0.2.14" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.4.0", features = ["serde"] }
-chrono = { version = "0.4.35", default-features = false, features = ["clock", "serde", "wasmbind"] }
+chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "wasmbind"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 concurrent-queue = { version = "2.5.0" }
@@ -165,7 +165,7 @@ bstr = { version = "0.2.14" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.4.0", features = ["serde"] }
 cc = { version = "1.1.28", default-features = false, features = ["parallel"] }
-chrono = { version = "0.4.35", default-features = false, features = ["clock", "serde", "wasmbind"] }
+chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "wasmbind"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 concurrent-queue = { version = "2.5.0" }
