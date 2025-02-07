@@ -10,11 +10,12 @@
 //! Debug tool for self managed environments.
 
 use std::fmt::Debug;
-use std::fs::File;
+use std::fs::{create_dir_all, File};
 use std::io::Write;
 use std::process;
 use std::sync::LazyLock;
 
+use chrono::{DateTime, Utc};
 use clap::Parser;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, ListParams, LogParams};
@@ -37,6 +38,22 @@ pub struct Args {
     k8s_namespaces: Vec<String>,
 }
 
+pub struct Context {
+    start_time: DateTime<Utc>,
+    args: Args,
+}
+
+pub enum K8sResourceType {
+    Pod,
+    Service,
+    Deployment,
+    StatefulSet,
+    ReplicaSet,
+    NetworkPolicy,
+    Log,
+    Event,
+}
+
 #[tokio::main]
 async fn main() {
     let args: Args = cli::parse_args(CliConfig {
@@ -44,7 +61,11 @@ async fn main() {
         enable_version_flag: true,
     });
 
-    if let Err(err) = run(args).await {
+    let start_time = Utc::now();
+
+    let context = Context { start_time, args };
+
+    if let Err(err) = run(context).await {
         eprintln!(
             "self-managed-debug: fatal: {}\nbacktrace: {}",
             err.display_with_causes(),
@@ -54,11 +75,11 @@ async fn main() {
     }
 }
 
-async fn run(args: Args) -> Result<(), anyhow::Error> {
-    match create_k8s_client(args.k8s_context).await {
+async fn run(context: Context) -> Result<(), anyhow::Error> {
+    match create_k8s_client(context.args.k8s_context.clone()).await {
         Ok(client) => {
-            for namespace in args.k8s_namespaces {
-                let _ = match dump_k8s_pod_logs(client.clone(), &namespace).await {
+            for namespace in context.args.k8s_namespaces.clone() {
+                let _ = match dump_k8s_pod_logs(&context, client.clone(), &namespace).await {
                     Ok(file_names) => Some(file_names),
                     Err(e) => {
                         eprintln!(
@@ -82,9 +103,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 }
 
 /// Creates a k8s client given a context. If no context is provided, the default context is used.
-async fn create_k8s_client(context: Option<String>) -> Result<Client, anyhow::Error> {
+async fn create_k8s_client(k8s_context: Option<String>) -> Result<Client, anyhow::Error> {
     let kubeconfig_options = KubeConfigOptions {
-        context,
+        context: k8s_context,
         ..Default::default()
     };
 
@@ -95,25 +116,30 @@ async fn create_k8s_client(context: Option<String>) -> Result<Client, anyhow::Er
     Ok(client)
 }
 
-/// Write k8s pod logs to a file per pod as mz-pod-logs.<namespace>.<pod-name>.log.
+/// Write k8s pod logs to a file per pod as mz-pod-logs.{namespace}.{pod-name}.log.
 /// Returns a list of file names on success.
 async fn dump_k8s_pod_logs(
+    context: &Context,
     client: Client,
     namespace: &String,
 ) -> Result<Vec<String>, anyhow::Error> {
     let mut file_names = Vec::new();
+    let file_path = format_resource_path(context.start_time, namespace, K8sResourceType::Log);
+    create_dir_all(&file_path)?;
 
     let pods: Api<Pod> = Api::<Pod>::namespaced(client.clone(), namespace);
 
     let pod_list = pods.list(&ListParams::default()).await?;
 
     for pod in &pod_list.items {
-        if let Err(e) = async {
-            let pod_name = pod.metadata.name.clone().unwrap_or_default();
-            let file_name = format!("mz-pod-logs.{}.{}.log", namespace, pod_name);
-            let mut file = File::create(&file_name)?;
+        let pod_name = pod.metadata.name.clone().unwrap_or_default();
+        let previous_logs_file_name = format!("{}/{}.previous.log", file_path, pod_name);
+        let current_logs_file_name = format!("{}/{}.current.log", file_path, pod_name);
 
-            let logs = match pods
+        if let Err(e) = async {
+            let mut file = File::create(&previous_logs_file_name)?;
+
+            let previous_logs = pods
                 .logs(
                     &pod_name,
                     &LogParams {
@@ -122,35 +148,66 @@ async fn dump_k8s_pod_logs(
                         ..Default::default()
                     },
                 )
-                .await
-            {
-                Ok(logs) => logs,
-                Err(_) => {
-                    // If we get a bad request error, try without the previous flag.
-                    pods.logs(
-                        &pod_name,
-                        &LogParams {
-                            timestamps: true,
-                            ..Default::default()
-                        },
-                    )
-                    .await?
-                }
-            };
+                .await?;
 
-            for line in logs.lines() {
-                writeln!(file, "{}", line)?;
-            }
+            file.write_all(previous_logs.as_bytes())?;
 
-            println!("Finished exporting logs for {}", pod_name);
-            file_names.push(file_name);
+            println!("Exported {}", &previous_logs_file_name);
+            file_names.push(previous_logs_file_name.clone());
             Ok::<(), anyhow::Error>(())
         }
         .await
         {
-            let pod_name = pod.metadata.name.clone().unwrap_or_default();
-            eprintln!("Failed to process pod {}: {}", pod_name, e);
+            eprintln!("Failed to export {}: {}", &previous_logs_file_name, e);
+        }
+
+        if let Err(e) = async {
+            let mut file = File::create(&current_logs_file_name)?;
+
+            let logs = pods
+                .logs(
+                    &pod_name,
+                    &LogParams {
+                        timestamps: true,
+                        ..Default::default()
+                    },
+                )
+                .await?;
+
+            file.write_all(logs.as_bytes())?;
+
+            println!("Exported {}", &current_logs_file_name);
+            file_names.push(current_logs_file_name.clone());
+            Ok::<(), anyhow::Error>(())
+        }
+        .await
+        {
+            eprintln!("Failed to export {}: {}", &current_logs_file_name, e);
         }
     }
     Ok(file_names)
+}
+
+fn format_resource_path(
+    date_time: DateTime<Utc>,
+    namespace: &str,
+    resource_type: K8sResourceType,
+) -> String {
+    let resource_type_str = match resource_type {
+        K8sResourceType::Pod => "pods",
+        K8sResourceType::Service => "services",
+        K8sResourceType::Deployment => "deployments",
+        K8sResourceType::StatefulSet => "statefulsets",
+        K8sResourceType::ReplicaSet => "replicasets",
+        K8sResourceType::NetworkPolicy => "networkpolicies",
+        K8sResourceType::Log => "logs",
+        K8sResourceType::Event => "events",
+    };
+
+    format!(
+        "mz-debug-{}/{}/{}",
+        date_time.format("%Y-%m-%dT%H:%MZ"),
+        resource_type_str,
+        namespace
+    )
 }
