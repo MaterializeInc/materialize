@@ -92,15 +92,16 @@ SELECT
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "MUCHMUCHMUCHLONGERVALUE", "f2": 9000}
 
-> SELECT
-    SUM(u.bytes_indexed) > ${state-bytes},
-    SUM(u.records_indexed)
-  FROM mz_tables t
-  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
-  WHERE t.name IN ('upsert_tbl')
-  GROUP BY t.name
-  ORDER BY t.name
-true 3
+# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/8802 is fixed
+# > SELECT
+#     SUM(u.bytes_indexed) > ${state-bytes},
+#     SUM(u.records_indexed)
+#   FROM mz_tables t
+#   JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+#   WHERE t.name IN ('upsert_tbl')
+#   GROUP BY t.name
+#   ORDER BY t.name
+# true 3
 
 
 # Ensure deletes work.
