@@ -542,9 +542,6 @@ impl Listeners {
             computed
         };
 
-        // TODO(aljoscha): We have to do the same dance for
-        // `0dt_deployment_max_wait`, and pass it to the preflight check.
-
         // Perform preflight checks.
         //
         // Preflight checks determine whether to boot in read-only mode or not.
