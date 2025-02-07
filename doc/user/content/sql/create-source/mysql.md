@@ -217,6 +217,7 @@ Materialize natively supports the following MySQL types:
 <ul style="column-count: 3">
 <li><code>bigint</code></li>
 <li><code>binary</code></li>
+<li><code>bit</code></li>
 <li><code>blob</code></li>
 <li><code>boolean</code></li>
 <li><code>char</code></li>
