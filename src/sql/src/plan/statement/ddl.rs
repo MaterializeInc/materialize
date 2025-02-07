@@ -5926,6 +5926,20 @@ pub fn plan_alter_cluster(
                                 hypothetical_replica_count,
                             });
                         }
+                    } else if alter_strategy.is_some() {
+                        // AlterClusterPlanStrategies that are not None will standup pending replicas of the new configuration
+                        // and violate the single replica for sources constraint. If there are any storage objects (sources or sinks) we should
+                        // just fail.
+                        let internal_replica_count =
+                            cluster.replicas().iter().filter(|r| r.internal()).count();
+                        let hypothetical_replica_count = internal_replica_count * 2;
+                        if contains_storage_objects(scx, cluster) {
+                            return Err(PlanError::CreateReplicaFailStorageObjects {
+                                current_replica_count: cluster.replica_ids().iter().count(),
+                                internal_replica_count,
+                                hypothetical_replica_count,
+                            });
+                        }
                     }
                 }
                 false => {

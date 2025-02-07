@@ -1979,6 +1979,9 @@ impl AlterClusterPlanStrategy {
     pub fn is_none(&self) -> bool {
         matches!(self, Self::None)
     }
+    pub fn is_some(&self) -> bool {
+        !matches!(self, Self::None)
+    }
 }
 
 impl TryFrom<ClusterAlterOptionExtracted> for AlterClusterPlanStrategy {

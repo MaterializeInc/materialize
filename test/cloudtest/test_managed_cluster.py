@@ -161,6 +161,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     # - names should match r# patter, not end with `-pending`
     # - cancelled statements correctly roll back
     # - timedout until ready queries take the appropriate action
+    # - Fails to gracefully alter cluster with source
     mz.environmentd.sql(
         'CREATE CLUSTER gracefulatlertest ( SIZE = "1" )',
         port="internal",
@@ -364,6 +365,28 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
             """
             ! ALTER CLUSTER slow_hydration set (size='4') WITH (WAIT UNTIL READY (TIMEOUT='1s', ON TIMEOUT ROLLBACK))
             contains: canceling statement, provided timeout lapsed
+            """
+        ),
+        no_reset=True,
+    )
+
+    # Test fails to alter with source
+    mz.environmentd.sql(
+        """
+        CREATE CLUSTER cluster_with_source( SIZE = "1" );
+        SET CLUSTER TO cluster_with_source;
+        SET DATABASE TO materialize;
+        CREATE SOURCE counter
+          FROM LOAD GENERATOR COUNTER
+          (TICK INTERVAL '500ms');
+        """
+    )
+
+    mz.testdrive.run(
+        input=dedent(
+            """
+            ! ALTER CLUSTER cluster_with_source set (size='2') WITH (WAIT UNTIL READY (TIMEOUT='10s', ON TIMEOUT ROLLBACK))
+            contains: cannot create more than one replica of clusters containing sources or sinks
             """
         ),
         no_reset=True,
