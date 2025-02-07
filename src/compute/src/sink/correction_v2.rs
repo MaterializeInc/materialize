@@ -63,6 +63,13 @@
 //! A batch of updates is appended as a new chain. Then chains are merged at the end of the chain
 //! list until the chain invariant is restored.
 //!
+//! Inserting an update into the correction buffer can be expensive: It involves allocating a new
+//! chunk, copying the update in, and then likely merging with an existing chain to restore the
+//! chain invariant. If updates trickle in in small batches, this can cause a considerable
+//! overhead. The amortize this overhead, new updates aren't immediately inserted into the sorted
+//! chains but instead stored in a [`Stage`] buffer. Once enough updates have been staged to fill a
+//! [`Chunk`], they are sorted an inserted into the chains.
+//!
 //! The insert operation has an amortized complexity of O(log N), with N being the current number
 //! of updates stored.
 //!
@@ -122,12 +129,13 @@ use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 
+use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::trace::implementations::BatchContainer;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
 use mz_timely_util::containers::stack::StackWrapper;
 use timely::container::columnation::Columnation;
-use timely::container::SizableContainer;
+use timely::container::{ContainerBuilder, PushInto, SizableContainer};
 use timely::progress::Antichain;
 use timely::{Container, PartialOrder};
 
@@ -148,6 +156,8 @@ impl<D: differential_dataflow::Data + Columnation> Data for D {}
 pub(super) struct CorrectionV2<D: Data> {
     /// Chains containing sorted updates.
     chains: Vec<Chain<D>>,
+    /// A staging area for updates, to speed up small inserts.
+    stage: Stage<D>,
     /// The frontier by which all contained times are advanced.
     since: Antichain<Timestamp>,
 
@@ -166,6 +176,7 @@ impl<D: Data> CorrectionV2<D> {
     pub fn new(metrics: SinkMetrics, worker_metrics: SinkWorkerMetrics) -> Self {
         Self {
             chains: Default::default(),
+            stage: Default::default(),
             since: Antichain::from_elem(Timestamp::MIN),
             total_size: Default::default(),
             metrics,
@@ -210,24 +221,8 @@ impl<D: Data> CorrectionV2<D> {
     fn insert_inner(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
         debug_assert!(updates.iter().all(|(_, t, _)| self.since.less_equal(t)));
 
-        consolidate(updates);
-
-        let first_update = match updates.first() {
-            Some((d, t, r)) => (d, *t, *r),
-            None => return,
-        };
-
-        // Optimization: If all items in `updates` sort after all items in the last chain, we can
-        // append them to the last chain directly instead of constructing a new chain.
-        let chain = match self.chains.last_mut() {
-            Some(chain) if chain.can_accept(first_update) => chain,
-            _ => {
-                self.chains.push(Chain::default());
-                self.chains.last_mut().unwrap()
-            }
-        };
-
-        chain.extend(updates.drain(..));
+        let new_chains = self.stage.insert(updates);
+        self.chains.extend(new_chains);
 
         // Restore the chain invariant.
         let merge_needed = |chains: &[Chain<_>]| match chains {
@@ -277,11 +272,15 @@ impl<D: Data> CorrectionV2<D> {
     /// Once this method returns, all remaining updates before `upper` are contained in a single
     /// chain. Note that this chain might also contain updates beyond `upper` though!
     fn consolidate_before(&mut self, upper: &Antichain<Timestamp>) {
-        if self.chains.is_empty() {
+        let mut chains = std::mem::take(&mut self.chains);
+
+        let new_chains = self.stage.flush();
+        chains.extend(new_chains);
+
+        if chains.is_empty() {
             return;
         }
 
-        let chains = std::mem::take(&mut self.chains);
         let (merged, remains) = merge_chains_up_to(chains, &self.since, upper);
 
         self.chains = remains;
@@ -899,45 +898,62 @@ impl<D: Data> Chunk<D> {
     }
 }
 
-/// Sort and consolidate the given list of updates.
-///
-/// This function is the same as [`differential_dataflow::consolidation::consolidate_updates`],
-/// except that it sorts updates by (time, data) instead of (data, time).
-fn consolidate<D: Data>(updates: &mut Vec<(D, Timestamp, Diff)>) {
-    if updates.len() <= 1 {
-        return;
-    }
+/// A buffer for staging updates before they are inserted into the sorted chains.
+struct Stage<D> {
+    builder: ConsolidatingContainerBuilder<Vec<(D, Timestamp, Diff)>>,
+}
 
-    let diff = |update: &(_, _, Diff)| update.2;
-
-    updates.sort_unstable_by(|(d1, t1, _), (d2, t2, _)| (t1, d1).cmp(&(t2, d2)));
-
-    let mut offset = 0;
-    let mut accum = diff(&updates[0]);
-
-    for idx in 1..updates.len() {
-        let this = &updates[idx];
-        let prev = &updates[idx - 1];
-        if this.0 == prev.0 && this.1 == prev.1 {
-            accum += diff(&updates[idx]);
-        } else {
-            if accum != 0 {
-                updates.swap(offset, idx - 1);
-                updates[offset].2 = accum;
-                offset += 1;
-            }
-            accum = diff(&updates[idx]);
+impl<D> Default for Stage<D> {
+    fn default() -> Self {
+        Self {
+            builder: Default::default(),
         }
     }
+}
 
-    if accum != 0 {
-        let len = updates.len();
-        updates.swap(offset, len - 1);
-        updates[offset].2 = accum;
-        offset += 1;
+impl<D> fmt::Debug for Stage<D> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Stage").finish_non_exhaustive()
+    }
+}
+
+impl<D: Data> Stage<D> {
+    /// Insert a batch of updates, possibly producing a ready [`Chain`].
+    fn insert(
+        &mut self,
+        updates: &mut Vec<(D, Timestamp, Diff)>,
+    ) -> impl Iterator<Item = Chain<D>> + '_ {
+        for update in updates.drain(..) {
+            self.builder.push_into(update);
+        }
+
+        std::iter::from_fn(|| {
+            let batch = self.builder.extract()?;
+
+            // `ConsolidatingContainerBuilder` sorts updates in a different order than we need, so
+            // re-sort the batch here.
+            batch.sort_unstable_by(|(d1, t1, _), (d2, t2, _)| (t1, d1).cmp(&(t2, d2)));
+
+            let mut chain = Chain::default();
+            chain.extend(batch.drain(..));
+            Some(chain)
+        })
     }
 
-    updates.truncate(offset);
+    /// Flush all currently staged updates into a chain.
+    fn flush(&mut self) -> impl Iterator<Item = Chain<D>> + '_ {
+        std::iter::from_fn(|| {
+            let batch = self.builder.finish()?;
+
+            // `ConsolidatingContainerBuilder` sorts updates in a different order than we need, so
+            //  re-sort the batch here.
+            batch.sort_unstable_by(|(d1, t1, _), (d2, t2, _)| (t1, d1).cmp(&(t2, d2)));
+
+            let mut chain = Chain::default();
+            chain.extend(batch.drain(..));
+            Some(chain)
+        })
+    }
 }
 
 /// Merge the given chains, advancing times by the given `since` in the process.
