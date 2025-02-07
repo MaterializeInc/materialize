@@ -605,15 +605,6 @@ impl SessionClient {
         outer_ctx_extra: Option<ExecuteContextExtra>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
-
-        // Before processing any queries we want to make sure our builtin tables writes that
-        // contain a record of this Session have completed.
-        //
-        // TODO(parkmycar): It would be great if we could push this waiting down a layer, after
-        // we've planned a query. This way we could only block if a query depends on a relevant
-        // internal table.
-        self.session().clear_builtin_table_updates().await;
-
         let response = self
             .send_with_cancel(
                 |tx, session| Command::Execute {

@@ -30,12 +30,15 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_client::client::TableData;
 use mz_storage_types::connections::inline::IntoInlineConnection;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::{event, Instrument, Level, Span};
 
 use crate::catalog::Catalog;
 use crate::command::{Command, ExecuteResponse, Response};
+use crate::coord::appends::{DeferredPlan, DeferredWriteOp};
+use crate::coord::validity::PlanValidity;
 use crate::coord::{
     catalog_serving, Coordinator, DeferredPlanStatement, Message, PlanStatement, TargetCluster,
 };
@@ -81,6 +84,39 @@ impl Coordinator {
                 ctx.retire(Err(AdapterError::ReadOnly));
                 return;
             }
+
+            // Check if we're still waiting for any of the builtin table appends from when we
+            // started the Session to complete.
+            if let Some((dependencies, wait_future)) =
+                super::appends::waiting_on_startup_appends(self.catalog(), ctx.session_mut(), &plan)
+            {
+                let conn_id = ctx.session().conn_id();
+                tracing::debug!(%conn_id, "deferring plan for startup appends");
+
+                let role_metadata = ctx.session().role_metadata().clone();
+                let validity = PlanValidity::new(
+                    self.catalog.transient_revision(),
+                    dependencies,
+                    None,
+                    None,
+                    role_metadata,
+                );
+                let deferred_plan = DeferredPlan {
+                    ctx,
+                    plan,
+                    validity,
+                    requires_locks: BTreeSet::default(),
+                };
+                // Defer op accepts an optional write lock, but there aren't any writes occurring
+                // here, since the map to `None`.
+                let acquire_future = wait_future.map(|()| None);
+
+                self.defer_op(acquire_future, DeferredWriteOp::Plan(deferred_plan));
+
+                // Return early because our op is deferred on waiting for the builtin writes to
+                // complete.
+                return;
+            };
 
             // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
             let target_cluster = match ctx.session().transaction().cluster() {

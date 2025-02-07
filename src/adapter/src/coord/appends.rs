@@ -12,21 +12,23 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use derivative::Derivative;
-use futures::future::FutureExt;
+use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::GROUP_COMMIT_BATCH_DURATION;
+use mz_catalog::builtin::{BuiltinTable, MZ_SESSIONS};
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
+use mz_expr::CollectionPlan;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument};
 use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::names::ResolvedIds;
-use mz_sql::plan::Plan;
+use mz_sql::plan::{ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
 use mz_timestamp_oracle::WriteTimestamp;
@@ -35,10 +37,10 @@ use smallvec::SmallVec;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 use tracing::{debug_span, info, warn, Instrument, Span};
 
-use crate::catalog::BuiltinTableUpdate;
+use crate::catalog::{BuiltinTableUpdate, Catalog};
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
 use crate::metrics::GroupCommitMetrics;
-use crate::session::{GroupCommitWriteLocks, WriteLocks};
+use crate::session::{GroupCommitWriteLocks, Session, WriteLocks};
 use crate::util::{CompletedClientTransmitter, ResultExt};
 use crate::{AdapterError, ExecuteContext};
 
@@ -184,6 +186,7 @@ impl Coordinator {
             tracing::warn!(%conn_id, "no deferred op found, it must have been canceled?");
             return;
         };
+        tracing::info!(%conn_id, "trying deferred plan");
 
         // If we pre-acquired a lock, try to acquire the rest.
         let write_locks = match acquired_lock {
@@ -204,7 +207,9 @@ impl Coordinator {
                 let locks = match write_locks.all_or_nothing(op.conn_id()) {
                     Ok(locks) => locks,
                     Err(failed_to_acquire) => {
-                        let acquire_future = self.grant_object_write_lock(failed_to_acquire);
+                        let acquire_future = self
+                            .grant_object_write_lock(failed_to_acquire)
+                            .map(Option::Some);
                         self.defer_op(acquire_future, op);
                         return;
                     }
@@ -409,7 +414,8 @@ impl Coordinator {
                             }
                             // Darn. We couldn't acquire the locks, defer the write.
                             Err(missing) => {
-                                let acquire_future = self.grant_object_write_lock(missing);
+                                let acquire_future =
+                                    self.grant_object_write_lock(missing).map(Option::Some);
                                 let write = DeferredWrite {
                                     span,
                                     writes,
@@ -632,7 +638,9 @@ impl Coordinator {
 
     pub(crate) fn defer_op<F>(&mut self, acquire_future: F, op: DeferredWriteOp)
     where
-        F: Future<Output = (CatalogItemId, tokio::sync::OwnedMutexGuard<()>)> + Send + 'static,
+        F: Future<Output = Option<(CatalogItemId, tokio::sync::OwnedMutexGuard<()>)>>
+            + Send
+            + 'static,
     {
         let conn_id = op.conn_id().clone();
 
@@ -650,12 +658,13 @@ impl Coordinator {
             // other locks that we later fail to get.
             let acquired_lock = acquire_future.await;
 
-            // If the op can be optimistically retried, don't hold onto the lock so other similar
-            // ops might be queued at the same time.
-            let acquired_lock = if is_optimistic {
-                None
-            } else {
-                Some(acquired_lock)
+            // Some operations, e.g. blind INSERTs, can be optimistically retried, meaning we
+            // can run multiple at once. In those cases we don't hold the lock so we retry all
+            // blind writes for a single object.
+            let acquired_lock = match (acquired_lock, is_optimistic) {
+                (Some(_lock), true) => None,
+                (Some(lock), false) => Some(lock),
+                (None, _) => None,
             };
 
             // If this send fails then the Coordinator is shutting down.
@@ -956,5 +965,142 @@ impl Drop for GroupCommitPermit {
                 tracing::debug!(?hold_duration, "drop GroupCommit permit");
             });
         }
+    }
+}
+
+/// When we start a [`Session`] we need to update some builtin tables, we don't want to wait for
+/// these writes to complete for two reasons:
+///
+/// 1. Doing a write can take a relatively long time.
+/// 2. Decoupling the write from the session start allows us to batch multiple writes together, if
+///    sessions are being created with a high frequency.
+///
+/// So as an optimization we do not wait for these writes to complete. But if a [`Session`] tries
+/// to query any of these builtin objects, we need to block that query on the writes completing to
+/// maintain linearizability.
+pub(crate) fn waiting_on_startup_appends(
+    catalog: &Catalog,
+    session: &mut Session,
+    plan: &Plan,
+) -> Option<(BTreeSet<CatalogItemId>, BoxFuture<'static, ()>)> {
+    /// Tables that we emit updates for when starting a new session.
+    static REQUIRED_BUILTIN_TABLES: &[&LazyLock<BuiltinTable>] = &[&MZ_SESSIONS];
+
+    let depends_on = match plan {
+        Plan::Select(plan) => plan.source.depends_on(),
+        Plan::ReadThenWrite(plan) => plan.selection.depends_on(),
+        Plan::ShowColumns(plan) => plan.select_plan.source.depends_on(),
+        Plan::Subscribe(plan) => plan.from.depends_on(),
+        Plan::ExplainPlan(ExplainPlanPlan {
+            explainee: Explainee::Statement(ExplaineeStatement::Select { plan, .. }),
+            ..
+        }) => plan.source.depends_on(),
+        Plan::ExplainTimestamp(ExplainTimestampPlan { raw_plan, .. }) => raw_plan.depends_on(),
+        Plan::CreateConnection(_)
+        | Plan::CreateDatabase(_)
+        | Plan::CreateSchema(_)
+        | Plan::CreateRole(_)
+        | Plan::CreateNetworkPolicy(_)
+        | Plan::CreateCluster(_)
+        | Plan::CreateClusterReplica(_)
+        | Plan::CreateContinualTask(_)
+        | Plan::CreateSource(_)
+        | Plan::CreateSources(_)
+        | Plan::CreateSecret(_)
+        | Plan::CreateSink(_)
+        | Plan::CreateTable(_)
+        | Plan::CreateView(_)
+        | Plan::CreateMaterializedView(_)
+        | Plan::CreateIndex(_)
+        | Plan::CreateType(_)
+        | Plan::Comment(_)
+        | Plan::DiscardTemp
+        | Plan::DiscardAll
+        | Plan::DropObjects(_)
+        | Plan::DropOwned(_)
+        | Plan::EmptyQuery
+        | Plan::ShowAllVariables
+        | Plan::ShowCreate(_)
+        | Plan::ShowVariable(_)
+        | Plan::InspectShard(_)
+        | Plan::SetVariable(_)
+        | Plan::ResetVariable(_)
+        | Plan::SetTransaction(_)
+        | Plan::StartTransaction(_)
+        | Plan::CommitTransaction(_)
+        | Plan::AbortTransaction(_)
+        | Plan::CopyFrom(_)
+        | Plan::CopyTo(_)
+        | Plan::ExplainPlan(_)
+        | Plan::ExplainPushdown(_)
+        | Plan::ExplainSinkSchema(_)
+        | Plan::Insert(_)
+        | Plan::AlterNetworkPolicy(_)
+        | Plan::AlterNoop(_)
+        | Plan::AlterClusterRename(_)
+        | Plan::AlterClusterSwap(_)
+        | Plan::AlterClusterReplicaRename(_)
+        | Plan::AlterCluster(_)
+        | Plan::AlterConnection(_)
+        | Plan::AlterSource(_)
+        | Plan::AlterSetCluster(_)
+        | Plan::AlterItemRename(_)
+        | Plan::AlterRetainHistory(_)
+        | Plan::AlterSchemaRename(_)
+        | Plan::AlterSchemaSwap(_)
+        | Plan::AlterSecret(_)
+        | Plan::AlterSink(_)
+        | Plan::AlterSystemSet(_)
+        | Plan::AlterSystemReset(_)
+        | Plan::AlterSystemResetAll(_)
+        | Plan::AlterRole(_)
+        | Plan::AlterOwner(_)
+        | Plan::AlterTableAddColumn(_)
+        | Plan::Declare(_)
+        | Plan::Fetch(_)
+        | Plan::Close(_)
+        | Plan::Prepare(_)
+        | Plan::Execute(_)
+        | Plan::Deallocate(_)
+        | Plan::Raise(_)
+        | Plan::GrantRole(_)
+        | Plan::RevokeRole(_)
+        | Plan::GrantPrivileges(_)
+        | Plan::RevokePrivileges(_)
+        | Plan::AlterDefaultPrivileges(_)
+        | Plan::ReassignOwned(_)
+        | Plan::ValidateConnection(_)
+        | Plan::SideEffectingFunc(_) => BTreeSet::default(),
+    };
+    let depends_on_required_id = REQUIRED_BUILTIN_TABLES
+        .iter()
+        .map(|table| catalog.resolve_builtin_table(&**table))
+        .any(|id| {
+            catalog
+                .get_global_ids(&id)
+                .any(|gid| depends_on.contains(&gid))
+        });
+
+    // If our plan does not depend on any required ID, then we don't need to
+    // wait for any builtin writes to occur.
+    if !depends_on_required_id {
+        return None;
+    }
+
+    // Even if we depend on a builtin table, there's no need to wait if the
+    // writes have already completed.
+    //
+    // TODO(parkmycar): As an optimization we should add a `Notify` type to
+    // `mz_ore` that allows peeking. If the builtin table writes have already
+    // completed then there is no need to defer this plan.
+    match session.clear_builtin_table_updates() {
+        Some(wait_future) => {
+            let depends_on = depends_on
+                .into_iter()
+                .map(|gid| catalog.get_entry_by_global_id(&gid).id())
+                .collect();
+            Some((depends_on, wait_future.boxed()))
+        }
+        None => None,
     }
 }

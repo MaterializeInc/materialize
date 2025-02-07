@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use futures::future::BoxFuture;
+use futures::future::{BoxFuture, FutureExt};
 use futures::stream::FuturesOrdered;
 use futures::{future, Future};
 use itertools::Itertools;
@@ -2800,7 +2800,7 @@ impl Coordinator {
                 Err(missing) => {
                     // Defer our write if we couldn't acquire all of the locks.
                     let role_metadata = ctx.session().role_metadata().clone();
-                    let acquire_future = self.grant_object_write_lock(missing);
+                    let acquire_future = self.grant_object_write_lock(missing).map(Option::Some);
                     let plan = DeferredPlan {
                         ctx,
                         plan: Plan::ReadThenWrite(plan),

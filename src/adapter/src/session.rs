@@ -14,6 +14,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::future::Future;
 use std::mem;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -878,15 +879,20 @@ impl<T: TimestampManipulation> Session<T> {
         mz_ore::soft_assert_or_log!(prev.is_none(), "replacing old builtin table notify");
     }
 
-    /// Takes the stashed `BuiltinTableAppendNotify` and waits for the writes to complete.
-    pub async fn clear_builtin_table_updates(&mut self) {
+    /// Takes the stashed `BuiltinTableAppendNotify`, if one exists, and returns a [`Future`] that
+    /// waits for the writes to complete.
+    pub fn clear_builtin_table_updates(&mut self) -> Option<impl Future<Output = ()> + 'static> {
         if let Some(fut) = self.builtin_updates.take() {
             // Record how long we blocked for, if we blocked at all.
             let histogram = self
                 .metrics()
                 .session_startup_table_writes_seconds()
                 .clone();
-            fut.wall_time().observe(histogram).await;
+            Some(async move {
+                fut.wall_time().observe(histogram).await;
+            })
+        } else {
+            None
         }
     }
 }
