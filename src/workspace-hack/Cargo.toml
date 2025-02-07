@@ -55,7 +55,7 @@ futures-channel = { version = "0.3.30", features = ["sink"] }
 futures-core = { version = "0.3.30" }
 futures-executor = { version = "0.3.30" }
 futures-io = { version = "0.3.30" }
-futures-sink = { version = "0.3.30" }
+futures-sink = { version = "0.3.31" }
 futures-task = { version = "0.3.30" }
 futures-util = { version = "0.3.30", features = ["channel", "io", "sink"] }
 getrandom = { version = "0.2.10", default-features = false, features = ["std"] }
@@ -188,7 +188,7 @@ futures-channel = { version = "0.3.30", features = ["sink"] }
 futures-core = { version = "0.3.30" }
 futures-executor = { version = "0.3.30" }
 futures-io = { version = "0.3.30" }
-futures-sink = { version = "0.3.30" }
+futures-sink = { version = "0.3.31" }
 futures-task = { version = "0.3.30" }
 futures-util = { version = "0.3.30", features = ["channel", "io", "sink"] }
 getrandom = { version = "0.2.10", default-features = false, features = ["std"] }
