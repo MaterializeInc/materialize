@@ -197,11 +197,6 @@ steps:
         env:
           CARGO_INCREMENTAL: "0"
           RUSTUP_TOOLCHAIN: $RUST_VERSION
-        inputs:
-          - Cargo.lock
-          - Cargo.toml
-          - "**/Cargo.toml"
-          - "**/*.rs"
         depends_on: []
         timeout_in_minutes: 30
         agents:
