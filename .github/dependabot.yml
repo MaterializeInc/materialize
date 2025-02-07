@@ -6,7 +6,7 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
-  open-pull-requests-limit: 10
+  open-pull-requests-limit: 50
   labels: [A-dependencies]
 - package-ecosystem: cargo
   directory: /misc/wasm
@@ -14,7 +14,7 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
-  open-pull-requests-limit: 10
+  open-pull-requests-limit: 50
   labels: [A-dependencies]
 - package-ecosystem: pip
   directory: /misc/dbt-materialize
@@ -30,7 +30,7 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
-  open-pull-requests-limit: 10
+  open-pull-requests-limit: 50
   labels: [A-dependencies]
 - package-ecosystem: docker
   directory: /ci/builder
@@ -38,7 +38,7 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
-  open-pull-requests-limit: 10
+  open-pull-requests-limit: 50
   labels: [A-dependencies]
 - package-ecosystem: pip
   directory: /ci/builder
@@ -46,5 +46,5 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
-  open-pull-requests-limit: 10
+  open-pull-requests-limit: 50
   labels: [A-dependencies]
