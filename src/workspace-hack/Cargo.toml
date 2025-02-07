@@ -81,7 +81,7 @@ mio = { version = "0.8.11", features = ["net", "os-ext"] }
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.32.4", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
-nix = { version = "0.26.1" }
+nix = { version = "0.29.0" }
 nom = { version = "7.1.2" }
 num = { version = "0.4.1" }
 num-bigint = { version = "0.4.3" }
@@ -216,7 +216,7 @@ mio = { version = "0.8.11", features = ["net", "os-ext"] }
 mysql_async = { git = "https://github.com/MaterializeInc/mysql_async", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.32.4", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["alpn"] }
-nix = { version = "0.26.1" }
+nix = { version = "0.29.0" }
 nom = { version = "7.1.2" }
 num = { version = "0.4.1" }
 num-bigint = { version = "0.4.3" }
