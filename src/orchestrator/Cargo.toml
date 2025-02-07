@@ -15,7 +15,7 @@ async-trait = "0.1.83"
 bytesize = "1.1.0"
 chrono = { version = "0.4.35", default-features = false, features = ["serde"] }
 derivative = "2.2.0"
-futures-core = "0.3.21"
+futures-core = "0.3.31"
 mz-ore = { path = "../ore", default-features = false }
 serde = "1.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }

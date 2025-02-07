@@ -52,7 +52,7 @@ event-listener-strategy = { version = "0.5.2" }
 flate2 = { version = "1.0.24", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
 futures-channel = { version = "0.3.30", features = ["sink"] }
-futures-core = { version = "0.3.30" }
+futures-core = { version = "0.3.31" }
 futures-executor = { version = "0.3.30" }
 futures-io = { version = "0.3.30" }
 futures-sink = { version = "0.3.31" }
@@ -185,7 +185,7 @@ event-listener-strategy = { version = "0.5.2" }
 flate2 = { version = "1.0.24", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
 futures-channel = { version = "0.3.30", features = ["sink"] }
-futures-core = { version = "0.3.30" }
+futures-core = { version = "0.3.31" }
 futures-executor = { version = "0.3.30" }
 futures-io = { version = "0.3.30" }
 futures-sink = { version = "0.3.31" }
