@@ -169,6 +169,15 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// LaunchDarkly is available.
     async fn get_0dt_deployment_max_wait(&mut self) -> Result<Option<Duration>, CatalogError>;
 
+    /// Get the `with_0dt_deployment_ddl_check_interval` config value of this instance.
+    ///
+    /// This mirrors the `with_0dt_deployment_ddl_check_interval` "system var" so that we can
+    /// toggle the flag with LaunchDarkly, but use it in boot before
+    /// LaunchDarkly is available.
+    async fn get_0dt_deployment_ddl_check_interval(
+        &mut self,
+    ) -> Result<Option<Duration>, CatalogError>;
+
     /// Get the `enable_0dt_deployment_panic_after_timeout` config value of this
     /// instance.
     ///

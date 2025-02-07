@@ -28,7 +28,8 @@ use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_adapter::{load_remote_system_parameters, AdapterError};
 use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
+    WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::ClusterReplicaSizeMap;
@@ -458,6 +459,52 @@ impl Listeners {
             );
             computed
         };
+        // Determine the DDL check interval when doing a 0dt deployment.
+        let with_0dt_deployment_ddl_check_interval = {
+            let cli_default = config
+                .system_parameter_defaults
+                .get(WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name())
+                .map(|x| {
+                    Duration::parse(VarInput::Flat(x)).map_err(|err| {
+                        anyhow!(
+                            "failed to parse default for {}: {:?}",
+                            WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name(),
+                            err
+                        )
+                    })
+                })
+                .transpose()?;
+            let compiled_default = WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.default().clone();
+            let ld = get_ld_value(
+                WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name(),
+                &remote_system_parameters,
+                |x| {
+                    Duration::parse(VarInput::Flat(x)).map_err(|err| {
+                        format!(
+                            "failed to parse LD value {} for {}: {:?}",
+                            x,
+                            WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name(),
+                            err
+                        )
+                    })
+                },
+            )?;
+            let catalog = openable_adapter_storage
+                .get_0dt_deployment_ddl_check_interval()
+                .await?;
+            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
+            info!(
+                ?computed,
+                ?ld,
+                ?catalog,
+                ?cli_default,
+                ?compiled_default,
+                "determined value for {} system parameter",
+                WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name()
+            );
+            computed
+        };
+
         // Determine whether we should panic if we reach the maximum wait time
         // without the preflight checks succeeding.
         let enable_0dt_deployment_panic_after_timeout = {
@@ -519,6 +566,7 @@ impl Listeners {
             caught_up_max_wait: with_0dt_deployment_max_wait,
             panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
             bootstrap_args,
+            ddl_check_interval: with_0dt_deployment_ddl_check_interval,
         };
         if enable_0dt_deployment {
             PreflightOutput {

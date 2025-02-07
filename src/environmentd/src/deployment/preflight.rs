@@ -36,6 +36,7 @@ pub struct PreflightInput {
     pub openable_adapter_storage: Box<dyn OpenableDurableCatalogState>,
     pub catalog_metrics: Arc<Metrics>,
     pub caught_up_max_wait: Duration,
+    pub ddl_check_interval: Duration,
     pub panic_after_timeout: bool,
     pub bootstrap_args: BootstrapArgs,
 }
@@ -59,6 +60,7 @@ pub async fn preflight_legacy(
         catalog_metrics,
         bootstrap_args,
         caught_up_max_wait: _,
+        ddl_check_interval: _,
         panic_after_timeout: _,
     }: PreflightInput,
 ) -> Result<Box<dyn OpenableDurableCatalogState>, CatalogError> {
@@ -135,6 +137,7 @@ pub async fn preflight_0dt(
         mut openable_adapter_storage,
         catalog_metrics,
         caught_up_max_wait,
+        ddl_check_interval,
         panic_after_timeout,
         bootstrap_args,
     }: PreflightInput,
@@ -182,7 +185,7 @@ pub async fn preflight_0dt(
 
             let mut skip_catchup = deployment_state.set_catching_up();
 
-            let mut check_ddl_changes_interval = tokio::time::interval(Duration::from_secs(5 * 60));
+            let mut check_ddl_changes_interval = tokio::time::interval(ddl_check_interval);
             check_ddl_changes_interval
                 .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
