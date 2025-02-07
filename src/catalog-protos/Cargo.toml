@@ -19,7 +19,7 @@ mz-storage-types = { path = "../storage-types" }
 paste = "1.0.11"
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
-prost = "0.13.2"
+prost = "0.13.4"
 serde = { version = "1.0.152", features = ["derive"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
