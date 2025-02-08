@@ -94,6 +94,7 @@ parquet = { version = "53.3.0", default-features = false, features = ["arrow", "
 percent-encoding = { version = "2.3.1" }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
+portable-atomic = { version = "1.6.0", features = ["require-cas"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "2.1.4" }
@@ -227,6 +228,7 @@ parquet = { version = "53.3.0", default-features = false, features = ["arrow", "
 percent-encoding = { version = "2.3.1" }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
+portable-atomic = { version = "1.6.0", features = ["require-cas"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "2.1.4" }

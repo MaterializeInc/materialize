@@ -22,7 +22,7 @@ differential-dataflow = "0.13.5"
 enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
-governor = "0.6.0"
+governor = "0.6.3"
 hex = "0.4.3"
 http = "1.1.0"
 ipnet = "2.11.0"
