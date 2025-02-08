@@ -1813,9 +1813,9 @@ dependencies = [
 
 [[package]]
 name = "compact_bytes"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7142ec2955b9a77690640f940a2baed9d5bfbe2b7a5395fe51da9df04c3af764"
+checksum = "9b08f6a0d5ec37167557a0434307dcfbd7e6808b860492a5a626568a5522550e"
 dependencies = [
  "serde",
  "static_assertions",
