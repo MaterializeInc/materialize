@@ -22,7 +22,12 @@ The following tutorial deploys the following components onto your local
 
 {{< important >}}
 
-For testing purposes only.
+This tutorial is for local evaluation/testing purposes only.
+
+- The tutorial uses sample configuration files that are for evaluation/testing
+  purposes only.
+- The tutorial uses a Kubernetes metrics server with TLS disabled. In practice,
+  refer to your organization's official security practices.
 
 {{< /important >}}
 
@@ -69,6 +74,27 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    minikube start
    ```
 
+1. Add labels `materialize.cloud/disk=true` and
+   `workload=materialize-instance` to the node.
+
+   ```shell
+   kubectl get nodes --show-labels
+   ```
+
+   Add the labels to the node, substituting `<node-name>` with the name of the
+   node (e.g., `minikube`).
+
+   ```shell
+   kubectl label node <node-name> materialize.cloud/disk=true
+   kubectl label node <node-name> workload=materialize-instance
+   ```
+
+   Verify that the labels were successfully applied by running the following command again:
+
+   ```shell
+   kubectl get nodes --show-labels
+   ```
+
 1. To help you get started for local evaluation/testing, Materialize provides
    some sample configuration files. Download the sample configuration files from
    the Materialize repo:
@@ -86,7 +112,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    - `sample-minio.yaml`: Used to configure minIO as the blob storage.
    - `sample-materialize.yaml`: Used to configure Materialize instance.
 
-   These configuration files are for demonstration/evaluation purposes only and
+   These configuration files are for local evaluation/testing purposes only and
    not intended for production use.
 
 1. Install the Materialize Helm chart.
@@ -103,13 +129,15 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
       helm repo update materialize
       ```
 
-   1. Install the Materialize Operator.
+   1. Install the Materialize Operator. The operator will be installed in the
+      `materialize` namespace.
 
       ```shell
       helm install my-materialize-operator materialize/materialize-operator \
           --namespace=materialize --create-namespace \
           --version v25.1.1 \
           --set operator.cloudProvider.region=minikube \
+          --set observability.podMetrics.enabled=true \
           -f sample-values.yaml
       ```
 
@@ -119,7 +147,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
       kubectl get all -n materialize
       ```
 
-      Wait for the components to be in the `Running` state:
+      Wait for the components to be ready and in the `Running` state:
 
       ```none
       NAME                                           READY   STATUS    RESTARTS   AGE
@@ -150,12 +178,48 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
         kubectl apply -f sample-minio.yaml
         ```
 
-1. Optional. Install the following metrics service for certain system metrics
-   but not required.
+1. Install the metrics service to the `kube-system` namespace.
 
-   ```shell
-   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-   ```
+   1. Add the metrics server Helm repository.
+
+      ```shell
+      helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
+      ```
+
+   1. Update the repository.
+
+      ```shell
+      helm repo update metrics-server
+      ```
+
+   1. Install the metrics server to the `kube-system` namespace.
+
+      {{< important >}}
+
+      This tutorial is for local evaluation/testing purposes only. For simplicity,
+      the tutorial uses a Kubernetes metrics server with TLS disabled. In practice,
+      refer to your organization's official security practices.
+
+      {{< /important >}}
+
+      ```shell
+      helm install metrics-server metrics-server/metrics-server \
+         --namespace kube-system \
+         --set args="{--kubelet-insecure-tls,--kubelet-preferred-address-types=InternalIP\,Hostname\,ExternalIP}"
+      ```
+
+      You can verify the installation by running the following command:
+
+      ```bash
+      kubectl get pods -n kube-system -l app.kubernetes.io/instance=metrics-server
+      ```
+
+      Wait for the `metrics-server` pod to be ready and in the `Running` state:
+
+      ```none
+      NAME                             READY   STATUS    RESTARTS   AGE
+      metrics-server-89dfdc559-tgvtg   1/1     Running   0          14m
+      ```
 
 1. Install Materialize into a new `materialize-environment` namespace:
 
@@ -172,7 +236,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
        kubectl get all -n materialize-environment
        ```
 
-       Wait for the components to be in the `Running` state.
+       Wait for the components to be ready and in the `Running` state.
 
 
        ```none
@@ -216,16 +280,16 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
        If you run into an error during deployment, refer to the
        [Troubleshooting](/self-hosted/troubleshooting) guide.
 
-1. Open the Materialize console in your browser:
+1. Open the Materialize Console in your browser:
 
-   1. From the previous `kubectl` output, find the Materialize console service.
+   1. From the previous `kubectl` output, find the Materialize Console service.
 
       ```none
       NAME                            TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)       AGE
       service/mzk7x050omzi-console    ClusterIP   None           <none>        8080/TCP      12s
       ```
 
-   1. Forward the Materialize console service to your local machine:
+   1. Forward the Materialize Console service to your local machine:
 
       ```shell
       while true;
@@ -251,7 +315,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    1. Open a browser to
       [http://localhost:8080](http://localhost:8080).
 
-      ![Image of self-managed Materialize console running on local minikube](/images/self-managed/self-managed-console-minkiube.png)
+      ![Image of self-managed Materialize Console running on local minikube](/images/self-managed/self-managed-console-minkiube.png)
 
 
 ## See also
