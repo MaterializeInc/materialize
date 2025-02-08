@@ -52,7 +52,7 @@ requests==2.32.3
 ruamel.yaml==0.18.10
 ruff==0.0.292
 scipy==1.15.1
-semver==3.0.2
+semver==3.0.4
 shtab==1.7.1
 sqlparse==0.5.3
 toml==0.10.2
