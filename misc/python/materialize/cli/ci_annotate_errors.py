@@ -110,10 +110,10 @@ ERROR_RE = re.compile(
 # Panics are multiline and our log lines of multiple services are interleaved,
 # making them complex to handle in regular expressions, thus handle them
 # separately.
-# Example 1: launchdarkly-materialized-1  | thread 'coordinator' panicked at [...]
-# Example 2: [pod/environmentd-0/environmentd] thread 'coordinator' panicked at [...]
+# Example 1: launchdarkly-materialized-1  | 2025-02-08T16:40:57.296144Z  thread 'coordinator' panicked at [...]
+# Example 2: [pod/environmentd-0/environmentd] 2025-02-08T16:40:57.296144Z  thread 'coordinator' panicked at [...]
 PANIC_IN_SERVICE_START_RE = re.compile(
-    rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) thread '.*' panicked at "
+    rb"^(\[)?(?P<service>[^ ]*)(\s*\||\]) \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z  thread '.*' panicked at "
 )
 # Example 1: launchdarkly-materialized-1  | global timestamp must always go up
 # Example 2: [pod/environmentd-0/environmentd] Unknown collection identifier u2082
