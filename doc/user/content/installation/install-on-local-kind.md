@@ -22,10 +22,14 @@ and deploys the following components:
 
 {{< important >}}
 
-For testing purposes only.
+This tutorial is for local evaluation/testing purposes only.
+
+- The tutorial uses sample configuration files that are for evaluation/testing
+  purposes only.
+- The tutorial uses a Kubernetes metrics server with TLS disabled. In practice,
+  refer to your organization's official security practices.
 
 {{< /important >}}
-
 
 ## Prerequisites
 
@@ -65,6 +69,27 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    kind create cluster
    ```
 
+1. Add labels `materialize.cloud/disk=true` and
+   `workload=materialize-instance` to the node.
+
+   ```shell
+   kubectl get nodes --show-labels
+   ```
+
+   Add the labels to the node, substituting `<node-name>` with the name of the
+   node (e.g., `kind-control-plane`).
+
+   ```shell
+   kubectl label node <node-name> materialize.cloud/disk=true
+   kubectl label node <node-name> workload=materialize-instance
+   ```
+
+   Verify that the labels were successfully applied by running the following command again:
+
+   ```shell
+   kubectl get nodes --show-labels
+   ```
+
 1. To help you get started for local evaluation/testing, Materialize provides
    some sample configuration files. Download the sample configuration files from
    the Materialize repo:
@@ -82,7 +107,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    - `sample-minio.yaml`: Used to configure minIO as the blob storage.
    - `sample-materialize.yaml`: Used to configure Materialize instance.
 
-   These configuration files are for demonstration/evaluation purposes only and
+   These configuration files are for local evaluation/testing purposes only and
    not intended for production use.
 
 1. Install the Materialize Helm chart.
@@ -106,6 +131,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
       helm install my-materialize-operator materialize/materialize-operator \
           --namespace=materialize --create-namespace \
           --version v25.1.1 \
+          --set observability.podMetrics.enabled=true \
           -f sample-values.yaml
       ```
 
@@ -115,17 +141,17 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
       kubectl get all -n materialize
       ```
 
-      Wait for the components to be in the `Running` state:
+      Wait for the components to be ready and in the `Running` state:
 
       ```none
-      NAME                                           READY   STATUS              RESTARTS   AGE
-      pod/my-materialize-operator-776b98455b-w9kkl   0/1     ContainerCreating   0          6s
+      NAME                                           READY   STATUS    RESTARTS   AGE
+      pod/my-materialize-operator-776b98455b-w9kkl   1/1     Running   0          6s
 
       NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
-      deployment.apps/my-materialize-operator   0/1     1            0           6s
+      deployment.apps/my-materialize-operator   1/1     1            1           6s
 
       NAME                                                 DESIRED   CURRENT   READY   AGE
-      replicaset.apps/my-materialize-operator-776b98455b   1         1         0       6s
+      replicaset.apps/my-materialize-operator-776b98455b   1         1         1       6s
       ```
 
       If you run into an error during deployment, refer to the
@@ -146,13 +172,48 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
         kubectl apply -f sample-minio.yaml
         ```
 
-1. Optional. Install the following metrics service for certain system metrics
-   but not required. The service will be installed in the `kube-system`
-   namespace.
+1. Install the metrics service to the `kube-system` namespace.
 
-   ```shell
-   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-   ```
+   1. Add the metrics server Helm repository.
+
+      ```shell
+      helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
+      ```
+
+   1. Update the repository.
+
+      ```shell
+      helm repo update metrics-server
+      ```
+
+   1. Install the metrics server to the `kube-system` namespace.
+
+      {{< important >}}
+
+      This tutorial is for local evaluation/testing purposes only. For simplicity,
+      the tutorial uses a Kubernetes metrics server with TLS disabled. In practice,
+      refer to your organization's official security practices.
+
+      {{< /important >}}
+
+      ```shell
+      helm install metrics-server metrics-server/metrics-server \
+         --namespace kube-system \
+         --set args="{--kubelet-insecure-tls,--kubelet-preferred-address-types=InternalIP\,Hostname\,ExternalIP}"
+      ```
+
+      You can verify the installation by running the following command:
+
+      ```bash
+      kubectl get pods -n kube-system -l app.kubernetes.io/instance=metrics-server
+      ```
+
+      Wait for the `metrics-server` pod to be ready and in the `Running` state:
+
+      ```none
+      NAME                             READY   STATUS    RESTARTS   AGE
+      metrics-server-89dfdc559-tgvtg   1/1     Running   0          14m
+      ```
 
 1. Install Materialize into a new `materialize-environment` namespace:
 
@@ -169,7 +230,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
        kubectl get all -n materialize-environment
        ```
 
-       Wait for the components to be in the `Running` state.
+       Wait for the components to be running and in the `Running` state.
 
        ```none
        NAME                                             READY   STATUS    RESTARTS   AGE
