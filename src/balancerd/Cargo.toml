@@ -23,7 +23,7 @@ humantime = "2.1.0"
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 hyper-openssl = "0.10.2"
 hyper-util = "0.1.6"
-jsonwebtoken = "9.2.0"
+jsonwebtoken = "9.3.1"
 launchdarkly-server-sdk = { version = "1.0.0", default-features = false }
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
