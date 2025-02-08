@@ -41,7 +41,7 @@ psycopg==3.2.4
 psycopg-binary==3.2.4
 # pydantic >= 2.9 causes pdoc 15.0.1 to fail: UserWarning: Error parsing type annotation dict[str, Any] | None for pydantic.main.BaseModel.__pydantic_extra__: 'function' object is not subscriptable
 # See also https://github.com/mitmproxy/pdoc/issues/741
-pydantic==2.8.2
+pydantic==2.10.6
 pyelftools==0.31
 pyjwt==2.10.1
 PyMySQL==1.1.1
