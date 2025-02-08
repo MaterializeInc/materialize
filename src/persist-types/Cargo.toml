@@ -20,7 +20,7 @@ hex = "0.4.3"
 itertools = "0.12.1"
 mz-ore = { path = "../ore", features = ["metrics", "test"], default-features = false }
 mz-proto = { path = "../proto", default-features = false }
-parquet = { version = "53.3.0", default-features = false, features = ["arrow"] }
+parquet = { version = "54.1.0", default-features = false, features = ["arrow"] }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.4", features = ["no-recursion-limit"] }

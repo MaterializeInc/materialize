@@ -39,7 +39,7 @@ mz-repr = { path = "../repr" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-parquet = { version = "53.3.0", default-features = false, features = ["arrow", "async", "snap"] }
+parquet = { version = "54.1.0", default-features = false, features = ["arrow", "async", "snap"] }
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 prost = "0.13.4"
