@@ -35,7 +35,7 @@ hyper-util = "0.1.6"
 include_dir = "0.7.3"
 ipnet = "2.11.0"
 itertools = "0.12.1"
-jsonwebtoken = "9.2.0"
+jsonwebtoken = "9.3.1"
 libc = "0.2.138"
 mime = "0.3.16"
 mz-alloc = { path = "../alloc" }
@@ -124,7 +124,7 @@ fallible-iterator = "0.2.0"
 http-body-util = "0.1.2"
 insta = { version = "1.32", features = ["json"] }
 itertools = "0.12.1"
-jsonwebtoken = "9.2.0"
+jsonwebtoken = "9.3.1"
 mz-environmentd = { path = "../environmentd", features = ["test"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgtest = { path = "../pgtest" }

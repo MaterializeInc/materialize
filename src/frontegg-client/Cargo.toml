@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-jsonwebtoken = "9.2.0"
+jsonwebtoken = "9.3.1"
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", features = ["network"] }
 reqwest = { version = "0.11.13", features = ["json"] }

@@ -17,7 +17,7 @@ base64 = "0.22.0"
 chrono = { version = "0.4.39", default-features = false, features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 hyper = { version = "1.4.1", features = ["http1", "server"] }
-jsonwebtoken = "9.2.0"
+jsonwebtoken = "9.3.1"
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", default-features = false, features = ["cli"] }
 serde = { version = "1.0.152", features = ["derive"] }
