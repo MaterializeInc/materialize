@@ -54,7 +54,7 @@ ruff==0.0.292
 scipy==1.15.1
 semver==3.0.2
 shtab==1.7.1
-sqlparse==0.5.0
+sqlparse==0.5.3
 toml==0.10.2
 twine==6.1.0
 types-Markdown==3.7.0.20241204
