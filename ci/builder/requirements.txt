@@ -18,7 +18,7 @@ ipympl==0.9.6
 ipywidgets==8.1.5
 junit-xml==1.9
 junitparser==3.2.0
-jupyterlab==4.3.0
+jupyterlab==4.3.5
 jupyter-black==0.4.0
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
