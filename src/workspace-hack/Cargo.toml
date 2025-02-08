@@ -63,7 +63,7 @@ half = { version = "2.4.1", features = ["num-traits"] }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.4.1", features = ["client", "http1", "http2", "server"] }
-hyper-util = { version = "0.1.6", features = ["client-legacy", "server-auto", "service"] }
+hyper-util = { version = "0.1.10", features = ["client-legacy", "server-auto", "service"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.33.0", features = ["json"] }
 k8s-openapi = { version = "0.22.0", default-features = false, features = ["schemars", "v1_29"] }
@@ -196,7 +196,7 @@ half = { version = "2.4.1", features = ["num-traits"] }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.4.1", features = ["client", "http1", "http2", "server"] }
-hyper-util = { version = "0.1.6", features = ["client-legacy", "server-auto", "service"] }
+hyper-util = { version = "0.1.10", features = ["client-legacy", "server-auto", "service"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.33.0", features = ["json"] }
 k8s-openapi = { version = "0.22.0", default-features = false, features = ["schemars", "v1_29"] }
