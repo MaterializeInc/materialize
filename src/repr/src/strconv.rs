@@ -465,7 +465,7 @@ where
 {
     let (year_ad, year) = ts.year_ce();
     write!(buf, "{:04}-{}", year, ts.format("%m-%d %H:%M:%S"));
-    format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
+    format_nanos_to_micros(buf, ts.and_utc().timestamp_subsec_nanos());
     if !year_ad {
         write!(buf, " BC");
     }

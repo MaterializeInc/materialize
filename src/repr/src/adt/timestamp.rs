@@ -813,7 +813,7 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
         let round_to_micros = 10_i64.pow(power.into());
 
         let mut original = self.date_time();
-        let nanoseconds = original.timestamp_subsec_nanos();
+        let nanoseconds = original.and_utc().timestamp_subsec_nanos();
         // truncating to microseconds does not round it up
         // i.e. 123456789 will be truncated to 123456
         original = original.truncate_microseconds();
