@@ -17,13 +17,14 @@ use std::sync::LazyLock;
 
 use chrono::{DateTime, Utc};
 use clap::Parser;
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::api::core::v1::{Event, Pod};
 use kube::api::{Api, ListParams, LogParams};
 use kube::config::KubeConfigOptions;
 use kube::{Client, Config};
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
+use serde_yaml;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
@@ -92,6 +93,17 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
                         None
                     }
                 };
+
+                let _ = match dump_k8s_events(&context, client.clone(), &namespace).await {
+                    Ok(file_name) => Some(file_name),
+                    Err(e) => {
+                        eprintln!(
+                            "Failed to write k8s events for namespace {}: {}",
+                            namespace, e
+                        );
+                        None
+                    }
+                };
             }
         }
         Err(e) => {
@@ -116,7 +128,7 @@ async fn create_k8s_client(k8s_context: Option<String>) -> Result<Client, anyhow
     Ok(client)
 }
 
-/// Write k8s pod logs to a file per pod as mz-pod-logs.{namespace}.{pod-name}.log.
+/// Write k8s pod logs to a file per pod.
 /// Returns a list of file names on success.
 async fn dump_k8s_pod_logs(
     context: &Context,
@@ -188,6 +200,31 @@ async fn dump_k8s_pod_logs(
     Ok(file_names)
 }
 
+/// Write k8s events to a yaml file.
+/// Returns a file name on success.
+async fn dump_k8s_events(
+    context: &Context,
+    client: Client,
+    namespace: &String,
+) -> Result<String, anyhow::Error> {
+    let file_path = format_resource_path(context.start_time, namespace, K8sResourceType::Event);
+    let file_name = format!("{}/events.yaml", file_path);
+    create_dir_all(&file_path)?;
+    let mut file = File::options().append(true).create(true).open(&file_name)?;
+
+    let events: Api<Event> = Api::<Event>::namespaced(client.clone(), namespace);
+
+    let event_list = events.list(&ListParams::default()).await?;
+
+    for event in event_list {
+        serde_yaml::to_writer(&mut file, &event)?;
+    }
+
+    println!("Exported {}", &file_name);
+
+    Ok(file_name)
+}
+
 fn format_resource_path(
     date_time: DateTime<Utc>,
     namespace: &str,
@@ -205,7 +242,7 @@ fn format_resource_path(
     };
 
     format!(
-        "mz-debug-{}/{}/{}",
+        "mz-debug/{}/{}/{}",
         date_time.format("%Y-%m-%dT%H:%MZ"),
         resource_type_str,
         namespace
