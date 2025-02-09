@@ -143,7 +143,7 @@ url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
 zeroize = { version = "1.5.7", features = ["serde"] }
 zstd = { version = "0.13.0" }
-zstd-safe = { version = "7.0.0", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
+zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2.0.13", features = ["std"] }
 
 [build-dependencies]
@@ -279,7 +279,7 @@ url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
 zeroize = { version = "1.5.7", features = ["serde"] }
 zstd = { version = "0.13.0" }
-zstd-safe = { version = "7.0.0", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
+zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2.0.13", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
