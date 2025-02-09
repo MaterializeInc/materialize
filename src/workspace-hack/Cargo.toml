@@ -134,7 +134,7 @@ tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit"
 tower-http = { version = "0.5.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.33" }
-tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 tungstenite = { version = "0.21.0" }
 uncased = { version = "0.9.7" }
 unicode-bidi = { version = "0.3.15" }
@@ -270,7 +270,7 @@ tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit"
 tower-http = { version = "0.5.2", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.33" }
-tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 tungstenite = { version = "0.21.0" }
 uncased = { version = "0.9.7" }
 unicode-bidi = { version = "0.3.15" }
