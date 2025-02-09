@@ -167,6 +167,12 @@ impl<T: AstInfo> AstDisplay for SetExpr<T> {
 }
 impl_display_t!(SetExpr);
 
+impl<T: AstInfo> SetExpr<T> {
+    pub fn take(&mut self) -> SetExpr<T> {
+        mem::replace(self, SetExpr::Values(Values(vec![])))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SetOperator {
     Union,

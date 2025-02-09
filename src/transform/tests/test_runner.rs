@@ -569,6 +569,8 @@ mod explain {
 
         type Dot = UnsupportedFormat;
 
+        type Sql = UnsupportedFormat;
+
         fn explain_text(
             &'a mut self,
             context: &'a Self::Context,
