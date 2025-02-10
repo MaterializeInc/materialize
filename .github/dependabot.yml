@@ -8,6 +8,12 @@ updates:
     time: "22:00"
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 - package-ecosystem: cargo
   directory: /misc/wasm
   schedule:
@@ -16,6 +22,12 @@ updates:
     time: "22:00"
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 - package-ecosystem: pip
   directory: /misc/dbt-materialize
   schedule:
@@ -24,6 +36,12 @@ updates:
     # dbt drops.
     interval: daily
   labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 - package-ecosystem: docker
   directory: /misc/images/ubuntu-base
   schedule:
@@ -32,6 +50,12 @@ updates:
     time: "22:00"
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 - package-ecosystem: docker
   directory: /ci/builder
   schedule:
@@ -40,6 +64,12 @@ updates:
     time: "22:00"
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 - package-ecosystem: pip
   directory: /ci/builder
   schedule:
@@ -48,3 +78,9 @@ updates:
     time: "22:00"
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
