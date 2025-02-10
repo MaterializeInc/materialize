@@ -283,7 +283,7 @@ impl Coordinator {
                 if mz_ore::assert::soft_assertions_enabled() {
                     let required_tables: BTreeSet<_> = super::appends::REQUIRED_BUILTIN_TABLES
                         .iter()
-                        .map(|table| self.catalog().resolve_builtin_table(&*table))
+                        .map(|table| self.catalog().resolve_builtin_table(*table))
                         .collect();
                     let updates_tracked = updates
                         .iter()
