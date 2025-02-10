@@ -1832,6 +1832,7 @@ steps:
             run: nightly
       agents:
         queue: hetzner-aarch64-16cpu-32gb
+      skip: "Reenable when database-issues#8956 is fixed"
 
     - id: copy-to-s3-2-replicas
       label: "Copy To S3 (2 replicas)"
@@ -1844,6 +1845,7 @@ steps:
             args: [--default-size=2]
       agents:
         queue: hetzner-aarch64-16cpu-32gb
+      skip: "Reenable when database-issues#8956 is fixed"
 
   - id: backup-restore
     label: "CRDB / Persist backup and restore"
