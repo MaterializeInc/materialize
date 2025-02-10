@@ -50,7 +50,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
     }
 
     /// Returns an iterator over the contained storage commands.
-    pub fn iter(&self) -> impl Iterator<Item = &StorageCommand<T>> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &StorageCommand<T>> {
         self.commands.iter()
     }
 
