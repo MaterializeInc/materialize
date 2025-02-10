@@ -137,7 +137,7 @@ tracing-core = { version = "0.1.33" }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 tungstenite = { version = "0.21.0" }
 uncased = { version = "0.9.7" }
-unicode-bidi = { version = "0.3.15" }
+unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.23" }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
@@ -273,7 +273,7 @@ tracing-core = { version = "0.1.33" }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 tungstenite = { version = "0.21.0" }
 uncased = { version = "0.9.7" }
-unicode-bidi = { version = "0.3.15" }
+unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.23" }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
