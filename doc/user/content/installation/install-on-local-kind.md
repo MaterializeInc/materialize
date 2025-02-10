@@ -230,7 +230,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
        kubectl get all -n materialize-environment
        ```
 
-       Wait for the components to be running and in the `Running` state.
+       Wait for the components to be ready and in the `Running` state.
 
        ```none
        NAME                                             READY   STATUS    RESTARTS   AGE
@@ -292,7 +292,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
       done;
       ```
 
-     {{< annotation type="Kubernetes issue 78446" >}}
+      {{< annotation type="Kubernetes issue 78446" >}}
 
       Due to a [known Kubernetes
       issue](https://github.com/kubernetes/kubernetes/issues/78446), interrupted
