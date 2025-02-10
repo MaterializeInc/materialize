@@ -47,7 +47,7 @@ debugid = { version = "0.8.0", default-features = false, features = ["serde"] }
 dec = { version = "0.4.9", default-features = false, features = ["num-traits", "serde"] }
 digest = { version = "0.10.6", features = ["mac", "std"] }
 either = { version = "1.8.0" }
-event-listener = { version = "5.3.1" }
+event-listener = { version = "5.4.0" }
 event-listener-strategy = { version = "0.5.2" }
 flate2 = { version = "1.0.24", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
@@ -181,7 +181,7 @@ debugid = { version = "0.8.0", default-features = false, features = ["serde"] }
 dec = { version = "0.4.9", default-features = false, features = ["num-traits", "serde"] }
 digest = { version = "0.10.6", features = ["mac", "std"] }
 either = { version = "1.8.0" }
-event-listener = { version = "5.3.1" }
+event-listener = { version = "5.4.0" }
 event-listener-strategy = { version = "0.5.2" }
 flate2 = { version = "1.0.24", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
