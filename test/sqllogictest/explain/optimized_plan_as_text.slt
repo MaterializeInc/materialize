@@ -1623,3 +1623,96 @@ Source materialize.public.t6
 Target cluster: no_replicas
 
 EOF
+
+# `count(*)` is planned as `count(true)`. We take care in EXPLAIN to show `count(true)` as `count(*)` to avoid confusing
+# users.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+SELECT count(*)
+FROM t5;
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          ReadStorage materialize.public.t5
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+
+Source materialize.public.t5
+
+Target cluster: no_replicas
+
+EOF
+
+query error DISTINCT \* not supported as function args
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+SELECT count(distinct *)
+FROM t5;
+
+# `count(true)` is currently also printed as `count(*)` in EXPLAIN, which I'd say is fine.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+SELECT count(true)
+FROM t5;
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          ReadStorage materialize.public.t5
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+
+Source materialize.public.t5
+
+Target cluster: no_replicas
+
+EOF
+
+# But `count(DISTINCT true)` means an entirely different thing, so EXPLAIN shouldn't conflate it with `count(*)`.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+SELECT count(DISTINCT true)
+FROM t5;
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(distinct true)]
+        Project ()
+          ReadStorage materialize.public.t5
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+
+Source materialize.public.t5
+
+Target cluster: no_replicas
+
+EOF
