@@ -435,8 +435,11 @@ where
         self.storage_collections.active_collection_metadatas()
     }
 
-    fn active_ingestions(&self, instance_id: StorageInstanceId) -> &BTreeSet<GlobalId> {
-        self.instances[&instance_id].active_ingestions()
+    fn active_ingestions(&self, instance_id: StorageInstanceId) -> Vec<GlobalId> {
+        self.instances[&instance_id]
+            .active_ingestions()
+            .copied()
+            .collect()
     }
 
     fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
