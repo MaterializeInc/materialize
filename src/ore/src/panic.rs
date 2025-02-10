@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{env, thread};
 
+#[cfg(feature = "chrono")]
 use chrono::Utc;
 use itertools::Itertools;
 #[cfg(feature = "async")]
@@ -86,7 +87,12 @@ pub fn install_enhanced_handler() {
             return;
         }
 
-        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ").to_string();
+        // can't use if cfg!() here because that will require chrono::Utc import
+        #[cfg(feature = "chrono")]
+        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ ").to_string();
+        #[cfg(not(feature = "chrono"))]
+        let timestamp = String::new();
+
         let thread = thread::current();
         let thread_name = thread.name().unwrap_or("<unnamed>");
 
@@ -142,7 +148,7 @@ pub fn install_enhanced_handler() {
         //
         // See https://github.com/rust-lang/rust/issues/64413 for details.
         let buf = format!(
-            "{timestamp}  thread '{thread_name}' panicked at {location}:\n{msg}\n{backtrace}"
+            "{timestamp}thread '{thread_name}' panicked at {location}:\n{msg}\n{backtrace}"
         );
 
         // Ideal path: spawn a thread that attempts to lock the Rust-managed
