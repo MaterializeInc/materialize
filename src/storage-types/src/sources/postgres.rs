@@ -130,6 +130,10 @@ impl<C: ConnectionAccess> SourceConnection for PostgresSourceConnection<C> {
     fn supports_read_only(&self) -> bool {
         false
     }
+
+    fn prefers_single_replica(&self) -> bool {
+        true
+    }
 }
 
 impl<C: ConnectionAccess> AlterCompatible for PostgresSourceConnection<C> {

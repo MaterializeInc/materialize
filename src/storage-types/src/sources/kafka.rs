@@ -228,6 +228,10 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
     fn supports_read_only(&self) -> bool {
         true
     }
+
+    fn prefers_single_replica(&self) -> bool {
+        false
+    }
 }
 
 impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
