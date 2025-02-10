@@ -343,8 +343,10 @@ impl Coordinator {
                     self.sequence_end_transaction(ctx, action).await;
                 }
                 Plan::Select(plan) => {
-                    let max = Some(ctx.session().vars().max_query_result_size());
-                    self.sequence_peek(ctx, plan, target_cluster, max).await;
+                    let max_query = Some(ctx.session().vars().max_query_result_size());
+                    let max_heap = ctx.session().vars().max_query_heap_size();
+                    self.sequence_peek(ctx, plan, target_cluster, max_query, max_heap)
+                        .await;
                 }
                 Plan::Subscribe(plan) => {
                     self.sequence_subscribe(ctx, plan, target_cluster).await;
@@ -356,9 +358,16 @@ impl Coordinator {
                     ctx.retire(Ok(Self::send_immediate_rows(plan.row)));
                 }
                 Plan::ShowColumns(show_columns_plan) => {
-                    let max = Some(ctx.session().vars().max_query_result_size());
-                    self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster, max)
-                        .await;
+                    let max_query = Some(ctx.session().vars().max_query_result_size());
+                    let max_heap = ctx.session().vars().max_query_heap_size();
+                    self.sequence_peek(
+                        ctx,
+                        show_columns_plan.select_plan,
+                        target_cluster,
+                        max_query,
+                        max_heap,
+                    )
+                    .await;
                 }
                 Plan::CopyFrom(plan) => match plan.source {
                     CopyFromSource::Stdin => {

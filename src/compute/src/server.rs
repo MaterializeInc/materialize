@@ -325,6 +325,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                         initial_storage_as_of: dataflow.initial_storage_as_of.clone(),
                         refresh_schedule: dataflow.refresh_schedule.clone(),
                         time_dependence: dataflow.time_dependence.clone(),
+                        memory_limit: dataflow.memory_limit,
                     })
                     .map(ComputeCommand::CreateDataflow)
                     .collect()
@@ -506,6 +507,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
                 compute_state.process_copy_tos();
+                compute_state.process_limits();
+                compute_state.advance_handles();
             }
         }
     }

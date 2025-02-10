@@ -6,7 +6,7 @@
 //! Initialization of logging dataflows.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -21,6 +21,9 @@ use mz_timely_util::containers::{Column, ColumnBuilder};
 use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::container::{ContainerBuilder, PushInto};
+use timely::dataflow::operators::input::Handle;
+use timely::dataflow::operators::Input;
+use timely::dataflow::Scope;
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
@@ -29,7 +32,7 @@ use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder}
 use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
-use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
+use crate::logging::{BatchLogger, EventQueue, SharedLoggingState, Update};
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 /// Initialize logging dataflows.
@@ -39,10 +42,8 @@ use crate::typedefs::{ErrBatcher, ErrBuilder};
 pub fn initialize<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-) -> (
-    super::compute::Logger,
-    BTreeMap<LogVariant, (TraceBundle, usize)>,
-) {
+    dataflows_exceeding_heap_size_limit: Rc<RefCell<BTreeSet<usize>>>,
+) -> (super::compute::Logger, LoggingDataflows) {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
     // Track time relative to the Unix epoch, rather than when the server
@@ -64,6 +65,7 @@ pub fn initialize<A: Allocate + 'static>(
         d_event_queue: EventQueue::new("d"),
         c_event_queue: EventQueue::new("c"),
         shared_state: Default::default(),
+        dataflows_exceeding_heap_size_limit,
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -94,38 +96,72 @@ struct LoggingContext<'a, A: Allocate> {
     d_event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     c_event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
+    dataflows_exceeding_heap_size_limit: Rc<RefCell<BTreeSet<usize>>>,
+}
+
+pub(crate) struct LoggingDataflows {
+    pub logs: BTreeMap<LogVariant, (TraceBundle, usize)>,
+    pub heap_size_limits_handle: Handle<Timestamp, Update<(usize, u64)>>,
 }
 
 impl<A: Allocate + 'static> LoggingContext<'_, A> {
-    fn construct_dataflows(&mut self) -> BTreeMap<LogVariant, (TraceBundle, usize)> {
-        let mut collections = BTreeMap::new();
-        collections.extend(super::timely::construct(
-            self.worker,
-            self.config,
-            self.t_event_queue.clone(),
-            Rc::clone(&self.shared_state),
-        ));
-        collections.extend(super::reachability::construct(
-            self.worker,
-            self.config,
-            self.r_event_queue.clone(),
-        ));
-        collections.extend(super::differential::construct(
-            self.worker,
-            self.config,
-            self.d_event_queue.clone(),
-            Rc::clone(&self.shared_state),
-        ));
-        collections.extend(super::compute::construct(
-            self.worker,
-            self.config,
-            self.c_event_queue.clone(),
-            Rc::clone(&self.shared_state),
-        ));
+    fn construct_dataflows(&mut self) -> LoggingDataflows {
+        let dataflow_index = self.worker.next_dataflow_index();
+        self.worker.dataflow_named("Dataflow: logging", |scope| {
+            let mut collections = BTreeMap::new();
 
-        let errs = self
-            .worker
-            .dataflow_named("Dataflow: logging errors", |scope| {
+            let super::timely::Return {
+                collections: timely_collections,
+                compute_events: compute_events_timely,
+                operator_to_dataflow,
+            } = super::timely::construct(scope.clone(), self.config, self.t_event_queue.clone());
+            collections.extend(timely_collections);
+
+            collections.extend(super::reachability::construct(
+                scope.clone(),
+                self.config,
+                self.r_event_queue.clone(),
+            ));
+
+            let super::differential::Return {
+                collections: differential_collections,
+                compute_events: compute_events_differential,
+                batcher_heap_size,
+            } = super::differential::construct(
+                scope.clone(),
+                self.config,
+                self.d_event_queue.clone(),
+                Rc::clone(&self.shared_state),
+            );
+            collections.extend(differential_collections);
+
+            let super::compute::Return {
+                collections: compute_collections,
+                arrangement_heap_size,
+            } = super::compute::construct(
+                scope.clone(),
+                scope.parent.clone(),
+                self.config,
+                self.c_event_queue.clone(),
+                [compute_events_timely, compute_events_differential],
+                Rc::clone(&self.shared_state),
+            );
+            collections.extend(compute_collections);
+
+            let (heap_size_limits_handle, heap_size_limits) = scope.new_input();
+
+            let watchdog_streams = super::watchdog::Streams {
+                arrangement_heap_size,
+                batcher_heap_size,
+                operator_to_dataflow,
+                heap_size_limits,
+                dataflows_exceeding_heap_size_limit: Rc::clone(
+                    &self.dataflows_exceeding_heap_size_limit,
+                ),
+            };
+            super::watchdog::construct(scope.clone(), watchdog_streams);
+
+            let errs = scope.scoped("Dataflow: logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowError, Diff> =
                     Collection::empty(scope).into();
                 collection
@@ -133,17 +169,22 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                     .trace
             });
 
-        // TODO(vmarcos): If we introduce introspection sources that would match
-        // type specialization for keys, we'd need to ensure that type specialized
-        // variants reach the map below (issue database-issues#6763).
-        collections
-            .into_iter()
-            .map(|(log, collection)| {
-                let bundle =
-                    TraceBundle::new(collection.trace, errs.clone()).with_drop(collection.token);
-                (log, (bundle, collection.dataflow_index))
-            })
-            .collect()
+            // TODO(vmarcos): If we introduce introspection sources that would match
+            // type specialization for keys, we'd need to ensure that type specialized
+            // variants reach the map below (issue database-issues#6763).
+            let logs = collections
+                .into_iter()
+                .map(|(log, collection)| {
+                    let bundle = TraceBundle::new(collection.trace, errs.clone())
+                        .with_drop(collection.token);
+                    (log, (bundle, dataflow_index))
+                })
+                .collect();
+            LoggingDataflows {
+                logs,
+                heap_size_limits_handle,
+            }
+        })
     }
 
     /// Construct a new reachability logger for timestamp type `T`.
@@ -177,8 +218,6 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         self.register_reachability_logger::<(Timestamp, Subtime)>(&mut register, 2);
         register.insert_logger("differential/arrange", d_logger);
         register.insert_logger("materialize/compute", c_logger.clone());
-
-        self.shared_state.borrow_mut().compute_logger = Some(c_logger);
     }
 
     fn simple_logger<CB: ContainerBuilder>(
