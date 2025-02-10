@@ -275,8 +275,9 @@ def main() -> int:
             print(f"persist-blob-url: {args.blob}")
             command += [
                 # Setting the listen addresses below to 0.0.0.0 is required
-                # to allow Prometheus running in Docker (misc/prometheus)
-                # access these services to scrape metrics.
+                # to allow other services (e.g., docker containers) to
+                # access these services.
+                "--http-listen-addr=0.0.0.0:6876",
                 "--internal-http-listen-addr=0.0.0.0:6878",
                 "--orchestrator=process",
                 f"--orchestrator-process-secrets-directory={MZDATA}/secrets",
