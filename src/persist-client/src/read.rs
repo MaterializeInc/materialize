@@ -798,16 +798,9 @@ where
     /// A rate-limited version of [Self::downgrade_since].
     ///
     /// This is an internally rate limited helper, designed to allow users to
-    /// call it as frequently as they like. Call this [Self::downgrade_since],
-    /// or Self::maybe_heartbeat_reader on some interval that is "frequent"
-    /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
-    ///
-    /// This is communicating actual progress information, so is given
-    /// preferential treatment compared to Self::maybe_heartbeat_reader.
+    /// call it as frequently as they like. Call this or [Self::downgrade_since],
+    /// on some interval that is "frequent" compared to the read lease duration.
     pub async fn maybe_downgrade_since(&mut self, new_since: &Antichain<T>) {
-        // NB: min_elapsed is intentionally smaller than the one in
-        // maybe_heartbeat_reader (this is the preferential treatment mentioned
-        // above).
         let min_elapsed = READER_LEASE_DURATION.get(&self.cfg) / 4;
         let elapsed_since_last_heartbeat =
             Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
