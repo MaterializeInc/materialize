@@ -132,6 +132,7 @@ skip = [
     { name = "thiserror-impl", version = "1.0.61" },
     { name = "twox-hash", version = "1.6.3" },
     { name = "miniz_oxide", version = "0.5.4" },
+    { name = "unicode-width", version = "0.1.10" },
 ]
 
 # Use `tracing` instead.
@@ -201,7 +202,6 @@ name = "lazy_static"
 wrappers = [
     "bindgen",
     "bstr",
-    "console",
     "dynfmt",
     "findshlibs",
     "insta",
