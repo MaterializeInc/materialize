@@ -154,8 +154,8 @@ where
     }
 
     /// Returns the ingestions running on this instance.
-    pub fn active_ingestions(&self) -> &BTreeSet<GlobalId> {
-        &self.active_ingestions
+    pub fn active_ingestions(&self) -> impl Iterator<Item = &GlobalId> {
+        self.active_ingestions.keys()
     }
 
     /// Sets the status to paused for all sources/sinks in the history.
