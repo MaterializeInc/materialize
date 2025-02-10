@@ -286,7 +286,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: testdrive
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-16cpu-32gb
 
   - id: cluster-tests
     label: "Cluster tests"
@@ -304,14 +304,14 @@ steps:
     label: "Fast SQL logic tests"
     depends_on: build-aarch64
     timeout_in_minutes: 30
-    parallelism: 5
+    parallelism: 6
     inputs: [test/sqllogictest]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
           run: fast-tests
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner-aarch64-8cpu-16gb
 
   - id: restarts
     label: "Restart test"
