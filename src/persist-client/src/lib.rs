@@ -1845,29 +1845,6 @@ mod tests {
         }
     }
 
-    /// Regression test for 16743, where the nightly tests found that calling
-    /// maybe_heartbeat_writer or maybe_heartbeat_reader on a "tombstone" shard
-    /// would panic.
-    #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    async fn regression_16743_heartbeat_tombstone(dyncfgs: ConfigUpdates) {
-        const EMPTY: &[(((), ()), u64, i64)] = &[];
-        let (mut write, mut read) = new_test_client(&dyncfgs)
-            .await
-            .expect_open::<(), (), u64, i64>(ShardId::new())
-            .await;
-        // Create a tombstone by advancing both the upper and since to [].
-        let () = read.downgrade_since(&Antichain::new()).await;
-        let () = write
-            .compare_and_append(EMPTY, Antichain::from_elem(0), Antichain::new())
-            .await
-            .expect("usage should be valid")
-            .expect("upper should match");
-        // Verify that heartbeating doesn't panic.
-        read.last_heartbeat = 0;
-        read.maybe_heartbeat_reader().await;
-    }
-
     /// Verify that shard finalization works with empty shards, shards that have
     /// an empty write up to the empty upper Antichain.
     #[mz_persist_proc::test(tokio::test)]

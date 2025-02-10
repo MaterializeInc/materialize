@@ -816,50 +816,6 @@ where
         }
     }
 
-    /// Heartbeats the read lease if necessary.
-    ///
-    /// This is an internally rate limited helper, designed to allow users to
-    /// call it as frequently as they like. Call this [Self::downgrade_since],
-    /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
-    /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
-    #[allow(dead_code)]
-    pub(crate) async fn maybe_heartbeat_reader(&mut self) {
-        let min_elapsed = READER_LEASE_DURATION.get(&self.cfg) / 2;
-        let heartbeat_ts = (self.cfg.now)();
-        let elapsed_since_last_heartbeat =
-            Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
-        if elapsed_since_last_heartbeat >= min_elapsed {
-            if elapsed_since_last_heartbeat > READER_LEASE_DURATION.get(&self.machine.applier.cfg) {
-                warn!(
-                    "reader ({}) of shard ({}) went {}s between heartbeats",
-                    self.reader_id,
-                    self.machine.shard_id(),
-                    elapsed_since_last_heartbeat.as_secs_f64()
-                );
-            }
-
-            let (_, existed, maintenance) = self
-                .machine
-                .heartbeat_leased_reader(&self.reader_id, heartbeat_ts)
-                .await;
-            if !existed && !self.machine.applier.is_finalized() {
-                // It's probably surprising to the caller that the shard
-                // becoming a tombstone expired this reader. Possibly the right
-                // thing to do here is pass up a bool to the caller indicating
-                // whether the LeasedReaderId it's trying to heartbeat has been
-                // expired, but that happening on a tombstone vs not is very
-                // different. As a medium-term compromise, pretend we did the
-                // heartbeat here.
-                panic!(
-                    "LeasedReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
-                    self.reader_id
-                )
-            }
-            self.last_heartbeat = heartbeat_ts;
-            maintenance.start_performing(&self.machine, &self.gc);
-        }
-    }
-
     /// Politely expires this reader, releasing its lease.
     ///
     /// There is a best-effort impl in Drop to expire a reader that wasn't
