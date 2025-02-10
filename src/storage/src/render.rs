@@ -402,7 +402,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 &health_stream,
                 crate::healthcheck::DefaultWriter {
                     command_tx: storage_state.internal_cmd_tx.clone(),
-                    updates: Rc::clone(&storage_state.object_status_updates),
+                    updates: Rc::clone(&storage_state.shared_status_updates),
                 },
                 storage_state
                     .storage_configuration
@@ -457,7 +457,7 @@ pub fn build_export_dataflow<A: Allocate>(
                 &health_stream,
                 crate::healthcheck::DefaultWriter {
                     command_tx: storage_state.internal_cmd_tx.clone(),
-                    updates: Rc::clone(&storage_state.object_status_updates),
+                    updates: Rc::clone(&storage_state.shared_status_updates),
                 },
                 storage_state
                     .storage_configuration

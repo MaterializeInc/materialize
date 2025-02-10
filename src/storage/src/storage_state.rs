@@ -230,7 +230,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 timely_worker.index(),
                 timely_worker.peers(),
             ),
-            object_status_updates: Default::default(),
+            shared_status_updates: Default::default(),
+            latest_status_updates: Default::default(),
+            initial_status_reported: Default::default(),
             internal_cmd_tx,
             internal_cmd_rx,
             read_only_tx,
@@ -308,11 +310,19 @@ pub struct StorageState {
     /// Statistics for sources and sinks.
     pub aggregated_statistics: AggregatedStatistics,
 
-    /// Status updates reported by health operators.
+    /// A place shared with running dataflows, so that health operators, can
+    /// report status updates back to us.
     ///
     /// **NOTE**: Operators that append to this collection should take care to only add new
     /// status updates if the status of the ingestion/export in question has _changed_.
-    pub object_status_updates: Rc<RefCell<Vec<StatusUpdate>>>,
+    pub shared_status_updates: Rc<RefCell<Vec<StatusUpdate>>>,
+
+    /// The latest status update for each object.
+    pub latest_status_updates: BTreeMap<GlobalId, StatusUpdate>,
+
+    /// Whether we have reported the initial status after connecting to a new client.
+    /// This is reset to false when a new client connects.
+    pub initial_status_reported: bool,
 
     /// Sender for cluster-internal storage commands. These can be sent from
     /// within workers/operators and will be distributed to all workers. For
@@ -458,13 +468,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             self.report_frontier_progress(&response_tx);
             self.process_oneshot_ingestions(&response_tx);
 
-            // Report status updates if any are present
-            if self.storage_state.object_status_updates.borrow().len() > 0 {
-                self.send_storage_response(
-                    &response_tx,
-                    StorageResponse::StatusUpdates(self.storage_state.object_status_updates.take()),
-                );
-            }
+            self.report_status_updates(&response_tx);
 
             if last_stats_time.elapsed() >= stats_interval {
                 self.report_storage_statistics(&response_tx);
@@ -831,6 +835,36 @@ impl<'w, A: Allocate> Worker<'w, A> {
         }
     }
 
+    /// Pumps latest status updates from the buffer shared with operators and
+    /// reports any updates that need reporting.
+    pub fn report_status_updates(&mut self, response_tx: &ResponseSender) {
+        let mut to_report = Vec::new();
+
+        // If we haven't done the initial status report, report all current
+        // statuses
+        if !self.storage_state.initial_status_reported {
+            to_report.extend(self.storage_state.latest_status_updates.values().cloned());
+            self.storage_state.initial_status_reported = true;
+        }
+
+        // Pump updates into our state and stage them for reporting.
+        if self.storage_state.shared_status_updates.borrow().len() > 0 {
+            for shared_update in self.storage_state.shared_status_updates.take() {
+                let id = shared_update.id;
+
+                to_report.push(shared_update.clone());
+
+                self.storage_state
+                    .latest_status_updates
+                    .insert(id, shared_update.clone());
+            }
+        }
+
+        if !to_report.is_empty() {
+            self.send_storage_response(response_tx, StorageResponse::StatusUpdates(to_report));
+        }
+    }
+
     /// Report source statistics back to the controller.
     pub fn report_storage_statistics(&mut self, response_tx: &ResponseSender) {
         let (sources, sinks) = self.storage_state.aggregated_statistics.emit_local();
@@ -1135,6 +1169,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
             *frontier = Antichain::from_elem(<_>::minimum());
         }
 
+        // Reset the initial status reported flag when a new client connects
+        self.storage_state.initial_status_reported = false;
+
         // Execute the modified commands.
         for command in commands {
             self.storage_state.handle_storage_command(command);
@@ -1287,6 +1324,8 @@ impl StorageState {
 
         self.ingestions.remove(&id);
         self.exports.remove(&id);
+
+        let _ = self.latest_status_updates.remove(&id);
 
         // This will stop reporting of frontiers.
         //
