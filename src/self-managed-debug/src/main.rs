@@ -24,7 +24,6 @@ use kube::{Client, Config};
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
-use serde_yaml;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
@@ -55,6 +54,22 @@ pub enum K8sResourceType {
     Event,
 }
 
+impl std::fmt::Display for K8sResourceType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            K8sResourceType::Pod => "pods",
+            K8sResourceType::Service => "services",
+            K8sResourceType::Deployment => "deployments",
+            K8sResourceType::StatefulSet => "statefulsets",
+            K8sResourceType::ReplicaSet => "replicasets",
+            K8sResourceType::NetworkPolicy => "networkpolicies",
+            K8sResourceType::Log => "logs",
+            K8sResourceType::Event => "events",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args: Args = cli::parse_args(CliConfig {
@@ -81,7 +96,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         Ok(client) => {
             for namespace in context.args.k8s_namespaces.clone() {
                 let _ = match dump_k8s_pod_logs(&context, client.clone(), &namespace).await {
-                    Ok(file_names) => Some(file_names),
+                    Ok(_) => Some(()),
                     Err(e) => {
                         eprintln!(
                             "Failed to write k8s pod logs for namespace {}: {}",
@@ -95,7 +110,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
                 };
 
                 let _ = match dump_k8s_events(&context, client.clone(), &namespace).await {
-                    Ok(file_name) => Some(file_name),
+                    Ok(_) => Some(()),
                     Err(e) => {
                         eprintln!(
                             "Failed to write k8s events for namespace {}: {}",
@@ -129,14 +144,12 @@ async fn create_k8s_client(k8s_context: Option<String>) -> Result<Client, anyhow
 }
 
 /// Write k8s pod logs to a file per pod.
-/// Returns a list of file names on success.
 async fn dump_k8s_pod_logs(
     context: &Context,
     client: Client,
     namespace: &String,
-) -> Result<Vec<String>, anyhow::Error> {
-    let mut file_names = Vec::new();
-    let file_path = format_resource_path(context.start_time, namespace, K8sResourceType::Log);
+) -> Result<(), anyhow::Error> {
+    let file_path = format_resource_path(context.start_time, namespace, &K8sResourceType::Log);
     create_dir_all(&file_path)?;
 
     let pods: Api<Pod> = Api::<Pod>::namespaced(client.clone(), namespace);
@@ -149,8 +162,6 @@ async fn dump_k8s_pod_logs(
         let current_logs_file_name = format!("{}/{}.current.log", file_path, pod_name);
 
         if let Err(e) = async {
-            let mut file = File::create(&previous_logs_file_name)?;
-
             let previous_logs = pods
                 .logs(
                     &pod_name,
@@ -162,10 +173,16 @@ async fn dump_k8s_pod_logs(
                 )
                 .await?;
 
+            if previous_logs.is_empty() {
+                println!("No previous logs found for pod {}", pod_name);
+                return Ok(());
+            }
+
+            let mut file = File::create(&previous_logs_file_name)?;
+
             file.write_all(previous_logs.as_bytes())?;
 
             println!("Exported {}", &previous_logs_file_name);
-            file_names.push(previous_logs_file_name.clone());
             Ok::<(), anyhow::Error>(())
         }
         .await
@@ -174,8 +191,6 @@ async fn dump_k8s_pod_logs(
         }
 
         if let Err(e) = async {
-            let mut file = File::create(&current_logs_file_name)?;
-
             let logs = pods
                 .logs(
                     &pod_name,
@@ -186,10 +201,15 @@ async fn dump_k8s_pod_logs(
                 )
                 .await?;
 
+            if logs.is_empty() {
+                println!("No logs found for pod {}", pod_name);
+                return Ok(());
+            }
+            let mut file = File::create(&current_logs_file_name)?;
+
             file.write_all(logs.as_bytes())?;
 
             println!("Exported {}", &current_logs_file_name);
-            file_names.push(current_logs_file_name.clone());
             Ok::<(), anyhow::Error>(())
         }
         .await
@@ -197,24 +217,28 @@ async fn dump_k8s_pod_logs(
             eprintln!("Failed to export {}: {}", &current_logs_file_name, e);
         }
     }
-    Ok(file_names)
+    Ok(())
 }
 
 /// Write k8s events to a yaml file.
-/// Returns a file name on success.
 async fn dump_k8s_events(
     context: &Context,
     client: Client,
     namespace: &String,
-) -> Result<String, anyhow::Error> {
-    let file_path = format_resource_path(context.start_time, namespace, K8sResourceType::Event);
-    let file_name = format!("{}/events.yaml", file_path);
-    create_dir_all(&file_path)?;
-    let mut file = File::options().append(true).create(true).open(&file_name)?;
-
+) -> Result<(), anyhow::Error> {
     let events: Api<Event> = Api::<Event>::namespaced(client.clone(), namespace);
 
     let event_list = events.list(&ListParams::default()).await?;
+
+    if event_list.items.is_empty() {
+        println!("No events found for namespace {}", namespace);
+        return Ok(());
+    }
+
+    let file_path = format_resource_path(context.start_time, namespace, &K8sResourceType::Event);
+    let file_name = format!("{}/events.yaml", file_path);
+    create_dir_all(&file_path)?;
+    let mut file = File::options().append(true).create(true).open(&file_name)?;
 
     for event in event_list {
         serde_yaml::to_writer(&mut file, &event)?;
@@ -222,29 +246,18 @@ async fn dump_k8s_events(
 
     println!("Exported {}", &file_name);
 
-    Ok(file_name)
+    Ok(())
 }
 
 fn format_resource_path(
     date_time: DateTime<Utc>,
     namespace: &str,
-    resource_type: K8sResourceType,
+    resource_type: &K8sResourceType,
 ) -> String {
-    let resource_type_str = match resource_type {
-        K8sResourceType::Pod => "pods",
-        K8sResourceType::Service => "services",
-        K8sResourceType::Deployment => "deployments",
-        K8sResourceType::StatefulSet => "statefulsets",
-        K8sResourceType::ReplicaSet => "replicasets",
-        K8sResourceType::NetworkPolicy => "networkpolicies",
-        K8sResourceType::Log => "logs",
-        K8sResourceType::Event => "events",
-    };
-
     format!(
         "mz-debug/{}/{}/{}",
         date_time.format("%Y-%m-%dT%H:%MZ"),
-        resource_type_str,
+        resource_type,
         namespace
     )
 }
