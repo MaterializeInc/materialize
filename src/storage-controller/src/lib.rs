@@ -127,6 +127,15 @@ struct PendingOneshotIngestion {
     cluster_id: StorageInstanceId,
 }
 
+impl PendingOneshotIngestion {
+    /// Consume the pending ingestion, responding with a cancelation message.
+    ///
+    /// TODO(cf2): Refine these error messages so they're not stringly typed.
+    pub(crate) fn cancel(self) {
+        (self.result_tx)(vec![Err("canceled".to_string())])
+    }
+}
+
 /// A storage controller for a storage instance.
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -1431,7 +1440,7 @@ where
             let novel = self
                 .pending_oneshot_ingestions
                 .insert(ingestion_id, pending);
-            assert!(novel.is_none());
+            assert_none!(novel);
             Ok(())
         } else {
             Err(StorageError::ReadOnly)
@@ -1454,13 +1463,22 @@ where
                 StorageError::Generic(anyhow::anyhow!("missing oneshot ingestion {ingestion_id}"))
             })?;
 
-        let instance = self.instances.get_mut(&pending.cluster_id).ok_or_else(|| {
-            // TODO(cf2): Refine this error.
-            StorageError::Generic(anyhow::anyhow!("missing cluster {}", pending.cluster_id))
-        })?;
-        instance.send(StorageCommand::CancelOneshotIngestion {
-            ingestions: vec![ingestion_id],
-        });
+        match self.instances.get_mut(&pending.cluster_id) {
+            Some(instance) => {
+                instance.send(StorageCommand::CancelOneshotIngestion {
+                    ingestions: vec![ingestion_id],
+                });
+            }
+            None => {
+                mz_ore::soft_panic_or_log!(
+                    "canceling oneshot ingestion on non-existent cluster, ingestion {:?}, instance {}",
+                    ingestion_id,
+                    pending.cluster_id,
+                );
+            }
+        }
+        // Respond to the user that the request has been canceled.
+        pending.cancel();
 
         Ok(())
     }

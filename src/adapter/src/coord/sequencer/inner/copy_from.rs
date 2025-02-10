@@ -178,8 +178,15 @@ impl Coordinator {
         });
         // Stash the execute context so we can cancel the COPY.
         let conn_id = ctx.session().conn_id().clone();
-        self.active_copies
-            .insert(conn_id, ActiveCopyFrom { ingestion_id, ctx });
+        self.active_copies.insert(
+            conn_id,
+            ActiveCopyFrom {
+                ingestion_id,
+                cluster_id,
+                table_id: id,
+                ctx,
+            },
+        );
 
         let _result = self
             .controller
@@ -195,12 +202,15 @@ impl Coordinator {
         batches: Vec<Result<ProtoBatch, String>>,
     ) {
         let Some(active_copy) = self.active_copies.remove(&conn_id) else {
-            tracing::warn!(?conn_id, "got response for canceled COPY FROM");
+            // Getting a successful response for a cancel COPY FROM is unexpected.
+            tracing::warn!(%conn_id, ?batches, "got response for canceled COPY FROM");
             return;
         };
 
         let ActiveCopyFrom {
             ingestion_id,
+            cluster_id: _,
+            table_id: _,
             mut ctx,
         } = active_copy;
         tracing::info!(%ingestion_id, num_batches = ?batches.len(), "received batches to append");
@@ -255,7 +265,13 @@ impl Coordinator {
     /// Cancel any active `COPY FROM` statements/oneshot ingestions.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) fn cancel_pending_copy(&mut self, conn_id: &ConnectionId) {
-        if let Some(ActiveCopyFrom { ingestion_id, ctx }) = self.active_copies.remove(conn_id) {
+        if let Some(ActiveCopyFrom {
+            ingestion_id,
+            cluster_id: _,
+            table_id: _,
+            ctx,
+        }) = self.active_copies.remove(conn_id)
+        {
             let cancel_result = self
                 .controller
                 .storage

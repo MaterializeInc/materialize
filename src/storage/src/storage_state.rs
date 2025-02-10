@@ -1138,6 +1138,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
             .filter(|ingestion_id| {
                 let created = create_oneshot_ingestions.contains(ingestion_id);
                 let dropped = cancel_oneshot_ingestions.contains(ingestion_id);
+                mz_ore::soft_assert_or_log!(
+                    !created && dropped,
+                    "dropped non-existent oneshot source"
+                );
                 !created && !dropped
             })
             .copied()

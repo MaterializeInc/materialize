@@ -22,8 +22,9 @@ use mz_expr::compare_columns;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::numeric;
-use mz_repr::{Datum, GlobalId, IntoRowIterator, Row, Timestamp};
+use mz_repr::{CatalogItemId, Datum, GlobalId, IntoRowIterator, Row, Timestamp};
 use mz_sql::plan::SubscribeOutput;
+use mz_storage_types::instances::StorageInstanceId;
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
@@ -441,6 +442,10 @@ impl ActiveCopyTo {
 pub(crate) struct ActiveCopyFrom {
     /// ID of the ingestion running in clusterd.
     pub ingestion_id: uuid::Uuid,
+    /// The cluster this is currently running on.
+    pub cluster_id: StorageInstanceId,
+    /// The table we're currently copying into.
+    pub table_id: CatalogItemId,
     /// Context of the SQL session that ran the statement.
     pub ctx: ExecuteContext,
 }
