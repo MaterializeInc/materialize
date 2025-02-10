@@ -68,7 +68,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [dev-dependencies]
 base64 = "0.13.1"
-insta = "1.32"
+insta = "1.41"
 mz-build-tools = { path = "../build-tools", default-features = false }
 
 [features]
