@@ -141,7 +141,7 @@ unicode-bidi = { version = "0.3.15" }
 unicode-normalization = { version = "0.1.23" }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
-zeroize = { version = "1.5.7", features = ["serde"] }
+zeroize = { version = "1.8.1", features = ["serde"] }
 zstd = { version = "0.13.0" }
 zstd-safe = { version = "7.0.0", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2.0.13", features = ["std"] }
@@ -277,7 +277,7 @@ unicode-bidi = { version = "0.3.15" }
 unicode-normalization = { version = "0.1.23" }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
-zeroize = { version = "1.5.7", features = ["serde"] }
+zeroize = { version = "1.8.1", features = ["serde"] }
 zstd = { version = "0.13.0" }
 zstd-safe = { version = "7.0.0", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2.0.13", features = ["std"] }
