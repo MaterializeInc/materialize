@@ -893,6 +893,11 @@ fn create_environmentd_statefulset_object(
     if config.enable_internal_statement_logging {
         args.push("--system-parameter-default=enable_internal_statement_logging=true".into());
     }
+
+    if config.disable_statement_logging {
+        args.push("--system-parameter-default=statement_logging_max_sample_rate=0".into());
+    }
+
     if config.disable_authentication {
         args.push("--system-parameter-default=enable_rbac_checks=false".into());
     }
