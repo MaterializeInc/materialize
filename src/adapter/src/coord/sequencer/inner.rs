@@ -311,25 +311,9 @@ impl Coordinator {
                         .in_cluster
                         .expect("ingestion plans must specify cluster");
                     match ingestion.desc.connection {
-                        GenericSourceConnection::Postgres(_) => {
-                            if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
-                                if cluster.replica_ids().len() > 1 {
-                                    return Err(AdapterError::Unsupported(
-                                        "Postgres sources in clusters with >1 replicas",
-                                    ));
-                                }
-                            }
-                        }
-                        GenericSourceConnection::MySql(_) => {
-                            if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
-                                if cluster.replica_ids().len() > 1 {
-                                    return Err(AdapterError::Unsupported(
-                                        "MySQL sources in clusters with >1 replicas",
-                                    ));
-                                }
-                            }
-                        }
-                        GenericSourceConnection::Kafka(_)
+                        GenericSourceConnection::Postgres(_)
+                        | GenericSourceConnection::MySql(_)
+                        | GenericSourceConnection::Kafka(_)
                         | GenericSourceConnection::LoadGenerator(_) => {
                             if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
                                 let enable_multi_replica_sources = ENABLE_MULTI_REPLICA_SOURCES
