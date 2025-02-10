@@ -163,8 +163,8 @@ where
     }
 
     /// Returns the ingestions running on this instance.
-    pub fn active_ingestions(&self) -> &BTreeSet<GlobalId> {
-        &self.active_ingestions
+    pub fn active_ingestions(&self) -> impl Iterator<Item = &GlobalId> {
+        self.active_ingestions.iter()
     }
 
     /// Returns the exports running on this instance.

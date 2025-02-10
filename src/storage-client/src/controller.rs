@@ -339,7 +339,10 @@ pub trait StorageController: Debug {
     fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)>;
 
     /// Returns the IDs of all active ingestions for the given storage instance.
-    fn active_ingestions(&self, instance_id: StorageInstanceId) -> &BTreeSet<GlobalId>;
+    fn active_ingestions(
+        &self,
+        instance_id: StorageInstanceId,
+    ) -> Box<dyn Iterator<Item = &GlobalId> + '_>;
 
     /// Checks whether a collection exists under the given `GlobalId`. Returns
     /// an error if the collection does not exist.
