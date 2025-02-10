@@ -73,6 +73,11 @@ pub static SOFT_ASSERTIONS: AtomicBool = {
 #[cfg(any(miri, target_arch = "wasm32"))]
 pub static SOFT_ASSERTIONS: AtomicBool = AtomicBool::new(true);
 
+/// Returns if [`SOFT_ASSERTIONS`] are enabled.
+pub fn soft_assertions_enabled() -> bool {
+    SOFT_ASSERTIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Asserts that a condition is true if soft assertions are enabled.
 ///
 /// Soft assertions have a small runtime cost even when disabled. See

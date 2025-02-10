@@ -96,9 +96,7 @@ use tracing::{warn, Instrument, Span};
 
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
-use crate::coord::appends::{
-    BuiltinTableAppendNotify, DeferredPlan, DeferredWriteOp, PendingWriteTxn,
-};
+use crate::coord::appends::{BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn};
 use crate::coord::{
     validate_ip_with_policy_rules, AlterConnectionValidationReady, AlterSinkReadyContext,
     Coordinator, CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext,
@@ -2813,7 +2811,7 @@ impl Coordinator {
                         ),
                         requires_locks: source_ids,
                     };
-                    return self.defer_op(acquire_future, DeferredWriteOp::Plan(plan));
+                    return self.defer_op(acquire_future, DeferredOp::Plan(plan));
                 }
             };
 

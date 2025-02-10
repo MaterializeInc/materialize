@@ -37,7 +37,7 @@ use tracing::{event, Instrument, Level, Span};
 
 use crate::catalog::Catalog;
 use crate::command::{Command, ExecuteResponse, Response};
-use crate::coord::appends::{DeferredPlan, DeferredWriteOp};
+use crate::coord::appends::{DeferredOp, DeferredPlan};
 use crate::coord::validity::PlanValidity;
 use crate::coord::{
     catalog_serving, Coordinator, DeferredPlanStatement, Message, PlanStatement, TargetCluster,
@@ -111,7 +111,7 @@ impl Coordinator {
                 // here, since the map to `None`.
                 let acquire_future = wait_future.map(|()| None);
 
-                self.defer_op(acquire_future, DeferredWriteOp::Plan(deferred_plan));
+                self.defer_op(acquire_future, DeferredOp::Plan(deferred_plan));
 
                 // Return early because our op is deferred on waiting for the builtin writes to
                 // complete.

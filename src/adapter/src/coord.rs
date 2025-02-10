@@ -176,7 +176,7 @@ use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{
-    BuiltinTableAppendNotify, DeferredWriteOp, GroupCommitPermit, PendingWriteTxn,
+    BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit, PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::cluster_scheduling::SchedulingDecision;
@@ -1678,7 +1678,7 @@ pub struct Coordinator {
     /// Locks that grant access to a specific object, populated lazily as objects are written to.
     write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
     /// Plans that are currently deferred and waiting on a write lock.
-    deferred_write_ops: BTreeMap<ConnectionId, DeferredWriteOp>,
+    deferred_write_ops: BTreeMap<ConnectionId, DeferredOp>,
 
     /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,

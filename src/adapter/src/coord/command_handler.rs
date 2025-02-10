@@ -275,9 +275,25 @@ impl Coordinator {
                 self.active_conns.insert(conn_id.clone(), conn);
 
                 // Note: Do NOT await the notify here, we pass this back to
-                // whatever requested the startup to prevent blocking the
-                // Coordinator on a builtin table update.
-                let notify = self.builtin_table_update().defer(vec![update]);
+                // whatever requested the startup to prevent blocking startup
+                // and the Coordinator on a builtin table update.
+                let updates = vec![update];
+                // It's not a hard error if our list is missing a builtin table, but we want to
+                // make sure these two things stay in-sync.
+                if mz_ore::assert::soft_assertions_enabled() {
+                    let required_tables: BTreeSet<_> = super::appends::REQUIRED_BUILTIN_TABLES
+                        .iter()
+                        .map(|table| self.catalog().resolve_builtin_table(&*table))
+                        .collect();
+                    let updates_tracked = updates
+                        .iter()
+                        .all(|update| required_tables.contains(&update.id));
+                    mz_ore::soft_assert_or_log!(
+                        updates_tracked,
+                        "not tracking all required builtin table updates!"
+                    );
+                }
+                let notify = self.builtin_table_update().defer(updates);
 
                 let resp = Ok(StartupResponse {
                     role_id,

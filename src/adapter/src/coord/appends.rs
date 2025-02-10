@@ -44,16 +44,21 @@ use crate::session::{GroupCommitWriteLocks, Session, WriteLocks};
 use crate::util::{CompletedClientTransmitter, ResultExt};
 use crate::{AdapterError, ExecuteContext};
 
-/// An operation that was deferred waiting for [`WriteLocks`].
+/// Tables that we emit updates for when starting a new session.
+pub(crate) static REQUIRED_BUILTIN_TABLES: &[&LazyLock<BuiltinTable>] = &[&MZ_SESSIONS];
+
+/// An operation that was deferred waiting on a resource to be available.
+///
+/// For example when inserting into a table we defer on acquiring [`WriteLocks`].
 #[derive(Debug)]
-pub enum DeferredWriteOp {
+pub enum DeferredOp {
     /// A plan, e.g. ReadThenWrite, that needs locks before sequencing.
     Plan(DeferredPlan),
     /// Inserts into a collection.
     Write(DeferredWrite),
 }
 
-impl DeferredWriteOp {
+impl DeferredOp {
     /// Certain operations, e.g. "blind writes"/`INSERT` statements, can be optimistically retried
     /// because we can share a write lock between multiple operations. In this case we wait to
     /// acquire the locks until [`group_commit`], where writes are groupped by collection and
@@ -67,19 +72,19 @@ impl DeferredWriteOp {
     /// [`group_commit`]: crate::coord::Coordinator::group_commit
     pub(crate) fn can_be_optimistically_retried(&self) -> bool {
         match self {
-            DeferredWriteOp::Plan(_) => false,
-            DeferredWriteOp::Write(_) => true,
+            DeferredOp::Plan(_) => false,
+            DeferredOp::Write(_) => true,
         }
     }
 
     /// Returns an Iterator of all the required locks for current operation.
     pub fn required_locks(&self) -> impl Iterator<Item = CatalogItemId> + '_ {
         match self {
-            DeferredWriteOp::Plan(plan) => {
+            DeferredOp::Plan(plan) => {
                 let iter = plan.requires_locks.iter().copied();
                 itertools::Either::Left(iter)
             }
-            DeferredWriteOp::Write(write) => {
+            DeferredOp::Write(write) => {
                 let iter = write.writes.keys().copied();
                 itertools::Either::Right(iter)
             }
@@ -89,16 +94,16 @@ impl DeferredWriteOp {
     /// Returns the [`ConnectionId`] associated with this deferred op.
     pub fn conn_id(&self) -> &ConnectionId {
         match self {
-            DeferredWriteOp::Plan(plan) => plan.ctx.session().conn_id(),
-            DeferredWriteOp::Write(write) => write.pending_txn.ctx.session().conn_id(),
+            DeferredOp::Plan(plan) => plan.ctx.session().conn_id(),
+            DeferredOp::Write(write) => write.pending_txn.ctx.session().conn_id(),
         }
     }
 
     /// Consumes the [`DeferredWriteOp`], returning the inner [`ExecuteContext`].
     pub fn into_ctx(self) -> ExecuteContext {
         match self {
-            DeferredWriteOp::Plan(plan) => plan.ctx,
-            DeferredWriteOp::Write(write) => write.pending_txn.ctx,
+            DeferredOp::Plan(plan) => plan.ctx,
+            DeferredOp::Write(write) => write.pending_txn.ctx,
         }
     }
 }
@@ -221,7 +226,7 @@ impl Coordinator {
         };
 
         match op {
-            DeferredWriteOp::Plan(mut deferred) => {
+            DeferredOp::Plan(mut deferred) => {
                 if let Err(e) = deferred.validity.check(self.catalog()) {
                     deferred.ctx.retire(Err(e))
                 } else {
@@ -249,7 +254,7 @@ impl Coordinator {
                         .await;
                 }
             }
-            DeferredWriteOp::Write(DeferredWrite {
+            DeferredOp::Write(DeferredWrite {
                 span,
                 writes,
                 pending_txn,
@@ -431,7 +436,7 @@ impl Coordinator {
 
         // Queue all of our deferred ops.
         for (acquire_future, write) in deferred_writes {
-            self.defer_op(acquire_future, DeferredWriteOp::Write(write));
+            self.defer_op(acquire_future, DeferredOp::Write(write));
         }
 
         // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
@@ -636,7 +641,7 @@ impl Coordinator {
         BuiltinTableAppend { coord: self }
     }
 
-    pub(crate) fn defer_op<F>(&mut self, acquire_future: F, op: DeferredWriteOp)
+    pub(crate) fn defer_op<F>(&mut self, acquire_future: F, op: DeferredOp)
     where
         F: Future<Output = Option<(CatalogItemId, tokio::sync::OwnedMutexGuard<()>)>>
             + Send
@@ -983,9 +988,6 @@ pub(crate) fn waiting_on_startup_appends(
     session: &mut Session,
     plan: &Plan,
 ) -> Option<(BTreeSet<CatalogItemId>, BoxFuture<'static, ()>)> {
-    /// Tables that we emit updates for when starting a new session.
-    static REQUIRED_BUILTIN_TABLES: &[&LazyLock<BuiltinTable>] = &[&MZ_SESSIONS];
-
     let depends_on = match plan {
         Plan::Select(plan) => plan.source.depends_on(),
         Plan::ReadThenWrite(plan) => plan.selection.depends_on(),
