@@ -11,6 +11,11 @@ provider "aws" {
   region = "us-east-1"
 }
 
+resource "random_password" "db_password" {
+  length  = 32
+  special = false
+}
+
 module "materialize_infrastructure" {
   source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.1.3"
 
@@ -43,7 +48,7 @@ module "materialize_infrastructure" {
   bucket_force_destroy     = true
 
   # Database Configuration
-  database_password    = "zdUXjK4dRBBqBiTMK9gbkL9zPMYMSTsj"
+  database_password    = random_password.db_password.result
   db_identifier        = "aws-persistent-metadata-db"
   postgres_version     = "15"
   db_instance_class    = "db.t3.micro"

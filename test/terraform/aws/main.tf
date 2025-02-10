@@ -11,6 +11,11 @@ provider "aws" {
   region = "us-east-1"
 }
 
+resource "random_password" "db_password" {
+  length  = 32
+  special = false
+}
+
 module "materialize_infrastructure" {
   source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.2.0"
 
@@ -44,7 +49,7 @@ module "materialize_infrastructure" {
   enable_bucket_encryption = false
 
   # Database Configuration
-  database_password    = "someRANDOMpasswordNOTsecure"
+  database_password    = random_password.db_password.result
   postgres_version     = "15"
   db_instance_class    = "db.t3.micro"
   db_allocated_storage = 20
