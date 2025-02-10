@@ -299,7 +299,6 @@ pub struct BuiltinCluster {
     pub name: &'static str,
     pub privileges: &'static [MzAclItem],
     pub owner_id: &'static RoleId,
-    pub replication_factor: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -9085,7 +9084,6 @@ pub const MZ_SYSTEM_CLUSTER: BuiltinCluster = BuiltinCluster {
         },
         rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
     ],
-    replication_factor: 1,
 };
 
 pub const MZ_SYSTEM_CLUSTER_REPLICA: BuiltinClusterReplica = BuiltinClusterReplica {
@@ -9109,7 +9107,6 @@ pub const MZ_CATALOG_SERVER_CLUSTER: BuiltinCluster = BuiltinCluster {
         },
         rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
     ],
-    replication_factor: 1,
 };
 
 pub const MZ_CATALOG_SERVER_CLUSTER_REPLICA: BuiltinClusterReplica = BuiltinClusterReplica {
@@ -9133,7 +9130,6 @@ pub const MZ_PROBE_CLUSTER: BuiltinCluster = BuiltinCluster {
         },
         rbac::owner_privilege(ObjectType::Cluster, MZ_SYSTEM_ROLE_ID),
     ],
-    replication_factor: 1,
 };
 pub const MZ_PROBE_CLUSTER_REPLICA: BuiltinClusterReplica = BuiltinClusterReplica {
     name: BUILTIN_CLUSTER_REPLICA_NAME,
@@ -9151,7 +9147,6 @@ pub const MZ_SUPPORT_CLUSTER: BuiltinCluster = BuiltinCluster {
         },
         rbac::owner_privilege(ObjectType::Cluster, MZ_SUPPORT_ROLE_ID),
     ],
-    replication_factor: 0,
 };
 
 pub const MZ_ANALYTICS_CLUSTER: BuiltinCluster = BuiltinCluster {
@@ -9165,7 +9160,6 @@ pub const MZ_ANALYTICS_CLUSTER: BuiltinCluster = BuiltinCluster {
         },
         rbac::owner_privilege(ObjectType::Cluster, MZ_ANALYTICS_ROLE_ID),
     ],
-    replication_factor: 0,
 };
 
 /// List of all builtin objects sorted topologically by dependency.

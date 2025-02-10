@@ -27,6 +27,7 @@ use ipnet::IpNet;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_adapter::{load_remote_system_parameters, AdapterError};
+use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
     WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
@@ -151,18 +152,18 @@ pub struct Config {
     pub environment_id: EnvironmentId,
     /// What role, if any, should be initially created with elevated privileges.
     pub bootstrap_role: Option<String>,
-    /// The size of the default cluster replica if bootstrapping.
+    /// The config of the default cluster replica if bootstrapping.
     pub bootstrap_default_cluster_replica_size: String,
-    /// The size of the builtin system cluster replicas if bootstrapping.
-    pub bootstrap_builtin_system_cluster_replica_size: String,
-    /// The size of the builtin catalog server cluster replicas if bootstrapping.
-    pub bootstrap_builtin_catalog_server_cluster_replica_size: String,
-    /// The size of the builtin probe cluster replicas if bootstrapping.
-    pub bootstrap_builtin_probe_cluster_replica_size: String,
-    /// The size of the builtin support cluster replicas if bootstrapping.
-    pub bootstrap_builtin_support_cluster_replica_size: String,
-    /// The size of the builtin analytics cluster replicas if bootstrapping.
-    pub bootstrap_builtin_analytics_cluster_replica_size: String,
+    /// The config of the builtin system cluster replicas if bootstrapping.
+    pub bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig,
+    /// The config of the builtin catalog server cluster replicas if bootstrapping.
+    pub bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig,
+    /// The config of the builtin probe cluster replicas if bootstrapping.
+    pub bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig,
+    /// The config of the builtin support cluster replicas if bootstrapping.
+    pub bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig,
+    /// The config of the builtin analytics cluster replicas if bootstrapping.
+    pub bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig,
     /// Values to set for system parameters, if those system parameters have not
     /// already been set by the system user.
     pub system_parameter_defaults: BTreeMap<String, String>,
@@ -678,15 +679,12 @@ impl Listeners {
             secrets_controller: config.secrets_controller,
             cloud_resource_controller: config.cloud_resource_controller,
             cluster_replica_sizes: config.cluster_replica_sizes,
-            builtin_system_cluster_replica_size: config
-                .bootstrap_builtin_system_cluster_replica_size,
-            builtin_catalog_server_cluster_replica_size: config
-                .bootstrap_builtin_catalog_server_cluster_replica_size,
-            builtin_probe_cluster_replica_size: config.bootstrap_builtin_probe_cluster_replica_size,
-            builtin_support_cluster_replica_size: config
-                .bootstrap_builtin_support_cluster_replica_size,
-            builtin_analytics_cluster_replica_size: config
-                .bootstrap_builtin_analytics_cluster_replica_size,
+            builtin_system_cluster_config: config.bootstrap_builtin_system_cluster_config,
+            builtin_catalog_server_cluster_config: config
+                .bootstrap_builtin_catalog_server_cluster_config,
+            builtin_probe_cluster_config: config.bootstrap_builtin_probe_cluster_config,
+            builtin_support_cluster_config: config.bootstrap_builtin_support_cluster_config,
+            builtin_analytics_cluster_config: config.bootstrap_builtin_analytics_cluster_config,
             availability_zones: config.availability_zones,
             system_parameter_defaults: config.system_parameter_defaults,
             storage_usage_client,

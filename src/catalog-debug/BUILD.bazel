@@ -32,6 +32,7 @@ rust_binary(
     version = "0.133.0-dev.0",
     deps = [
         "//src/adapter:mz_adapter",
+        "//src/adapter-types:mz_adapter_types",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/cloud-resources:mz_cloud_resources",

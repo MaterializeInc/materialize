@@ -25,6 +25,12 @@ use futures::Future;
 use headers::{Header, HeaderMapExt};
 use hyper::http::header::HeaderMap;
 use mz_adapter::TimestampExplanation;
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    BootstrapBuiltinClusterConfig, ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
+
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
@@ -92,11 +98,12 @@ pub struct TestHarness {
     storage_usage_collection_interval: Duration,
     storage_usage_retention_period: Option<Duration>,
     default_cluster_replica_size: String,
-    builtin_system_cluster_replica_size: String,
-    builtin_catalog_server_cluster_replica_size: String,
-    builtin_probe_cluster_replica_size: String,
-    builtin_support_cluster_replica_size: String,
-    builtin_analytics_cluster_replica_size: String,
+    builtin_system_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_probe_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_support_cluster_config: BootstrapBuiltinClusterConfig,
+    builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig,
+
     propagate_crashes: bool,
     enable_tracing: bool,
     // This is currently unrelated to enable_tracing, and is used only to disable orchestrator
@@ -125,11 +132,26 @@ impl Default for TestHarness {
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
             default_cluster_replica_size: "1".to_string(),
-            builtin_system_cluster_replica_size: "1".to_string(),
-            builtin_catalog_server_cluster_replica_size: "1".to_string(),
-            builtin_probe_cluster_replica_size: "1".to_string(),
-            builtin_support_cluster_replica_size: "1".to_string(),
-            builtin_analytics_cluster_replica_size: "1".to_string(),
+            builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                size: "1".to_string(),
+                replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
             propagate_crashes: false,
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
@@ -254,17 +276,18 @@ impl TestHarness {
         mut self,
         builtin_system_cluster_replica_size: String,
     ) -> Self {
-        self.builtin_system_cluster_replica_size = builtin_system_cluster_replica_size;
+        self.builtin_system_cluster_config.size = builtin_system_cluster_replica_size;
         self
     }
     pub fn with_builtin_catalog_server_cluster_replica_size(
         mut self,
         builtin_catalog_server_cluster_replica_size: String,
     ) -> Self {
-        self.builtin_catalog_server_cluster_replica_size =
+        self.builtin_catalog_server_cluster_config.size =
             builtin_catalog_server_cluster_replica_size;
         self
     }
+    // TODO: Add with_builtin_probe_cluster_replica_size
 
     pub fn with_propagate_crashes(mut self, propagate_crashes: bool) -> Self {
         self.propagate_crashes = propagate_crashes;
@@ -511,16 +534,12 @@ impl Listeners {
                 cors_allowed_origin: AllowOrigin::list([]),
                 cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
-                bootstrap_builtin_system_cluster_replica_size: config
-                    .builtin_system_cluster_replica_size,
-                bootstrap_builtin_catalog_server_cluster_replica_size: config
-                    .builtin_catalog_server_cluster_replica_size,
-                bootstrap_builtin_probe_cluster_replica_size: config
-                    .builtin_probe_cluster_replica_size,
-                bootstrap_builtin_support_cluster_replica_size: config
-                    .builtin_support_cluster_replica_size,
-                bootstrap_builtin_analytics_cluster_replica_size: config
-                    .builtin_analytics_cluster_replica_size,
+                bootstrap_builtin_system_cluster_config: config.builtin_system_cluster_config,
+                bootstrap_builtin_catalog_server_cluster_config: config
+                    .builtin_catalog_server_cluster_config,
+                bootstrap_builtin_probe_cluster_config: config.builtin_probe_cluster_config,
+                bootstrap_builtin_support_cluster_config: config.builtin_support_cluster_config,
+                bootstrap_builtin_analytics_cluster_config: config.builtin_analytics_cluster_config,
                 system_parameter_defaults: config.system_parameter_defaults,
                 availability_zones: Default::default(),
                 tracing_handle,
