@@ -14,10 +14,10 @@ SELECT sql FROM expected_compression_implicit_create_sql
 "materialize.public.compression_implicit" ${expected-compression-implicit-create-sql}
 
 > SHOW CREATE SINK compression_none_explicit;
-"materialize.public.compression_none_explicit" "CREATE SINK \"materialize\".\"public\".\"compression_none_explicit\" IN CLUSTER \"quickstart\" FROM \"materialize\".\"public\".\"kafka_sink_from\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'kafka-sink', COMPRESSION TYPE = 'none') FORMAT JSON ENVELOPE DEBEZIUM WITH (PARTITION STRATEGY = 'v0')"
+"materialize.public.compression_none_explicit" "CREATE SINK \"materialize\".\"public\".\"compression_none_explicit\" IN CLUSTER \"quickstart\" FROM \"materialize\".\"public\".\"kafka_sink_from\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'kafka-sink', COMPRESSION TYPE = 'none') FORMAT JSON ENVELOPE DEBEZIUM"
 
 > SHOW CREATE SINK compression_lz4_explicit;
-"materialize.public.compression_lz4_explicit" "CREATE SINK \"materialize\".\"public\".\"compression_lz4_explicit\" IN CLUSTER \"quickstart\" FROM \"materialize\".\"public\".\"kafka_sink_from\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'kafka-sink', COMPRESSION TYPE = 'lz4') FORMAT JSON ENVELOPE DEBEZIUM WITH (PARTITION STRATEGY = 'v0')"
+"materialize.public.compression_lz4_explicit" "CREATE SINK \"materialize\".\"public\".\"compression_lz4_explicit\" IN CLUSTER \"quickstart\" FROM \"materialize\".\"public\".\"kafka_sink_from\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'kafka-sink', COMPRESSION TYPE = 'lz4') FORMAT JSON ENVELOPE DEBEZIUM"
 
 > SHOW CREATE SINK compression_gzip_explicit;
-"materialize.public.compression_gzip_explicit" "CREATE SINK \"materialize\".\"public\".\"compression_gzip_explicit\" IN CLUSTER \"quickstart\" FROM \"materialize\".\"public\".\"kafka_sink_from\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'kafka-sink', COMPRESSION TYPE = 'gzip') FORMAT JSON ENVELOPE DEBEZIUM WITH (PARTITION STRATEGY = 'v0')"
+"materialize.public.compression_gzip_explicit" "CREATE SINK \"materialize\".\"public\".\"compression_gzip_explicit\" IN CLUSTER \"quickstart\" FROM \"materialize\".\"public\".\"kafka_sink_from\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'kafka-sink', COMPRESSION TYPE = 'gzip') FORMAT JSON ENVELOPE DEBEZIUM"

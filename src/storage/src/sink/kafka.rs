@@ -109,7 +109,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
-    KafkaSinkConnection, KafkaSinkFormatType, SinkEnvelope, SinkPartitionStrategy, StorageSinkDesc,
+    KafkaSinkConnection, KafkaSinkFormatType, SinkEnvelope, StorageSinkDesc,
 };
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::antichain::AntichainExt;
@@ -203,7 +203,6 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
             &encoded,
             sink_id,
             self.clone(),
-            sink.partition_strategy.clone(),
             storage_state.storage_configuration.clone(),
             sink,
             metrics,
@@ -236,8 +235,6 @@ struct TransactionalProducer {
     progress_key: ProgressKey,
     /// The version of this sink, used to fence out previous versions from writing.
     sink_version: u64,
-    /// The strategy to partition the data with.
-    partition_strategy: SinkPartitionStrategy,
     /// The number of partitions in the target topic.
     partition_count: Arc<AtomicU64>,
     /// A task to periodically refresh the partition count.
@@ -265,7 +262,6 @@ impl TransactionalProducer {
     async fn new(
         sink_id: GlobalId,
         connection: &KafkaSinkConnection,
-        partition_strategy: SinkPartitionStrategy,
         storage_configuration: &StorageConfiguration,
         metrics: Arc<KafkaSinkMetrics>,
         statistics: SinkStatistics,
@@ -354,7 +350,6 @@ impl TransactionalProducer {
         let producer = Self {
             task_name,
             data_topic: connection.topic.clone(),
-            partition_strategy,
             partition_count,
             _partition_count_task: partition_count_task.abort_on_drop(),
             progress_topic: connection
@@ -474,15 +469,10 @@ impl TransactionalProducer {
             });
         }
 
-        let partition = match self.partition_strategy {
-            SinkPartitionStrategy::V0 => None,
-            SinkPartitionStrategy::V1 => {
-                let pc = self
-                    .partition_count
-                    .load(std::sync::atomic::Ordering::SeqCst);
-                Some(i32::try_from(message.hash % pc).unwrap())
-            }
-        };
+        let pc = self
+            .partition_count
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let partition = Some(i32::try_from(message.hash % pc).unwrap());
 
         let record = BaseRecord {
             topic: &self.data_topic,
@@ -636,7 +626,6 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     input: &Collection<G, KafkaMessage, Diff>,
     sink_id: GlobalId,
     connection: KafkaSinkConnection,
-    partition_strategy: SinkPartitionStrategy,
     storage_configuration: StorageConfiguration,
     sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
     metrics: KafkaSinkMetrics,
@@ -676,7 +665,6 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
             let (mut producer, resume_upper) = TransactionalProducer::new(
                 sink_id,
                 &connection,
-                partition_strategy,
                 &storage_configuration,
                 Arc::clone(&metrics),
                 statistics,

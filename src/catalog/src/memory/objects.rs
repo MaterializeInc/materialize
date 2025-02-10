@@ -58,7 +58,7 @@ use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::sinks::{SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection};
+use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, SourceExportDataConfig,
     SourceExportDetails, Timeline,
@@ -1245,8 +1245,6 @@ pub struct Sink {
     ///
     /// TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
-    /// Strategy used to partition rows.
-    pub partition_strategy: SinkPartitionStrategy,
     /// Emit an initial snapshot into the sink.
     pub with_snapshot: bool,
     /// Used to fence other writes into this sink as we evolve the upstream materialized view.

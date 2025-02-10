@@ -86,7 +86,7 @@ use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnecti
 use mz_storage_types::connections::{Connection, KafkaTopicOptions};
 use mz_storage_types::sinks::{
     KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType, SinkEnvelope,
-    SinkPartitionStrategy, StorageSinkConnection,
+    StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
@@ -3198,12 +3198,7 @@ pub fn describe_create_sink(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(
-    CreateSinkOption,
-    (Snapshot, bool),
-    (PartitionStrategy, String),
-    (Version, u64)
-);
+generate_extracted_config!(CreateSinkOption, (Snapshot, bool), (Version, u64));
 
 pub fn plan_create_sink(
     scx: &StatementContext,
@@ -3403,7 +3398,6 @@ fn plan_sink(
     let CreateSinkOptionExtracted {
         snapshot,
         version,
-        partition_strategy,
         seen: _,
     } = with_options.try_into()?;
 
@@ -3411,28 +3405,6 @@ fn plan_sink(
     let with_snapshot = snapshot.unwrap_or(true);
     // VERSION defaults to 0
     let version = version.unwrap_or(0);
-
-    let has_partition_by = matches!(
-        connection_builder,
-        StorageSinkConnection::Kafka(KafkaSinkConnection {
-            partition_by: Some(_),
-            ..
-        })
-    );
-
-    let partition_strategy = match partition_strategy.as_deref() {
-        // If someone sets the `PARTITION BY` option, we need to force upgrade
-        // to partition strategy v1, even if the region's default partition
-        // strategy is still v0, so that the partition hash is taken into
-        // account. There are no backwards compatibility concerns here because
-        // anything that uses `PARTITION BY` by definition does not depend on
-        // the legacy partitioning scheme.
-        Some("v0") if has_partition_by => SinkPartitionStrategy::V1,
-        Some("v0") => SinkPartitionStrategy::V0,
-        Some("v1") => SinkPartitionStrategy::V1,
-        Some(strategy) => sql_bail!("{strategy} is not a valid partition strategy"),
-        None => unreachable!("partitioning strategy must be set during purification"),
-    };
 
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
@@ -3449,7 +3421,6 @@ fn plan_sink(
             create_sql,
             from: from.global_id(),
             connection: connection_builder,
-            partition_strategy,
             envelope,
             version,
         },
