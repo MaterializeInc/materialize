@@ -96,7 +96,7 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
 def kill_clusterd(
     mz: MaterializeApplication, compute_id: int, signal: str = "SIGKILL"
 ) -> None:
-    cluster_id, replica_id = mz.environmentd.sql_query(
+    cluster_id, replica_id = mz.sql_query(
         "SELECT cluster_id, id FROM mz_cluster_replicas WHERE name = 'shared_fate_replica'"
     )[0]
 

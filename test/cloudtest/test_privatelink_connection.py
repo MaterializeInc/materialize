@@ -39,22 +39,22 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
         ProgrammingError,
         match="creating AWS PrivateLink Connection would violate max_aws_privatelink_connections limit",
     ):
-        mz.environmentd.sql(create_connection_statement)
+        mz.sql(create_connection_statement)
 
-    next_gid = mz.environmentd.sql_query(
+    next_gid = mz.sql_query(
         "SELECT MAX(SUBSTR(id, 2, LENGTH(id) - 1)::int) + 1 FROM mz_objects WHERE id LIKE 'u%'"
     )[0][0]
 
     not_exists(resource=f"vpcendpoint/connection-u{next_gid}")
 
-    mz.environmentd.sql(
+    mz.sql(
         "ALTER SYSTEM SET max_aws_privatelink_connections = 5",
         port="internal",
         user="mz_system",
     )
-    mz.environmentd.sql(create_connection_statement)
+    mz.sql(create_connection_statement)
 
-    aws_connection_id = mz.environmentd.sql_query(
+    aws_connection_id = mz.sql_query(
         "SELECT id FROM mz_connections WHERE name = 'privatelinkconn'"
     )[0][0]
 
@@ -62,7 +62,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
 
     assert (
         "unknown"
-        == mz.environmentd.sql_query(
+        == mz.sql_query(
             f"SELECT status FROM mz_internal.mz_aws_privatelink_connection_status_history WHERE connection_id = '{aws_connection_id}'"
         )[0][0]
     )
@@ -70,12 +70,12 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
     # TODO: validate the contents of the VPC endpoint resource, rather than just
     # its existence.
 
-    mz.environmentd.sql(
+    mz.sql(
         "ALTER SYSTEM SET enable_connection_validation_syntax = true",
         port="internal",
         user="mz_system",
     )
-    mz.environmentd.sql(
+    mz.sql(
         dedent(
             """\
             CREATE CONNECTION kafkaconn TO KAFKA (
@@ -90,20 +90,18 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
             """
         )
     )
-    mz.environmentd.sql_query("SELECT id FROM mz_connections WHERE name = 'kafkaconn'")[
-        0
-    ][0]
+    mz.sql_query("SELECT id FROM mz_connections WHERE name = 'kafkaconn'")[0][0]
 
-    principal = mz.environmentd.sql_query(
-        "SELECT principal FROM mz_aws_privatelink_connections"
-    )[0][0]
+    principal = mz.sql_query("SELECT principal FROM mz_aws_privatelink_connections")[0][
+        0
+    ]
 
     assert principal == (
         f"arn:aws:iam::123456789000:role/mz_eb5cb59b-e2fe-41f3-87ca-d2176a495345_{aws_connection_id}"
     )
 
     # Validate default privatelink connections for kafka
-    mz.environmentd.sql(
+    mz.sql(
         dedent(
             """\
             CREATE CONNECTION kafkaconn_alt TO KAFKA (
@@ -113,11 +111,9 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
             """
         )
     )
-    mz.environmentd.sql_query(
-        "SELECT id FROM mz_connections WHERE name = 'kafkaconn_alt'"
-    )[0][0]
+    mz.sql_query("SELECT id FROM mz_connections WHERE name = 'kafkaconn_alt'")[0][0]
 
-    mz.environmentd.sql(
+    mz.sql(
         dedent(
             """\
             CREATE CONNECTION sshconn TO SSH TUNNEL (
@@ -131,7 +127,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
     with pytest.raises(
         ProgrammingError, match="cannot specify both SSH TUNNEL and AWS PRIVATELINK"
     ):
-        mz.environmentd.sql(
+        mz.sql(
             dedent(
                 """\
             CREATE CONNECTION pg TO POSTGRES (
@@ -148,7 +144,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
     with pytest.raises(
         ProgrammingError, match='invalid AWS PrivateLink availability zone "us-east-1a"'
     ):
-        mz.environmentd.sql(
+        mz.sql(
             dedent(
                 """\
                 CREATE CONNECTION privatelinkconn2
@@ -164,7 +160,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
         ProgrammingError,
         match="connection cannot contain duplicate availability zones",
     ):
-        mz.environmentd.sql(
+        mz.sql(
             dedent(
                 """\
                 CREATE CONNECTION privatelinkconn2
@@ -180,7 +176,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
         ProgrammingError,
         match='AWS PrivateLink availability zone "use1-az3" does not match any of the availability zones on the AWS PrivateLink connection',
     ):
-        mz.environmentd.sql(
+        mz.sql(
             dedent(
                 """\
                 CREATE CONNECTION kafkaconn2 TO KAFKA (
@@ -197,7 +193,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
         DatabaseError,
         match="invalid CONNECTION: can only set one of BROKER, BROKERS, or AWS PRIVATELINK",
     ):
-        mz.environmentd.sql(
+        mz.sql(
             dedent(
                 """\
                 CREATE CONNECTION kafkaconn2_alt TO KAFKA (
@@ -214,7 +210,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
         ProgrammingError,
         match="invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka",
     ):
-        mz.environmentd.sql(
+        mz.sql(
             dedent(
                 """\
             CREATE CONNECTION pg TO POSTGRES (
@@ -228,8 +224,8 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
             )
         )
 
-    mz.environmentd.sql("DROP CONNECTION kafkaconn CASCADE")
-    mz.environmentd.sql("DROP CONNECTION privatelinkconn CASCADE")
+    mz.sql("DROP CONNECTION kafkaconn CASCADE")
+    mz.sql("DROP CONNECTION privatelinkconn CASCADE")
 
     not_exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
 
@@ -237,7 +233,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
 def test_background_drop_privatelink_connection(mz: MaterializeApplication) -> None:
     # Ensure that privatelink connections are
     # deleted in a background task
-    mz.environmentd.sql(
+    mz.sql(
         "ALTER SYSTEM SET max_aws_privatelink_connections = 5",
         port="internal",
         user="mz_system",
@@ -251,21 +247,21 @@ def test_background_drop_privatelink_connection(mz: MaterializeApplication) -> N
         )
         """
     )
-    mz.environmentd.sql(create_connection_statement)
-    aws_connection_id = mz.environmentd.sql_query(
+    mz.sql(create_connection_statement)
+    aws_connection_id = mz.sql_query(
         "SELECT id FROM mz_connections WHERE name = 'privatelinkconn'"
     )[0][0]
-    mz.environmentd.sql("SET FAILPOINTS = 'drop_vpc_endpoint=pause'")
-    mz.environmentd.sql("DROP CONNECTION privatelinkconn CASCADE")
+    mz.sql("SET FAILPOINTS = 'drop_vpc_endpoint=pause'")
+    mz.sql("DROP CONNECTION privatelinkconn CASCADE")
     exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
-    mz.environmentd.sql("SET FAILPOINTS = 'drop_vpc_endpoint=off'")
+    mz.sql("SET FAILPOINTS = 'drop_vpc_endpoint=off'")
     not_exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
 
 
 def test_retry_drop_privatelink_connection(mz: MaterializeApplication) -> None:
     # Ensure that privatelink connections are
     # deleted in a background task
-    mz.environmentd.sql(
+    mz.sql(
         "ALTER SYSTEM SET max_aws_privatelink_connections = 5",
         port="internal",
         user="mz_system",
@@ -279,14 +275,14 @@ def test_retry_drop_privatelink_connection(mz: MaterializeApplication) -> None:
         )
         """
     )
-    mz.environmentd.sql(create_connection_statement)
-    aws_connection_id = mz.environmentd.sql_query(
+    mz.sql(create_connection_statement)
+    aws_connection_id = mz.sql_query(
         "SELECT id FROM mz_connections WHERE name = 'privatelinkconn'"
     )[0][0]
-    mz.environmentd.sql("SET FAILPOINTS = 'drop_vpc_endpoint=return(failed)'")
-    mz.environmentd.sql("DROP CONNECTION privatelinkconn CASCADE")
+    mz.sql("SET FAILPOINTS = 'drop_vpc_endpoint=return(failed)'")
+    mz.sql("DROP CONNECTION privatelinkconn CASCADE")
     exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
-    mz.environmentd.sql("SET FAILPOINTS = 'drop_vpc_endpoint=off'")
+    mz.sql("SET FAILPOINTS = 'drop_vpc_endpoint=off'")
     retry(
         f=lambda: not_exists(resource=f"vpcendpoint/connection-{aws_connection_id}"),
         max_attempts=10,

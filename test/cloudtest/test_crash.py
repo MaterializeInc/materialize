@@ -89,7 +89,7 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
 def test_crash_storage(mz: MaterializeApplication) -> None:
     populate(mz, 1)
 
-    [cluster_id, replica_id] = mz.environmentd.sql_query(
+    [cluster_id, replica_id] = mz.sql_query(
         "SELECT s.cluster_id, r.id FROM mz_sources s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = 's1'"
     )[0]
     pod_name = cluster_pod_name(cluster_id, replica_id)
@@ -132,7 +132,7 @@ def test_crash_environmentd(mz: MaterializeApplication) -> None:
     before = get_replica()
 
     try:
-        mz.environmentd.sql("SELECT mz_unsafe.mz_panic('forced panic')")
+        mz.sql("SELECT mz_unsafe.mz_panic('forced panic')")
     except InterfaceError:
         pass
     validate(mz, 2)
@@ -154,11 +154,11 @@ def test_crash_clusterd(mz: MaterializeApplication) -> None:
         ),
         no_reset=True,
     )
-    mz.environmentd.sql("CREATE TABLE crash_table (f1 TEXT)")
-    mz.environmentd.sql(
+    mz.sql("CREATE TABLE crash_table (f1 TEXT)")
+    mz.sql(
         "CREATE MATERIALIZED VIEW crash_view AS SELECT mz_unsafe.mz_panic(f1) FROM crash_table"
     )
-    mz.environmentd.sql("INSERT INTO crash_table VALUES ('forced panic')")
+    mz.sql("INSERT INTO crash_table VALUES ('forced panic')")
 
     mz.testdrive.run(
         input=dedent(

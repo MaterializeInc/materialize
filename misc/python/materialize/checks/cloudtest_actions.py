@@ -79,7 +79,7 @@ class SetupSshTunnels(Action):
         )
 
         for i in range(connection_count):
-            public_key = self.mz.environmentd.sql_query(
+            public_key = self.mz.sql_query(
                 "SELECT public_key_1 FROM mz_ssh_tunnel_connections ssh"
                 " JOIN mz_connections c ON c.id = ssh.id"
                 f" WHERE c.name = 'ssh_tunnel_{i}';"
