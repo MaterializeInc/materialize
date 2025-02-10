@@ -144,6 +144,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 user="mz_system",
                 port=6877,
             )
+            c.sql(
+                "GRANT ALL PRIVILEGES ON CLUSTER quickstart TO materialize",
+                user="mz_system",
+                port=6877,
+            )
 
         c.sql(
             "CREATE CLUSTER singlereplica SIZE = '4', REPLICATION FACTOR = 1",
