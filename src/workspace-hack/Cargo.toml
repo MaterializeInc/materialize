@@ -102,7 +102,7 @@ proc-macro2 = { version = "1.0.93", features = ["span-locations"] }
 prost = { version = "0.13.4", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.14.6", default-features = false, features = ["serde"] }
 prost-types = { version = "0.13.2" }
-quote = { version = "1.0.36" }
+quote = { version = "1.0.38" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
@@ -237,7 +237,7 @@ proptest-derive = { version = "0.5.1", default-features = false, features = ["bo
 prost = { version = "0.13.4", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.14.6", default-features = false, features = ["serde"] }
 prost-types = { version = "0.13.2" }
-quote = { version = "1.0.36" }
+quote = { version = "1.0.38" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
