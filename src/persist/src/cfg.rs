@@ -177,6 +177,7 @@ impl BlobConfig {
                             "".to_string(),
                             metrics,
                             url.clone().into_redacted(),
+                            knobs,
                             cfg,
                         )?))
                     } else {
