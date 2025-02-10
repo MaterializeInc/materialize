@@ -162,7 +162,7 @@ Materialize integrates with dbt through the [`dbt-materialize`](https://github.c
 | Service   | Support level                    | Notes                                                                                                                                                                                                                          |             |
 | --------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
 | dbt Core  | {{< supportLevel beta >}}        | See the [`dbt-materialize` reference documentation](https://materialize.com/docs/manage/dbt/) for more details, and the [development workflows guide](/integrations/dbt/) for common dbt patterns. | [](#notify) |
-| dbt Cloud | {{< supportLevel in-progress >}} | Not supported yet. We are working with the dbt community to bring native Materialize support to dbt Cloud soon.                                                                                                                | [](#notify) |
+| dbt Cloud | {{< supportLevel in-progress >}} | Not supported yet. Making the adapter available in dbt Cloud depends on prioritization by dbt Labs. If you require dbt Cloud support, please reach out to the [dbt Labs team](https://www.getdbt.com/community/join-the-community/).                                                                                                                | [](#notify) |
 
 ### Terraform
 
