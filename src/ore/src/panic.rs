@@ -89,7 +89,7 @@ pub fn install_enhanced_handler() {
 
         // can't use if cfg!() here because that will require chrono::Utc import
         #[cfg(feature = "chrono")]
-        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ ").to_string();
+        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ  ").to_string();
         #[cfg(not(feature = "chrono"))]
         let timestamp = String::new();
 
