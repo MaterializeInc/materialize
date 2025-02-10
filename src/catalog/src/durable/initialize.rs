@@ -74,6 +74,15 @@ pub(crate) const ENABLE_0DT_DEPLOYMENT: &str = "enable_0dt_deployment";
 pub(crate) const WITH_0DT_DEPLOYMENT_MAX_WAIT: &str = "with_0dt_deployment_max_wait";
 
 /// The key used within the "config" collection where we store a mirror of the
+/// `with_0dt_deployment_ddl_check_interval` "system var" value. This is
+/// mirrored so that we can toggle the flag with LaunchDarkly, but use it in
+/// boot before LaunchDarkly is available.
+///
+/// NOTE: Weird prefix because we can't start with a `0`.
+pub(crate) const WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL: &str =
+    "with_0dt_deployment_ddl_check_interval";
+
+/// The key used within the "config" collection where we store a mirror of the
 /// `enable_0dt_deployment_panic_after_timeout` "system var" value. This is
 /// mirrored so that we can toggle the flag with LaunchDarkly, but use it in
 /// boot before LaunchDarkly is available.

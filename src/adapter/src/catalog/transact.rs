@@ -17,7 +17,8 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
+    WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
@@ -2268,6 +2269,13 @@ impl Catalog {
                         Duration::parse(VarInput::Flat(&parsed_value))
                             .expect("parsing succeeded above");
                     tx.set_0dt_deployment_max_wait(with_0dt_deployment_max_wait)?;
+                } else if name == WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name() {
+                    let with_0dt_deployment_ddl_check_interval =
+                        Duration::parse(VarInput::Flat(&parsed_value))
+                            .expect("parsing succeeded above");
+                    tx.set_0dt_deployment_ddl_check_interval(
+                        with_0dt_deployment_ddl_check_interval,
+                    )?;
                 } else if name == ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.name() {
                     let panic_after_timeout =
                         strconv::parse_bool(&parsed_value).expect("parsing succeeded above");
@@ -2297,6 +2305,8 @@ impl Catalog {
                     tx.reset_enable_0dt_deployment()?;
                 } else if name == WITH_0DT_DEPLOYMENT_MAX_WAIT.name() {
                     tx.reset_0dt_deployment_max_wait()?;
+                } else if name == WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name() {
+                    tx.reset_0dt_deployment_ddl_check_interval()?;
                 }
 
                 CatalogState::add_to_audit_log(
@@ -2314,6 +2324,7 @@ impl Catalog {
                 tx.clear_system_configs();
                 tx.reset_enable_0dt_deployment()?;
                 tx.reset_0dt_deployment_max_wait()?;
+                tx.reset_0dt_deployment_ddl_check_interval()?;
 
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,

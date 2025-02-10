@@ -41,7 +41,7 @@ use mz_storage_types::controller::StorageError;
 use crate::builtin::BuiltinLog;
 use crate::durable::initialize::{
     ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, SYSTEM_CONFIG_SYNCED_KEY,
-    WITH_0DT_DEPLOYMENT_MAX_WAIT,
+    WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
@@ -1876,6 +1876,27 @@ impl<'a> Transaction<'a> {
         )
     }
 
+    /// Updates the catalog `with_0dt_deployment_ddl_check_interval` "config"
+    /// value to match the `with_0dt_deployment_ddl_check_interval` "system var"
+    /// value.
+    ///
+    /// These are mirrored so that we can toggle the flag with Launch Darkly,
+    /// but use it in boot before Launch Darkly is available.
+    pub fn set_0dt_deployment_ddl_check_interval(
+        &mut self,
+        value: Duration,
+    ) -> Result<(), CatalogError> {
+        self.set_config(
+            WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.into(),
+            Some(
+                value
+                    .as_millis()
+                    .try_into()
+                    .expect("ddl check interval fits into u64"),
+            ),
+        )
+    }
+
     /// Updates the catalog `0dt_deployment_panic_after_timeout` "config" value to
     /// match the `0dt_deployment_panic_after_timeout` "system var" value.
     ///
@@ -1907,6 +1928,16 @@ impl<'a> Transaction<'a> {
     /// but use it in boot before LaunchDarkly is available.
     pub fn reset_0dt_deployment_max_wait(&mut self) -> Result<(), CatalogError> {
         self.set_config(WITH_0DT_DEPLOYMENT_MAX_WAIT.into(), None)
+    }
+
+    /// Removes the catalog `with_0dt_deployment_ddl_check_interval` "config"
+    /// value to match the `with_0dt_deployment_ddl_check_interval` "system var"
+    /// value.
+    ///
+    /// These are mirrored so that we can toggle the flag with LaunchDarkly, but
+    /// use it in boot before LaunchDarkly is available.
+    pub fn reset_0dt_deployment_ddl_check_interval(&mut self) -> Result<(), CatalogError> {
+        self.set_config(WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.into(), None)
     }
 
     /// Removes the catalog `enable_0dt_deployment_panic_after_timeout` "config"
