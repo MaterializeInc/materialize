@@ -1180,12 +1180,9 @@ pub fn plan_create_source(
     match stmt.connection {
         CreateSourceConnection::Postgres { .. }
         | CreateSourceConnection::Yugabyte { .. }
-        | CreateSourceConnection::MySql { .. } => {
-            if in_cluster.replica_ids().len() > 1 {
-                sql_bail!("cannot create source in cluster with more than one replica")
-            }
-        }
-        CreateSourceConnection::Kafka { .. } | CreateSourceConnection::LoadGenerator { .. } => {
+        | CreateSourceConnection::MySql { .. }
+        | CreateSourceConnection::Kafka { .. }
+        | CreateSourceConnection::LoadGenerator { .. } => {
             let enable_multi_replica_sources =
                 ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs());
             if !enable_multi_replica_sources {
@@ -5343,12 +5340,14 @@ fn contains_single_replica_objects(scx: &StatementContext, cluster: &dyn Catalog
         let item = scx.catalog.get_item(id);
         let single_replica_source = match item.source_desc() {
             Ok(Some(desc)) => match desc.connection {
-                GenericSourceConnection::Kafka(_) | GenericSourceConnection::LoadGenerator(_) => {
+                GenericSourceConnection::Kafka(_)
+                | GenericSourceConnection::LoadGenerator(_)
+                | GenericSourceConnection::MySql(_)
+                | GenericSourceConnection::Postgres(_) => {
                     let enable_multi_replica_sources =
                         ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs());
                     !enable_multi_replica_sources
                 }
-                GenericSourceConnection::MySql(_) | GenericSourceConnection::Postgres(_) => true,
             },
             _ => false,
         };

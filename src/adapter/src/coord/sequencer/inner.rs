@@ -312,16 +312,8 @@ impl Coordinator {
                         .expect("ingestion plans must specify cluster");
                     match ingestion.desc.connection {
                         GenericSourceConnection::Postgres(_)
-                        | GenericSourceConnection::MySql(_) => {
-                            if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
-                                mz_ore::soft_assert_or_log!(
-                                    cluster.replica_ids().len() <= 1,
-                                    "cannot create source in cluster {}; has >1 replicas",
-                                    cluster.id()
-                                );
-                            }
-                        }
-                        GenericSourceConnection::Kafka(_)
+                        | GenericSourceConnection::MySql(_)
+                        | GenericSourceConnection::Kafka(_)
                         | GenericSourceConnection::LoadGenerator(_) => {
                             if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
                                 let enable_multi_replica_sources = ENABLE_MULTI_REPLICA_SOURCES
