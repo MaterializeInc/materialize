@@ -1614,9 +1614,9 @@ impl CatalogItem {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
             | CatalogItem::ContinualTask(_) => true,
             CatalogItem::Log(_)
-            | CatalogItem::Sink(_)
             | CatalogItem::View(_)
             | CatalogItem::Index(_)
             | CatalogItem::Type(_)

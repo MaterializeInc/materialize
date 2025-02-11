@@ -5143,12 +5143,12 @@ def workflow_test_constant_sink(c: Composition) -> None:
                 > SELECT write_frontier
                   FROM mz_internal.mz_frontiers
                   JOIN mz_sinks ON id = object_id
-                  WHERE name = 'snk'
+                  WHERE name = 'snk' AND write_frontier IS NOT NULL
 
                 > SELECT status
                   FROM mz_internal.mz_sink_statuses
                   WHERE name = 'snk'
-                dropped
+                running
                 """
             )
         )
@@ -5162,12 +5162,12 @@ def workflow_test_constant_sink(c: Composition) -> None:
                 > SELECT write_frontier
                   FROM mz_internal.mz_frontiers
                   JOIN mz_sinks ON id = object_id
-                  WHERE name = 'snk'
+                  WHERE name = 'snk' AND write_frontier IS NOT NULL
 
                 > SELECT status
                   FROM mz_internal.mz_sink_statuses
                   WHERE name = 'snk'
-                dropped
+                running
                 """
             )
         )

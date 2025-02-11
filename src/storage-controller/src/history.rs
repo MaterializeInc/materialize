@@ -406,6 +406,22 @@ mod tests {
                 ),
                 txns_shard: Default::default(),
             },
+            to_storage_metadata: CollectionMetadata {
+                persist_location: PersistLocation {
+                    blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                    consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                },
+                remap_shard: Default::default(),
+                data_shard: Default::default(),
+                relation_desc: RelationDesc::new(
+                    RelationType {
+                        column_types: Default::default(),
+                        keys: Default::default(),
+                    },
+                    Vec::<String>::new(),
+                ),
+                txns_shard: Default::default(),
+            },
         }
     }
 

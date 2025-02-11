@@ -339,6 +339,7 @@ impl<T: Codec64 + TimelyTimestamp + Lattice + Sync> SnapshotCursor<T> {
 }
 
 /// Frontiers of the collection identified by `id`.
+#[derive(Debug)]
 pub struct CollectionFrontiers<T> {
     /// The [GlobalId] of the collection that these frontiers belong to.
     pub id: GlobalId,
@@ -846,7 +847,7 @@ where
     fn determine_collection_dependencies(
         &self,
         self_collections: &BTreeMap<GlobalId, CollectionState<T>>,
-        data_source: &DataSource,
+        data_source: &DataSource<T>,
     ) -> Result<Vec<GlobalId>, StorageError<T>> {
         let dependencies = match &data_source {
             DataSource::Introspection(_)
@@ -878,6 +879,7 @@ where
             }
             // Ingestions depend on their remap collection.
             DataSource::Ingestion(ingestion) => vec![ingestion.remap_collection_id],
+            DataSource::Sink { desc } => vec![desc.sink.from],
         };
 
         Ok(dependencies)
@@ -1663,7 +1665,7 @@ where
         collections.dedup();
         for pos in 1..collections.len() {
             if collections[pos - 1].0 == collections[pos].0 {
-                return Err(StorageError::SourceIdReused(collections[pos].0));
+                return Err(StorageError::CollectionIdReused(collections[pos].0));
             }
         }
 
@@ -1677,7 +1679,7 @@ where
             for (id, description) in collections.iter() {
                 if let Some(existing_collection) = self_collections.get(id) {
                     if &existing_collection.description != description {
-                        return Err(StorageError::SourceIdReused(*id));
+                        return Err(StorageError::CollectionIdReused(*id));
                     }
                 }
             }
@@ -1779,6 +1781,7 @@ where
                         | DataSource::Ingestion(_)
                         | DataSource::Progress
                         | DataSource::Other => {}
+                        DataSource::Sink { .. } => {}
                         DataSource::Table { .. } => {
                             let register_ts = register_ts.expect(
                                 "caller should have provided a register_ts when creating a table",
@@ -1866,7 +1869,7 @@ where
             let initial_since = match storage_dependencies
                 .iter()
                 .at_most_one()
-                .expect("should have at most one depdendency")
+                .expect("should have at most one dependency")
             {
                 Some(dep) => {
                     let dependency_collection = self_collections
@@ -1991,6 +1994,9 @@ where
                     self_collections.insert(id, collection_state);
                 }
                 DataSource::Ingestion(_) => {
+                    self_collections.insert(id, collection_state);
+                }
+                DataSource::Sink { .. } => {
                     self_collections.insert(id, collection_state);
                 }
             }
@@ -2505,6 +2511,7 @@ where
                 }
                 // Materialized views, continual tasks, etc, aren't managed by storage.
                 Other => {}
+                Sink { .. } => {}
             };
         }
         Ok(result)

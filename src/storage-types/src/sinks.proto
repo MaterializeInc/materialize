@@ -29,6 +29,7 @@ message ProtoStorageSinkDesc {
   ProtoStorageSinkConnection connection = 3;
   optional ProtoSinkEnvelope envelope = 4;
   optional mz_storage_types.controller.ProtoCollectionMetadata from_storage_metadata = 6;
+  optional mz_storage_types.controller.ProtoCollectionMetadata to_storage_metadata = 15;
   mz_repr.antichain.ProtoU64Antichain as_of = 11;
   bool with_snapshot = 12;
   uint64 version = 13;

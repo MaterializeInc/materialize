@@ -373,7 +373,7 @@ impl<T> ShouldTerminateGracefully for StorageError<T> {
             | StorageError::ReadBeforeSince(_)
             | StorageError::InvalidUppers(_)
             | StorageError::InvalidUsage(_)
-            | StorageError::SourceIdReused(_)
+            | StorageError::CollectionIdReused(_)
             | StorageError::SinkIdReused(_)
             | StorageError::IdentifierMissing(_)
             | StorageError::IdentifierInvalid(_)

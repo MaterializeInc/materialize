@@ -146,12 +146,13 @@ use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
 use mz_storage_client::client::TableData;
-use mz_storage_client::controller::{CollectionDescription, DataSource};
+use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::read_holds::ReadHold;
-use mz_storage_types::sinks::S3SinkFormat;
+use mz_storage_types::sinks::{S3SinkFormat, StorageSinkDesc};
+use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
@@ -2075,9 +2076,11 @@ impl Coordinator {
                     self.ship_dataflow(df_desc, mview.cluster_id, None).await;
                 }
                 CatalogItem::Sink(sink) => {
-                    self.create_storage_export(sink.global_id(), sink)
-                        .await
-                        .unwrap_or_terminate("cannot fail to create exports");
+                    policies_to_set
+                        .entry(CompactionWindow::Default)
+                        .or_insert_with(Default::default)
+                        .storage_ids
+                        .insert(sink.global_id());
                 }
                 CatalogItem::Connection(catalog_connection) => {
                     if let ConnectionDetails::AwsPrivatelink(conn) = &catalog_connection.details {
@@ -2730,6 +2733,44 @@ impl Coordinator {
                         compute_collections.push((ct.global_id(), ct.desc.clone()));
                         collections.push((ct.global_id(), collection_desc));
                     }
+                }
+                CatalogItem::Sink(sink) => {
+                    let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
+                    let from_desc = storage_sink_from_entry
+                        .desc(&self.catalog().resolve_full_name(
+                            storage_sink_from_entry.name(),
+                            storage_sink_from_entry.conn_id(),
+                        ))
+                        .expect("sinks can only be built on items with descs")
+                        .into_owned();
+                    let collection_desc = CollectionDescription {
+                        // TODO(sinks): make generic once we have more than one sink type.
+                        desc: KAFKA_PROGRESS_DESC.clone(),
+                        data_source: DataSource::Sink {
+                            desc: ExportDescription {
+                                sink: StorageSinkDesc {
+                                    from: sink.from,
+                                    from_desc,
+                                    connection: sink
+                                        .connection
+                                        .clone()
+                                        .into_inline_connection(self.catalog().state()),
+                                    partition_strategy: sink.partition_strategy.clone(),
+                                    envelope: sink.envelope,
+                                    as_of: Antichain::from_elem(Timestamp::minimum()),
+                                    with_snapshot: sink.with_snapshot,
+                                    version: sink.version,
+                                    from_storage_metadata: (),
+                                    to_storage_metadata: (),
+                                },
+                                instance_id: sink.cluster_id,
+                            },
+                        },
+                        since: None,
+                        status_collection_id: None,
+                        timeline: None,
+                    };
+                    collections.push((sink.global_id, collection_desc));
                 }
                 _ => (),
             }
