@@ -2305,19 +2305,26 @@ where
     pub fn expire_at(&mut self, walltime_ms: EpochMillis) -> ExpiryMetrics {
         let mut metrics = ExpiryMetrics::default();
         let shard_id = self.shard_id();
-        self.collections.leased_readers.retain(|k, v| {
-            let retain = v.last_heartbeat_timestamp_ms + v.lease_duration_ms >= walltime_ms;
+        self.collections.leased_readers.retain(|id, state| {
+            let retain = state.last_heartbeat_timestamp_ms + state.lease_duration_ms >= walltime_ms;
             if !retain {
-                info!("Force expiring reader ({k}) of shard ({shard_id}) due to inactivity");
+                info!(
+                    "Force expiring reader {id} ({}) of shard {shard_id} due to inactivity",
+                    state.debug.purpose
+                );
                 metrics.readers_expired += 1;
             }
             retain
         });
         // critical_readers don't need forced expiration. (In fact, that's the point!)
-        self.collections.writers.retain(|k, v| {
-            let retain = (v.last_heartbeat_timestamp_ms + v.lease_duration_ms) >= walltime_ms;
+        self.collections.writers.retain(|id, state| {
+            let retain =
+                (state.last_heartbeat_timestamp_ms + state.lease_duration_ms) >= walltime_ms;
             if !retain {
-                info!("Force expiring writer ({k}) of shard ({shard_id}) due to inactivity");
+                info!(
+                    "Force expiring writer {id} ({}) of shard {shard_id} due to inactivity",
+                    state.debug.purpose
+                );
                 metrics.writers_expired += 1;
             }
             retain
