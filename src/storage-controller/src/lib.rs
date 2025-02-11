@@ -149,7 +149,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// A shared TxnsCache running in a task and communicated with over a channel.
     txns_read: TxnsRead<T>,
     txns_metrics: Arc<TxnMetrics>,
-    stashed_response: Option<StorageResponse<T>>,
+    stashed_responses: Vec<StorageResponse<T>>,
     /// Compaction commands to send during the next call to
     /// `StorageController::process`.
     pending_compaction_commands: Vec<PendingCompactionCommand<T>>,
@@ -1492,7 +1492,7 @@ where
                 export_id: id,
             })?;
 
-        instance.send(StorageCommand::RunSinks(vec![cmd]));
+        instance.send(StorageCommand::RunSink(cmd));
         Ok(())
     }
 
@@ -1581,7 +1581,9 @@ where
                 }
             })?;
 
-            instance.send(StorageCommand::RunSinks(cmds));
+            for cmd in cmds {
+                instance.send(StorageCommand::RunSink(cmd));
+            }
 
             // Update state only after all possible errors have occurred.
             for (id, new_export_description) in export_updates {
@@ -1787,7 +1789,7 @@ where
             // propagate to the storage dependencies.
 
             // Remove sink by removing its write frontier and arranging for deprovisioning.
-            self.update_write_frontiers(&[(id, Antichain::new())]);
+            self.update_write_frontier(&id, &Antichain::new());
         }
     }
 
@@ -1854,24 +1856,19 @@ where
             return;
         }
 
-        if let Ok(dropped_id) = self.pending_table_handle_drops_rx.try_recv() {
-            // HACKY: We cannot check if the channel has data on the version of
-            // tokio that we're using, so we do a try_recv and put it back.
-            self.pending_table_handle_drops_tx
-                .send(dropped_id)
-                .expect("ourselves are not dropped");
+        if !self.pending_table_handle_drops_rx.is_empty() {
             return;
         }
 
-        self.stashed_response = tokio::select! {
-            // Order matters here. We want to process internal commands
-            // before processing external commands.
-            biased;
-
-            Some(m) = self.instance_response_rx.recv() => Some(m),
+        tokio::select! {
+            Some(m) = self.instance_response_rx.recv() => {
+                self.stashed_responses.push(m);
+                while let Ok(m) = self.instance_response_rx.try_recv() {
+                    self.stashed_responses.push(m);
+                }
+            }
             _ = self.maintenance_ticker.tick() => {
                 self.maintenance_scheduled = true;
-                None
             },
         };
     }
@@ -1891,73 +1888,74 @@ where
             instance.rehydrate_failed_replicas();
         }
 
-        let mut updated_frontiers = None;
-        match self.stashed_response.take() {
-            None => (),
-            Some(StorageResponse::FrontierUppers(updates)) => {
-                self.update_write_frontiers(&updates);
-                updated_frontiers = Some(Response::FrontierUpdates(updates));
-            }
-            Some(StorageResponse::DroppedId(id)) => {
-                tracing::debug!("DroppedId for collection {id}");
+        let mut status_updates = vec![];
+        let mut updated_frontiers = BTreeMap::new();
 
-                if let Some(_collection) = self.collections.remove(&id) {
-                    // Nothing to do, we already dropped read holds in
-                    // `drop_sources_unvalidated`.
-                } else if let Some(export) = self.exports.get_mut(&id) {
-                    // TODO: Current main never drops export state, so we
-                    // also don't do that, because it would be yet more
-                    // refactoring. Instead, we downgrade to the empty
-                    // frontier, which satisfies StorageCollections just as
-                    // much.
-                    tracing::info!("downgrading read hold of export {id} to empty frontier!");
-                    export
-                        .read_hold
-                        .try_downgrade(Antichain::new())
-                        .expect("must be possible");
-                } else {
-                    soft_panic_or_log!(
-                        "DroppedId for ID {id} but we have neither ingestion nor export \
-                         under that ID"
-                    );
+        for resp in std::mem::take(&mut self.stashed_responses) {
+            match resp {
+                StorageResponse::FrontierUpper(id, upper) => {
+                    self.update_write_frontier(&id, &upper);
+                    updated_frontiers.insert(id, upper);
                 }
-            }
-            Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
-                // Note we only hold the locks while moving some plain-old-data around here.
-                //
-                // We just write the whole object, as the update from storage represents the
-                // current values.
-                //
-                // We don't overwrite removed objects, as we may have received a late
-                // `StatisticsUpdates` while we were shutting down the storage object.
-                {
-                    let mut shared_stats = self.source_statistics.lock().expect("poisoned");
-                    for stat in source_stats {
-                        // Don't override it if its been removed.
-                        shared_stats
-                            .source_statistics
-                            .entry(stat.id)
-                            .and_modify(|current| current.stat().incorporate(stat));
+                StorageResponse::DroppedId(id) => {
+                    tracing::debug!("DroppedId for collection {id}");
+
+                    if let Some(_collection) = self.collections.remove(&id) {
+                        // Nothing to do, we already dropped read holds in
+                        // `drop_sources_unvalidated`.
+                    } else if let Some(export) = self.exports.get_mut(&id) {
+                        // TODO: Current main never drops export state, so we
+                        // also don't do that, because it would be yet more
+                        // refactoring. Instead, we downgrade to the empty
+                        // frontier, which satisfies StorageCollections just as
+                        // much.
+                        tracing::info!("downgrading read hold of export {id} to empty frontier!");
+                        export
+                            .read_hold
+                            .try_downgrade(Antichain::new())
+                            .expect("must be possible");
+                    } else {
+                        soft_panic_or_log!(
+                            "DroppedId for ID {id} but we have neither ingestion nor export \
+                             under that ID"
+                        );
                     }
                 }
+                StorageResponse::StatisticsUpdates(source_stats, sink_stats) => {
+                    // Note we only hold the locks while moving some plain-old-data around here.
+                    //
+                    // We just write the whole object, as the update from storage represents the
+                    // current values.
+                    //
+                    // We don't overwrite removed objects, as we may have received a late
+                    // `StatisticsUpdates` while we were shutting down the storage object.
+                    {
+                        let mut shared_stats = self.source_statistics.lock().expect("poisoned");
+                        for stat in source_stats {
+                            // Don't override it if its been removed.
+                            shared_stats
+                                .source_statistics
+                                .entry(stat.id)
+                                .and_modify(|current| current.stat().incorporate(stat));
+                        }
+                    }
 
-                {
-                    let mut shared_stats = self.sink_statistics.lock().expect("poisoned");
-                    for stat in sink_stats {
-                        // Don't override it if its been removed.
-                        shared_stats
-                            .entry(stat.id)
-                            .and_modify(|current| current.stat().incorporate(stat));
+                    {
+                        let mut shared_stats = self.sink_statistics.lock().expect("poisoned");
+                        for stat in sink_stats {
+                            // Don't override it if its been removed.
+                            shared_stats
+                                .entry(stat.id)
+                                .and_modify(|current| current.stat().incorporate(stat));
+                        }
                     }
                 }
-            }
-            Some(StorageResponse::StatusUpdates(updates)) => {
-                for status_update in updates.iter() {
+                StorageResponse::StatusUpdate(status_update) => {
                     // NOTE(aljoscha): We sniff out the hydration status for
                     // ingestions from status updates. This is the easiest we
                     // can do right now, without going deeper into changing the
                     // comms protocol between controller and cluster. We cannot,
-                    // for example use `StorageResponse::FrontierUppers`,
+                    // for example use `StorageResponse::FrontierUpper`,
                     // because those will already get sent when the ingestion is
                     // just being created.
                     //
@@ -1994,20 +1992,22 @@ where
                         }
                         _ => (),
                     }
+                    status_updates.push(status_update);
                 }
-                self.record_status_updates(updates);
-            }
-            Some(StorageResponse::StagedBatches(batches)) => {
-                for (collection_id, batches) in batches {
-                    match self.pending_oneshot_ingestions.remove(&collection_id) {
-                        Some(sender) => (sender)(batches),
-                        // TODO(cf2): When we support running COPY FROM on multiple
-                        // replicas we can probably just ignore the case of `None`.
-                        None => mz_ore::soft_panic_or_log!("no sender for {collection_id}!"),
+                StorageResponse::StagedBatches(batches) => {
+                    for (collection_id, batches) in batches {
+                        match self.pending_oneshot_ingestions.remove(&collection_id) {
+                            Some(sender) => (sender)(batches),
+                            // TODO(cf2): When we support running COPY FROM on multiple
+                            // replicas we can probably just ignore the case of `None`.
+                            None => mz_ore::soft_panic_or_log!("no sender for {collection_id}!"),
+                        }
                     }
                 }
             }
         }
+
+        self.record_status_updates(status_updates);
 
         // IDs of sources that were dropped whose statuses should be updated.
         let mut pending_source_drops = vec![];
@@ -2093,10 +2093,7 @@ where
             // Note that while collections are dropped, the `client` may already
             // be cleared out, before we do this post-processing!
             if let Some(client) = instance {
-                client.send(StorageCommand::AllowCompaction(vec![(
-                    id,
-                    read_frontier.clone(),
-                )]));
+                client.send(StorageCommand::AllowCompaction(id, read_frontier.clone()));
             }
         }
 
@@ -2159,7 +2156,13 @@ where
             );
         }
 
-        Ok(updated_frontiers)
+        if updated_frontiers.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(Response::FrontierUpdates(
+                updated_frontiers.into_iter().collect(),
+            )))
+        }
     }
 
     async fn inspect_persist_state(
@@ -2438,7 +2441,7 @@ where
             persist_table_worker,
             txns_read,
             txns_metrics,
-            stashed_response: None,
+            stashed_responses: vec![],
             pending_compaction_commands: vec![],
             pending_table_handle_drops_tx,
             pending_table_handle_drops_rx,
@@ -2519,90 +2522,88 @@ where
     }
 
     #[instrument(level = "debug", fields(updates))]
-    fn update_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<T>)]) {
+    fn update_write_frontier(&mut self, id: &GlobalId, new_upper: &Antichain<T>) {
         let mut read_capability_changes = BTreeMap::default();
 
-        for (id, new_upper) in updates.iter() {
-            if let Some(collection) = self.collections.get_mut(id) {
-                let ingestion = match &mut collection.extra_state {
-                    CollectionStateExtra::Ingestion(ingestion) => ingestion,
-                    CollectionStateExtra::None => {
-                        if matches!(collection.data_source, DataSource::Progress) {
-                            // We do get these, but can't do anything with it!
-                        } else {
-                            tracing::error!(
-                                ?collection,
-                                ?new_upper,
-                                "updated write frontier for collection which is not an ingestion"
-                            );
-                        }
-                        continue;
+        if let Some(collection) = self.collections.get_mut(id) {
+            let ingestion = match &mut collection.extra_state {
+                CollectionStateExtra::Ingestion(ingestion) => ingestion,
+                CollectionStateExtra::None => {
+                    if matches!(collection.data_source, DataSource::Progress) {
+                        // We do get these, but can't do anything with it!
+                    } else {
+                        tracing::error!(
+                            ?collection,
+                            ?new_upper,
+                            "updated write frontier for collection which is not an ingestion"
+                        );
                     }
-                };
-
-                if PartialOrder::less_than(&ingestion.write_frontier, new_upper) {
-                    ingestion.write_frontier.clone_from(new_upper);
+                    return;
                 }
+            };
 
-                debug!(%id, ?ingestion, ?new_upper, "upper update for ingestion!");
-
-                let mut new_derived_since = ingestion
-                    .hold_policy
-                    .frontier(ingestion.write_frontier.borrow());
-
-                if PartialOrder::less_equal(&ingestion.derived_since, &new_derived_since) {
-                    let mut update = ChangeBatch::new();
-                    update.extend(new_derived_since.iter().map(|time| (time.clone(), 1)));
-                    std::mem::swap(&mut ingestion.derived_since, &mut new_derived_since);
-                    update.extend(new_derived_since.iter().map(|time| (time.clone(), -1)));
-
-                    if !update.is_empty() {
-                        read_capability_changes.insert(*id, update);
-                    }
-                }
-            } else if let Ok(export) = self.export_mut(*id) {
-                if PartialOrder::less_than(&export.write_frontier, new_upper) {
-                    export.write_frontier.clone_from(new_upper);
-                }
-
-                // Ignore read policy for sinks whose write frontiers are closed, which identifies
-                // the sink is being dropped; we need to advance the read frontier to the empty
-                // chain to signal to the dataflow machinery that they should deprovision this
-                // object.
-                let new_read_capability = if export.write_frontier.is_empty() {
-                    export.write_frontier.clone()
-                } else {
-                    export.read_policy.frontier(export.write_frontier.borrow())
-                };
-
-                if PartialOrder::less_equal(export.read_hold.since(), &new_read_capability) {
-                    let mut update = ChangeBatch::new();
-                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
-                    update.extend(
-                        export
-                            .read_hold
-                            .since()
-                            .iter()
-                            .map(|time| (time.clone(), -1)),
-                    );
-
-                    if !update.is_empty() {
-                        read_capability_changes.insert(*id, update);
-                    }
-                }
-            } else if self.storage_collections.check_exists(*id).is_ok() {
-                // StorageCollections is handling it!
-            } else {
-                // TODO: This can happen because subsources report back an upper
-                // but we don't store them in our `ingestions` field, _nor_ do
-                // we acquire read holds for them. Also because we don't get
-                // `DroppedId` messages for them, so we wouldn't know when to
-                // clean up read holds.
-                info!(
-                    "Reference to absent collection {id}, new_upper={:?}",
-                    new_upper
-                );
+            if PartialOrder::less_than(&ingestion.write_frontier, new_upper) {
+                ingestion.write_frontier.clone_from(new_upper);
             }
+
+            debug!(%id, ?ingestion, ?new_upper, "upper update for ingestion!");
+
+            let mut new_derived_since = ingestion
+                .hold_policy
+                .frontier(ingestion.write_frontier.borrow());
+
+            if PartialOrder::less_equal(&ingestion.derived_since, &new_derived_since) {
+                let mut update = ChangeBatch::new();
+                update.extend(new_derived_since.iter().map(|time| (time.clone(), 1)));
+                std::mem::swap(&mut ingestion.derived_since, &mut new_derived_since);
+                update.extend(new_derived_since.iter().map(|time| (time.clone(), -1)));
+
+                if !update.is_empty() {
+                    read_capability_changes.insert(*id, update);
+                }
+            }
+        } else if let Ok(export) = self.export_mut(*id) {
+            if PartialOrder::less_than(&export.write_frontier, new_upper) {
+                export.write_frontier.clone_from(new_upper);
+            }
+
+            // Ignore read policy for sinks whose write frontiers are closed, which identifies
+            // the sink is being dropped; we need to advance the read frontier to the empty
+            // chain to signal to the dataflow machinery that they should deprovision this
+            // object.
+            let new_read_capability = if export.write_frontier.is_empty() {
+                export.write_frontier.clone()
+            } else {
+                export.read_policy.frontier(export.write_frontier.borrow())
+            };
+
+            if PartialOrder::less_equal(export.read_hold.since(), &new_read_capability) {
+                let mut update = ChangeBatch::new();
+                update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+                update.extend(
+                    export
+                        .read_hold
+                        .since()
+                        .iter()
+                        .map(|time| (time.clone(), -1)),
+                );
+
+                if !update.is_empty() {
+                    read_capability_changes.insert(*id, update);
+                }
+            }
+        } else if self.storage_collections.check_exists(*id).is_ok() {
+            // StorageCollections is handling it!
+        } else {
+            // TODO: This can happen because subsources report back an upper
+            // but we don't store them in our `ingestions` field, _nor_ do
+            // we acquire read holds for them. Also because we don't get
+            // `DroppedId` messages for them, so we wouldn't know when to
+            // clean up read holds.
+            info!(
+                "Reference to absent collection {id}, new_upper={:?}",
+                new_upper
+            );
         }
 
         if !read_capability_changes.is_empty() {
@@ -3134,7 +3135,7 @@ where
             })?;
 
         let augmented_ingestion = RunIngestionCommand { id, description };
-        instance.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
+        instance.send(StorageCommand::RunIngestion(augmented_ingestion));
 
         Ok(())
     }
@@ -3181,7 +3182,7 @@ where
                 export_id: id,
             })?;
 
-        instance.send(StorageCommand::RunSinks(vec![cmd]));
+        instance.send(StorageCommand::RunSink(cmd));
 
         Ok(())
     }

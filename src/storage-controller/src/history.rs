@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use mz_ore::cast::{CastFrom, CastInto};
+use mz_ore::cast::CastFrom;
 use mz_storage_client::client::StorageCommand;
 use mz_storage_client::metrics::HistoryMetrics;
 use mz_storage_types::parameters::StorageParameters;
@@ -68,9 +68,9 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
                 InitializationComplete => metrics.initialization_complete_count.inc(),
                 AllowWrites => metrics.allow_writes_count.inc(),
                 UpdateConfiguration(_) => metrics.update_configuration_count.inc(),
-                RunIngestions(x) => metrics.run_ingestions_count.add(x.len().cast_into()),
-                RunSinks(x) => metrics.run_sinks_count.add(x.len().cast_into()),
-                AllowCompaction(x) => metrics.allow_compaction_count.add(x.len().cast_into()),
+                RunIngestion(_) => metrics.run_ingestions_count.inc(),
+                RunSink(_) => metrics.run_sinks_count.inc(),
+                AllowCompaction(_, _) => metrics.allow_compaction_count.inc(),
                 RunOneshotIngestion(_) => {
                     // TODO(cf2): Add metrics for oneshot ingestions.
                 }
@@ -108,13 +108,15 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
                 InitializationComplete => initialization_complete = true,
                 AllowWrites => allow_writes = true,
                 UpdateConfiguration(params) => final_configuration.update(params),
-                RunIngestions(cmds) => {
-                    final_ingestions.extend(cmds.into_iter().map(|c| (c.id, c)));
+                RunIngestion(ingestion) => {
+                    final_ingestions.insert(ingestion.id, ingestion);
                 }
-                RunSinks(cmds) => {
-                    final_sinks.extend(cmds.into_iter().map(|c| (c.id, c)));
+                RunSink(sink) => {
+                    final_sinks.insert(sink.id, sink);
                 }
-                AllowCompaction(updates) => final_compactions.extend(updates),
+                AllowCompaction(id, since) => {
+                    final_compactions.insert(id, since);
+                }
                 RunOneshotIngestion(oneshot) => {
                     final_oneshot_ingestions.insert(oneshot.ingestion_id, oneshot);
                 }
@@ -181,15 +183,14 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
 
         let count = u64::cast_from(run_ingestions.len());
         self.metrics.run_ingestions_count.set(count);
-        if !run_ingestions.is_empty() {
-            self.commands
-                .push(StorageCommand::RunIngestions(run_ingestions));
+        for ingestion in run_ingestions {
+            self.commands.push(StorageCommand::RunIngestion(ingestion));
         }
 
         let count = u64::cast_from(run_sinks.len());
         self.metrics.run_ingestions_count.set(count);
-        if !run_sinks.is_empty() {
-            self.commands.push(StorageCommand::RunSinks(run_sinks));
+        for sink in run_sinks {
+            self.commands.push(StorageCommand::RunSink(sink));
         }
 
         // TODO(cf1): Add a CancelOneshotIngestion command, make sure we prevent
@@ -204,9 +205,9 @@ impl<T: std::fmt::Debug> CommandHistory<T> {
 
         let count = u64::cast_from(allow_compaction.len());
         self.metrics.allow_compaction_count.set(count);
-        if !allow_compaction.is_empty() {
-            let updates = allow_compaction.into_iter().collect();
-            self.commands.push(StorageCommand::AllowCompaction(updates));
+        for (id, since) in allow_compaction {
+            self.commands
+                .push(StorageCommand::AllowCompaction(id, since));
         }
 
         let count = u64::from(initialization_complete);
@@ -414,15 +415,13 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestions(vec![RunIngestionCommand {
+            StorageCommand::RunIngestion(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }]),
-            StorageCommand::AllowCompaction(vec![
-                (GlobalId::User(1), Antichain::new()),
-                (GlobalId::User(2), Antichain::new()),
-                (GlobalId::User(3), Antichain::new()),
-            ]),
+            }),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::new()),
+            StorageCommand::AllowCompaction(GlobalId::User(3), Antichain::new()),
         ];
 
         for cmd in commands {
@@ -440,15 +439,13 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestions(vec![RunIngestionCommand {
+            StorageCommand::RunIngestion(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }]),
-            StorageCommand::AllowCompaction(vec![
-                (GlobalId::User(1), Antichain::from_elem(1)),
-                (GlobalId::User(2), Antichain::from_elem(2)),
-                (GlobalId::User(3), Antichain::from_elem(3)),
-            ]),
+            }),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(1)),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(2)),
+            StorageCommand::AllowCompaction(GlobalId::User(3), Antichain::from_elem(3)),
         ];
 
         for cmd in commands.clone() {
@@ -466,11 +463,11 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunIngestions(vec![RunIngestionCommand {
+            StorageCommand::RunIngestion(RunIngestionCommand {
                 id: GlobalId::User(1),
                 description: ingestion_description(1, [2], 3),
-            }]),
-            StorageCommand::AllowCompaction(vec![(GlobalId::User(2), Antichain::new())]),
+            }),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::new()),
         ];
 
         for cmd in commands.clone() {
@@ -488,11 +485,11 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::RunSinks(vec![RunSinkCommand {
+            StorageCommand::RunSink(RunSinkCommand {
                 id: GlobalId::User(1),
                 description: sink_description(),
-            }]),
-            StorageCommand::AllowCompaction(vec![(GlobalId::User(1), Antichain::new())]),
+            }),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
         ];
 
         for cmd in commands {
@@ -511,11 +508,11 @@ mod tests {
 
         let sink_desc = sink_description();
         let commands = [
-            StorageCommand::RunSinks(vec![RunSinkCommand {
+            StorageCommand::RunSink(RunSinkCommand {
                 id: GlobalId::User(1),
                 description: sink_desc.clone(),
-            }]),
-            StorageCommand::AllowCompaction(vec![(GlobalId::User(1), Antichain::from_elem(42))]),
+            }),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::from_elem(42)),
         ];
 
         for cmd in commands {
@@ -530,10 +527,10 @@ mod tests {
             as_of: Antichain::from_elem(42),
             ..sink_desc
         };
-        let expected_commands = [StorageCommand::RunSinks(vec![RunSinkCommand {
+        let expected_commands = [StorageCommand::RunSink(RunSinkCommand {
             id: GlobalId::User(1),
             description: expected_sink_desc,
-        }])];
+        })];
 
         assert_eq!(commands_after, expected_commands);
     }
@@ -543,11 +540,9 @@ mod tests {
         let mut history = history();
 
         let commands = [
-            StorageCommand::AllowCompaction(vec![(GlobalId::User(1), Antichain::new())]),
-            StorageCommand::AllowCompaction(vec![
-                (GlobalId::User(2), Antichain::from_elem(1)),
-                (GlobalId::User(2), Antichain::from_elem(2)),
-            ]),
+            StorageCommand::AllowCompaction(GlobalId::User(1), Antichain::new()),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(1)),
+            StorageCommand::AllowCompaction(GlobalId::User(2), Antichain::from_elem(2)),
         ];
 
         for cmd in commands {
