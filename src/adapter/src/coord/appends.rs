@@ -99,7 +99,7 @@ impl DeferredOp {
         }
     }
 
-    /// Consumes the [`DeferredWriteOp`], returning the inner [`ExecuteContext`].
+    /// Consumes the [`DeferredOp`], returning the inner [`ExecuteContext`].
     pub fn into_ctx(self) -> ExecuteContext {
         match self {
             DeferredOp::Plan(plan) => plan.ctx,
@@ -177,7 +177,7 @@ impl Coordinator {
         self.advance_timelines_interval.reset();
     }
 
-    /// Tries to execute a previously [`DeferredWriteOp`] that requires write locks.
+    /// Tries to execute a previously [`DeferredOp`] that requires write locks.
     ///
     /// If we can't acquire all of the write locks then we'll defer the plan again and wait for
     /// the necessary locks to become available.

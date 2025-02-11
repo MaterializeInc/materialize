@@ -242,7 +242,7 @@ pub enum Message {
         /// then everything waiting on this collection will get retried causing traffic in the
         /// Coordinator's message queue.
         ///
-        /// See [`DeferredWriteOp::can_be_optimistically_retried`] for more detail.
+        /// See [`DeferredOp::can_be_optimistically_retried`] for more detail.
         acquired_lock: Option<(CatalogItemId, tokio::sync::OwnedMutexGuard<()>)>,
     },
     /// Initiates a group commit.
