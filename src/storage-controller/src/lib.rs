@@ -1789,7 +1789,7 @@ where
             // propagate to the storage dependencies.
 
             // Remove sink by removing its write frontier and arranging for deprovisioning.
-            self.update_write_frontiers(&[(id, Antichain::new())]);
+            self.update_write_frontier(&id, &Antichain::new());
         }
     }
 
@@ -1891,15 +1891,11 @@ where
         let mut status_updates = vec![];
         let mut updated_frontiers = BTreeMap::new();
 
-        // Take the allocation so that we can call mut receiver functions in the loop. We put it
-        // back at the end of the loop.
-        let mut stashed_responses = std::mem::take(&mut self.stashed_responses);
-        for resp in stashed_responses.drain(..) {
+        for resp in std::mem::take(&mut self.stashed_responses) {
             match resp {
                 StorageResponse::FrontierUpper(id, upper) => {
-                    let update = (id, upper);
-                    self.update_write_frontiers(std::slice::from_ref(&update));
-                    updated_frontiers.insert(update.0, update.1);
+                    self.update_write_frontier(&id, &upper);
+                    updated_frontiers.insert(id, upper);
                 }
                 StorageResponse::DroppedId(id) => {
                     tracing::debug!("DroppedId for collection {id}");
@@ -2010,8 +2006,6 @@ where
                 }
             }
         }
-        // Restore the allocation
-        self.stashed_responses = stashed_responses;
 
         self.record_status_updates(status_updates);
 
@@ -2528,90 +2522,88 @@ where
     }
 
     #[instrument(level = "debug", fields(updates))]
-    fn update_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<T>)]) {
+    fn update_write_frontier(&mut self, id: &GlobalId, new_upper: &Antichain<T>) {
         let mut read_capability_changes = BTreeMap::default();
 
-        for (id, new_upper) in updates.iter() {
-            if let Some(collection) = self.collections.get_mut(id) {
-                let ingestion = match &mut collection.extra_state {
-                    CollectionStateExtra::Ingestion(ingestion) => ingestion,
-                    CollectionStateExtra::None => {
-                        if matches!(collection.data_source, DataSource::Progress) {
-                            // We do get these, but can't do anything with it!
-                        } else {
-                            tracing::error!(
-                                ?collection,
-                                ?new_upper,
-                                "updated write frontier for collection which is not an ingestion"
-                            );
-                        }
-                        continue;
+        if let Some(collection) = self.collections.get_mut(id) {
+            let ingestion = match &mut collection.extra_state {
+                CollectionStateExtra::Ingestion(ingestion) => ingestion,
+                CollectionStateExtra::None => {
+                    if matches!(collection.data_source, DataSource::Progress) {
+                        // We do get these, but can't do anything with it!
+                    } else {
+                        tracing::error!(
+                            ?collection,
+                            ?new_upper,
+                            "updated write frontier for collection which is not an ingestion"
+                        );
                     }
-                };
-
-                if PartialOrder::less_than(&ingestion.write_frontier, new_upper) {
-                    ingestion.write_frontier.clone_from(new_upper);
+                    return;
                 }
+            };
 
-                debug!(%id, ?ingestion, ?new_upper, "upper update for ingestion!");
-
-                let mut new_derived_since = ingestion
-                    .hold_policy
-                    .frontier(ingestion.write_frontier.borrow());
-
-                if PartialOrder::less_equal(&ingestion.derived_since, &new_derived_since) {
-                    let mut update = ChangeBatch::new();
-                    update.extend(new_derived_since.iter().map(|time| (time.clone(), 1)));
-                    std::mem::swap(&mut ingestion.derived_since, &mut new_derived_since);
-                    update.extend(new_derived_since.iter().map(|time| (time.clone(), -1)));
-
-                    if !update.is_empty() {
-                        read_capability_changes.insert(*id, update);
-                    }
-                }
-            } else if let Ok(export) = self.export_mut(*id) {
-                if PartialOrder::less_than(&export.write_frontier, new_upper) {
-                    export.write_frontier.clone_from(new_upper);
-                }
-
-                // Ignore read policy for sinks whose write frontiers are closed, which identifies
-                // the sink is being dropped; we need to advance the read frontier to the empty
-                // chain to signal to the dataflow machinery that they should deprovision this
-                // object.
-                let new_read_capability = if export.write_frontier.is_empty() {
-                    export.write_frontier.clone()
-                } else {
-                    export.read_policy.frontier(export.write_frontier.borrow())
-                };
-
-                if PartialOrder::less_equal(export.read_hold.since(), &new_read_capability) {
-                    let mut update = ChangeBatch::new();
-                    update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
-                    update.extend(
-                        export
-                            .read_hold
-                            .since()
-                            .iter()
-                            .map(|time| (time.clone(), -1)),
-                    );
-
-                    if !update.is_empty() {
-                        read_capability_changes.insert(*id, update);
-                    }
-                }
-            } else if self.storage_collections.check_exists(*id).is_ok() {
-                // StorageCollections is handling it!
-            } else {
-                // TODO: This can happen because subsources report back an upper
-                // but we don't store them in our `ingestions` field, _nor_ do
-                // we acquire read holds for them. Also because we don't get
-                // `DroppedId` messages for them, so we wouldn't know when to
-                // clean up read holds.
-                info!(
-                    "Reference to absent collection {id}, new_upper={:?}",
-                    new_upper
-                );
+            if PartialOrder::less_than(&ingestion.write_frontier, new_upper) {
+                ingestion.write_frontier.clone_from(new_upper);
             }
+
+            debug!(%id, ?ingestion, ?new_upper, "upper update for ingestion!");
+
+            let mut new_derived_since = ingestion
+                .hold_policy
+                .frontier(ingestion.write_frontier.borrow());
+
+            if PartialOrder::less_equal(&ingestion.derived_since, &new_derived_since) {
+                let mut update = ChangeBatch::new();
+                update.extend(new_derived_since.iter().map(|time| (time.clone(), 1)));
+                std::mem::swap(&mut ingestion.derived_since, &mut new_derived_since);
+                update.extend(new_derived_since.iter().map(|time| (time.clone(), -1)));
+
+                if !update.is_empty() {
+                    read_capability_changes.insert(*id, update);
+                }
+            }
+        } else if let Ok(export) = self.export_mut(*id) {
+            if PartialOrder::less_than(&export.write_frontier, new_upper) {
+                export.write_frontier.clone_from(new_upper);
+            }
+
+            // Ignore read policy for sinks whose write frontiers are closed, which identifies
+            // the sink is being dropped; we need to advance the read frontier to the empty
+            // chain to signal to the dataflow machinery that they should deprovision this
+            // object.
+            let new_read_capability = if export.write_frontier.is_empty() {
+                export.write_frontier.clone()
+            } else {
+                export.read_policy.frontier(export.write_frontier.borrow())
+            };
+
+            if PartialOrder::less_equal(export.read_hold.since(), &new_read_capability) {
+                let mut update = ChangeBatch::new();
+                update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
+                update.extend(
+                    export
+                        .read_hold
+                        .since()
+                        .iter()
+                        .map(|time| (time.clone(), -1)),
+                );
+
+                if !update.is_empty() {
+                    read_capability_changes.insert(*id, update);
+                }
+            }
+        } else if self.storage_collections.check_exists(*id).is_ok() {
+            // StorageCollections is handling it!
+        } else {
+            // TODO: This can happen because subsources report back an upper
+            // but we don't store them in our `ingestions` field, _nor_ do
+            // we acquire read holds for them. Also because we don't get
+            // `DroppedId` messages for them, so we wouldn't know when to
+            // clean up read holds.
+            info!(
+                "Reference to absent collection {id}, new_upper={:?}",
+                new_upper
+            );
         }
 
         if !read_capability_changes.is_empty() {

@@ -145,7 +145,7 @@ impl<T> StorageCommand<T> {
             | InitializationComplete
             | AllowWrites
             | UpdateConfiguration(_)
-            | AllowCompaction(_, _) => false,
+            | AllowCompaction(..) => false,
             // TODO(cf2): multi-replica oneshot ingestions. At the moment returning
             // true here means we can't run `COPY FROM` on multi-replica clusters, this
             // should be easy enough to support though.
@@ -589,7 +589,7 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     StagedBatches(BTreeMap<uuid::Uuid, Vec<Result<ProtoBatch, String>>>),
     /// A list of statistics updates, currently only for sources.
     StatisticsUpdates(Vec<SourceStatisticsUpdate>, Vec<SinkStatisticsUpdate>),
-    /// A status updates for a source or a sink. Periodically sent from
+    /// A status update for a source or a sink. Periodically sent from
     /// storage workers to convey the latest status information about an object.
     StatusUpdate(StatusUpdate),
 }
