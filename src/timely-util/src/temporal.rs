@@ -215,13 +215,13 @@ mod tests {
 
     impl BucketTimestamp for u8 {
         fn advance_by_exponent(&self, bits: usize) -> Option<Self> {
-            self.checked_add(1_u8.checked_shl(bits as u32)?)
+            self.checked_add(1_u8.checked_shl(bits.try_into().unwrap())?)
         }
     }
 
     impl BucketTimestamp for u64 {
         fn advance_by_exponent(&self, bits: usize) -> Option<Self> {
-            self.checked_add(1_u64.checked_shl(bits as u32)?)
+            self.checked_add(1_u64.checked_shl(bits.try_into().unwrap())?)
         }
     }
 
@@ -248,7 +248,7 @@ mod tests {
         collected
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_bucket_chain_empty_peel_all() {
         let mut chain = BucketChain::new(TestStorage::<u8> { inner: vec![] });
         let mut fuel = 1000;
@@ -259,7 +259,7 @@ mod tests {
         assert!(chain.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_bucket_chain() {
         let mut chain = BucketChain::new(TestStorage::<u8> {
             inner: (0..=255).collect(),
@@ -290,7 +290,7 @@ mod tests {
 
     /// Test a chain with 10M disjoint elements. The same with a vector would take too long for a
     /// test.
-    #[test]
+    #[mz_ore::test]
     fn test_bucket_10m() {
         let limit = 10_000_000;
 
