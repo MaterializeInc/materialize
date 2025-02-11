@@ -175,6 +175,11 @@ operator:
       support: 25cc
       catalogServer: 50cc
       analytics: 25cc
+    defaultReplicationFactor:
+      system: 0
+      probe: 0
+      support: 0
+      analytics: 0
 
   # Node selector to use for the operator pod
   nodeSelector: {}

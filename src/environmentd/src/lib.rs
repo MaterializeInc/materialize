@@ -152,7 +152,7 @@ pub struct Config {
     pub environment_id: EnvironmentId,
     /// What role, if any, should be initially created with elevated privileges.
     pub bootstrap_role: Option<String>,
-    /// The config of the default cluster replica if bootstrapping.
+    /// The size of the default cluster replica if bootstrapping.
     pub bootstrap_default_cluster_replica_size: String,
     /// The config of the builtin system cluster replicas if bootstrapping.
     pub bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig,

@@ -22,12 +22,11 @@ fn test_zero_replication_factor_no_replicas() {
     let system_cluster = client
         .query_one(
             r#"
-    SELECT c.id, c.name, c.replication_factor::integer, COUNT(cr.id)::integer as replica_count 
+    SELECT c.id, c.name, c.replication_factor::integer, COUNT(cr.id)::integer as replica_count
     FROM mz_clusters c
     LEFT JOIN mz_cluster_replicas cr ON c.id = cr.cluster_id
     WHERE c.name = 'mz_system'
-    GROUP BY c.id, c.name, c.replication_factor
-    "#,
+    GROUP BY c.id, c.name, c.replication_factor"#,
             &[],
         )
         .unwrap();
