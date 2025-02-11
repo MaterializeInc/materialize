@@ -1,127 +1,244 @@
 ---
 title: "Ingesting data"
 description: "How to ingest data into Materialize from external systems."
-disable_toc: true
+disable_list: true
+menu:
+  main:
+    identifier: "ingest-data"
+    name: "Ingest data"
+    weight: 11
 ---
 
-a source [](). 
+Materialize can ingest data from various external systems:
 
-Sources are used to ingest data into Materialize. When a new source is created, it needs to transition through different stages until it becomes ready to be queried. For large datasets it can take some time until the initial data load has been completed and the source can be queried.
+{{< multilinkbox >}}
+{{< linkbox title="Databases (CDC)" >}}
+- [PostgreSQL](/ingest-data/postgres/)
+- [MySQL](/ingest-data/mysql/)
+- [SQL Server](/ingest-data/cdc-sql-server/)
+- [CockroachDB](/ingest-data/cdc-cockroachdb/)
+{{</ linkbox >}}
+{{< linkbox title="Message Brokers" >}}
+- [Kafka](/ingest-data/kafka/)
+- [Redpanda](/sql/create-source/kafka)
+- [Other message brokers](/integrations/#message-brokers)
+{{</ linkbox >}}
+{{< linkbox title="Webhooks" >}}
+- [Amazon EventBridge](/ingest-data/webhooks/amazon-eventbridge/)
+- [Segment](/ingest-data/webhooks/segment/)
+- [Other webhooks](/sql/create-source/webhook)
+{{</ linkbox >}}
+{{</ multilinkbox >}}
 
-To avoid bad surprises during source creation, like blocking queries, it's essential to follow a few steps and monitor that one step completed before going to the next. There are three main stages a source needs to go through before it becomes healthy: initial data load, rehydration, and catching up with new data. Unless all three steps have completed successfully, queries reading from a source may just hang and appear to do nothing. These steps usually complete within a few minutes. But for very large sources that contain hundreds of GB of data, it can take up to an hour or even several hours to complete.
+## Sources and clusters
+
+Materialize ingests data from external systems using
+[sources](/concepts/sources/). For the sources, you need to associate a
+[cluster](/concepts/clusters/) to provide the compute resources needed to ingest
+data.
+
+{{% tip %}}
+
+- If possible, dedicate a cluster just for sources.
+
+- When you create a new source, Materialize performs a one-time [snapshotting
+  operation](#snapshotting) to initially populate the source in Materialize.
+  Snapshotting is a resource-intensive operation that can require a significant
+  amount of CPU and memory. Consider using a larger cluster size during
+  snapshotting. Once the snapshotting operation is complete, you can downsize
+  the cluster to align with the steady-state ingestion.
+
+- See also [Best practices](#best-practices).
+
+{{% /tip %}}
 
 ## Snapshotting
 
-[//]: # "TODO(morsapaes) If we decide to include screenshots of the console in
-this section, we should also adapt ingest-data/troubleshooting for
-consistency."
+Snapshotting refers to the initial population of a source in Materialize. When
+you create a new source, Materialize takes a snapshot of the data from the
+upstream (i.e., external) system at a given offset and loads it into
+Materialize.
 
-When a new source is created, Materialize performs a sync of all data available
-in the external system before it starts ingesting new data — an operation known
-as _snapshotting_. Because the initial snapshot is persisted in the storage
-layer atomically (i.e., at the same ingestion timestamp), you are **not able to
-query the source until snapshotting is complete**. Depending on the volume of
-data in the initial snapshot and the size of the cluster the source is hosted
-in, this operation can take anywhere from a few minutes up to several hours,
-and might require more compute resources than steady-state.
+For the offset, Materialize chooses the latest available offset. For the
+available offset, Materialize uses:
 
-### Monitoring the snapshot
+- Log Sequence Number (LSN) for PostgreSQL sources.
 
-While snapshotting is taking place, you can monitor how many records have
-already been read by the source (`snapshot_records_staged`) and how many
-records are part of the initial snapshot (`snapshot_records_known`).
+- The number of transactions committed across all servers in the cluster for
+  MySQL sources.
 
-```sql
-SELECT
-	o.name,
-	s.snapshot_records_staged,
-	s.snapshot_records_known,
-	round(100.0 * s.snapshot_records_staged / NULLIF(s.snapshot_records_known, 0), 2) AS snapshot_completed_pct
-FROM mz_internal.mz_source_statistics AS s
-INNER JOIN mz_objects AS o ON (s.id = o.id)
-WHERE NOT s.snapshot_committed;
-```
+- Kafka message offset for Kafka sources.
 
-It's also important to monitor CPU and memory utilization for the cluster
-hosting the source during snapshotting. If there are signs of resource
-exhaustion, you may need to [resize the cluster](#resizing-the-cluster).
+Materialize captures/commits a snapshot of all historical data up to that point.
+Snapshot is persisted in the storage layer, and all records in this initial load
+have the same ingestion timestamp.
 
-### Best practices
+### Duration
 
-#### Limiting the volume of data
+The snapshotting operation duration depends on the snapshot dataset size and the
+size of the Materialize cluster that is hosting the source. For very large
+sources that contain hundreds of GB of data, it can take up to an hour or even
+several hours to complete.
 
-When possible, you should limit the volume of data that needs to be synced into
-Materialize on source creation. This will help speed up snapshotting, as well
-as make data exploration more lightweight.
+{{% tip %}}
 
-* [Kafka source]():
+- If possible, schedule creating new sources during off-peak hours to mitigate
+  the impact of snapshotting on both the upstream system and the Materialize
+  cluster.
 
-* [PostgreSQL source]():
+- Consider using a larger cluster size during snapshotting. Once the
+  snapshottingis complete, you can downsize the cluster to align with the volume
+  of changes being replicated from your upstream in steady-state.
 
-* [MySQL source]():
+- See also [Best practices](#best-practices).
 
-#### Resizing the cluster
+{{% /tip %}}
+
+If you create your source from the Materialize Console, the overview page for
+the source displays the snapshotting progress. Alternatively, you can run a
+query to monitor its progress. See [Monitoring the snapshotting progress](/ingest-data/monitoring-data-ingestion/#monitoring-the-snapshotting-progress).
+
+### CPU and memory utilization
+
+Snapshotting may require more compute resources from the Materialize cluster
+than steady-state. If there are signs of resource exhaustion (that is, the
+cluster restarts because it ran out of memory), resize the cluster.
+
+{{% tip %}}
+Consider using a larger cluster size during snapshotting. Once the snapshotting
+operation is complete, you can downsize your source cluster to align with the
+volume of changes being replicated from your upstream in steady-state.
+{{% /tip %}}
+
+### Queries during snapshotting
+
+While a source is snapshotting, the source (and the associated subsources)
+cannot serve queries. That is, queries issued to the snapshotting source (and
+its subsources) will return after the snapshotting completes (unless the user
+breaks out of the query). If the user does not break out of the query, the
+returned query results will reflect the data from the snapshot.
+
+## Running/steady-state
+
+Once snapshotting completes, Materialize transitions to Running state. During
+this state, Materialize continually ingests changes from the upstream system.
+
+### Queries during steady-state
+
+Although Materialize is continually ingesting changes from the upstream system,
+depending on the volume of the upstream changes, Materialize may lag behind the
+upstream system. If the lag is significant, queries may block until Materialize
+has caught up sufficiently with the upstream system when using the default
+[isolation level](/get-started/isolation-level/) of [strict
+serializability](/get-started/isolation-level/#strict-serializable).
+
+In the Materialize Console, you can see a source's data freshness from the
+**Data Explorer** screen. Alternatively, you can run a query to monitor the lag.
+See [Monitoring the snapshotting progress](/ingest-data/monitoring-data-ingestion).
+
+## Rehydration
+
+When a cluster is restarted (such as after resizing), sources undergo
+rehydration.[^1] Rehydration refers to the reconstruction of in-memory state by
+reading data from the storage layer; rehydration does not require reading data
+from the upstream system.
+
+{{% tip %}}
+
+If possible, use a dedicated cluster just for sources. That is, avoid
+using the same cluster for sources and other objects, such as sinks, etc. See [Best practices](#best-practices) for more details.
+
+{{% /tip %}}
+
+### Process
+
+During rehydration, data from the storage layer is read to reconstruct the
+in-memory state of the object. As part of the rehydration process:
+
+- Internal data structures are re-created.
+
+- Various processes are re-initiated. These processes may also require
+  re-reading of their in-memory state.
+
+### Duration
+
+For a source, the duration of its rehydration depends on the type and the size
+of the source; e.g., large `UPSERT` sources can take hours to complete.
+
+### Queries during rehydration
+
+During rehydration, queries usually block until the process has been completed.
+
+## Best practices
+
+#### Scheduling
+
+If possible, schedule creating new sources during off-peak hours to mitigate the
+impact of snapshotting on both the upstream system and the Materialize cluster.
+
+#### Dedicate a cluster for the sources
+
+If possible, dedicate a cluster just for sources. That is, avoid using the same
+cluster for sources and sinks/indexes/materialized views (and other compute objects).
+
+#### Use a larger cluster for snapshotting
+
+Consider using a larger cluster size during snapshotting. Once the snapshotting
+operation is complete, you can downsize the cluster to align with the volume of
+changes being replicated from your upstream in steady-state.
 
 If the cluster hosting the source restarts during snapshotting (e.g., because it
-ran out of memory), you must temporarily scale it up to a larger [size](https://materialize.com/docs/sql/create-cluster/#size),
-so the operation can complete.
+ran out of memory), you can scale up to a larger
+[size](/sql/alter-cluster/#alter-cluster-size) to complete the
+operation.
 
 ```sql
 ALTER CLUSTER <cluster_name> SET ( SIZE = <new_size> );
 ```
 
-Once the initial snapshot has completed, you can right-size the cluster.
+{{% note %}}
 
-## Rehydration
+Resizing a cluster with sources requires the cluster to restart. This operation
+incurs downtime for the duration it takes for all objects in the cluster to
+[rehydrate](#rehydration).
 
-When the source has completed the initial snapshot and every time the source cluster is restarted, it reads the data from the storage backend. This process is called rehydration. Depending on the type and the size of the source, this can be a very lightweight process that takes seconds, but for large `UPSERT` sources it can also be hours. During rehydration, queries usually block until the process has been completed. So it's best to monitor the source status and wait until rehydration has completed.
+{{% /note %}}
 
-```sql
-SELECT
-	s.name,
-	h.hydrated
-FROM mz_sources AS s
-INNER JOIN mz_internal.mz_hydration_statuses AS h ON (s.id = h.object_id);
-```
+Once the initial snapshot has completed, you can resize the cluster.
 
-Because the initial data load is more resource intensive than rehydration and consuming data from the external system, there may be opportunity to scale down the cluster for the steady state workload. Because the taking initial snapshot is resource intensive but happens only once, knowing the resource requirements during steady state is much more important to correctly size the source cluster for normal operation. Restarting the cluster is achieved by removing all compute resources from the underlying cluster and subsequently adding it back.
+#### Limit the volume of data
 
-```sql
-ALTER CLUSTER sources SET (REPLICATION FACTOR 0);
-ALTER CLUSTER sources SET (REPLICATION FACTOR 1);
-```
+If possible, limit the volume of data that needs to be synced into Materialize
+on source creation. This will help speed up snapshotting as well as make data
+exploration more lightweight.
 
-## Catching up with most recent changes
+For example, when creating a PostgreSQL source, you may want to create a
+publication with specific tables rather than for all tables in the database.
 
-During the initial snapshot and rehydration, new changes may happen in the external system. After the source has completed the first two stages, it consumes new changes from the external system and might need to catch up with the backlog of outstanding changes. The source is aware of any outstanding changes and queries may once again block until the source is caught up enough with the backlog.
+#### Right-size the cluster for steady-state
 
-The following query indicates the difference between the largest offset that is known from the external system and the last offset that has been processed (committed) by the source. The units depend on the source type. For Kafka sources, it's the number of offsets, for MySQL sources, it's the number of transactions, and for Postgres sources, it's the number of bytes in its replication stream. But in any case, you want `offset_delta` to be close to 0.
-
-```sql
-SELECT
-	o.name,
-	s.offset_committed,
-	s.offset_known,
-	s.offset_known - s.offset_committed AS offset_delta
-FROM mz_internal.mz_source_statistics AS s
-INNER JOIN mz_objects AS o ON (s.id = o.id)
-WHERE s.snapshot_committed;
-```
-
-Once the source has caught up consuming from the external upstream system, it should be ready to be queried.
-
-## Putting it all together
-
-In general, sources can only be queried when they have completed their initial snapshot, completed hydration, and are caught up with the external upstream system they are consuming from. Unless all these three conditions are met, queries will likely block and wait until the conditions are met. So it’s recommended that you verify your source is healthy before you run any query against it.
+Once the initial snapshot has completed, you can
+[resize](/sql/alter-cluster/#alter-cluster-size)  the cluster
+to align with the volume of changes being replicated from your upstream in
+steady-state.
 
 ```sql
-SELECT
-	o.name,
-	s.snapshot_committed,
-	CASE WHEN NOT s.snapshot_committed THEN round(100.0 * s.snapshot_records_staged / NULLIF(s.snapshot_records_known, 0)) ELSE 100 END AS snapshot_completed_pct,
-	h.hydrated,
-	s.offset_known - s.offset_committed AS offset_delta
-FROM mz_internal.mz_source_statistics AS s
-INNER JOIN mz_objects AS o ON (s.id = o.id)
-INNER JOIN mz_internal.mz_hydration_statuses AS h ON (s.id = h.object_id);
+ALTER CLUSTER <cluster_name> SET ( SIZE = <new_size> );
 ```
+
+{{% note %}}
+
+Resizing a cluster with sources requires the cluster to restart. This operation
+incurs downtime for the duration it takes for all objects in the cluster to
+[rehydrate](#rehydration).
+
+{{% /note %}}
+
+## See also
+
+- [Monitoring data ingestion](/ingest-data/monitoring-data-ingestion)
+- [Troubleshooting data ingestion](/ingest-data/troubleshooting)
+
+[^1]: Other objects, such as sinks, indexes, materialized views, etc., also
+undergo rehydration if their cluster is restarted.  If possible, use a dedicated
+cluster just for sources.
