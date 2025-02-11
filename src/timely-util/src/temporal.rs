@@ -31,7 +31,7 @@ pub trait Storage: Sized {
     /// Split self in two, based on the timestamp. The result a pair of self, where the first
     /// element contains all data with a timestamp strictly less than `timestamp`, and the second
     /// all other data.
-    fn split(self, timestamp: &Self::Timestamp) -> (Self, Self);
+    fn split(self, timestamp: &Self::Timestamp, fuel: &mut isize) -> (Self, Self);
 }
 
 /// A bucket of data, with a lower and an upper bound in time.
@@ -60,10 +60,10 @@ impl<S: Storage> Bucket<S> {
     /// half.
     ///
     /// Panics if the bucket cannot be split.
-    fn split(self) -> [Bucket<S>; 2] {
+    fn split(self, fuel: &mut isize) -> [Bucket<S>; 2] {
         let bits = self.bits - 1;
         let midpoint = self.offset.advance_by_exponent(bits).expect("must exist");
-        let (s_lower, s_upper) = self.storage.split(&midpoint);
+        let (s_lower, s_upper) = self.storage.split(&midpoint, fuel);
         [
             Bucket::new(bits, midpoint, s_upper),
             Bucket::new(bits, self.offset, s_lower),
@@ -104,6 +104,14 @@ impl<S: Storage> std::ops::DerefMut for Bucket<S> {
 ///
 /// We achieve this by storing buckets of increasing size for timestamps that are further out
 /// in the future. At the same time, adjacent buckets span a time range at most factor 4 different.
+///
+/// A bucket chain is well-formed if all buckets are within two bits of each other, with an imaginary
+/// bucket of -1 bits at the end. A chain does not need to be well-formed at all times, and supports
+/// peeling and finding even if not well-formed. However, `peel` might need to split buckets to
+/// extract the desired data.
+///
+/// The `restore` method can be used to restore the chain property. It needs to be called repeatedly
+/// with a positive amount of fuel while the remaining fuel after the call is non-positive.
 pub struct BucketChain<S: Storage> {
     /// Buckets in reverse order.
     buckets: Vec<Bucket<S>>,
@@ -150,24 +158,39 @@ impl<S: Storage> BucketChain<S> {
             if PartialOrder::less_equal(&bucket.upper(), &frontier) {
                 peeled.push(bucket);
             } else {
-                self.buckets.extend(bucket.split());
+                self.buckets.extend(bucket.split(&mut 0));
             }
         }
-        self.restore();
         peeled
     }
 
     /// Restore the chain property by splitting buckets as necessary.
     ///
-    /// The chain is well-formed if all buckets are within two bits of each other.
-    fn restore(&mut self) {
+    /// The chain is well-formed if all buckets are within two bits of each other, with an imaginary
+    /// bucket of -1 bits at the end.
+    pub fn restore(&mut self, fuel: &mut isize) {
+        // Start at the biggest bucket
         let mut index = 0;
-        while index + 1 < self.buckets.len() {
-            if self.buckets[index].bits > self.buckets[index + 1].bits + 2 {
-                let split = self.buckets.remove(index).split();
+        // While the index points at a valid bucket, and we have fuel, try to restore the chain.
+        while index < self.buckets.len() && *fuel > 0 {
+            // The maximum number of bits the current bucket can have is the number of bits of the
+            // next bucket plus two, or 1 if there is no next bucket. This ensures the end of the
+            // chain is terminated with a small bucket.
+            let max_bits = if index < self.buckets.len() - 1 {
+                self.buckets[index + 1].bits + 2
+            } else {
+                1
+            };
+            if self.buckets[index].bits > max_bits {
+                let split = self.buckets.remove(index).split(fuel);
                 self.buckets.splice(index..index, split);
+                // Move pointer back as after splitting the bucket at `index`, we might now
+                // violate the chain property at `index - 1`.
+                index = index.saturating_sub(1);
+            } else {
+                // Bucket
+                index += 1;
             }
-            index += 1;
         }
     }
 }
@@ -175,7 +198,6 @@ impl<S: Storage> BucketChain<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_ore::vec::VecExt;
 
     impl BucketTimestamp for u8 {
         fn advance_by_exponent(&self, bits: usize) -> Option<Self> {
@@ -189,12 +211,10 @@ mod tests {
 
     impl Storage for TestStorage {
         type Timestamp = u8;
-        fn split(mut self, timestamp: &u8) -> (Self, Self) {
-            let inner = self
-                .inner
-                .drain_filter_swapping(|d| *d < *timestamp)
-                .collect();
-            (Self { inner }, self)
+        fn split(self, timestamp: &u8, fuel: &mut isize) -> (Self, Self) {
+            *fuel = fuel.saturating_sub(self.inner.len().try_into().expect("must fit"));
+            let (left, right) = self.inner.into_iter().partition(|d| *d < *timestamp);
+            (Self { inner: left }, Self { inner: right })
         }
     }
 
@@ -210,22 +230,39 @@ mod tests {
         };
 
         let mut chain = BucketChain::new(TestStorage { inner: vec![] });
+        let mut fuel = 1000;
+        chain.restore(&mut fuel);
+        assert!(fuel > 0);
         let buckets = chain.peel(Antichain::new());
-        assert_eq!(buckets.len(), 1);
+        let mut fuel = 1000;
+        chain.restore(&mut fuel);
+        assert!(fuel > 0);
         assert_eq!(buckets[0].lower(), Antichain::from_elem(0));
-        assert_eq!(buckets[0].upper(), Antichain::new());
+        assert_eq!(buckets.last().unwrap().upper(), Antichain::new());
 
         let mut chain = BucketChain::new(TestStorage {
             inner: (0..=255).collect(),
         });
         let peeled = chain.peel(Antichain::from_elem(1));
+        let mut fuel = 1000;
+        chain.restore(&mut fuel);
+        assert!(fuel > 0);
         assert_eq!(peeled.len(), 1);
         assert_eq!(peeled[0].inner[0], 0);
         let peeled = chain.peel(Antichain::from_elem(63));
+        let mut fuel = 1000;
+        chain.restore(&mut fuel);
+        assert!(fuel > 0);
         assert!(collect_and_sort(peeled).into_iter().eq(1..63));
         let peeled = chain.peel(Antichain::from_elem(65));
+        let mut fuel = 1000;
+        chain.restore(&mut fuel);
+        assert!(fuel > 0);
         assert!(collect_and_sort(peeled).into_iter().eq(63..65));
         let peeled = chain.peel(Antichain::new());
+        let mut fuel = 1000;
+        chain.restore(&mut fuel);
+        assert!(fuel > 0);
         assert!(collect_and_sort(peeled).into_iter().eq(65..=255));
     }
 }
