@@ -16,7 +16,8 @@
 //! Utilities to efficiently store future updates.
 
 use timely::order::TotalOrder;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::frontier::AntichainRef;
+use timely::progress::Timestamp;
 use timely::PartialOrder;
 
 /// Timestamp extension for totally ordered timestamps that can advance by `2^exponent`.
@@ -113,7 +114,7 @@ impl<S: Storage> BucketChain<S> {
     /// Peel off all data up to `frontier`, where the returned buckets contain all
     /// data strictly less than the frontier.
     #[inline]
-    pub fn peel(&mut self, frontier: Antichain<S::Timestamp>) -> Vec<S> {
+    pub fn peel(&mut self, frontier: AntichainRef<S::Timestamp>) -> Vec<S> {
         let mut peeled = vec![];
         // While there are buckets, and the frontier is not less than the lowest offset, peel off
         while !self.is_empty() && !frontier.less_equal(self.offsets.last().expect("must exist")) {
@@ -254,7 +255,7 @@ mod tests {
         let mut fuel = 1000;
         chain.restore(&mut fuel);
         assert!(fuel > 0);
-        let peeled = chain.peel(Antichain::new());
+        let peeled = chain.peel(AntichainRef::new(&[]));
         assert!(collect_and_sort(peeled).is_empty());
         assert!(chain.is_empty());
     }
@@ -264,24 +265,24 @@ mod tests {
         let mut chain = BucketChain::new(TestStorage::<u8> {
             inner: (0..=255).collect(),
         });
-        let peeled = chain.peel(Antichain::from_elem(1));
+        let peeled = chain.peel(AntichainRef::new(&[1]));
         assert_eq!(peeled.len(), 1);
         assert_eq!(peeled[0].inner[0], 0);
         assert!(collect_and_sort(peeled).into_iter().eq(0..1));
         let mut fuel = 1000;
         chain.restore(&mut fuel);
         assert!(fuel > 0);
-        let peeled = chain.peel(Antichain::from_elem(63));
+        let peeled = chain.peel(AntichainRef::new(&[63]));
         let mut fuel = 1000;
         chain.restore(&mut fuel);
         assert!(fuel > 0);
         assert!(collect_and_sort(peeled).into_iter().eq(1..63));
-        let peeled = chain.peel(Antichain::from_elem(65));
+        let peeled = chain.peel(AntichainRef::new(&[65]));
         let mut fuel = 1000;
         chain.restore(&mut fuel);
         assert!(fuel > 0);
         assert!(collect_and_sort(peeled).into_iter().eq(63..65));
-        let peeled = chain.peel(Antichain::new());
+        let peeled = chain.peel(AntichainRef::new(&[]));
         let mut fuel = 1000;
         chain.restore(&mut fuel);
         assert!(fuel > 0);
@@ -301,7 +302,7 @@ mod tests {
 
         let now = 1739276664_u64;
 
-        let peeled = chain.peel(Antichain::from_elem(now));
+        let peeled = chain.peel(AntichainRef::new(&[now]));
         let mut fuel = 1000;
         chain.restore(&mut fuel);
         assert!(fuel > 0);
@@ -315,7 +316,7 @@ mod tests {
         let mut offset = now;
         let step = 1000;
         while offset < now + limit {
-            let peeled = chain.peel(Antichain::from_elem(offset + step));
+            let peeled = chain.peel(AntichainRef::new(&[offset + step]));
             assert!(collect_and_sort(peeled)
                 .into_iter()
                 .eq(offset..offset + step));

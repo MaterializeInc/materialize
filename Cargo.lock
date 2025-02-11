@@ -6587,6 +6587,7 @@ dependencies = [
  "mz-pgtz",
  "mz-proto",
  "mz-sql-parser",
+ "mz-timely-util",
  "num-traits",
  "num_enum",
  "ordered-float 4.2.0",
