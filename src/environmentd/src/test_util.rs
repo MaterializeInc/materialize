@@ -279,6 +279,16 @@ impl TestHarness {
         self.builtin_system_cluster_config.size = builtin_system_cluster_replica_size;
         self
     }
+
+    pub fn with_builtin_system_cluster_replication_factor(
+        mut self,
+        builtin_system_cluster_replication_factor: u32,
+    ) -> Self {
+        self.builtin_system_cluster_config.replication_factor =
+            builtin_system_cluster_replication_factor;
+        self
+    }
+
     pub fn with_builtin_catalog_server_cluster_replica_size(
         mut self,
         builtin_catalog_server_cluster_replica_size: String,
@@ -287,7 +297,6 @@ impl TestHarness {
             builtin_catalog_server_cluster_replica_size;
         self
     }
-    // TODO: Add with_builtin_probe_cluster_replica_size
 
     pub fn with_propagate_crashes(mut self, propagate_crashes: bool) -> Self {
         self.propagate_crashes = propagate_crashes;
