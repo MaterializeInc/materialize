@@ -559,17 +559,17 @@ crates_repository(
     },
     cargo_config = "//:.cargo/config.toml",
     cargo_lockfile = "//:Cargo.lock",
-    generator_urls = {
-        "aarch64-apple-darwin": "https://github.com/MaterializeInc/rules_rust/releases/download/v{0}/cargo-bazel-aarch64-apple-darwin".format(RULES_RUST_VERSION),
-        "x86_64-apple-darwin": "https://github.com/MaterializeInc/rules_rust/releases/download/v{0}/cargo-bazel-x86_64-apple-darwin".format(RULES_RUST_VERSION),
-        "aarch64-unknown-linux-gnu": "https://github.com/MaterializeInc/rules_rust/releases/download/v{0}/cargo-bazel-aarch64-unknown-linux-gnu".format(RULES_RUST_VERSION),
-        "x86_64-unknown-linux-gnu": "https://github.com/MaterializeInc/rules_rust/releases/download/v{0}/cargo-bazel-x86_64-unknown-linux-gnu".format(RULES_RUST_VERSION),
-    },
     generator_sha256s = {
         "aarch64-apple-darwin": "8204746334a17823bd6a54ce2c3821b0bdca96576700d568e2ca2bd8224dc0ea",
         "x86_64-apple-darwin": "2ee14b230d32c05415852b7a388b76e700c87c506459e5b31ced19d6c131b6d0",
         "aarch64-unknown-linux-gnu": "3792feb084bd43b9a7a9cd75be86ee9910b46db59360d6b29c9cca2f8889a0aa",
         "x86_64-unknown-linux-gnu": "2b9d07f34694f63f0cc704989ad6ec148ff8d126579832f4f4d88edea75875b2",
+    },
+    generator_urls = {
+        "aarch64-apple-darwin": "https://github.com/MaterializeInc/rules_rust/releases/download/v{0}/cargo-bazel-aarch64-apple-darwin".format(RULES_RUST_VERSION),
+        "x86_64-apple-darwin": "https://github.com/MaterializeInc/rules_rust/releases/download/v{0}/cargo-bazel-x86_64-apple-darwin".format(RULES_RUST_VERSION),
+        "aarch64-unknown-linux-gnu": "https://github.com/MaterializeInc/rules_rust/releases/download/v{0}/cargo-bazel-aarch64-unknown-linux-gnu".format(RULES_RUST_VERSION),
+        "x86_64-unknown-linux-gnu": "https://github.com/MaterializeInc/rules_rust/releases/download/v{0}/cargo-bazel-x86_64-unknown-linux-gnu".format(RULES_RUST_VERSION),
     },
     # When `isolated` is true, Bazel will create a new `$CARGO_HOME`, i.e. it
     # won't use `~/.cargo`, when re-pinning. This is nice but not totally
@@ -709,6 +709,10 @@ load("@crates_io//:defs.bzl", "crate_repositories")
 crate_repositories()
 
 crate_universe_dependencies()
+
+load("@rules_rust//cargo:deps.bzl", "cargo_dependencies")
+
+cargo_dependencies()
 
 # Third-Party Rust Tools
 #

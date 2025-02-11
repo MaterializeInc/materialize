@@ -55,6 +55,7 @@ pub struct RustLibrary {
     is_proc_macro: bool,
     features: Field<List<QuotedString>>,
     aliases: Field<Aliases>,
+    lint_config: Field<QuotedString>,
     deps: Field<List<QuotedString>>,
     proc_macro_deps: Field<List<QuotedString>>,
     data: Field<List<QuotedString>>,
@@ -147,6 +148,9 @@ impl RustLibrary {
             proc_macro_deps = proc_macro_deps.concat_other(select);
         }
 
+        // TODO(parkmycar): Make the lint_config configurable.
+        let lint_config = QuotedString::new(":lints");
+
         // For every library we also generate the tests targets.
         let unit_test = RustTest::library(config, metadata, crate_config, features.clone())?;
         let doc_tests = RustDocTest::generate(config, metadata, crate_config)?;
@@ -206,6 +210,7 @@ impl RustLibrary {
             is_proc_macro: metadata.is_proc_macro(),
             features: Field::new("crate_features", features),
             aliases: Field::new("aliases", Aliases::default().normal().proc_macro()),
+            lint_config: Field::new("lint_config", lint_config),
             deps: Field::new("deps", deps),
             proc_macro_deps: Field::new("proc_macro_deps", proc_macro_deps),
             data: Field::new("data", data),
@@ -239,6 +244,7 @@ impl ToBazelDefinition for RustLibrary {
 
             self.features.format(&mut w)?;
             self.aliases.format(&mut w)?;
+            self.lint_config.format(&mut w)?;
             self.deps.format(&mut w)?;
             self.proc_macro_deps.format(&mut w)?;
             self.data.format(&mut w)?;
@@ -265,6 +271,7 @@ pub struct RustBinary {
     version: Field<QuotedString>,
     crate_root: Field<QuotedString>,
     features: Field<List<QuotedString>>,
+    lint_config: Field<QuotedString>,
     aliases: Field<Aliases>,
     deps: Field<List<QuotedString>>,
     proc_macro_deps: Field<List<QuotedString>>,
@@ -346,6 +353,9 @@ impl RustBinary {
             proc_macro_deps = proc_macro_deps.concat_other(select);
         }
 
+        // TODO(parkmycar): Make the lint_config configurable.
+        let lint_config = QuotedString::new(":lints");
+
         // Add the library crate as a dep if it isn't already.
         if maybe_library.is_some() {
             let dep = format!(":{}", metadata.name().to_case(Case::Snake));
@@ -382,6 +392,7 @@ impl RustBinary {
             crate_root: Field::new("crate_root", binary_path),
             features: Field::new("features", List::empty()),
             aliases: Field::new("aliases", Aliases::default().normal().proc_macro()),
+            lint_config: Field::new("lint_config", lint_config),
             deps: Field::new("deps", deps),
             proc_macro_deps: Field::new("proc_macro_deps", proc_macro_deps),
             data: Field::new("data", data),
@@ -409,6 +420,7 @@ impl ToBazelDefinition for RustBinary {
 
             self.features.format(&mut w)?;
             self.aliases.format(&mut w)?;
+            self.lint_config.format(&mut w)?;
             self.deps.format(&mut w)?;
             self.proc_macro_deps.format(&mut w)?;
             self.compile_data.format(&mut w)?;
@@ -431,6 +443,7 @@ pub struct RustTest {
     kind: RustTestKind,
     features: Field<List<QuotedString>>,
     aliases: Field<Aliases>,
+    lint_config: Field<QuotedString>,
     deps: Field<List<QuotedString>>,
     proc_macro_deps: Field<List<QuotedString>>,
     size: Field<RustTestSize>,
@@ -488,6 +501,9 @@ impl RustTest {
             proc_macro_deps = proc_macro_deps.concat_other(select);
         }
 
+        // TODO(parkmycar): Make the lint_config configurable.
+        let lint_config = QuotedString::new(":lints");
+
         if matches!(kind, RustTestKind::Integration { .. }) {
             let dep = format!(":{crate_name}");
             if metadata.is_proc_macro() {
@@ -529,6 +545,7 @@ impl RustTest {
             kind,
             features: Field::new("crate_features", crate_features),
             aliases: Field::new("aliases", aliases),
+            lint_config: Field::new("lint_config", lint_config),
             deps: Field::new("deps", deps),
             proc_macro_deps: Field::new("proc_macro_deps", proc_macro_deps),
             size: Field::new("size", size),
@@ -604,6 +621,7 @@ impl ToBazelDefinition for RustTest {
             self.kind.format(&mut w)?;
             self.features.format(&mut w)?;
             self.aliases.format(&mut w)?;
+            self.lint_config.format(&mut w)?;
             self.deps.format(&mut w)?;
             self.proc_macro_deps.format(&mut w)?;
             self.size.format(&mut w)?;
@@ -946,6 +964,48 @@ impl ToBazelDefinition for CargoBuildScript {
             self.compile_data.format(&mut w)?;
             self.rustc_flags.format(&mut w)?;
             self.rustc_env.format(&mut w)?;
+        }
+        writeln!(w, ")")?;
+
+        Ok(())
+    }
+}
+
+/// Reads lint config from a Cargo.toml file.
+#[derive(Debug)]
+pub struct ExtractCargoLints {
+    name: Field<QuotedString>,
+    manifest: Field<QuotedString>,
+    workspace: Field<QuotedString>,
+}
+
+impl RustTarget for ExtractCargoLints {
+    fn rules(&self) -> Vec<Rule> {
+        vec![Rule::ExtractCargoLints]
+    }
+}
+
+impl ExtractCargoLints {
+    pub fn generate() -> Self {
+        ExtractCargoLints {
+            name: Field::new("name", QuotedString::new("lints")),
+            manifest: Field::new("manifest", QuotedString::new("Cargo.toml")),
+            workspace: Field::new("workspace", QuotedString::new("@//:Cargo.toml")),
+        }
+    }
+}
+
+impl ToBazelDefinition for ExtractCargoLints {
+    fn format(&self, writer: &mut dyn fmt::Write) -> Result<(), fmt::Error> {
+        let mut w = AutoIndentingWriter::new(writer);
+
+        writeln!(w, "extract_cargo_lints(")?;
+        {
+            let mut w = w.indent();
+
+            self.name.format(&mut w)?;
+            self.manifest.format(&mut w)?;
+            self.workspace.format(&mut w)?;
         }
         writeln!(w, ")")?;
 
