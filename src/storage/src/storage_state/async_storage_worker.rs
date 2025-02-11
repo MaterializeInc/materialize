@@ -267,15 +267,47 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                         // amount of memory required to hydrate.
                         //
                         // For each output `o` and for each input `i` of the ingestion the
-                        // controller guarantees that i.since < o.upper. Therefore the largest
-                        // as-of for a particular output `o` is `{ t - 1 | t in o.upper }`.
+                        // controller guarantees that i.since < o.upper except when o.upper is
+                        // [T::minimum()]. Therefore the largest as-of for a particular output `o`
+                        // is `{ (t - 1).advance_by(i.since) | t in o.upper }`.
                         //
                         // To calculate the global as_of frontier we take the minimum of all those
                         // per-output as-of frontiers.
+                        let client = persist_clients
+                            .open(
+                                ingestion_description
+                                    .ingestion_metadata
+                                    .persist_location
+                                    .clone(),
+                            )
+                            .await
+                            .expect("error creating persist client");
+                        let read_handle = client
+                            .open_leased_reader::<SourceData, (), T, Diff>(
+                                seen_remap_shard,
+                                Arc::new(ingestion_description.desc.connection.timestamp_desc()),
+                                Arc::new(UnitSchema),
+                                Diagnostics {
+                                    shard_name: ingestion_description
+                                        .remap_collection_id
+                                        .to_string(),
+                                    handle_purpose: format!("resumption data for {}", id),
+                                },
+                                false,
+                            )
+                            .await
+                            .unwrap();
+                        let remap_since = read_handle.since().clone();
+                        mz_ore::task::spawn(move || "deferred_expire", async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                            read_handle.expire().await;
+                        });
                         let mut as_of = Antichain::new();
                         for upper in resume_uppers.values() {
                             for t in upper.elements() {
-                                as_of.insert(t.step_back().unwrap_or(T::minimum()));
+                                let mut t_prime = t.step_back().unwrap_or(T::minimum());
+                                t_prime.advance_by(remap_since.borrow());
+                                as_of.insert(t_prime);
                             }
                         }
 
