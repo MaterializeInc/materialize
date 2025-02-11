@@ -311,19 +311,26 @@ where
 
         let mut command_txs = Vec::with_capacity(workers);
         let mut response_rxs = Vec::with_capacity(workers);
+        let mut activator_rxs = Vec::with_capacity(workers);
         let mut activators = Vec::with_capacity(workers);
         for client_tx in &timely.client_txs {
             let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
             let (resp_tx, resp_rx) = mpsc::unbounded_channel();
-            let (activator_tx, mut activator_rx) = mpsc::unbounded_channel();
+            let (activator_tx, activator_rx) = mpsc::unbounded_channel();
 
             client_tx
                 .send((cmd_rx, resp_tx, activator_tx))
                 .expect("worker not dropped");
-            let activator = activator_rx.recv().await.expect("worker not dropped");
 
             command_txs.push(cmd_tx);
             response_rxs.push(resp_rx);
+            activator_rxs.push(activator_rx);
+        }
+
+        // It's important that we wait for activators only after we have sent the channels to all
+        // workers. Otherwise we could end up in a stalled state. See database-issues#8957.
+        for mut activator_rx in activator_rxs {
+            let activator = activator_rx.recv().await.expect("worker not dropped");
             activators.push(activator);
         }
 
