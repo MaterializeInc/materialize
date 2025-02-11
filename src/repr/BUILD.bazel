@@ -43,6 +43,7 @@ rust_library(
         "//src/pgtz:mz_pgtz",
         "//src/proto:mz_proto",
         "//src/sql-parser:mz_sql_parser",
+        "//src/timely-util:mz_timely_util",
     ] + all_crate_deps(normal = True),
 )
 
@@ -85,6 +86,7 @@ rust_test(
         "//src/pgtz:mz_pgtz",
         "//src/proto:mz_proto",
         "//src/sql-parser:mz_sql_parser",
+        "//src/timely-util:mz_timely_util",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -102,6 +104,7 @@ rust_doc_test(
         "//src/pgtz:mz_pgtz",
         "//src/proto:mz_proto",
         "//src/sql-parser:mz_sql_parser",
+        "//src/timely-util:mz_timely_util",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -180,6 +183,7 @@ rust_test(
         "//src/pgtz:mz_pgtz",
         "//src/proto:mz_proto",
         "//src/sql-parser:mz_sql_parser",
+        "//src/timely-util:mz_timely_util",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
