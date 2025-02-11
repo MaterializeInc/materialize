@@ -893,14 +893,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     update
                 });
             for update in status_updates {
-                self.send_storage_response(&response_tx, StorageResponse::StatusUpdate(update));
+                self.send_storage_response(response_tx, StorageResponse::StatusUpdate(update));
             }
             self.storage_state.initial_status_reported = true;
         }
 
         // Pump updates into our state and stage them for reporting.
         for shared_update in self.storage_state.shared_status_updates.take() {
-            self.send_storage_response(&response_tx, StorageResponse::StatusUpdate(shared_update.clone()));
+            self.send_storage_response(response_tx, StorageResponse::StatusUpdate(shared_update.clone()));
 
             self.storage_state.latest_status_updates.insert(shared_update.id, shared_update);
         }

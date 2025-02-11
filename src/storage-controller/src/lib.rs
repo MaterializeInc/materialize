@@ -2155,9 +2155,8 @@ where
         for resp in stashed_responses {
             match resp {
                 (_replica_id, StorageResponse::FrontierUpper(id, upper)) => {
-                    let update = (id, upper);
-                    self.update_write_frontiers(std::slice::from_ref(&update));
-                    updated_frontiers.insert(update.0, update.1);
+                    self.update_write_frontier(&id, &upper);
+                    updated_frontiers.insert(id, upper);
                 }
                 (replica_id, StorageResponse::DroppedId(id)) => {
                     let replica_id = replica_id.expect("DroppedId from unknown replica");
@@ -2651,52 +2650,50 @@ where
     }
 
     #[instrument(level = "debug", fields(updates))]
-    fn update_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<T>)]) {
+    fn update_write_frontier(&mut self, id: &GlobalId, new_upper: &Antichain<T>) {
         let mut read_capability_changes = BTreeMap::default();
 
-        for (id, new_upper) in updates.iter() {
-            if let Some(collection) = self.collections.get_mut(id) {
-                let (write_frontier, derived_since, hold_policy) = match &mut collection.extra_state
-                {
-                    CollectionStateExtra::Ingestion(ingestion) => (
-                        &mut ingestion.write_frontier,
-                        &mut ingestion.derived_since,
-                        &ingestion.hold_policy,
-                    ),
-                    CollectionStateExtra::None => {
-                        if matches!(collection.data_source, DataSource::Progress) {
-                            // We do get these, but can't do anything with it!
-                        } else {
-                            tracing::error!(
-                                ?collection,
-                                ?new_upper,
-                                "updated write frontier for collection which is not an ingestion"
-                            );
-                        }
-                        continue;
+        if let Some(collection) = self.collections.get_mut(id) {
+            let (write_frontier, derived_since, hold_policy) = match &mut collection.extra_state
+            {
+                CollectionStateExtra::Ingestion(ingestion) => (
+                    &mut ingestion.write_frontier,
+                    &mut ingestion.derived_since,
+                    &ingestion.hold_policy,
+                ),
+                CollectionStateExtra::None => {
+                    if matches!(collection.data_source, DataSource::Progress) {
+                        // We do get these, but can't do anything with it!
+                    } else {
+                        tracing::error!(
+                            ?collection,
+                            ?new_upper,
+                            "updated write frontier for collection which is not an ingestion"
+                        );
                     }
-                    CollectionStateExtra::Export(export) => (
-                        &mut export.write_frontier,
-                        &mut export.derived_since,
-                        &export.read_policy,
-                    ),
-                };
-
-                if PartialOrder::less_than(write_frontier, new_upper) {
-                    write_frontier.clone_from(new_upper);
+                    return;
                 }
+                CollectionStateExtra::Export(export) => (
+                    &mut export.write_frontier,
+                    &mut export.derived_since,
+                    &export.read_policy,
+                ),
+            };
 
-                let new_derived_since = hold_policy.frontier(write_frontier.borrow());
-                let mut update = swap_updates(derived_since, new_derived_since);
-                if !update.is_empty() {
-                    read_capability_changes.insert(*id, update);
-                }
-            } else if self.dropped_objects.contains_key(id) {
-                // We dropped an object but might still get updates from cluster
-                // side, before it notices the drop. This is expected and fine.
-            } else {
-                soft_panic_or_log!("spurious upper update for {id}: {new_upper:?}");
+            if PartialOrder::less_than(write_frontier, new_upper) {
+                write_frontier.clone_from(new_upper);
             }
+
+            let new_derived_since = hold_policy.frontier(write_frontier.borrow());
+            let mut update = swap_updates(derived_since, new_derived_since);
+            if !update.is_empty() {
+                read_capability_changes.insert(*id, update);
+            }
+        } else if self.dropped_objects.contains_key(id) {
+            // We dropped an object but might still get updates from cluster
+            // side, before it notices the drop. This is expected and fine.
+        } else {
+            soft_panic_or_log!("spurious upper update for {id}: {new_upper:?}");
         }
 
         if !read_capability_changes.is_empty() {
