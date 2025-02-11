@@ -49,18 +49,20 @@ WHERE name = <SOURCE_NAME>;
 
 ## Has my source ingested its initial snapshot?
 
-[//]: # "TODO(morsapaes) If we decide to include screenshots of the console in
-this section, we should also adapt ingest-data/_index_ for consistency."
+[//]: # "This page as a whole (as well as some of our other troubleshooting
+    pages) can undergo a rewrite since the page is a bit of troubleshooting/faq.
+    That is, the troubleshooting might relate to 'why is my query not returning'
+    and the answer is check if the source is still snapshotting.  For now, just
+    tweaking the changes made for this PR and will address how to rework this
+    page in the future."
 
-When a new source is created, Materialize performs a sync of all data available
-in the external system before it starts ingesting new data — an operation
-known as _snapshotting_. To ensure correct and consistent results, this snapshot is
-committed atomically at a specific timestamp. Because of that, you will not be
-able to query your source (or, queries will return no data) until Materialize
-has finished ingesting the initial snapshot.
+While a source is [snapshotting](/ingest-data/#snapshotting), the source (and the associated subsources)
+cannot serve queries. That is, queries issued to the snapshotting source (and
+its subsources) will return after the snapshotting completes (unless the user
+breaks out of the query).
 
 Snapshotting can take between a few minutes to several hours, depending on the
-size of your dataset and the [size of your ingestion cluster](https://materialize.com/docs/sql/create-cluster/#disk-enabled-sizes).
+size of your dataset and the size of your ingestion cluster.
 
 To determine whether your source has completed ingesting the initial snapshot,
 you can query the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
@@ -128,17 +130,3 @@ Beware that these statistics periodically reset to zero, as internal components
 of the system restart. This is expected behavior. As a result, you should
 restrict your attention to how these statistics evolve over time, and not their
 absolute values at any moment in time.
-
-## Is my source hydrated?
-
-When the source has completed the initial snapshot and every time the source cluster is restarted, it reads the data from the storage backend. This process is called rehydration. Depending on the type and the size of the source, this can be a very lightweight process that takes seconds, but for large `UPSERT` sources it can also be hours. During rehydration, queries are likely to block until the process has been completed. So it's best to monitor the source status and wait until rehydration has completed.
-
-To determine whether your source has hydrated, you can query the mz_source_statistics system catalog table:
-
-```sql
-SELECT
-        s.name,
-        h.hydrated
-FROM mz_sources AS s
-INNER JOIN mz_internal.mz_hydration_statuses AS h ON (s.id = h.object_id);
-```
