@@ -132,7 +132,7 @@ pub(crate) enum BuiltinTableUpdateSource {
     /// Internal update, notify the caller when it's complete.
     Internal(oneshot::Sender<()>),
     /// Update was triggered by some background process, such as periodic heartbeats from COMPUTE.
-    Background,
+    Background(oneshot::Sender<()>),
 }
 
 /// A pending write transaction that will be committing during the next group commit.
@@ -504,8 +504,9 @@ impl Coordinator {
                         appends.entry(update.id).or_default().push(data);
                     }
                     // Once the write completes we notify any waiters.
-                    if let BuiltinTableUpdateSource::Internal(tx) = source {
-                        notifies.push(tx);
+                    match source {
+                        BuiltinTableUpdateSource::Internal(tx)
+                        | BuiltinTableUpdateSource::Background(tx) => notifies.push(tx),
                     }
                 }
             }
@@ -735,7 +736,7 @@ impl<'a> BuiltinTableAppend<'a> {
     ///
     /// Note: When in read-only mode, this will buffer the update and return
     /// immediately.
-    pub fn background(self, mut updates: Vec<BuiltinTableUpdate>) {
+    pub fn background(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
         if self.coord.controller.read_only() {
             self.coord
                 .buffered_builtin_table_updates
@@ -743,13 +744,16 @@ impl<'a> BuiltinTableAppend<'a> {
                 .expect("in read-only mode")
                 .append(&mut updates);
 
-            return;
+            return Box::pin(futures::future::ready(()));
         }
 
+        let (tx, rx) = oneshot::channel();
         self.coord.pending_writes.push(PendingWriteTxn::System {
             updates,
-            source: BuiltinTableUpdateSource::Background,
+            source: BuiltinTableUpdateSource::Background(tx),
         });
+
+        Box::pin(rx.map(|_| ()))
     }
 
     /// Submits a write to be executed during the next group commit __and__ triggers a group commit.

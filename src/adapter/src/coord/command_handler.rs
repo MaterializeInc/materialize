@@ -293,7 +293,7 @@ impl Coordinator {
                         "not tracking all required builtin table updates!"
                     );
                 }
-                let notify = self.builtin_table_update().defer(updates);
+                let notify = self.builtin_table_update().background(updates);
 
                 let resp = Ok(StartupResponse {
                     role_id,
