@@ -735,7 +735,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
         let (reqs, mut maintenance) = machine.spine_exert(fuel).await;
         for req in reqs {
             info!(
-                "dangerous_force_compaction_and_break_pushdown {} {} compacting {} batches in {} parts totaling {} bytes: lower={:?} upper={:?} since={:?}",
+                "force_compaction {} {} compacting {} batches in {} parts totaling {} bytes: lower={:?} upper={:?} since={:?}",
                 machine.applier.shard_metrics.name,
                 machine.applier.shard_metrics.shard_id,
                 req.inputs.len(),
@@ -757,7 +757,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
                 Ok(x) => x,
                 Err(err) => {
                     warn!(
-                        "dangerous_force_compaction_and_break_pushdown {} {} errored in compaction: {:?}",
+                        "force_compaction {} {} errored in compaction: {:?}",
                         machine.applier.shard_metrics.name,
                         machine.applier.shard_metrics.shard_id,
                         err
@@ -767,7 +767,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
             };
             machine.applier.metrics.compaction.admin_count.inc();
             info!(
-                "dangerous_force_compaction_and_break_pushdown {} {} compacted in {:?}: {:?}",
+                "force_compaction {} {} compacted in {:?}: {:?}",
                 machine.applier.shard_metrics.name,
                 machine.applier.shard_metrics.shard_id,
                 start.elapsed(),
@@ -787,7 +787,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
         let num_batches = machine.applier.all_batches().len();
         if num_batches < 2 {
             info!(
-                "dangerous_force_compaction_and_break_pushdown {} {} exiting with {} batches",
+                "force_compaction {} {} exiting with {} batches",
                 machine.applier.shard_metrics.name,
                 machine.applier.shard_metrics.shard_id,
                 num_batches
