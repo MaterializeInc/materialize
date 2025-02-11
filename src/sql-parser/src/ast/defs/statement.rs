@@ -2336,6 +2336,7 @@ pub enum ClusterFeatureName {
     EnableEagerDeltaJoins,
     EnableVariadicLeftJoinLowering,
     EnableLetrecFixpointAnalysis,
+    EnableJoinPrioritizeArranged,
 }
 
 impl WithOptionName for ClusterFeatureName {
@@ -2350,7 +2351,8 @@ impl WithOptionName for ClusterFeatureName {
             | Self::EnableNewOuterJoinLowering
             | Self::EnableEagerDeltaJoins
             | Self::EnableVariadicLeftJoinLowering
-            | Self::EnableLetrecFixpointAnalysis => false,
+            | Self::EnableLetrecFixpointAnalysis
+            | Self::EnableJoinPrioritizeArranged => false,
         }
     }
 }
@@ -3897,6 +3899,7 @@ pub enum ExplainPlanOptionName {
     EnableEagerDeltaJoins,
     EnableVariadicLeftJoinLowering,
     EnableLetrecFixpointAnalysis,
+    EnableJoinPrioritizeArranged,
 }
 
 impl WithOptionName for ExplainPlanOptionName {
@@ -3931,7 +3934,8 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::EnableNewOuterJoinLowering
             | Self::EnableEagerDeltaJoins
             | Self::EnableVariadicLeftJoinLowering
-            | Self::EnableLetrecFixpointAnalysis => false,
+            | Self::EnableLetrecFixpointAnalysis
+            | Self::EnableJoinPrioritizeArranged => false,
         }
     }
 }

@@ -118,6 +118,8 @@ optimizer_feature_flags!({
     reoptimize_imported_views: bool,
     // See the feature flag of the same name.
     enable_reduce_reduction: bool,
+    // See the feature flag of the same name.
+    enable_join_prioritize_arranged: bool,
 });
 
 /// A trait used to implement layered config construction.
