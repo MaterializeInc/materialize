@@ -43,7 +43,7 @@ use tokio::sync::mpsc::error::SendError;
 use tracing::{info, trace, warn};
 
 use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
-use crate::metrics::ComputeMetrics;
+use crate::metrics::{ComputeMetrics, WorkerMetrics};
 
 /// Caller-provided configuration for compute.
 #[derive(Clone, Debug)]
@@ -188,7 +188,7 @@ struct Worker<'w, A: Allocate> {
     )>,
     compute_state: Option<ComputeState>,
     /// Compute metrics.
-    metrics: ComputeMetrics,
+    metrics: WorkerMetrics,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<PersistClientCache>,
@@ -217,10 +217,13 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
             set_core_affinity(timely_worker.index());
         }
 
+        let worker_id = timely_worker.index();
+        let metrics = config.metrics.for_worker(worker_id);
+
         Worker {
             timely_worker,
             client_rx,
-            metrics: config.metrics,
+            metrics,
             context: config.context,
             persist_clients,
             txns_ctx,
@@ -472,8 +475,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     compute_state.check_expiration();
                 }
 
-                self.metrics
-                    .record_shared_row_metrics(self.timely_worker.index());
+                self.metrics.record_shared_row_metrics();
             } else {
                 // We didn't perform maintenance, sleep until the next maintenance interval.
                 let next_maintenance = last_maintenance + maintenance_interval;
@@ -514,7 +516,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
                 self.compute_state = Some(ComputeState::new(
-                    self.timely_worker.index(),
                     Arc::clone(&self.persist_clients),
                     self.txns_ctx.clone(),
                     self.metrics.clone(),
@@ -567,8 +568,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         command_rx: &CommandReceiverQueue,
         response_tx: &mut ResponseSender,
     ) -> Result<(), RecvError> {
-        let worker_id = self.timely_worker.index();
-
         // To initialize the connection, we want to drain all commands until we receive a
         // `ComputeCommand::InitializationComplete` command to form a target command state.
         let mut new_commands = Vec::new();
@@ -690,7 +689,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                             }
 
                             compute_state.metrics.record_dataflow_reconciliation(
-                                worker_id,
                                 compatible,
                                 uncompacted,
                                 subscribe_free,
@@ -825,8 +823,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         // Overwrite `self.command_history` to reflect `new_commands`.
         // It is possible that there still isn't a compute state yet.
         if let Some(compute_state) = &mut self.compute_state {
-            let mut command_history =
-                ComputeCommandHistory::new(self.metrics.for_history(worker_id));
+            let mut command_history = ComputeCommandHistory::new(self.metrics.for_history());
             for command in new_commands.iter() {
                 command_history.push(command.clone());
             }

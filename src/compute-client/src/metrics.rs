@@ -447,7 +447,7 @@ pub(crate) struct ReplicaCollectionMetrics {
 }
 
 /// Metrics keyed by `ComputeCommand` type.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CommandMetrics<M> {
     /// Metrics for `CreateTimely`.
     pub create_timely: M,

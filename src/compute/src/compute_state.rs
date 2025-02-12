@@ -65,7 +65,6 @@ use uuid::Uuid;
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
-use crate::metrics::ComputeMetrics;
 use crate::metrics::WorkerMetrics;
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
@@ -113,10 +112,8 @@ pub struct ComputeState {
     max_result_size: u64,
     /// Specification for rendering linear joins.
     pub linear_join_spec: LinearJoinSpec,
-    /// Metrics for this replica.
-    pub metrics: ComputeMetrics,
-    /// Metrics for this replica, specific to a worker.
-    pub worker_metrics: WorkerMetrics,
+    /// Metrics for this worker.
+    pub metrics: WorkerMetrics,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
     /// Other configuration for compute
@@ -183,22 +180,19 @@ pub struct ComputeState {
 impl ComputeState {
     /// Construct a new `ComputeState`.
     pub fn new(
-        worker_id: usize,
         persist_clients: Arc<PersistClientCache>,
         txns_ctx: TxnsContext,
-        metrics: ComputeMetrics,
+        metrics: WorkerMetrics,
         tracing_handle: Arc<TracingHandle>,
         context: ComputeInstanceContext,
     ) -> Self {
-        let traces = TraceManager::new(metrics.for_traces(worker_id));
-        let command_history = ComputeCommandHistory::new(metrics.for_history(worker_id));
+        let traces = TraceManager::new(metrics.clone());
+        let command_history = ComputeCommandHistory::new(metrics.for_history());
         let (hydration_tx, hydration_rx) = mpsc::channel();
 
         // We always initialize as read_only=true. Only when we're explicitly
         // allowed do we switch to doing writes.
         let (read_only_tx, read_only_rx) = watch::channel(true);
-
-        let worker_metrics = WorkerMetrics::from(&metrics, worker_id);
 
         Self {
             collections: Default::default(),
@@ -214,7 +208,6 @@ impl ComputeState {
             max_result_size: u64::MAX,
             linear_join_spec: Default::default(),
             metrics,
-            worker_metrics,
             tracing_handle,
             context,
             worker_config: mz_dyncfgs::all_dyncfgs().into(),
@@ -337,7 +330,7 @@ impl ComputeState {
             self.replica_expiration = Antichain::from_elem(replica_expiration);
 
             // Record the replica expiration in the metrics.
-            self.worker_metrics
+            self.metrics
                 .replica_expiration_timestamp_seconds
                 .set(replica_expiration.into());
         }
@@ -389,7 +382,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // Record the command duration, per worker and command kind.
         let timer = self
             .compute_state
-            .worker_metrics
+            .metrics
             .handle_command_duration_seconds
             .for_command(&cmd)
             .start_timer();
@@ -838,7 +831,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             let expiration = Duration::from_millis(<u64>::from(expiration)).as_secs_f64();
             let remaining = expiration - now;
             self.compute_state
-                .worker_metrics
+                .metrics
                 .replica_expiration_remaining_seconds
                 .set(remaining)
         }

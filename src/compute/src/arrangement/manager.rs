@@ -24,19 +24,19 @@ use timely::dataflow::Scope;
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::PartialOrder;
 
-use crate::metrics::TraceMetrics;
+use crate::metrics::WorkerMetrics;
 use crate::typedefs::{ErrAgent, RowRowAgent};
 
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
 /// representation of that collection.
 pub struct TraceManager {
     pub(crate) traces: BTreeMap<GlobalId, TraceBundle>,
-    metrics: TraceMetrics,
+    metrics: WorkerMetrics,
 }
 
 impl TraceManager {
     /// TODO(undocumented)
-    pub fn new(metrics: TraceMetrics) -> Self {
+    pub fn new(metrics: WorkerMetrics) -> Self {
         TraceManager {
             traces: BTreeMap::new(),
             metrics,
@@ -52,7 +52,7 @@ impl TraceManager {
     /// be able to remove this code.
     pub fn maintenance(&mut self) {
         let start = Instant::now();
-        self.metrics.maintenance_active_info.set(1);
+        self.metrics.arrangement_maintenance_active_info.set(1);
 
         let mut antichain = Antichain::new();
         for bundle in self.traces.values_mut() {
@@ -63,8 +63,10 @@ impl TraceManager {
         }
 
         let duration = start.elapsed().as_secs_f64();
-        self.metrics.maintenance_seconds_total.inc_by(duration);
-        self.metrics.maintenance_active_info.set(0);
+        self.metrics
+            .arrangement_maintenance_seconds_total
+            .inc_by(duration);
+        self.metrics.arrangement_maintenance_active_info.set(0);
     }
 
     /// Enables compaction of traces associated with the identifier.
