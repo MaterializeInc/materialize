@@ -68,9 +68,6 @@ skip = [
     { name = "regex-automata", version = "0.1.9" },
 
     # TODO: Required for Rust nightly upgrade
-    { name = "portable-atomic", version = "0.3.20" },
-
-    # TODO: Required for Rust nightly upgrade
     { name = "http", version = "0.2.9" },
 
     # TODO: Required for Rust nightly upgrade
@@ -133,6 +130,9 @@ skip = [
     { name = "twox-hash", version = "1.6.3" },
     { name = "miniz_oxide", version = "0.5.4" },
     { name = "unicode-width", version = "0.1.10" },
+    # Used by rdkafka-sys
+    { name = "num_enum", version = "0.5.11" },
+    { name = "num_enum_derive", version = "0.5.11" },
 ]
 
 # Use `tracing` instead.
