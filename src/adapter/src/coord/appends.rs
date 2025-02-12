@@ -11,42 +11,54 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::sync::Arc;
-use std::time::Duration;
+use std::pin::Pin;
+use std::sync::{Arc, LazyLock};
+use std::time::{Duration, Instant};
 
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::GROUP_COMMIT_BATCH_DURATION;
+use mz_catalog::builtin::{BuiltinTable, MZ_SESSIONS};
+use mz_dyncfg::{ConfigSet, ConfigValHandle};
+use mz_expr::CollectionPlan;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument};
 use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::names::ResolvedIds;
-use mz_sql::plan::Plan;
+use mz_sql::plan::{ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
 use mz_timestamp_oracle::WriteTimestamp;
+use prometheus::Histogram;
 use smallvec::SmallVec;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 use tracing::{debug_span, info, warn, Instrument, Span};
 
-use crate::catalog::BuiltinTableUpdate;
+use crate::catalog::{BuiltinTableUpdate, Catalog};
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
-use crate::session::{GroupCommitWriteLocks, WriteLocks};
+use crate::metrics::GroupCommitMetrics;
+use crate::session::{GroupCommitWriteLocks, Session, WriteLocks};
 use crate::util::{CompletedClientTransmitter, ResultExt};
 use crate::{AdapterError, ExecuteContext};
 
-/// An operation that was deferred waiting for [`WriteLocks`].
+/// Tables that we emit updates for when starting a new session.
+pub(crate) static REQUIRED_BUILTIN_TABLES: &[&LazyLock<BuiltinTable>] = &[&MZ_SESSIONS];
+
+/// An operation that was deferred waiting on a resource to be available.
+///
+/// For example when inserting into a table we defer on acquiring [`WriteLocks`].
 #[derive(Debug)]
-pub enum DeferredWriteOp {
+pub enum DeferredOp {
     /// A plan, e.g. ReadThenWrite, that needs locks before sequencing.
     Plan(DeferredPlan),
     /// Inserts into a collection.
     Write(DeferredWrite),
 }
 
-impl DeferredWriteOp {
+impl DeferredOp {
     /// Certain operations, e.g. "blind writes"/`INSERT` statements, can be optimistically retried
     /// because we can share a write lock between multiple operations. In this case we wait to
     /// acquire the locks until [`group_commit`], where writes are groupped by collection and
@@ -60,19 +72,19 @@ impl DeferredWriteOp {
     /// [`group_commit`]: crate::coord::Coordinator::group_commit
     pub(crate) fn can_be_optimistically_retried(&self) -> bool {
         match self {
-            DeferredWriteOp::Plan(_) => false,
-            DeferredWriteOp::Write(_) => true,
+            DeferredOp::Plan(_) => false,
+            DeferredOp::Write(_) => true,
         }
     }
 
     /// Returns an Iterator of all the required locks for current operation.
     pub fn required_locks(&self) -> impl Iterator<Item = CatalogItemId> + '_ {
         match self {
-            DeferredWriteOp::Plan(plan) => {
+            DeferredOp::Plan(plan) => {
                 let iter = plan.requires_locks.iter().copied();
                 itertools::Either::Left(iter)
             }
-            DeferredWriteOp::Write(write) => {
+            DeferredOp::Write(write) => {
                 let iter = write.writes.keys().copied();
                 itertools::Either::Right(iter)
             }
@@ -82,16 +94,16 @@ impl DeferredWriteOp {
     /// Returns the [`ConnectionId`] associated with this deferred op.
     pub fn conn_id(&self) -> &ConnectionId {
         match self {
-            DeferredWriteOp::Plan(plan) => plan.ctx.session().conn_id(),
-            DeferredWriteOp::Write(write) => write.pending_txn.ctx.session().conn_id(),
+            DeferredOp::Plan(plan) => plan.ctx.session().conn_id(),
+            DeferredOp::Write(write) => write.pending_txn.ctx.session().conn_id(),
         }
     }
 
-    /// Consumes the [`DeferredWriteOp`], returning the inner [`ExecuteContext`].
+    /// Consumes the [`DeferredOp`], returning the inner [`ExecuteContext`].
     pub fn into_ctx(self) -> ExecuteContext {
         match self {
-            DeferredWriteOp::Plan(plan) => plan.ctx,
-            DeferredWriteOp::Write(write) => write.pending_txn.ctx,
+            DeferredOp::Plan(plan) => plan.ctx,
+            DeferredOp::Write(write) => write.pending_txn.ctx,
         }
     }
 }
@@ -120,7 +132,7 @@ pub(crate) enum BuiltinTableUpdateSource {
     /// Internal update, notify the caller when it's complete.
     Internal(oneshot::Sender<()>),
     /// Update was triggered by some background process, such as periodic heartbeats from COMPUTE.
-    Background,
+    Background(oneshot::Sender<()>),
 }
 
 /// A pending write transaction that will be committing during the next group commit.
@@ -165,7 +177,7 @@ impl Coordinator {
         self.advance_timelines_interval.reset();
     }
 
-    /// Tries to execute a previously [`DeferredWriteOp`] that requires write locks.
+    /// Tries to execute a previously [`DeferredOp`] that requires write locks.
     ///
     /// If we can't acquire all of the write locks then we'll defer the plan again and wait for
     /// the necessary locks to become available.
@@ -179,6 +191,7 @@ impl Coordinator {
             tracing::warn!(%conn_id, "no deferred op found, it must have been canceled?");
             return;
         };
+        tracing::info!(%conn_id, "trying deferred plan");
 
         // If we pre-acquired a lock, try to acquire the rest.
         let write_locks = match acquired_lock {
@@ -199,7 +212,9 @@ impl Coordinator {
                 let locks = match write_locks.all_or_nothing(op.conn_id()) {
                     Ok(locks) => locks,
                     Err(failed_to_acquire) => {
-                        let acquire_future = self.grant_object_write_lock(failed_to_acquire);
+                        let acquire_future = self
+                            .grant_object_write_lock(failed_to_acquire)
+                            .map(Option::Some);
                         self.defer_op(acquire_future, op);
                         return;
                     }
@@ -211,7 +226,7 @@ impl Coordinator {
         };
 
         match op {
-            DeferredWriteOp::Plan(mut deferred) => {
+            DeferredOp::Plan(mut deferred) => {
                 if let Err(e) = deferred.validity.check(self.catalog()) {
                     deferred.ctx.retire(Err(e))
                 } else {
@@ -239,7 +254,7 @@ impl Coordinator {
                         .await;
                 }
             }
-            DeferredWriteOp::Write(DeferredWrite {
+            DeferredOp::Write(DeferredWrite {
                 span,
                 writes,
                 pending_txn,
@@ -404,7 +419,8 @@ impl Coordinator {
                             }
                             // Darn. We couldn't acquire the locks, defer the write.
                             Err(missing) => {
-                                let acquire_future = self.grant_object_write_lock(missing);
+                                let acquire_future =
+                                    self.grant_object_write_lock(missing).map(Option::Some);
                                 let write = DeferredWrite {
                                     span,
                                     writes,
@@ -420,7 +436,7 @@ impl Coordinator {
 
         // Queue all of our deferred ops.
         for (acquire_future, write) in deferred_writes {
-            self.defer_op(acquire_future, DeferredWriteOp::Write(write));
+            self.defer_op(acquire_future, DeferredOp::Write(write));
         }
 
         // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
@@ -487,8 +503,9 @@ impl Coordinator {
                         appends.entry(update.id).or_default().push(update.data);
                     }
                     // Once the write completes we notify any waiters.
-                    if let BuiltinTableUpdateSource::Internal(tx) = source {
-                        notifies.push(tx);
+                    match source {
+                        BuiltinTableUpdateSource::Internal(tx)
+                        | BuiltinTableUpdateSource::Background(tx) => notifies.push(tx),
                     }
                 }
             }
@@ -624,9 +641,11 @@ impl Coordinator {
         BuiltinTableAppend { coord: self }
     }
 
-    pub(crate) fn defer_op<F>(&mut self, acquire_future: F, op: DeferredWriteOp)
+    pub(crate) fn defer_op<F>(&mut self, acquire_future: F, op: DeferredOp)
     where
-        F: Future<Output = (CatalogItemId, tokio::sync::OwnedMutexGuard<()>)> + Send + 'static,
+        F: Future<Output = Option<(CatalogItemId, tokio::sync::OwnedMutexGuard<()>)>>
+            + Send
+            + 'static,
     {
         let conn_id = op.conn_id().clone();
 
@@ -644,12 +663,13 @@ impl Coordinator {
             // other locks that we later fail to get.
             let acquired_lock = acquire_future.await;
 
-            // If the op can be optimistically retried, don't hold onto the lock so other similar
-            // ops might be queued at the same time.
-            let acquired_lock = if is_optimistic {
-                None
-            } else {
-                Some(acquired_lock)
+            // Some operations, e.g. blind INSERTs, can be optimistically retried, meaning we
+            // can run multiple at once. In those cases we don't hold the lock so we retry all
+            // blind writes for a single object.
+            let acquired_lock = match (acquired_lock, is_optimistic) {
+                (Some(_lock), true) => None,
+                (Some(lock), false) => Some(lock),
+                (None, _) => None,
             };
 
             // If this send fails then the Coordinator is shutting down.
@@ -702,7 +722,7 @@ pub struct BuiltinTableAppend<'a> {
 /// Note: builtin table writes need to talk to persist, which can take 100s of milliseconds. This
 /// type allows you to execute a builtin table write, e.g. via [`BuiltinTableAppend::execute`], and
 /// wait for it to complete, while other long running tasks are concurrently executing.
-pub type BuiltinTableAppendNotify = BoxFuture<'static, ()>;
+pub type BuiltinTableAppendNotify = Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>;
 
 impl<'a> BuiltinTableAppend<'a> {
     /// Submit a write to a system table to be executed during the next group commit. This method
@@ -715,7 +735,7 @@ impl<'a> BuiltinTableAppend<'a> {
     ///
     /// Note: When in read-only mode, this will buffer the update and return
     /// immediately.
-    pub fn background(self, mut updates: Vec<BuiltinTableUpdate>) {
+    pub fn background(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
         if self.coord.controller.read_only() {
             self.coord
                 .buffered_builtin_table_updates
@@ -723,13 +743,16 @@ impl<'a> BuiltinTableAppend<'a> {
                 .expect("in read-only mode")
                 .append(&mut updates);
 
-            return;
+            return Box::pin(futures::future::ready(()));
         }
 
+        let (tx, rx) = oneshot::channel();
         self.coord.pending_writes.push(PendingWriteTxn::System {
             updates,
-            source: BuiltinTableUpdateSource::Background,
+            source: BuiltinTableUpdateSource::Background(tx),
         });
+
+        Box::pin(rx.map(|_| ()))
     }
 
     /// Submits a write to be executed during the next group commit __and__ triggers a group commit.
@@ -748,7 +771,7 @@ impl<'a> BuiltinTableAppend<'a> {
                 .expect("in read-only mode")
                 .append(&mut updates);
 
-            return futures::future::ready(()).boxed();
+            return Box::pin(futures::future::ready(()));
         }
 
         let (tx, rx) = oneshot::channel();
@@ -781,7 +804,7 @@ impl<'a> BuiltinTableAppend<'a> {
                 .expect("in read-only mode")
                 .append(&mut updates);
 
-            return (futures::future::ready(()).boxed(), None);
+            return (Box::pin(futures::future::ready(())), None);
         }
 
         let (tx, rx) = oneshot::channel();
@@ -821,9 +844,13 @@ impl<'a> BuiltinTableAppend<'a> {
 
 /// Returns two sides of a "channel" that can be used to notify the coordinator when we want a
 /// group commit to be run.
-pub fn notifier() -> (GroupCommitNotifier, GroupCommitWaiter) {
+pub fn notifier(
+    dyncfgs: &ConfigSet,
+    metrics: GroupCommitMetrics,
+) -> (GroupCommitNotifier, GroupCommitWaiter) {
     let notify = Arc::new(Notify::new());
     let in_progress = Arc::new(Semaphore::new(1));
+    let batch_duration = GROUP_COMMIT_BATCH_DURATION.handle(dyncfgs);
 
     let notifier = GroupCommitNotifier {
         notify: Arc::clone(&notify),
@@ -831,6 +858,8 @@ pub fn notifier() -> (GroupCommitNotifier, GroupCommitWaiter) {
     let waiter = GroupCommitWaiter {
         notify,
         in_progress,
+        batch_duration,
+        metrics,
     };
 
     (notifier, waiter)
@@ -859,6 +888,10 @@ pub struct GroupCommitWaiter {
     notify: Arc<Notify>,
     /// Distributes permits which tracks in progress group commits.
     in_progress: Arc<Semaphore>,
+    /// Minimum amount of time we wait after acquiring a permit before dropping it.
+    batch_duration: ConfigValHandle<Duration>,
+    /// Metrics to measure how group commits are performing.
+    metrics: GroupCommitMetrics,
 }
 static_assertions::assert_not_impl_all!(GroupCommitWaiter: Clone);
 
@@ -882,7 +915,24 @@ impl GroupCommitWaiter {
         // safety.
         self.notify.notified().await;
 
-        GroupCommitPermit(permit)
+        // Record when we returned so we know how long to hold the permit for.
+        let start = Instant::now();
+        let hold_until = match start.checked_add(self.batch_duration.get()) {
+            Some(instant) => instant,
+            None => {
+                mz_ore::soft_panic_or_log!("group commit batch duration overflow!");
+                start
+            }
+        };
+
+        self.metrics.group_commit_trigger_count.inc();
+        let hold_histogram = self.metrics.group_commit_batch_defer_seconds.clone();
+
+        GroupCommitPermit {
+            hold_until,
+            hold_histogram,
+            _permit: Some(permit),
+        }
     }
 }
 
@@ -891,4 +941,174 @@ impl GroupCommitWaiter {
 /// Note: We sometimes want to throttle how many group commits are running at once, which this
 /// permit allows us to do.
 #[derive(Debug)]
-pub struct GroupCommitPermit(#[allow(dead_code)] OwnedSemaphorePermit);
+pub struct GroupCommitPermit {
+    /// How long we want this permit to last before dropping.
+    hold_until: Instant,
+    /// Histogram used to measure how long we delayed for, if we delayed.
+    hold_histogram: Histogram,
+    /// Permit that is preventing other group commits from running.
+    ///
+    /// Only `None` if the permit has been moved into a tokio task for waiting.
+    _permit: Option<OwnedSemaphorePermit>,
+}
+
+impl Drop for GroupCommitPermit {
+    fn drop(&mut self) {
+        let now = Instant::now();
+
+        // We don't want to drop this permit yet so move it into a task that
+        // will wait until we reached our desired duration.
+        if self.hold_until > now {
+            let hold_until = self.hold_until.clone();
+            let permit = self._permit.take();
+
+            let hold_duration = hold_until.duration_since(now);
+            self.hold_histogram.observe(hold_duration.as_secs_f64());
+            tracing::debug!(?hold_duration, "defering drop of GroupCommit permit");
+
+            mz_ore::task::spawn(|| "group-commit-permit-waiter".to_string(), async move {
+                tokio::time::sleep_until(hold_until.into()).await;
+                // Explicitly drop our permit once our timeout has elapsed.
+                drop(permit);
+                tracing::debug!(?hold_duration, "drop GroupCommit permit");
+            });
+        }
+    }
+}
+
+/// When we start a [`Session`] we need to update some builtin tables, we don't want to wait for
+/// these writes to complete for two reasons:
+///
+/// 1. Doing a write can take a relatively long time.
+/// 2. Decoupling the write from the session start allows us to batch multiple writes together, if
+///    sessions are being created with a high frequency.
+///
+/// So as an optimization we do not wait for these writes to complete. But if a [`Session`] tries
+/// to query any of these builtin objects, we need to block that query on the writes completing to
+/// maintain linearizability.
+pub(crate) fn waiting_on_startup_appends(
+    catalog: &Catalog,
+    session: &mut Session,
+    plan: &Plan,
+) -> Option<(BTreeSet<CatalogItemId>, BoxFuture<'static, ()>)> {
+    // TODO(parkmycar): We need to check transitive uses here too if we ever move the
+    // referenced builtin tables out of mz_internal, or we allow creating views on
+    // mz_internal objects.
+    let depends_on = match plan {
+        Plan::Select(plan) => plan.source.depends_on(),
+        Plan::ReadThenWrite(plan) => plan.selection.depends_on(),
+        Plan::ShowColumns(plan) => plan.select_plan.source.depends_on(),
+        Plan::Subscribe(plan) => plan.from.depends_on(),
+        Plan::ExplainPlan(ExplainPlanPlan {
+            explainee: Explainee::Statement(ExplaineeStatement::Select { plan, .. }),
+            ..
+        }) => plan.source.depends_on(),
+        Plan::ExplainTimestamp(ExplainTimestampPlan { raw_plan, .. }) => raw_plan.depends_on(),
+        Plan::CreateConnection(_)
+        | Plan::CreateDatabase(_)
+        | Plan::CreateSchema(_)
+        | Plan::CreateRole(_)
+        | Plan::CreateNetworkPolicy(_)
+        | Plan::CreateCluster(_)
+        | Plan::CreateClusterReplica(_)
+        | Plan::CreateContinualTask(_)
+        | Plan::CreateSource(_)
+        | Plan::CreateSources(_)
+        | Plan::CreateSecret(_)
+        | Plan::CreateSink(_)
+        | Plan::CreateTable(_)
+        | Plan::CreateView(_)
+        | Plan::CreateMaterializedView(_)
+        | Plan::CreateIndex(_)
+        | Plan::CreateType(_)
+        | Plan::Comment(_)
+        | Plan::DiscardTemp
+        | Plan::DiscardAll
+        | Plan::DropObjects(_)
+        | Plan::DropOwned(_)
+        | Plan::EmptyQuery
+        | Plan::ShowAllVariables
+        | Plan::ShowCreate(_)
+        | Plan::ShowVariable(_)
+        | Plan::InspectShard(_)
+        | Plan::SetVariable(_)
+        | Plan::ResetVariable(_)
+        | Plan::SetTransaction(_)
+        | Plan::StartTransaction(_)
+        | Plan::CommitTransaction(_)
+        | Plan::AbortTransaction(_)
+        | Plan::CopyFrom(_)
+        | Plan::CopyTo(_)
+        | Plan::ExplainPlan(_)
+        | Plan::ExplainPushdown(_)
+        | Plan::ExplainSinkSchema(_)
+        | Plan::Insert(_)
+        | Plan::AlterNetworkPolicy(_)
+        | Plan::AlterNoop(_)
+        | Plan::AlterClusterRename(_)
+        | Plan::AlterClusterSwap(_)
+        | Plan::AlterClusterReplicaRename(_)
+        | Plan::AlterCluster(_)
+        | Plan::AlterConnection(_)
+        | Plan::AlterSource(_)
+        | Plan::AlterSetCluster(_)
+        | Plan::AlterItemRename(_)
+        | Plan::AlterRetainHistory(_)
+        | Plan::AlterSchemaRename(_)
+        | Plan::AlterSchemaSwap(_)
+        | Plan::AlterSecret(_)
+        | Plan::AlterSink(_)
+        | Plan::AlterSystemSet(_)
+        | Plan::AlterSystemReset(_)
+        | Plan::AlterSystemResetAll(_)
+        | Plan::AlterRole(_)
+        | Plan::AlterOwner(_)
+        | Plan::AlterTableAddColumn(_)
+        | Plan::Declare(_)
+        | Plan::Fetch(_)
+        | Plan::Close(_)
+        | Plan::Prepare(_)
+        | Plan::Execute(_)
+        | Plan::Deallocate(_)
+        | Plan::Raise(_)
+        | Plan::GrantRole(_)
+        | Plan::RevokeRole(_)
+        | Plan::GrantPrivileges(_)
+        | Plan::RevokePrivileges(_)
+        | Plan::AlterDefaultPrivileges(_)
+        | Plan::ReassignOwned(_)
+        | Plan::ValidateConnection(_)
+        | Plan::SideEffectingFunc(_) => BTreeSet::default(),
+    };
+    let depends_on_required_id = REQUIRED_BUILTIN_TABLES
+        .iter()
+        .map(|table| catalog.resolve_builtin_table(&**table))
+        .any(|id| {
+            catalog
+                .get_global_ids(&id)
+                .any(|gid| depends_on.contains(&gid))
+        });
+
+    // If our plan does not depend on any required ID, then we don't need to
+    // wait for any builtin writes to occur.
+    if !depends_on_required_id {
+        return None;
+    }
+
+    // Even if we depend on a builtin table, there's no need to wait if the
+    // writes have already completed.
+    //
+    // TODO(parkmycar): As an optimization we should add a `Notify` type to
+    // `mz_ore` that allows peeking. If the builtin table writes have already
+    // completed then there is no need to defer this plan.
+    match session.clear_builtin_table_updates() {
+        Some(wait_future) => {
+            let depends_on = depends_on
+                .into_iter()
+                .map(|gid| catalog.get_entry_by_global_id(&gid).id())
+                .collect();
+            Some((depends_on, wait_future.boxed()))
+        }
+        None => None,
+    }
+}

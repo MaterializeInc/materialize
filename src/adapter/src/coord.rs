@@ -177,7 +177,7 @@ use crate::client::{Client, Handle};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{
-    BuiltinTableAppendNotify, DeferredWriteOp, GroupCommitPermit, PendingWriteTxn,
+    BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit, PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::cluster_scheduling::SchedulingDecision;
@@ -209,7 +209,7 @@ pub(crate) mod statement_logging;
 pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
-mod appends;
+pub mod appends;
 mod catalog_serving;
 mod caught_up;
 pub mod cluster_scheduling;
@@ -243,7 +243,7 @@ pub enum Message {
         /// then everything waiting on this collection will get retried causing traffic in the
         /// Coordinator's message queue.
         ///
-        /// See [`DeferredWriteOp::can_be_optimistically_retried`] for more detail.
+        /// See [`DeferredOp::can_be_optimistically_retried`] for more detail.
         acquired_lock: Option<(CatalogItemId, tokio::sync::OwnedMutexGuard<()>)>,
     },
     /// Initiates a group commit.
@@ -1679,7 +1679,7 @@ pub struct Coordinator {
     /// Locks that grant access to a specific object, populated lazily as objects are written to.
     write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
     /// Plans that are currently deferred and waiting on a write lock.
-    deferred_write_ops: BTreeMap<ConnectionId, DeferredWriteOp>,
+    deferred_write_ops: BTreeMap<ConnectionId, DeferredOp>,
 
     /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
@@ -3926,7 +3926,6 @@ pub fn serve(
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
-        let (group_commit_tx, group_commit_rx) = appends::notifier();
         let (strict_serializable_reads_tx, strict_serializable_reads_rx) =
             mpsc::unbounded_channel();
 
@@ -4171,6 +4170,10 @@ pub fn serve(
             &mz_sql::session::vars::SUPERUSER_RESERVED_CONNECTIONS,
             connection_limit_callback,
         );
+
+        let dyncfgs = catalog.system_config().dyncfgs();
+        let group_commit_metrics = metrics.group_commit_metrics();
+        let (group_commit_tx, group_commit_rx) = appends::notifier(dyncfgs, group_commit_metrics);
 
         let parent_span = tracing::Span::current();
         let thread = thread::Builder::new()

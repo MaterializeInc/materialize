@@ -12,6 +12,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
+use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
@@ -275,13 +276,40 @@ impl Coordinator {
                 self.active_conns.insert(conn_id.clone(), conn);
 
                 // Note: Do NOT await the notify here, we pass this back to
-                // whatever requested the startup to prevent blocking the
-                // Coordinator on a builtin table update.
-                let notify = self.builtin_table_update().defer(vec![update]);
+                // whatever requested the startup to prevent blocking startup
+                // and the Coordinator on a builtin table update.
+                let updates = vec![update];
+                // It's not a hard error if our list is missing a builtin table, but we want to
+                // make sure these two things stay in-sync.
+                if mz_ore::assert::soft_assertions_enabled() {
+                    let required_tables: BTreeSet<_> = super::appends::REQUIRED_BUILTIN_TABLES
+                        .iter()
+                        .map(|table| self.catalog().resolve_builtin_table(*table))
+                        .collect();
+                    let updates_tracked = updates
+                        .iter()
+                        .all(|update| required_tables.contains(&update.id));
+                    let all_mz_internal = super::appends::REQUIRED_BUILTIN_TABLES
+                        .iter()
+                        .all(|table| table.schema == MZ_INTERNAL_SCHEMA);
+                    mz_ore::soft_assert_or_log!(
+                        updates_tracked,
+                        "not tracking all required builtin table updates!"
+                    );
+                    // TODO(parkmycar): When checking if a query depends on these builtin table
+                    // writes we do not check the transitive dependencies of the query, because
+                    // we don't support creating views on mz_internal objects. If one of these
+                    // tables is promoted out of mz_internal then we'll need to add this check.
+                    mz_ore::soft_assert_or_log!(
+                        all_mz_internal,
+                        "not all builtin tables are in mz_internal! need to check transitive depends",
+                    )
+                }
+                let notify = self.builtin_table_update().background(updates);
 
                 let resp = Ok(StartupResponse {
                     role_id,
-                    write_notify: Box::pin(notify),
+                    write_notify: notify,
                     session_defaults,
                     catalog: self.owned_catalog(),
                 });

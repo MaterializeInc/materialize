@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use futures::future::BoxFuture;
+use futures::future::{BoxFuture, FutureExt};
 use futures::stream::FuturesOrdered;
 use futures::{future, Future};
 use itertools::Itertools;
@@ -96,9 +96,7 @@ use tracing::{info, warn, Instrument, Span};
 
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
-use crate::coord::appends::{
-    BuiltinTableAppendNotify, DeferredPlan, DeferredWriteOp, PendingWriteTxn,
-};
+use crate::coord::appends::{BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn};
 use crate::coord::{
     validate_ip_with_policy_rules, AlterConnectionValidationReady, AlterSinkReadyContext,
     Coordinator, CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext,
@@ -2803,7 +2801,7 @@ impl Coordinator {
                 Err(missing) => {
                     // Defer our write if we couldn't acquire all of the locks.
                     let role_metadata = ctx.session().role_metadata().clone();
-                    let acquire_future = self.grant_object_write_lock(missing);
+                    let acquire_future = self.grant_object_write_lock(missing).map(Option::Some);
                     let plan = DeferredPlan {
                         ctx,
                         plan: Plan::ReadThenWrite(plan),
@@ -2816,7 +2814,7 @@ impl Coordinator {
                         ),
                         requires_locks: source_ids,
                     };
-                    return self.defer_op(acquire_future, DeferredWriteOp::Plan(plan));
+                    return self.defer_op(acquire_future, DeferredOp::Plan(plan));
                 }
             };
 

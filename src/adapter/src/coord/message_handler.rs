@@ -439,7 +439,8 @@ impl Coordinator {
                         .catalog()
                         .state()
                         .resolve_builtin_table_updates(updates);
-                    self.builtin_table_update().background(updates);
+                    // We don't care about when the write finishes.
+                    let _notify = self.builtin_table_update().background(updates);
                 }
             }
             ControllerResponse::WatchSetFinished(ws_ids) => {
