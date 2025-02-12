@@ -23,7 +23,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::coord::sequencer::inner::return_if_err;
-use crate::coord::{Coordinator, TargetCluster};
+use crate::coord::{ActiveCopyFrom, Coordinator, TargetCluster};
 use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::session::{TransactionOps, WriteOp};
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
@@ -177,8 +177,16 @@ impl Coordinator {
             });
         });
         // Stash the execute context so we can cancel the COPY.
-        self.active_copies
-            .insert(ctx.session().conn_id().clone(), ctx);
+        let conn_id = ctx.session().conn_id().clone();
+        self.active_copies.insert(
+            conn_id,
+            ActiveCopyFrom {
+                ingestion_id,
+                cluster_id,
+                table_id: id,
+                ctx,
+            },
+        );
 
         let _result = self
             .controller
@@ -193,10 +201,19 @@ impl Coordinator {
         table_id: CatalogItemId,
         batches: Vec<Result<ProtoBatch, String>>,
     ) {
-        let Some(mut ctx) = self.active_copies.remove(&conn_id) else {
-            tracing::warn!(?conn_id, "got response for canceled COPY FROM");
+        let Some(active_copy) = self.active_copies.remove(&conn_id) else {
+            // Getting a successful response for a cancel COPY FROM is unexpected.
+            tracing::warn!(%conn_id, ?batches, "got response for canceled COPY FROM");
             return;
         };
+
+        let ActiveCopyFrom {
+            ingestion_id,
+            cluster_id: _,
+            table_id: _,
+            mut ctx,
+        } = active_copy;
+        tracing::info!(%ingestion_id, num_batches = ?batches.len(), "received batches to append");
 
         let mut all_batches = SmallVec::with_capacity(batches.len());
         let mut all_errors = SmallVec::<[String; 1]>::with_capacity(batches.len());
@@ -248,8 +265,21 @@ impl Coordinator {
     /// Cancel any active `COPY FROM` statements/oneshot ingestions.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) fn cancel_pending_copy(&mut self, conn_id: &ConnectionId) {
-        // TODO(cf1): Also cancel the dataflow running on clusterd.
-        if let Some(ctx) = self.active_copies.remove(conn_id) {
+        if let Some(ActiveCopyFrom {
+            ingestion_id,
+            cluster_id: _,
+            table_id: _,
+            ctx,
+        }) = self.active_copies.remove(conn_id)
+        {
+            let cancel_result = self
+                .controller
+                .storage
+                .cancel_oneshot_ingestion(ingestion_id);
+            if let Err(err) = cancel_result {
+                tracing::error!(?err, "failed to cancel OneshotIngestion");
+            }
+
             ctx.retire(Err(AdapterError::Canceled));
         }
     }

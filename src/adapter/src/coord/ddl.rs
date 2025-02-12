@@ -207,6 +207,7 @@ impl Coordinator {
         let mut cluster_replicas_to_drop = vec![];
         let mut compute_sinks_to_drop = BTreeMap::new();
         let mut peeks_to_drop = vec![];
+        let mut copies_to_drop = vec![];
         let mut clusters_to_create = vec![];
         let mut cluster_replicas_to_create = vec![];
         let mut update_tracing_config = false;
@@ -454,6 +455,18 @@ impl Coordinator {
             }
         }
 
+        // Clean up any pending `COPY` statements that rely on dropped relations or clusters.
+        for (conn_id, pending_copy) in &self.active_copies {
+            let dropping_table = table_gids_to_drop
+                .iter()
+                .any(|(item_id, _gid)| pending_copy.table_id == *item_id);
+            let dropping_cluster = clusters_to_drop.contains(&pending_copy.cluster_id);
+
+            if dropping_table || dropping_cluster {
+                copies_to_drop.push(conn_id.clone());
+            }
+        }
+
         let storage_ids_to_drop = sources_to_drop
             .iter()
             .map(|(_, gid)| *gid)
@@ -664,6 +677,11 @@ impl Coordinator {
                             pending_peek.ctx_extra,
                         );
                     }
+                }
+            }
+            if !copies_to_drop.is_empty() {
+                for conn_id in copies_to_drop {
+                    self.cancel_pending_copy(&conn_id);
                 }
             }
             if !indexes_to_drop.is_empty() {
