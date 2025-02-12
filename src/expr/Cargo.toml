@@ -48,7 +48,7 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-sql-pretty = { path = "../sql-pretty" }
 num = "0.4.3"
 num_enum = "0.7.3"
-ordered-float = { version = "4.2.0", features = ["serde"] }
+ordered-float = { version = "4.6.0", features = ["serde"] }
 paste = "1.0.11"
 prost = { version = "0.13.4", features = ["no-recursion-limit"] }
 regex = "1.7.0"
