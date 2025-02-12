@@ -992,6 +992,9 @@ pub(crate) fn waiting_on_startup_appends(
     session: &mut Session,
     plan: &Plan,
 ) -> Option<(BTreeSet<CatalogItemId>, BoxFuture<'static, ()>)> {
+    // TODO(parkmycar): We need to check transitive uses here too if we ever move the
+    // referenced builtin tables out of mz_internal, or we allow creating views on
+    // mz_internal objects.
     let depends_on = match plan {
         Plan::Select(plan) => plan.source.depends_on(),
         Plan::ReadThenWrite(plan) => plan.selection.depends_on(),
