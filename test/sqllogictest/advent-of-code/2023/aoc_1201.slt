@@ -38,7 +38,8 @@ FROM (
 278
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR SELECT SUM(LEFT(r, 1)::int * 10 + RIGHT(r, 1)::int) AS part1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+SELECT SUM(LEFT(r, 1)::int * 10 + RIGHT(r, 1)::int) AS part1
 FROM (
 	SELECT regexp_replace(input, '[^\d]', '', 'g') AS r
 	FROM aoc_1201
@@ -47,17 +48,17 @@ FROM (
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[sum(((text_to_integer(left(regexp_replace["[^\d]", case_insensitive=false, limit=0](#0, ""), 1)) * 10) + text_to_integer(right(regexp_replace["[^\d]", case_insensitive=false, limit=0](#0, ""), 1))))]
-        ReadStorage materialize.public.aoc_1201
-  Return
-    Union
-      Get l0
-      Map (null)
-        Union
-          Negate
-            Project ()
-              Get l0
-          Constant
+      Reduce aggregates=[sum(((text_to_integer(left(regexp_replace["[^\d]", case_insensitive=false, limit=0](#0{input}, ""), 1)) * 10) + text_to_integer(right(regexp_replace["[^\d]", case_insensitive=false, limit=0](#0{input}, ""), 1))))] // { arity: 1 }
+        ReadStorage materialize.public.aoc_1201 // { arity: 1 }
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 1 }
+          Constant // { arity: 0 }
             - ()
 
 Source materialize.public.aoc_1201
@@ -97,7 +98,8 @@ WHERE first.line = last.line
 391
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+WITH
     lines AS (
         SELECT regexp_split_to_table(input, '\n') AS line
         FROM aoc_1201
@@ -127,23 +129,27 @@ WHERE first.line = last.line
 Explained Query:
   With
     cte l0 =
-      Project (#0, #1, #4)
-        Join on=(#3 = substr(#0, #1, #2)) type=delta
-          ArrangeBy keys=[[]]
-            FlatMap generate_series(1, char_length(#0), 1)
-              Project (#1)
-                Filter (#1) IS NOT NULL
-                  FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0))
-                    ReadStorage materialize.public.aoc_1201
-          ArrangeBy keys=[[]]
-            Constant
+      Project (#0, #1, #4) // { arity: 3 }
+        Join on=(#3 = substr(#0, #1, #2)) type=delta // { arity: 5 }
+          implementation
+            %0 » %1[×] » %2[#0]UK
+            %1 » %0[×] » %2[#0]UK
+            %2 » %0[×] » %1[×]
+          ArrangeBy keys=[[]] // { arity: 2 }
+            FlatMap generate_series(1, char_length(#0), 1) // { arity: 2 }
+              Project (#1) // { arity: 1 }
+                Filter (#1) IS NOT NULL // { arity: 2 }
+                  FlatMap unnest_array(regexp_split_to_array["\n", case_insensitive=false](#0{input})) // { arity: 2 }
+                    ReadStorage materialize.public.aoc_1201 // { arity: 1 }
+          ArrangeBy keys=[[]] // { arity: 1 }
+            Constant // { arity: 1 }
               - (1)
               - (2)
               - (3)
               - (4)
               - (5)
-          ArrangeBy keys=[[#0]]
-            Constant
+          ArrangeBy keys=[[#0]] // { arity: 2 }
+            Constant // { arity: 2 }
               - ("0", 0)
               - ("1", 1)
               - ("2", 2)
@@ -165,26 +171,28 @@ Explained Query:
               - ("seven", 7)
               - ("three", 3)
     cte l1 =
-      Reduce aggregates=[sum(((#0 * 10) + #1))]
-        Project (#1, #3)
-          Join on=(#0 = #2) type=differential
-            ArrangeBy keys=[[#0]]
-              Project (#0, #2)
-                TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=1
-                  Get l0
-            ArrangeBy keys=[[#0]]
-              Project (#0, #2)
-                TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=1
-                  Get l0
-  Return
-    Union
-      Get l1
-      Map (null)
-        Union
-          Negate
-            Project ()
-              Get l1
-          Constant
+      Reduce aggregates=[sum(((#0 * 10) + #1))] // { arity: 1 }
+        Project (#1, #3) // { arity: 2 }
+          Join on=(#0 = #2) type=differential // { arity: 4 }
+            implementation
+              %0[#0]UK » %1[#0]UK
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Project (#0, #2) // { arity: 2 }
+                TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=1 // { arity: 3 }
+                  Get l0 // { arity: 3 }
+            ArrangeBy keys=[[#0]] // { arity: 2 }
+              Project (#0, #2) // { arity: 2 }
+                TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=1 // { arity: 3 }
+                  Get l0 // { arity: 3 }
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l1 // { arity: 1 }
+      Map (null) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l1 // { arity: 1 }
+          Constant // { arity: 0 }
             - ()
 
 Source materialize.public.aoc_1201
