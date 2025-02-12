@@ -302,7 +302,7 @@ impl Coordinator {
                     // tables is promoted out of mz_internal then we'll need to add this check.
                     mz_ore::soft_assert_or_log!(
                         all_mz_internal,
-                        "not all builtin tables are in mz_internal! need to check transitive depends".
+                        "not all builtin tables are in mz_internal! need to check transitive depends",
                     )
                 }
                 let notify = self.builtin_table_update().background(updates);
