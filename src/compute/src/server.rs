@@ -29,6 +29,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::halt;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_service::local::LocalActivator;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use timely::communication::Allocate;
@@ -36,7 +37,7 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::source;
 use timely::dataflow::operators::Operator;
 use timely::progress::{Antichain, Timestamp};
-use timely::scheduling::{Scheduler, SyncActivator};
+use timely::scheduling::Scheduler;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
@@ -74,7 +75,7 @@ pub fn serve(
     context: ComputeInstanceContext,
 ) -> Result<
     (
-        TimelyContainerRef<ComputeCommand, ComputeResponse, SyncActivator>,
+        TimelyContainerRef<ComputeCommand, ComputeResponse>,
         impl Fn() -> Box<dyn ComputeClient>,
     ),
     Error,
@@ -96,8 +97,6 @@ pub fn serve(
 
     Ok((timely_container, client_builder))
 }
-
-type ActivatorSender = mpsc::UnboundedSender<SyncActivator>;
 
 /// Endpoint used by workers to receive compute commands.
 struct CommandReceiver {
@@ -184,7 +183,7 @@ struct Worker<'w, A: Allocate> {
     client_rx: crossbeam_channel::Receiver<(
         crossbeam_channel::Receiver<ComputeCommand>,
         mpsc::UnboundedSender<ComputeResponse>,
-        ActivatorSender,
+        mpsc::UnboundedSender<LocalActivator>,
     )>,
     compute_state: Option<ComputeState>,
     /// Compute metrics.
@@ -200,14 +199,13 @@ struct Worker<'w, A: Allocate> {
 }
 
 impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Config {
-    type Activatable = SyncActivator;
     fn build_and_run<A: Allocate + 'static>(
         config: Self,
         timely_worker: &mut TimelyWorker<A>,
         client_rx: crossbeam_channel::Receiver<(
             crossbeam_channel::Receiver<ComputeCommand>,
-            tokio::sync::mpsc::UnboundedSender<ComputeResponse>,
-            ActivatorSender,
+            mpsc::UnboundedSender<ComputeResponse>,
+            mpsc::UnboundedSender<LocalActivator>,
         )>,
         persist_clients: Arc<PersistClientCache>,
         txns_ctx: TxnsContext,
@@ -337,7 +335,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         &mut self,
         command_rx: crossbeam_channel::Receiver<ComputeCommand>,
         response_tx: mpsc::UnboundedSender<ComputeResponse>,
-        activator_tx: ActivatorSender,
+        activator_tx: mpsc::UnboundedSender<LocalActivator>,
     ) {
         let cmd_queue = Rc::new(RefCell::new(
             VecDeque::<Result<ComputeCommand, TryRecvError>>::new(),
@@ -355,6 +353,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 source(scope, "CmdSource", |capability, info| {
                     // Send activator for this operator back.
                     let activator = scope.sync_activator_for(info.address.to_vec());
+                    let activator = LocalActivator::new(activator);
                     // This might fail if the client has already shut down, which is fine. The rest
                     // of the operator implementation knows how to handle a disconnected client.
                     let _ = activator_tx.send(activator);

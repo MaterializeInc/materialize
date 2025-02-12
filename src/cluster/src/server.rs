@@ -23,7 +23,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
-use mz_service::local::LocalClient;
+use mz_service::local::{LocalActivator, LocalClient};
 use mz_txn_wal::operator::TxnsContext;
 use timely::communication::initialize::WorkerGuards;
 use timely::execute::execute_from;
@@ -34,7 +34,7 @@ use tracing::{info, warn};
 
 use crate::communication::initialize_networking;
 
-type PartitionedClient<C, R, A> = Partitioned<LocalClient<C, R, A>, C, R>;
+type PartitionedClient<C, R> = Partitioned<LocalClient<C, R>, C, R>;
 
 /// Configures a cluster server.
 #[derive(Debug)]
@@ -57,7 +57,7 @@ where
     /// The actual client to talk to the cluster
     inner: Option<Client>,
     /// The running timely instance
-    timely_container: TimelyContainerRef<C, R, Worker::Activatable>,
+    timely_container: TimelyContainerRef<C, R>,
     /// Handle to the persist infrastructure.
     persist_clients: Arc<PersistClientCache>,
     /// Context necessary for rendering txn-wal operators.
@@ -70,7 +70,7 @@ where
 }
 
 /// Metadata about timely workers in this process.
-pub struct TimelyContainer<C, R, A> {
+pub struct TimelyContainer<C, R> {
     /// The current timely config in use
     config: TimelyConfig,
     /// Channels over which to send endpoints for wiring up a new Client
@@ -78,21 +78,21 @@ pub struct TimelyContainer<C, R, A> {
         crossbeam_channel::Sender<(
             crossbeam_channel::Receiver<C>,
             mpsc::UnboundedSender<R>,
-            mpsc::UnboundedSender<A>,
+            mpsc::UnboundedSender<LocalActivator>,
         )>,
     >,
     /// Thread guards that keep worker threads alive
     _worker_guards: WorkerGuards<()>,
 }
 
-impl<C, R, A> Drop for TimelyContainer<C, R, A> {
+impl<C, R> Drop for TimelyContainer<C, R> {
     fn drop(&mut self) {
         panic!("Timely container must never drop");
     }
 }
 
 /// Threadsafe reference to an optional TimelyContainer
-pub type TimelyContainerRef<C, R, A> = Arc<tokio::sync::Mutex<Option<TimelyContainer<C, R, A>>>>;
+pub type TimelyContainerRef<C, R> = Arc<tokio::sync::Mutex<Option<TimelyContainer<C, R>>>>;
 
 /// Initiates a timely dataflow computation, processing cluster commands.
 pub fn serve<Worker, C, R>(
@@ -100,8 +100,8 @@ pub fn serve<Worker, C, R>(
     worker_config: Worker,
 ) -> Result<
     (
-        TimelyContainerRef<C, R, Worker::Activatable>,
-        impl Fn() -> Box<ClusterClient<PartitionedClient<C, R, Worker::Activatable>, Worker, C, R>>,
+        TimelyContainerRef<C, R>,
+        impl Fn() -> Box<ClusterClient<PartitionedClient<C, R>, Worker, C, R>>,
     ),
     Error,
 >
@@ -134,7 +134,7 @@ where
     Ok((timely_container, client_builder))
 }
 
-impl<Worker, C, R> ClusterClient<PartitionedClient<C, R, Worker::Activatable>, Worker, C, R>
+impl<Worker, C, R> ClusterClient<PartitionedClient<C, R>, Worker, C, R>
 where
     C: Send + 'static,
     R: Send + 'static,
@@ -142,7 +142,7 @@ where
     Worker: crate::types::AsRunnableWorker<C, R> + Clone + Send + Sync + 'static,
 {
     fn new(
-        timely_container: TimelyContainerRef<C, R, Worker::Activatable>,
+        timely_container: TimelyContainerRef<C, R>,
         persist_clients: Arc<PersistClientCache>,
         txns_ctx: TxnsContext,
         tokio_handle: tokio::runtime::Handle,
@@ -168,7 +168,7 @@ where
         txns_ctx: TxnsContext,
         tracing_handle: Arc<TracingHandle>,
         tokio_executor: Handle,
-    ) -> Result<TimelyContainer<C, R, Worker::Activatable>, Error> {
+    ) -> Result<TimelyContainer<C, R>, Error> {
         info!("Building timely container with config {config:?}");
         let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
             .map(|_| crossbeam_channel::unbounded())
@@ -309,10 +309,13 @@ where
 
         let timely = timely_container.as_ref().expect("set above");
 
+        // Order is important here: If our future is canceled, we need to drop the `command_txs`
+        // before the `activators` so when the workers are unparked by the dropping of the
+        // activators they can observed that the senders have disconnected.
+        let mut activators = Vec::with_capacity(workers);
         let mut command_txs = Vec::with_capacity(workers);
         let mut response_rxs = Vec::with_capacity(workers);
         let mut activator_rxs = Vec::with_capacity(workers);
-        let mut activators = Vec::with_capacity(workers);
         for client_tx in &timely.client_txs {
             let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
             let (resp_tx, resp_rx) = mpsc::unbounded_channel();
@@ -355,14 +358,12 @@ impl<Client: Debug, Worker: crate::types::AsRunnableWorker<C, R>, C, R> Debug
 }
 
 #[async_trait]
-impl<Worker, C, R> GenericClient<C, R>
-    for ClusterClient<PartitionedClient<C, R, Worker::Activatable>, Worker, C, R>
+impl<Worker, C, R> GenericClient<C, R> for ClusterClient<PartitionedClient<C, R>, Worker, C, R>
 where
     C: Send + Debug + mz_cluster_client::client::TryIntoTimelyConfig + 'static,
     R: Send + Debug + 'static,
     (C, R): Partitionable<C, R>,
     Worker: crate::types::AsRunnableWorker<C, R> + Send + Sync + Clone + 'static,
-    Worker::Activatable: Send + Sync + 'static + Debug,
 {
     async fn send(&mut self, cmd: C) -> Result<(), Error> {
         // Changing this debug statement requires changing the replica-isolation test
