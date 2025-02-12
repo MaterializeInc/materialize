@@ -13,6 +13,9 @@
 #
 # Records are expected to be routed to the same partition, regardless of comment.
 
+$ skip-if
+SELECT mz_version_num() < 13300;
+
 $ kafka-create-topic topic=v1 partitions=100
 
 $ set-arg-default default-storage-size=1
