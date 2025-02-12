@@ -21,7 +21,7 @@ convert_case = "0.6"
 guppy = "0.17.5"
 md-5 = "0.10.5"
 proc-macro2 = "1.0.60"
-protobuf-parse = "3.4.0"
+protobuf-parse = "3.7.1"
 quote = "1.0.38"
 syn = { version = "1.0.107", features = ["extra-traits", "full"] }
 serde = "1.0.152"
