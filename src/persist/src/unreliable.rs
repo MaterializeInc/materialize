@@ -90,13 +90,13 @@ impl UnreliableHandle {
     fn should_happen(&self) -> bool {
         let mut core = self.core.lock().expect("mutex poisoned");
         let should_happen = core.should_happen;
-        core.rng.gen_bool(should_happen)
+        core.rng.random_bool(should_happen)
     }
 
     fn should_timeout(&self) -> bool {
         let mut core = self.core.lock().expect("mutex poisoned");
         let should_timeout = core.should_timeout;
-        core.rng.gen_bool(should_timeout)
+        core.rng.random_bool(should_timeout)
     }
 
     async fn run_op<R, F, WorkFn>(&self, name: &str, work_fn: WorkFn) -> Result<R, ExternalError>

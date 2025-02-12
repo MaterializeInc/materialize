@@ -917,7 +917,7 @@ fn substitute_vars(
 pub async fn create_state(
     config: &Config,
 ) -> Result<(State, impl Future<Output = Result<(), anyhow::Error>>), anyhow::Error> {
-    let seed = config.seed.unwrap_or_else(|| rand::thread_rng().gen());
+    let seed = config.seed.unwrap_or_else(|| rand::rng().random());
 
     let (_tempfile, temp_path) = match &config.temp_dir {
         Some(temp_dir) => {

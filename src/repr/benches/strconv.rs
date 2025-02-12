@@ -10,7 +10,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use mz_repr::strconv;
 use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 use rand::{Rng, SeedableRng};
 
 fn bench_parse_float32(c: &mut Criterion) {
@@ -38,7 +38,7 @@ fn bench_parse_jsonb(c: &mut Criterion) {
 
 fn bench_format_list_simple(c: &mut Criterion) {
     let mut rng = StdRng::from_seed([0; 32]);
-    let list: Vec<i32> = (0..(1 << 12)).map(|_| rng.gen()).collect();
+    let list: Vec<i32> = (0..(1 << 12)).map(|_| rng.random()).collect();
     c.bench_function("format_list simple", |b| {
         b.iter(|| {
             let mut buf = String::new();
@@ -60,9 +60,9 @@ fn bench_format_list_nested(c: &mut Criterion) {
     ];
     let list: Vec<Vec<Vec<String>>> = (0..8)
         .map(|_| {
-            (0..rng.gen_range(0..16))
+            (0..rng.random_range(0..16))
                 .map(|_| {
-                    (1..rng.gen_range(0..16))
+                    (1..rng.random_range(0..16))
                         .map(|_| STRINGS.choose(&mut rng).unwrap())
                         .map(|s| (*s).to_owned())
                         .collect()

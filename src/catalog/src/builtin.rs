@@ -382,8 +382,8 @@ impl Fingerprint for &BuiltinTable {
                 format!("{}{}", self.desc.fingerprint(), whitespace)
             }
             Some((UnsafeBuiltinTableFingerprintWhitespace::Half, whitespace)) => {
-                let mut rng = rand::thread_rng();
-                let migrate: bool = rng.gen();
+                let mut rng = rand::rng();
+                let migrate: bool = rng.random();
                 if migrate {
                     format!("{}{}", self.desc.fingerprint(), whitespace)
                 } else {

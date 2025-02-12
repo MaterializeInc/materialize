@@ -15,7 +15,7 @@ use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::Codec;
 use mz_repr::{ColumnType, Datum, ProtoRow, RelationDesc, Row, ScalarType};
 use mz_storage_types::sources::SourceData;
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -102,7 +102,7 @@ fn benches_roundtrip(c: &mut Criterion) {
         ]);
         let data = (0..num_rows)
             .map(|_| {
-                let str_len = rng.gen_range(0..10);
+                let str_len = rng.random_range(0..10);
                 let row = Row::pack(vec![
                     Datum::from(Alphanumeric.sample_string(&mut rng, str_len).as_bytes()),
                     Datum::from(
@@ -135,7 +135,7 @@ fn benches_roundtrip(c: &mut Criterion) {
         ]);
         let data = (0..num_rows)
             .map(|_| {
-                let str_len = rng.gen_range(0..10);
+                let str_len = rng.random_range(0..10);
                 let row = Row::pack(vec![
                     Datum::from(Alphanumeric.sample_string(&mut rng, str_len).as_str()),
                     Datum::from(

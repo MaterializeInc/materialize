@@ -5083,7 +5083,7 @@ dependencies = [
  "kube",
  "mz-ore",
  "mz-repr",
- "rand 0.9.0",
+ "rand 0.8.5",
  "schemars",
  "semver",
  "serde",

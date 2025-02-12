@@ -18,7 +18,7 @@ use mz_storage_types::sources::load_generator::{
     Event, Generator, LoadGeneratorOutput, MarketingView,
 };
 use mz_storage_types::sources::MzOffset;
-use rand::{distributions::Standard, rngs::SmallRng, Rng, SeedableRng};
+use rand::{distr::StandardUniform, rngs::SmallRng, Rng, SeedableRng};
 
 const CONTROL: &str = "control";
 const EXPERIMENT: &str = "experiment";
@@ -50,7 +50,7 @@ impl Generator for Marketing {
 
                 packer.push(Datum::Int64(id.try_into().unwrap()));
                 packer.push(Datum::String(email));
-                packer.push(Datum::Int64(rng.gen_range(5_000_000..10_000_000i64)));
+                packer.push(Datum::Int64(rng.random_range(5_000_000..10_000_000i64)));
 
                 (MarketingView::Customers, customer, 1)
             })
@@ -68,9 +68,9 @@ impl Generator for Marketing {
 
                     packer.push(Datum::Int64(impression_id));
                     packer.push(Datum::Int64(
-                        rng.gen_range(0..CUSTOMERS.len()).try_into().unwrap(),
+                        rng.random_range(0..CUSTOMERS.len()).try_into().unwrap(),
                     ));
-                    packer.push(Datum::Int64(rng.gen_range(0..20i64)));
+                    packer.push(Datum::Int64(rng.random_range(0..20i64)));
                     let impression_time = now();
                     packer.push(Datum::TimestampTz(
                         to_datetime(impression_time)
@@ -82,11 +82,11 @@ impl Generator for Marketing {
 
                     // 1 in 10 impressions have a click. Making us the
                     // most successful marketing organization in the world.
-                    if rng.gen_range(0..10) == 1 {
+                    if rng.random_range(0..10) == 1 {
                         let mut click = Row::with_capacity(2);
                         let mut packer = click.packer();
 
-                        let click_time = impression_time + rng.gen_range(20000..40000);
+                        let click_time = impression_time + rng.random_range(20000..40000);
 
                         packer.push(Datum::Int64(impression_id));
                         packer.push(Datum::TimestampTz(
@@ -101,13 +101,13 @@ impl Generator for Marketing {
                     let mut updates = future_updates.retrieve(now());
                     pending.append(&mut updates);
 
-                    for _ in 0..rng.gen_range(1..2) {
+                    for _ in 0..rng.random_range(1..2) {
                         let id = counter;
                         counter += 1;
 
                         let mut lead = Lead {
                             id,
-                            customer_id: rng.gen_range(0..CUSTOMERS.len()).try_into().unwrap(),
+                            customer_id: rng.random_range(0..CUSTOMERS.len()).try_into().unwrap(),
                             created_at: now(),
                             converted_at: None,
                             conversion_amount: None,
@@ -117,7 +117,7 @@ impl Generator for Marketing {
 
                         // a highly scientific statistical model
                         // predicting the likelyhood of a conversion
-                        let score = rng.sample::<f64, _>(Standard);
+                        let score = rng.sample::<f64, _>(StandardUniform);
                         let label = score > 0.5f64;
 
                         let bucket = if lead.id % 10 <= 1 {
@@ -141,7 +141,7 @@ impl Generator for Marketing {
                         let mut sent_coupon = false;
                         if !label && bucket == EXPERIMENT {
                             sent_coupon = true;
-                            let amount = rng.gen_range(500..5000);
+                            let amount = rng.random_range(500..5000);
 
                             let mut coupon = Row::with_capacity(4);
                             let mut packer = coupon.packer();
@@ -161,19 +161,19 @@ impl Generator for Marketing {
                         // Decide if a lead will convert. We assume our model is fairly
                         // accurate and correlates with conversions. We also assume
                         // that coupons make leads a little more liekly to convert.
-                        let mut converted = rng.sample::<f64, _>(Standard) < score;
+                        let mut converted = rng.sample::<f64, _>(StandardUniform) < score;
                         if sent_coupon && !converted {
-                            converted = rng.sample::<f64, _>(Standard) < score;
+                            converted = rng.sample::<f64, _>(StandardUniform) < score;
                         }
 
                         if converted {
-                            let converted_at = now() + rng.gen_range(1..30);
+                            let converted_at = now() + rng.random_range(1..30);
 
                             future_updates
                                 .insert(converted_at, (MarketingView::Leads, lead.to_row(), -1));
 
                             lead.converted_at = Some(converted_at);
-                            lead.conversion_amount = Some(rng.gen_range(1000..25000));
+                            lead.conversion_amount = Some(rng.random_range(1000..25000));
 
                             future_updates
                                 .insert(converted_at, (MarketingView::Leads, lead.to_row(), 1));

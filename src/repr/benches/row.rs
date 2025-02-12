@@ -21,7 +21,7 @@ use mz_persist_types::Codec;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{ColumnType, Datum, ProtoRow, RelationDesc, Row, ScalarType};
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, SampleString};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -115,24 +115,24 @@ pub fn bench_sort(c: &mut Criterion) {
     let int_rows = (0..num_rows)
         .map(|_| {
             vec![
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
+                Datum::Int32(rng.random()),
+                Datum::Int32(rng.random()),
+                Datum::Int32(rng.random()),
+                Datum::Int32(rng.random()),
+                Datum::Int32(rng.random()),
+                Datum::Int32(rng.random()),
             ]
         })
         .collect::<Vec<_>>();
     let numeric_rows = (0..num_rows)
         .map(|_| {
             vec![
-                Datum::Numeric(rng.gen::<i32>().into()),
-                Datum::Numeric(rng.gen::<i32>().into()),
-                Datum::Numeric(rng.gen::<i32>().into()),
-                Datum::Numeric(rng.gen::<i32>().into()),
-                Datum::Numeric(rng.gen::<i32>().into()),
-                Datum::Numeric(rng.gen::<i32>().into()),
+                Datum::Numeric(rng.random::<i32>().into()),
+                Datum::Numeric(rng.random::<i32>().into()),
+                Datum::Numeric(rng.random::<i32>().into()),
+                Datum::Numeric(rng.random::<i32>().into()),
+                Datum::Numeric(rng.random::<i32>().into()),
+                Datum::Numeric(rng.random::<i32>().into()),
             ]
         })
         .collect::<Vec<_>>();
@@ -140,7 +140,7 @@ pub fn bench_sort(c: &mut Criterion) {
     let mut rng = seeded_rng();
     let byte_data = (0..num_rows)
         .map(|_| {
-            let i: i32 = rng.gen();
+            let i: i32 = rng.random();
             format!("{} and then {} and then {}", i, i + 1, i + 2).into_bytes()
         })
         .collect::<Vec<_>>();
@@ -197,12 +197,12 @@ pub fn bench_pack(c: &mut Criterion) {
     let int_rows = (0..num_rows)
         .map(|_| {
             vec![
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
+                Datum::Int32(rng.random()),
+                Datum::Int32(rng.random()),
+                Datum::Int32(rng.random()),
+                Datum::Int32(rng.random()),
+                Datum::Int32(rng.random()),
+                Datum::Int32(rng.random()),
             ]
         })
         .collect::<Vec<_>>();
@@ -210,7 +210,7 @@ pub fn bench_pack(c: &mut Criterion) {
     let mut rng = seeded_rng();
     let byte_data = (0..num_rows)
         .map(|_| {
-            let i: i32 = rng.gen();
+            let i: i32 = rng.random();
             format!("{} and then {} and then {}", i, i + 1, i + 2).into_bytes()
         })
         .collect::<Vec<_>>();
@@ -228,15 +228,15 @@ fn bench_filter(c: &mut Criterion) {
     let num_rows = 10_000;
     let mut rng = seeded_rng();
     let mut random_date =
-        || Date::from_pg_epoch(rng.gen_range(Date::LOW_DAYS..=Date::HIGH_DAYS)).unwrap();
+        || Date::from_pg_epoch(rng.random_range(Date::LOW_DAYS..=Date::HIGH_DAYS)).unwrap();
     let mut rng = seeded_rng();
     let date_rows = (0..num_rows)
         .map(|_| {
             vec![
                 Datum::Date(random_date()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
-                Datum::Int32(rng.gen()),
+                Datum::Int32(rng.random()),
+                Datum::Int32(rng.random()),
+                Datum::Int32(rng.random()),
             ]
         })
         .collect::<Vec<_>>();
@@ -284,14 +284,14 @@ fn bench_roundtrip(c: &mut Criterion) {
     let mut rng = seeded_rng();
     let rows = (0..num_rows)
         .map(|_| {
-            let str_len = rng.gen_range(0..10);
+            let str_len = rng.random_range(0..10);
             Row::pack(vec![
-                Datum::from(rng.gen::<bool>()),
-                Datum::from(rng.gen::<Option<bool>>()),
+                Datum::from(rng.random::<bool>()),
+                Datum::from(rng.random::<Option<bool>>()),
                 Datum::from(Alphanumeric.sample_string(&mut rng, str_len).as_str()),
                 Datum::from(
                     Some(Alphanumeric.sample_string(&mut rng, str_len).as_str())
-                        .filter(|_| rng.gen::<bool>()),
+                        .filter(|_| rng.random::<bool>()),
                 ),
             ])
         })

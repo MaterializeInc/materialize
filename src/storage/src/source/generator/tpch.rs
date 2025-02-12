@@ -22,9 +22,9 @@ use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
 use mz_repr::{Datum, Row};
 use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput, TpchView};
 use mz_storage_types::sources::MzOffset;
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, SampleString};
 use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 use rand::{Rng, SeedableRng};
 
 #[derive(Clone, Debug)]
@@ -86,7 +86,7 @@ impl Generator for Tpch {
                 let key_usize = usize::try_from(key).expect("key known to be non-negative");
                 let row = match output {
                     TpchView::Supplier => {
-                        let nation = rng.gen_range(0..count_nation);
+                        let nation = rng.random_range(0..count_nation);
                         row.packer().extend([
                             Datum::Int64(key),
                             Datum::String(&pad_nine("Supplier", key)),
@@ -105,11 +105,11 @@ impl Generator for Tpch {
                             .cloned()
                             .collect::<Vec<_>>()
                             .join("  ");
-                        let m = rng.gen_range(1..=5);
-                        let n = rng.gen_range(1..=5);
+                        let m = rng.random_range(1..=5);
+                        let n = rng.random_range(1..=5);
                         for _ in 1..=4 {
                             let suppkey = (key
-                                + (rng.gen_range(0..=3)
+                                + (rng.random_range(0..=3)
                                     * ((ctx.tpch.count_supplier / 4)
                                         + (key - 1) / ctx.tpch.count_supplier)))
                                 % ctx.tpch.count_supplier
@@ -117,7 +117,7 @@ impl Generator for Tpch {
                             row.packer().extend([
                                 Datum::Int64(key),
                                 Datum::Int64(suppkey),
-                                Datum::Int32(rng.gen_range(1..=9_999)), // availqty
+                                Datum::Int32(rng.random_range(1..=9_999)), // availqty
                                 Datum::Numeric(decimal(&mut rng, &mut ctx.cx, 1_00, 1_000_00, 100)), // supplycost
                                 Datum::String(text_string(
                                     &mut rng,
@@ -137,7 +137,7 @@ impl Generator for Tpch {
                             Datum::String(&format!("Manufacturer#{m}")),
                             Datum::String(&format!("Brand#{m}{n}")),
                             Datum::String(&syllables(&mut rng, TYPES)),
-                            Datum::Int32(rng.gen_range(1..=50)), // size
+                            Datum::Int32(rng.random_range(1..=50)), // size
                             Datum::String(&syllables(&mut rng, CONTAINERS)),
                             Datum::Numeric(partkey_retailprice(key)),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 49, 198)),
@@ -145,7 +145,7 @@ impl Generator for Tpch {
                         row.clone()
                     }
                     TpchView::Customer => {
-                        let nation = rng.gen_range(0..count_nation);
+                        let nation = rng.random_range(0..count_nation);
                         row.packer().extend([
                             Datum::Int64(key),
                             Datum::String(&pad_nine("Customer", key)),
@@ -159,7 +159,7 @@ impl Generator for Tpch {
                         row.clone()
                     }
                     TpchView::Orders => {
-                        let seed = rng.gen();
+                        let seed = rng.random();
                         let (order, lineitems) = ctx.order_row(seed, key);
                         for row in lineitems {
                             pending.push_back((
@@ -202,7 +202,7 @@ impl Generator for Tpch {
                 if ctx.tpch.tick.is_zero() {
                     return None;
                 }
-                let idx = rng.gen_range(0..active_orders.len());
+                let idx = rng.random_range(0..active_orders.len());
                 let (key, old_seed) = active_orders.swap_remove(idx);
                 let (old_order, old_lineitems) = ctx.order_row(old_seed, key);
                 // Fill pending with old lineitem retractions, new lineitem
@@ -214,7 +214,7 @@ impl Generator for Tpch {
                         Event::Message(MzOffset::from(offset), (row, -1)),
                     ));
                 }
-                let new_seed = rng.gen();
+                let new_seed = rng.random();
                 let (new_order, new_lineitems) = ctx.order_row(new_seed, key);
                 for row in new_lineitems {
                     pending.push_back((
@@ -261,7 +261,7 @@ impl Context {
         let mut rng = StdRng::seed_from_u64(seed);
         let key = order_key(key);
         let custkey = loop {
-            let custkey = rng.gen_range(1..=self.tpch.count_customer);
+            let custkey = rng.random_range(1..=self.tpch.count_customer);
             if custkey % 3 != 0 {
                 break custkey;
             }
@@ -269,17 +269,17 @@ impl Context {
         let orderdate = date(&mut rng, &*START_DATE, 1..=*ORDER_END_DAYS);
         let mut totalprice = Numeric::lossy_from(0);
         let mut orderstatus = None;
-        let lineitem_count = rng.gen_range(1..=7);
+        let lineitem_count = rng.random_range(1..=7);
         let mut lineitems = Vec::with_capacity(lineitem_count);
 
         for linenumber in 1..=lineitem_count {
-            let partkey = rng.gen_range(1..=self.tpch.count_part);
+            let partkey = rng.random_range(1..=self.tpch.count_part);
             let suppkey = (partkey
-                + (rng.gen_range(0..=3)
+                + (rng.random_range(0..=3)
                     * ((self.tpch.count_supplier / 4) + (partkey - 1) / self.tpch.count_supplier)))
                 % self.tpch.count_supplier
                 + 1;
-            let quantity = Numeric::from(rng.gen_range(1..=50));
+            let quantity = Numeric::from(rng.random_range(1..=50));
             let mut extendedprice = quantity;
             self.cx
                 .mul(&mut extendedprice, &partkey_retailprice(partkey).0);
@@ -335,7 +335,10 @@ impl Context {
             Datum::Numeric(OrderedDecimal(totalprice)),
             Datum::Date(orderdate),
             Datum::String(PRIORITIES.choose(&mut rng).unwrap()),
-            Datum::String(&pad_nine("Clerk", rng.gen_range(1..=self.tpch.count_clerk))),
+            Datum::String(&pad_nine(
+                "Clerk",
+                rng.random_range(1..=self.tpch.count_clerk),
+            )),
             Datum::Int32(0), // shippriority
             Datum::String(text_string(&mut rng, &self.text_string_source, 19, 78)),
         ]);
@@ -367,13 +370,13 @@ fn text_string<'a, R: Rng + ?Sized>(
     min: usize,
     max: usize,
 ) -> &'a str {
-    let start = rng.gen_range(0..=(source.len() - max));
-    let len = rng.gen_range(min..=max);
+    let start = rng.random_range(0..=(source.len() - max));
+    let len = rng.random_range(min..=max);
     &source[start..(start + len)]
 }
 
 fn date<R: Rng + ?Sized>(rng: &mut R, start: &Date, days: RangeInclusive<i32>) -> Date {
-    let days = rng.gen_range(days);
+    let days = rng.random_range(days);
     start.checked_add(days).expect("must fit")
 }
 
@@ -409,7 +412,7 @@ fn decimal<R: Rng + ?Sized>(
     max: i64,
     div: i64,
 ) -> OrderedDecimal<Numeric> {
-    let n = rng.gen_range(min..=max);
+    let n = rng.random_range(min..=max);
     let mut n = Numeric::lossy_from(n);
     cx.div(&mut n, &Numeric::lossy_from(div));
     OrderedDecimal(n)
@@ -419,11 +422,11 @@ fn phone<R: Rng + ?Sized>(rng: &mut R, nation: i64) -> String {
     let mut s = String::with_capacity(15);
     s.push_str(&(nation + 10).to_string());
     s.push('-');
-    s.push_str(&rng.gen_range(100..=999).to_string());
+    s.push_str(&rng.random_range(100..=999).to_string());
     s.push('-');
-    s.push_str(&rng.gen_range(100..=999).to_string());
+    s.push_str(&rng.random_range(100..=999).to_string());
     s.push('-');
-    s.push_str(&rng.gen_range(1000..=9999).to_string());
+    s.push_str(&rng.random_range(1000..=9999).to_string());
     s
 }
 
@@ -434,7 +437,7 @@ fn v_string<R: Rng + ?Sized>(rng: &mut R, min: usize, max: usize) -> String {
         'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '1', '2',
         '3', '4', '5', '6', '7', '8', '9', '0', ',', ' ',
     ];
-    let take = rng.gen_range(min..=max);
+    let take = rng.random_range(min..=max);
     let mut s = String::with_capacity(take);
     for _ in 0..take {
         s.push(*ALPHABET.choose(rng).unwrap());
