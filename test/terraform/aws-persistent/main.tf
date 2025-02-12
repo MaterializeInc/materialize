@@ -17,14 +17,12 @@ resource "random_password" "db_password" {
 }
 
 module "materialize_infrastructure" {
-  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.1.3"
+  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.2.0"
 
   # Basic settings
+  namespace    = "aws-persistent"
   environment  = "dev"
-  vpc_name     = "aws-persistent-vpc"
-  cluster_name = "aws-persistent-cluster"
-  mz_iam_service_account_name = "aws-persistent-user"
-  mz_iam_role_name = "aws-persistent-s3-role"
+  install_materialize_operator = true
 
   # VPC Configuration
   vpc_cidr             = "10.0.0.0/16"
@@ -42,14 +40,15 @@ module "materialize_infrastructure" {
   node_group_capacity_type  = "ON_DEMAND"
 
   # Storage Configuration
-  bucket_name              = "aws-persistent-storage-${random_id.suffix.hex}"
-  enable_bucket_versioning = true
-  enable_bucket_encryption = true
-  bucket_force_destroy     = true
+  bucket_force_destroy = true
+
+  # For testing purposes, we are disabling encryption and versioning to allow for easier cleanup
+  # This should be enabled in production environments for security and data integrity
+  enable_bucket_versioning = false
+  enable_bucket_encryption = false
 
   # Database Configuration
   database_password    = random_password.db_password.result
-  db_identifier        = "aws-persistent-metadata-db"
   postgres_version     = "15"
   db_instance_class    = "db.t3.micro"
   db_allocated_storage = 20

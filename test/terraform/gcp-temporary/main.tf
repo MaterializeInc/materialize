@@ -41,7 +41,7 @@ module "materialize" {
     example     = "true"
   }
 
-  install_materialize_operator = false
+  install_materialize_operator = true
 }
 
 variable "project_id" {

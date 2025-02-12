@@ -22,8 +22,9 @@ module "materialize_infrastructure" {
   # Basic settings
   # The namespace and environment variables are used to construct the names of the resources
   # e.g. ${namespace}-${environment}-eks and etc.
-  namespace    = "terraform-aws-test"
+  namespace    = "aws-test"
   environment  = "dev"
+  install_materialize_operator = true
 
   # VPC Configuration
   vpc_cidr             = "10.0.0.0/16"
@@ -64,7 +65,7 @@ module "materialize_infrastructure" {
   # Tags
   tags = {
     Environment = "dev"
-    Project     = "terraform-aws-test"
+    Project     = "aws-test"
     Terraform   = "true"
   }
 }

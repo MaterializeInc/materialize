@@ -151,7 +151,7 @@ class AWS:
                     "eks",
                     "update-kubeconfig",
                     "--name",
-                    f"{prefix}-cluster",
+                    f"{prefix}-dev-eks",
                     "--region",
                     "us-east-1",
                 ]
@@ -170,7 +170,7 @@ class AWS:
         persist_backend_url = spawn.capture(
             ["terraform", "output", "-raw", "persist_backend_url"], cwd=self.path
         ).strip()
-        materialize_s3_role_arn = spawn.capture(
+        spawn.capture(
             ["terraform", "output", "-raw", "materialize_s3_role_arn"], cwd=self.path
         ).strip()
 
@@ -180,7 +180,7 @@ class AWS:
                 "eks",
                 "update-kubeconfig",
                 "--name",
-                f"{prefix}-cluster",
+                f"{prefix}-dev-eks",
                 "--region",
                 "us-east-1",
             ]
@@ -209,7 +209,7 @@ class AWS:
         #     ["kubectl", "get", "pods", "-n", "openebs", "-l", "role=openebs-lvm"]
         # )
 
-        aws_account_id = spawn.capture(
+        spawn.capture(
             [
                 "aws",
                 "sts",
@@ -220,49 +220,7 @@ class AWS:
                 "text",
             ]
         ).strip()
-        public_ip_address = spawn.capture(
-            ["curl", "http://checkip.amazonaws.com"]
-        ).strip()
 
-        materialize_values = {
-            "operator": {
-                "image": {"tag": tag},
-                "cloudProvider": {
-                    "type": "aws",
-                    "region": "us-east-1",
-                    "providers": {
-                        "aws": {
-                            "enabled": True,
-                            "accountID": aws_account_id,
-                            "iam": {"roles": {"environment": materialize_s3_role_arn}},
-                        }
-                    },
-                },
-            },
-            "rbac": {"enabled": False},
-            "networkPolicies": {
-                "enabled": True,
-                "egress": {"enabled": True, "cidrs": ["0.0.0.0/0"]},
-                "ingress": {"enabled": True, "cidrs": [f"{public_ip_address}/24"]},
-                "internal": {"enabled": True},
-            },
-        }
-
-        spawn.runv(
-            [
-                "helm",
-                "install",
-                "materialize-operator",
-                "misc/helm-charts/operator",
-                "--namespace",
-                "materialize",
-                "--create-namespace",
-                "-f",
-                "-",
-            ],
-            cwd=MZ_ROOT,
-            stdin=yaml.dump(materialize_values).encode(),
-        )
         for i in range(60):
             try:
                 spawn.runv(
@@ -352,7 +310,7 @@ class AWS:
                 time.sleep(1)
         else:
             raise ValueError("Never completed")
-        for i in range(180):
+        for i in range(240):
             try:
                 spawn.runv(
                     ["kubectl", "get", "pods", "-n", "materialize-environment"],
@@ -380,7 +338,7 @@ class AWS:
             raise ValueError("Never completed")
 
         # Can take a while for balancerd to come up
-        for i in range(240):
+        for i in range(300):
             try:
                 status = spawn.capture(
                     [
@@ -499,10 +457,6 @@ class AWS:
             ]
         )
         run_ignore_error(["kubectl", "delete", "namespace", "materialize-environment"])
-        run_ignore_error(
-            ["helm", "uninstall", "materialize-operator"],
-            cwd=self.path,
-        )
         run_ignore_error(["kubectl", "delete", "namespace", "materialize"])
         spawn.runv(["terraform", "destroy", "-auto-approve"], cwd=self.path)
 
@@ -600,7 +554,7 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     path = MZ_ROOT / "test" / "terraform" / "aws-temporary"
     aws = AWS(path)
     try:
-        aws.setup("terraform-aws-test", args.setup, tag)
+        aws.setup("aws-test", args.setup, tag)
         print("--- Running tests")
         with c.override(testdrive(no_reset=False)):
             aws.connect(c)
@@ -619,8 +573,11 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                         MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
                     ) as f:
                         content = yaml.load(f, Loader=yaml.Loader)
-                        helm_chart_version = content["version"]
-                    assert version.endswith(f", helm chart: {helm_chart_version})")
+                        content["version"]
+                    # TODO: Reenable when we can pass the helm-chart path in directly
+                    # assert version.endswith(
+                    #     f", helm chart: {helm_chart_version})"
+                    # ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
             c.run_testdrive_files(*args.files)
     finally:
@@ -748,8 +705,7 @@ def workflow_aws_persistent_destroy(
     aws.destroy()
 
 
-def workflow_gcp(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """To run locally use `aws sso login` first."""
+def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--setup",
         default=True,
@@ -781,7 +737,7 @@ def workflow_gcp(c: Composition, parser: WorkflowArgumentParser) -> None:
     environmentd_port_forward_process = None
     balancerd_port_forward_process = None
 
-    path = MZ_ROOT / "test" / "terraform" / "gcp"
+    path = MZ_ROOT / "test" / "terraform" / "gcp-temporary"
 
     gcp_service_account_json = os.getenv("GCP_SERVICE_ACCOUNT_JSON")
     assert (
@@ -844,47 +800,6 @@ def workflow_gcp(c: Composition, parser: WorkflowArgumentParser) -> None:
         spawn.runv(["kubectl", "get", "nodes"])
 
         if args.setup:
-            public_ip_address = spawn.capture(
-                ["curl", "http://checkip.amazonaws.com"]
-            ).strip()
-
-            materialize_values = {
-                "operator": {
-                    "image": {"tag": tag},
-                    "cloudProvider": {
-                        "type": "gcp",
-                        "region": "us-east1",
-                        "providers": {
-                            "gcp": {
-                                "enabled": True,
-                            }
-                        },
-                    },
-                },
-                "rbac": {"enabled": False},
-                "networkPolicies": {
-                    "enabled": True,
-                    "egress": {"enabled": True, "cidrs": ["0.0.0.0/0"]},
-                    "ingress": {"enabled": True, "cidrs": [f"{public_ip_address}/24"]},
-                    "internal": {"enabled": True},
-                },
-            }
-
-            spawn.runv(
-                [
-                    "helm",
-                    "install",
-                    "materialize-operator",
-                    "misc/helm-charts/operator",
-                    "--namespace",
-                    "materialize",
-                    "--create-namespace",
-                    "-f",
-                    "-",
-                ],
-                cwd=MZ_ROOT,
-                stdin=yaml.dump(materialize_values).encode(),
-            )
             for i in range(60):
                 try:
                     spawn.runv(
@@ -1122,8 +1037,11 @@ def workflow_gcp(c: Composition, parser: WorkflowArgumentParser) -> None:
                         MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
                     ) as f:
                         content = yaml.load(f, Loader=yaml.Loader)
-                        helm_chart_version = content["version"]
-                    assert version.endswith(f", helm chart: {helm_chart_version})")
+                        content["version"]
+                    # TODO: Reenable when we can pass the helm-chart path in directly
+                    # assert version.endswith(
+                    #     f", helm chart: {helm_chart_version})"
+                    # ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
             c.run_testdrive_files(*args.files)
     finally:
@@ -1150,10 +1068,6 @@ def workflow_gcp(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
             run_ignore_error(
                 ["kubectl", "delete", "namespace", "materialize-environment"]
-            )
-            run_ignore_error(
-                ["helm", "uninstall", "materialize-operator"],
-                cwd=path,
             )
             run_ignore_error(["kubectl", "delete", "namespace", "materialize"])
             spawn.runv(["terraform", "destroy", "-auto-approve"], cwd=path)
