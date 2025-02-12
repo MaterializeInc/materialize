@@ -111,7 +111,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
             let namespace = namespace.clone();
 
             // Spawn a new task for each describe operation
-            let handle = tokio::spawn(async move {
+            let handle = mz_ore::task::spawn(|| "dump-kubectl-describe", async move {
                 if let Err(e) = dump_kubectl_describe(&context, &namespace, &resource_type).await {
                     eprintln!(
                         "Failed to dump kubectl describe for {}: {}",
