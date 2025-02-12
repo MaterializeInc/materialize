@@ -10,18 +10,19 @@
 //! An interactive dataflow server.
 
 use std::sync::Arc;
-use std::thread::Thread;
 
 use mz_cluster::server::TimelyContainerRef;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_rocksdb::config::SharedWriteBufferManager;
+use mz_service::local::LocalActivator;
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use timely::communication::initialize::WorkerGuards;
 use timely::worker::Worker as TimelyWorker;
+use tokio::sync::mpsc;
 
 use crate::metrics::StorageMetrics;
 use crate::storage_state::{StorageInstanceContext, Worker};
@@ -57,7 +58,7 @@ pub fn serve(
     instance_context: StorageInstanceContext,
 ) -> Result<
     (
-        TimelyContainerRef<StorageCommand, StorageResponse, Thread>,
+        TimelyContainerRef<StorageCommand, StorageResponse>,
         impl Fn() -> Box<dyn StorageClient>,
     ),
     anyhow::Error,
@@ -93,14 +94,13 @@ pub fn serve(
 }
 
 impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Config {
-    type Activatable = std::thread::Thread;
     fn build_and_run<A: timely::communication::Allocate>(
         config: Self,
         timely_worker: &mut TimelyWorker<A>,
         client_rx: crossbeam_channel::Receiver<(
             crossbeam_channel::Receiver<StorageCommand>,
-            tokio::sync::mpsc::UnboundedSender<StorageResponse>,
-            tokio::sync::mpsc::UnboundedSender<std::thread::Thread>,
+            mpsc::UnboundedSender<StorageResponse>,
+            mpsc::UnboundedSender<LocalActivator>,
         )>,
         persist_clients: Arc<PersistClientCache>,
         txns_ctx: TxnsContext,

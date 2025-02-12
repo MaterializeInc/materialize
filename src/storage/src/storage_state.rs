@@ -89,6 +89,7 @@ use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Timestamp};
 use mz_rocksdb::config::SharedWriteBufferManager;
+use mz_service::local::LocalActivator;
 use mz_storage_client::client::{
     RunIngestionCommand, StatusUpdate, StorageCommand, StorageResponse,
 };
@@ -135,7 +136,7 @@ pub struct Worker<'w, A: Allocate> {
     pub client_rx: crossbeam_channel::Receiver<(
         CommandReceiver,
         ResponseSender,
-        mpsc::UnboundedSender<std::thread::Thread>,
+        mpsc::UnboundedSender<LocalActivator>,
     )>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
@@ -148,7 +149,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         client_rx: crossbeam_channel::Receiver<(
             CommandReceiver,
             ResponseSender,
-            mpsc::UnboundedSender<std::thread::Thread>,
+            mpsc::UnboundedSender<LocalActivator>,
         )>,
         metrics: StorageMetrics,
         now: NowFn,
@@ -389,9 +390,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
         while !shutdown {
             match self.client_rx.recv() {
                 Ok((rx, tx, activator_tx)) => {
+                    let activator = LocalActivator::new(thread::current());
                     // This might fail if the client has already shut down, which is fine.
                     // `run_client` knows how to handle a disconnected client.
-                    let _ = activator_tx.send(std::thread::current());
+                    let _ = activator_tx.send(activator);
                     self.run_client(rx, tx)
                 }
                 Err(_) => {

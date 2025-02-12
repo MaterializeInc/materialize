@@ -20,7 +20,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
 
-pub trait Activatable {
+/// A trait for types that can be used to activate threads.
+pub trait Activatable: fmt::Debug + Send {
     fn activate(&self);
 }
 
@@ -36,23 +37,52 @@ impl Activatable for Thread {
     }
 }
 
+/// An activator for a thread.
+///
+/// This wraps any `Activatable` and has a `Drop` impl to ensure the thread is always activated
+/// when the activator is dropped. This is important to ensure workers have a chance to observe
+/// that their command channel has closed and prepare for reconnection.
+#[derive(Debug)]
+pub struct LocalActivator {
+    inner: Box<dyn Activatable>,
+}
+
+impl LocalActivator {
+    pub fn new<A: Activatable + 'static>(inner: A) -> Self {
+        Self {
+            inner: Box::new(inner),
+        }
+    }
+
+    fn activate(&self) {
+        self.inner.activate();
+    }
+}
+
+impl Drop for LocalActivator {
+    fn drop(&mut self) {
+        self.inner.activate();
+    }
+}
+
 /// A client to a thread in the same process.
 ///
 /// The thread is unparked on every call to [`send`](LocalClient::send) and on
 /// `Drop`.
 #[derive(Debug)]
-pub struct LocalClient<C, R, A: Activatable> {
+pub struct LocalClient<C, R> {
+    // Order is important here: We need to drop the `tx` before the activator so when the thread is
+    // unparked by the dropping of the activator it can observed that the sender has disconnected.
     rx: UnboundedReceiver<R>,
     tx: Sender<C>,
-    tx_activator: A,
+    tx_activator: LocalActivator,
 }
 
 #[async_trait]
-impl<C, R, A> GenericClient<C, R> for LocalClient<C, R, A>
+impl<C, R> GenericClient<C, R> for LocalClient<C, R>
 where
     C: fmt::Debug + Send,
     R: fmt::Debug + Send,
-    A: fmt::Debug + Activatable + Send,
 {
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         self.tx
@@ -75,9 +105,9 @@ where
     }
 }
 
-impl<C, R, A: Activatable> LocalClient<C, R, A> {
+impl<C, R> LocalClient<C, R> {
     /// Create a new instance of [`LocalClient`] from its parts.
-    pub fn new(rx: UnboundedReceiver<R>, tx: Sender<C>, tx_activator: A) -> Self {
+    pub fn new(rx: UnboundedReceiver<R>, tx: Sender<C>, tx_activator: LocalActivator) -> Self {
         Self {
             rx,
             tx,
@@ -89,7 +119,7 @@ impl<C, R, A: Activatable> LocalClient<C, R, A> {
     pub fn new_partitioned(
         rxs: Vec<UnboundedReceiver<R>>,
         txs: Vec<Sender<C>>,
-        tx_activators: Vec<A>,
+        tx_activators: Vec<LocalActivator>,
     ) -> Partitioned<Self, C, R>
     where
         (C, R): Partitionable<C, R>,
@@ -101,18 +131,5 @@ impl<C, R, A: Activatable> LocalClient<C, R, A> {
             .map(|((rx, tx), tx_activator)| LocalClient::new(rx, tx, tx_activator))
             .collect();
         Partitioned::new(clients)
-    }
-}
-
-// We implement `Drop` so that we can wake each of the threads and have them
-// notice the drop.
-impl<C, R, A: Activatable> Drop for LocalClient<C, R, A> {
-    fn drop(&mut self) {
-        // Drop the thread handle.
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        self.tx = tx;
-        // Unpark the thread once the handle is dropped, so that it can observe
-        // the emptiness.
-        self.tx_activator.activate();
     }
 }
