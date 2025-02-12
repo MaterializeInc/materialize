@@ -333,12 +333,56 @@ impl<T> Region<T> {
     /// Otherwise, the vector representation could try to reallocate the underlying memory
     /// using the global allocator, which would cause problems because the memory might not
     /// have originated from it. This is undefined behavior.
+    ///
+    /// Private because it is too dangerous to expose to the public.
     #[inline]
     unsafe fn as_mut_vec(&mut self) -> &mut Vec<T> {
         match self {
             Region::Heap(vec) => vec,
             Region::MMap(inner) => &mut inner.inner,
         }
+    }
+}
+
+impl Region<u64> {
+    /// Create a new file-based mapped region of a specific capacity, initialized to 0. The
+    /// capacity of the returned region can be larger than requested to accommodate page sizes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the memory allocation fails.
+    #[inline(always)]
+    pub fn new_mmap_zeroed(capacity: usize) -> Result<Region<u64>, lgalloc::AllocError> {
+        lgalloc::allocate::<u64>(capacity).map(|(ptr, capacity, handle)| {
+            // SAFETY: `allocate` returns a valid memory block
+            unsafe { ptr.as_ptr().write_bytes(0, capacity) }
+            // SAFETY: `ptr` points to suitable memory.
+            // It is UB to call `from_raw_parts` with a pointer not allocated from the global
+            // allocator, but we accept this here because we promise never to reallocate the vector.
+            let inner =
+                ManuallyDrop::new(unsafe { Vec::from_raw_parts(ptr.as_ptr(), capacity, capacity) });
+            let handle = Some(handle);
+            Region::MMap(MMapRegion { inner, handle })
+        })
+    }
+
+    /// Allocate a zeroed region on the heap.
+    #[inline(always)]
+    pub fn new_heap_zeroed(capacity: usize) -> Self {
+        Region::Heap(vec![0; capacity])
+    }
+
+    /// Construct a new region with the specified capacity, initialized to 0.
+    pub fn new_auto_zeroed(capacity: usize) -> Self {
+        match Region::new_mmap_zeroed(capacity) {
+            Ok(r) => return r,
+            Err(lgalloc::AllocError::Disabled) | Err(lgalloc::AllocError::InvalidSizeClass(_)) => {}
+            Err(e) => {
+                eprintln!("lgalloc error: {e}, falling back to heap");
+            }
+        }
+        // Fall-through
+        Region::Heap(vec![0; capacity])
     }
 }
 

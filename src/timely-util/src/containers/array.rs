@@ -16,7 +16,7 @@
 //! An array of fixed length, allocated from lgalloc if possible.
 
 use std::mem::{ManuallyDrop, MaybeUninit};
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 /// A fixed-length region in memory, which is either allocated from heap or lgalloc.
 pub struct Array<T> {
@@ -112,6 +112,14 @@ impl<T> Array<T> {
     }
 }
 
+impl<T: Clone> Clone for Array<T> {
+    fn clone(&self) -> Self {
+        let mut clone = Self::with_capacity(self.length);
+        clone.deref_mut().clone_from_slice(&**self);
+        clone
+    }
+}
+
 impl<T> Deref for Array<T> {
     type Target = [T];
 
@@ -126,6 +134,22 @@ impl<T> Deref for Array<T> {
         #[allow(clippy::as_conversions)]
         unsafe {
             &*(&self.elements[..self.length] as *const [MaybeUninit<T>] as *const [T])
+        }
+    }
+}
+
+impl<T> DerefMut for Array<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // TODO: Use `slice_assume_init_ref` once stable.
+        // Context: https://doc.rust-lang.org/std/mem/union.MaybeUninit.html#method.slice_assume_init_ref
+        // The following safety argument is adapted from the source.
+        // SAFETY: casting `elements` to a `*const [T]` is safe since the caller guarantees that
+        // `slice` is initialized, and `MaybeUninit` is guaranteed to have the same layout as `T`.
+        // The pointer obtained is valid since it refers to memory owned by `elements` which is a
+        // reference and thus guaranteed to be valid for reads.
+        #[allow(clippy::as_conversions)]
+        unsafe {
+            &mut *(&mut self.elements[..self.length] as *mut [MaybeUninit<T>] as *mut [T])
         }
     }
 }

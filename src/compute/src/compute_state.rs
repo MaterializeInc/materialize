@@ -309,6 +309,9 @@ impl ComputeState {
         info!("using chunked stack: {chunked_stack}");
         mz_timely_util::containers::stack::use_chunked_stack(chunked_stack);
 
+        let enable_lgalloc_columnar = ENABLE_LGALLOC_COLUMNAR.get(config);
+        mz_timely_util::containers::set_enable_lgalloc_columnar(enable_lgalloc_columnar);
+
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);

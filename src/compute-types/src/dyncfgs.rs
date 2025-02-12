@@ -50,8 +50,15 @@ pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
 /// Enable lgalloc for columnation.
 pub const ENABLE_COLUMNATION_LGALLOC: Config<bool> = Config::new(
     "enable_columnation_lgalloc",
-    false,
+    true,
     "Enable allocating regions from lgalloc.",
+);
+
+/// Enable lgalloc for columnation.
+pub const ENABLE_LGALLOC_COLUMNAR: Config<bool> = Config::new(
+    "enable_lgalloc_columnar",
+    true,
+    "Enable allocating alignd regions in columnar from lgalloc.",
 );
 
 /// Enable lgalloc's eager memory return/reclamation feature.
@@ -191,6 +198,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
+        .add(&ENABLE_LGALLOC_COLUMNAR)
         .add(&ENABLE_CHUNKED_STACK)
         .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES)

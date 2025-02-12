@@ -34,10 +34,13 @@ mod container {
     use columnar::Container as _;
     use columnar::{AsBytes, Clear, FromBytes, Index, Len};
     use mz_ore::cast::CastFrom;
+    use mz_ore::region::Region;
     use timely::bytes::arc::Bytes;
     use timely::container::PushInto;
     use timely::dataflow::channels::ContainerBytes;
     use timely::Container;
+
+    use crate::containers::alloc_aligned_zeroed;
 
     /// A container based on a columnar store, encoded in aligned bytes.
     ///
@@ -53,7 +56,7 @@ mod container {
         ///
         /// Reasons could include misalignment, cloning of data, or wanting
         /// to release the `Bytes` as a scarce resource.
-        Align(Box<[u64]>),
+        Align(Region<u64>),
     }
 
     impl<C: Columnar> Column<C> {
@@ -92,11 +95,15 @@ mod container {
                 Column::Typed(t) => Column::Typed(t.clone()),
                 Column::Bytes(b) => {
                     assert_eq!(b.len() % 8, 0);
-                    let mut alloc: Vec<u64> = vec![0; b.len() / 8];
+                    let mut alloc: Region<u64> = alloc_aligned_zeroed(b.len() / 8);
                     bytemuck::cast_slice_mut(&mut alloc[..]).copy_from_slice(&b[..]);
-                    Self::Align(alloc.into())
+                    Self::Align(alloc)
                 }
-                Column::Align(a) => Column::Align(a.clone()),
+                Column::Align(a) => {
+                    let mut alloc = alloc_aligned_zeroed(a.len());
+                    alloc.extend_from_slice(&a[..]);
+                    Column::Align(alloc)
+                }
             }
         }
     }
@@ -113,8 +120,7 @@ mod container {
         fn clear(&mut self) {
             match self {
                 Column::Typed(t) => t.clear(),
-                Column::Bytes(_) => *self = Column::Typed(Default::default()),
-                Column::Align(_) => *self = Column::Typed(Default::default()),
+                Column::Bytes(_) | Column::Align(_) => *self = Column::Typed(Default::default()),
             }
         }
 
@@ -161,9 +167,9 @@ mod container {
                 Self::Bytes(bytes)
             } else {
                 // We failed to cast the slice, so we'll reallocate.
-                let mut alloc: Vec<u64> = vec![0; bytes.len() / 8];
+                let mut alloc: Region<u64> = alloc_aligned_zeroed(bytes.len() / 8);
                 bytemuck::cast_slice_mut(&mut alloc[..]).copy_from_slice(&bytes[..]);
-                Self::Align(alloc.into())
+                Self::Align(alloc)
             }
         }
 
@@ -200,15 +206,23 @@ mod container {
     }
 }
 
-pub use builder::ColumnBuilder;
+pub(self) use builder::alloc_aligned_zeroed;
+pub use builder::{set_enable_lgalloc_columnar, ColumnBuilder};
 mod builder {
     use std::collections::VecDeque;
+    use std::io::Write;
 
     use columnar::{AsBytes, Clear, Columnar, Len, Push};
+    use mz_ore::cast::CastFrom;
+    use mz_ore::region::Region;
     use timely::container::PushInto;
     use timely::container::{ContainerBuilder, LengthPreservingContainerBuilder};
 
     use super::Column;
+
+    thread_local! {
+        static ENABLE_LGALLOC_COLUMNAR: std::cell::RefCell<bool> = const { std::cell::RefCell::new(false) };
+    }
 
     /// A container builder for `Column<C>`.
     pub struct ColumnBuilder<C: Columnar> {
@@ -223,6 +237,28 @@ mod builder {
         pending: VecDeque<Column<C>>,
     }
 
+    /// Returns `true` if columnar allocations should come from lgalloc.
+    #[inline]
+    pub fn enable_lgalloc_columnar() -> bool {
+        ENABLE_LGALLOC_COLUMNAR.with(|enabled| *enabled.borrow())
+    }
+
+    /// Set whether columnar allocations should come from lgalloc. Applies to future allocations.
+    pub fn set_enable_lgalloc_columnar(enabled: bool) {
+        ENABLE_LGALLOC_COLUMNAR.with(|enable| *enable.borrow_mut() = enabled);
+    }
+
+    /// Allocate a region of memory with a capacity of at least `len` that is aligned to 8 bytes
+    /// and zeroed.
+    #[inline]
+    pub(crate) fn alloc_aligned_zeroed(len: usize) -> Region<u64> {
+        if enable_lgalloc_columnar() {
+            Region::new_auto_zeroed(len)
+        } else {
+            Region::new_heap_zeroed(len)
+        }
+    }
+
     impl<C: Columnar, T> PushInto<T> for ColumnBuilder<C>
     where
         C::Container: Push<T>,
@@ -235,14 +271,32 @@ mod builder {
             let words = self.current.borrow().length_in_words();
             let round = (words + ((1 << 18) - 1)) & !((1 << 18) - 1);
             if round - words < round / 10 {
-                let mut alloc = Vec::with_capacity(round);
-                columnar::bytes::serialization::encode(
-                    &mut alloc,
-                    self.current.borrow().as_bytes(),
-                );
-                self.pending
-                    .push_back(Column::Align(alloc.into_boxed_slice()));
-                self.current.clear();
+                /// Move the contents from `current` to an aligned allocation, and push it to `pending`.
+                /// The contents must fit in `round` words (u64).
+                #[cold]
+                fn outlined_align<C>(
+                    current: &mut C::Container,
+                    round: usize,
+                    pending: &mut VecDeque<Column<C>>,
+                ) where
+                    C: Columnar,
+                {
+                    let mut alloc = alloc_aligned_zeroed(round);
+                    let mut writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
+                    for (align, bytes) in current.borrow().as_bytes() {
+                        assert!(align <= 8);
+                        let length = u64::cast_from(bytes.len());
+                        let length_slice = bytemuck::cast_slice(std::slice::from_ref(&length));
+                        writer.write_all(length_slice).unwrap();
+                        writer.write_all(bytes).unwrap();
+                        let padding = usize::cast_from((8 - (length % 8)) % 8);
+                        writer.write_all(&[0; 8][..padding]).unwrap();
+                    }
+                    pending.push_back(Column::Align(alloc));
+                    current.clear();
+                }
+
+                outlined_align(&mut self.current, round, &mut self.pending);
             }
         }
     }
