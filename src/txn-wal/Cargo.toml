@@ -31,7 +31,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [dev-dependencies]
 crossbeam-channel = "0.5.14"
-rand = { version = "0.8.5", default-features = false, features = ["small_rng"] }
+rand = { version = "0.9.0", default-features = false, features = ["small_rng"] }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }

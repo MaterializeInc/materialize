@@ -72,7 +72,7 @@ opentelemetry = { version = "0.24.0", features = ["trace"] }
 prometheus = { version = "0.13.3", default-features = false }
 prost = { version = "0.13.4", features = ["no-recursion-limit"] }
 qcell = "0.5"
-rand = "0.8.5"
+rand = "0.9.0"
 rand_chacha = "0.3"
 semver = "1.0.16"
 serde = "1.0.152"

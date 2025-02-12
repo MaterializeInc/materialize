@@ -63,7 +63,7 @@ pin-project = "1.0.12"
 postgres-replication = { version = "0.6.7" }
 prometheus = { version = "0.13.3", default-features = false }
 prost = { version = "0.13.4", features = ["no-recursion-limit"] }
-rand = "0.8.5"
+rand = "0.9.0"
 rdkafka = { version = "0.29.0", features = [
     "cmake-build",
     "ssl-vendored",

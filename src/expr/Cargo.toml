@@ -73,7 +73,7 @@ datadriven = "0.8.0"
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
 proc-macro2 = "1.0.60"
-rand = "0.8.5"
+rand = "0.9.0"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
