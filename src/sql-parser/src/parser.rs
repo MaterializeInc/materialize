@@ -3199,6 +3199,10 @@ impl<'a> Parser<'a> {
         let name = match self.expect_one_of_keywords(&[PARTITION, SNAPSHOT, VERSION])? {
             SNAPSHOT => CreateSinkOptionName::Snapshot,
             VERSION => CreateSinkOptionName::Version,
+            PARTITION => {
+                self.expect_keyword(STRATEGY)?;
+                CreateSinkOptionName::PartitionStrategy
+            }
             _ => unreachable!(),
         };
         Ok(name)
