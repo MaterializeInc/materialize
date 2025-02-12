@@ -49,6 +49,14 @@ impl<T: Columnation> StackWrapper<T> {
         }
     }
 
+    /// Return the capacity of the local buffer.
+    pub fn capacity(&self) -> usize {
+        match self {
+            Self::Legacy(stack) => stack.capacity(),
+            Self::Chunked(stack) => stack.capacity(),
+        }
+    }
+
     /// Estimate the memory capacity in bytes.
     #[inline]
     pub fn heap_size(&self, callback: impl FnMut(usize, usize)) {
