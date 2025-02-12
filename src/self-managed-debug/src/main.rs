@@ -19,7 +19,10 @@ use std::sync::LazyLock;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use futures::future::join_all;
-use k8s_openapi::api::core::v1::{Event, Pod};
+use k8s_openapi::api::apps::v1::{Deployment, ReplicaSet, StatefulSet};
+use k8s_openapi::api::core::v1::{Event, Node, Pod, Service};
+use k8s_openapi::api::networking::v1::NetworkPolicy;
+use k8s_openapi::ListableResource;
 use kube::api::{Api, ListParams, LogParams};
 use kube::config::KubeConfigOptions;
 use kube::{Client, Config};
@@ -48,14 +51,14 @@ pub struct Context {
 
 #[derive(Clone)]
 pub enum K8sResourceType {
+    Event,
     Pod,
     Service,
     Deployment,
     StatefulSet,
     ReplicaSet,
     NetworkPolicy,
-    Log,
-    Event,
+    Node,
 }
 
 impl std::fmt::Display for K8sResourceType {
@@ -67,8 +70,8 @@ impl std::fmt::Display for K8sResourceType {
             K8sResourceType::StatefulSet => "statefulsets",
             K8sResourceType::ReplicaSet => "replicasets",
             K8sResourceType::NetworkPolicy => "networkpolicies",
-            K8sResourceType::Log => "logs",
             K8sResourceType::Event => "events",
+            K8sResourceType::Node => "nodes",
         };
         write!(f, "{}", s)
     }
@@ -98,23 +101,17 @@ async fn main() {
 async fn run(context: Context) -> Result<(), anyhow::Error> {
     let mut describe_handles = Vec::new();
 
-    for resource_type in [
-        K8sResourceType::Pod,
-        K8sResourceType::Service,
-        K8sResourceType::Deployment,
-        K8sResourceType::StatefulSet,
-        K8sResourceType::ReplicaSet,
-        K8sResourceType::NetworkPolicy,
-    ] {
-        for namespace in context.args.k8s_namespaces.clone() {
-            // Clone the values needed inside the task
+    let mut spawn_kubectl_describe_process =
+        |resource_type: &K8sResourceType, namespace: Option<String>| {
             let context = context.clone();
             let resource_type = resource_type.clone();
             let namespace = namespace.clone();
 
             // Spawn a new task for each describe operation
             let handle = mz_ore::task::spawn(|| "dump-kubectl-describe", async move {
-                if let Err(e) = dump_kubectl_describe(&context, &namespace, &resource_type).await {
+                if let Err(e) =
+                    dump_kubectl_describe(&context, &resource_type, namespace.as_ref()).await
+                {
                     eprintln!(
                         "Failed to dump kubectl describe for {}: {}",
                         resource_type, e
@@ -122,8 +119,24 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
                 }
             });
             describe_handles.push(handle);
+        };
+
+    for resource_type in [
+        K8sResourceType::Pod,
+        K8sResourceType::Service,
+        K8sResourceType::Deployment,
+        K8sResourceType::StatefulSet,
+        K8sResourceType::ReplicaSet,
+        K8sResourceType::NetworkPolicy,
+        K8sResourceType::Event,
+    ] {
+        for namespace in context.args.k8s_namespaces.clone() {
+            spawn_kubectl_describe_process(&resource_type, Some(namespace));
         }
     }
+
+    spawn_kubectl_describe_process(&K8sResourceType::Node, None);
+
     match create_k8s_client(context.args.k8s_context.clone()).await {
         Ok(client) => {
             for namespace in context.args.k8s_namespaces.clone() {
@@ -134,12 +147,107 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
                     );
                 }
 
-                if let Err(e) = dump_k8s_events(&context, client.clone(), &namespace).await {
+                let events_api = Api::<Event>::namespaced(client.clone(), &namespace);
+                if let Err(e) = dump_k8s_resources(
+                    &context,
+                    events_api,
+                    &K8sResourceType::Event,
+                    Some(&namespace),
+                )
+                .await
+                {
                     eprintln!(
                         "Failed to write k8s events for namespace {}: {}",
                         namespace, e
                     );
                 }
+                let pods_api = Api::<Pod>::namespaced(client.clone(), &namespace);
+                if let Err(e) =
+                    dump_k8s_resources(&context, pods_api, &K8sResourceType::Pod, Some(&namespace))
+                        .await
+                {
+                    eprintln!(
+                        "Failed to write k8s pods for namespace {}: {}",
+                        namespace, e
+                    );
+                }
+                let services_api = Api::<Service>::namespaced(client.clone(), &namespace);
+                if let Err(e) = dump_k8s_resources(
+                    &context,
+                    services_api,
+                    &K8sResourceType::Service,
+                    Some(&namespace),
+                )
+                .await
+                {
+                    eprintln!(
+                        "Failed to write k8s services for namespace {}: {}",
+                        namespace, e
+                    );
+                }
+                let deployments_api = Api::<Deployment>::namespaced(client.clone(), &namespace);
+                if let Err(e) = dump_k8s_resources(
+                    &context,
+                    deployments_api,
+                    &K8sResourceType::Deployment,
+                    Some(&namespace),
+                )
+                .await
+                {
+                    eprintln!(
+                        "Failed to write k8s deployments for namespace {}: {}",
+                        namespace, e
+                    );
+                }
+                let statefulsets_api = Api::<StatefulSet>::namespaced(client.clone(), &namespace);
+                if let Err(e) = dump_k8s_resources(
+                    &context,
+                    statefulsets_api,
+                    &K8sResourceType::StatefulSet,
+                    Some(&namespace),
+                )
+                .await
+                {
+                    eprintln!(
+                        "Failed to write k8s statefulsets for namespace {}: {}",
+                        namespace, e
+                    );
+                }
+                let replicasets_api = Api::<ReplicaSet>::namespaced(client.clone(), &namespace);
+                if let Err(e) = dump_k8s_resources(
+                    &context,
+                    replicasets_api,
+                    &K8sResourceType::ReplicaSet,
+                    Some(&namespace),
+                )
+                .await
+                {
+                    eprintln!(
+                        "Failed to write k8s replicasets for namespace {}: {}",
+                        namespace, e
+                    );
+                }
+                let networkpolicies_api =
+                    Api::<NetworkPolicy>::namespaced(client.clone(), &namespace);
+                if let Err(e) = dump_k8s_resources(
+                    &context,
+                    networkpolicies_api,
+                    &K8sResourceType::NetworkPolicy,
+                    Some(&namespace),
+                )
+                .await
+                {
+                    eprintln!(
+                        "Failed to write k8s networkpolicies for namespace {}: {}",
+                        namespace, e
+                    );
+                }
+            }
+            let nodes_api = Api::<Node>::all(client.clone());
+            if let Err(e) =
+                dump_k8s_resources(&context, nodes_api, &K8sResourceType::Node, None).await
+            {
+                eprintln!("Failed to write k8s nodes: {}", e);
             }
         }
         Err(e) => {
@@ -173,7 +281,7 @@ async fn dump_k8s_pod_logs(
     client: Client,
     namespace: &String,
 ) -> Result<(), anyhow::Error> {
-    let file_path = format_resource_path(context.start_time, namespace, &K8sResourceType::Log);
+    let file_path = format_resource_path(context.start_time, "logs", Some(namespace));
     create_dir_all(&file_path)?;
 
     let pods: Api<Pod> = Api::<Pod>::namespaced(client.clone(), namespace);
@@ -202,7 +310,7 @@ async fn dump_k8s_pod_logs(
                 .await?;
 
             if logs.is_empty() {
-                println!("No {} logs found for pod {}", suffix, pod_name);
+                eprintln!("No {} logs found for pod {}", suffix, pod_name);
                 return Ok(());
             }
 
@@ -239,27 +347,37 @@ async fn dump_k8s_pod_logs(
     Ok(())
 }
 
-/// Write k8s events to a yaml file.
-async fn dump_k8s_events(
+async fn dump_k8s_resources<T>(
     context: &Context,
-    client: Client,
-    namespace: &String,
-) -> Result<(), anyhow::Error> {
-    let events: Api<Event> = Api::<Event>::namespaced(client.clone(), namespace);
-    let event_list = events.list(&ListParams::default()).await?;
+    api: Api<T>,
+    resource_type: &K8sResourceType,
+    namespace: Option<&String>,
+) -> Result<(), anyhow::Error>
+where
+    T: ListableResource,
+    T: Clone,
+    T: std::fmt::Debug,
+    T: serde::Serialize,
+    T: serde::de::DeserializeOwned,
+{
+    let object_list = api.list(&ListParams::default()).await?;
 
-    if event_list.items.is_empty() {
-        println!("No events found for namespace {}", namespace);
+    if object_list.items.is_empty() {
+        let mut err_msg = format!("No {} found", resource_type);
+        if let Some(namespace) = namespace {
+            err_msg = format!("{} for namespace {}", err_msg, namespace);
+        }
+        println!("{}", err_msg);
         return Ok(());
     }
 
-    let file_path = format_resource_path(context.start_time, namespace, &K8sResourceType::Event);
-    let file_name = file_path.join("events.yaml");
+    let file_path = format_resource_path(context.start_time, &resource_type.to_string(), namespace);
+    let file_name = file_path.join(format!("{}.yaml", resource_type));
     create_dir_all(&file_path)?;
     let mut file = File::create(&file_name)?;
 
-    for event in event_list {
-        serde_yaml::to_writer(&mut file, &event)?;
+    for item in &object_list.items {
+        serde_yaml::to_writer(&mut file, &item)?;
     }
 
     println!("Exported {}", file_name.display());
@@ -270,11 +388,14 @@ async fn dump_k8s_events(
 /// Runs `kubectl describe` for a given resource and writes the output to a file.
 async fn dump_kubectl_describe(
     context: &Context,
-    namespace: &String,
     resource_type: &K8sResourceType,
+    namespace: Option<&String>,
 ) -> Result<(), anyhow::Error> {
     let resource_type_str = resource_type.to_string();
-    let mut args = vec!["describe", &resource_type_str, "-n", namespace];
+    let mut args = vec!["describe", &resource_type_str];
+    if let Some(namespace) = namespace {
+        args.extend(["-n", namespace]);
+    }
 
     if let Some(k8s_context) = &context.args.k8s_context {
         args.extend(["--context", k8s_context]);
@@ -294,11 +415,15 @@ async fn dump_kubectl_describe(
     }
 
     if output.stdout.is_empty() {
-        println!("No {} found in namespace {}", resource_type, namespace);
+        let mut err_msg = format!("Describe: No {} found", resource_type);
+        if let Some(namespace) = namespace {
+            err_msg = format!("{} for namespace {}", err_msg, namespace);
+        }
+        eprintln!("{}", err_msg);
         return Ok(());
     }
 
-    let file_path = format_resource_path(context.start_time, namespace, resource_type);
+    let file_path = format_resource_path(context.start_time, &resource_type.to_string(), namespace);
     let file_name = file_path.join("describe.txt");
     create_dir_all(&file_path)?;
     let mut file = File::create(&file_name)?;
@@ -311,13 +436,16 @@ async fn dump_kubectl_describe(
 
 fn format_resource_path(
     date_time: DateTime<Utc>,
-    namespace: &str,
-    resource_type: &K8sResourceType,
+    resource_type: &str,
+    namespace: Option<&String>,
 ) -> PathBuf {
-    PathBuf::from(format!(
-        "mz-debug/{}/{}/{}",
+    let mut path = PathBuf::from(format!(
+        "mz-debug/{}/{}",
         date_time.format("%Y-%m-%dT%H:%MZ"),
         resource_type,
-        namespace
-    ))
+    ));
+    if let Some(namespace) = namespace {
+        path = path.join(namespace);
+    }
+    path
 }
