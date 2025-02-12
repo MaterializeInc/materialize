@@ -172,6 +172,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ],
     )
 
+    matching_files = []
+    for files in args.files:
+        matching_files.extend(
+            glob.glob(files, root_dir=MZ_ROOT / "test" / "testdrive-old-kafka-src-syntax")
+        )
+
+    # test files that need to have the schema registry reset
+    # this include resetting its storage, which for confluent is kafka
+    requires_csr_refresh = ["avro-resolution-schema-subject-mismatch.td"]
+
     with c.override(testdrive, materialized):
         c.up(*dependencies)
 
@@ -228,6 +238,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         junit_report = ci_util.junit_report_filename(c.name)
 
+
         try:
             junit_report = ci_util.junit_report_filename(c.name)
             print(f"Passing through arguments to testdrive {passthrough_args}\n")
@@ -235,6 +246,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             # do not set default args, they should be set in the td file using set-arg-default to easen the execution
             # without mzcompose
             def process(file: str) -> None:
+                # brute force method of resetting the schema_id
+                # removes and add back schema registry, and associated storage
+                if file in requires_csr_refresh:
+                    if args.redpanda:
+                        c.rm("redpanda")
+                        c.up("redpanda")
+                    else:
+                        c.kill("schema-registry")
+                        c.rm("kafka")
+                        c.up("kafka")
+                        c.up("schema-registry")
                 c.run_testdrive_files(
                     (
                         "--rewrite-results"
@@ -246,7 +268,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     file,
                 )
 
-            c.test_parts(args.files, process)
+            c.test_parts(matching_files, process)
             c.sanity_restart_mz()
         finally:
             ci_util.upload_junit_report(
