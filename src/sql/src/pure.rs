@@ -625,6 +625,9 @@ async fn purify_create_source(
         CreateSourceConnection::Postgres { .. } | CreateSourceConnection::Yugabyte { .. } => {
             &mz_storage_types::sources::postgres::PG_PROGRESS_DESC
         }
+        CreateSourceConnection::SqlServer { .. } => {
+            &mz_storage_types::sources::sql_server::SQL_SERVER_PROGRESS_DESC
+        }
         CreateSourceConnection::MySql { .. } => {
             &mz_storage_types::sources::mysql::MYSQL_PROGRESS_DESC
         }
@@ -916,6 +919,13 @@ async fn purify_create_source(
                     details.into_proto().encode_to_vec(),
                 )))),
             })
+        }
+        CreateSourceConnection::SqlServer { .. } => {
+            // TODO(sql_server1)
+            return Err(PlanError::Unsupported {
+                feature: "SQL SERVER".to_string(),
+                discussion_no: None,
+            });
         }
         CreateSourceConnection::MySql {
             connection,

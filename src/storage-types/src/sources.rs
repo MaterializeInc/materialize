@@ -64,6 +64,7 @@ pub mod kafka;
 pub mod load_generator;
 pub mod mysql;
 pub mod postgres;
+pub mod sql_server;
 
 pub use crate::sources::envelope::SourceEnvelope;
 pub use crate::sources::kafka::KafkaSourceConnection;
