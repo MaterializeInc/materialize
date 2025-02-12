@@ -148,6 +148,7 @@ def get_default_system_parameters(
         "persist_use_critical_since_snapshot": "false" if zero_downtime else "true",
         "persist_use_critical_since_source": "false" if zero_downtime else "true",
         "persist_part_decode_format": "row_with_validate",
+        "persist_blob_cache_scale_with_threads": "true",
         "pg_offset_known_interval": "1s",
         "statement_logging_default_sample_rate": "0.01",
         "statement_logging_max_sample_rate": "0.01",
