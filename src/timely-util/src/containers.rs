@@ -28,12 +28,11 @@ pub mod stack;
 pub use container::Column;
 
 mod container {
-    use columnar::bytes::serialization::decode;
+    use columnar::bytes::{EncodeDecode, Indexed};
     use columnar::common::IterOwn;
     use columnar::Columnar;
     use columnar::Container as _;
-    use columnar::{AsBytes, Clear, FromBytes, Index, Len};
-    use mz_ore::cast::CastFrom;
+    use columnar::{Clear, FromBytes, Index, Len};
     use timely::bytes::arc::Bytes;
     use timely::container::PushInto;
     use timely::dataflow::channels::ContainerBytes;
@@ -63,12 +62,12 @@ mod container {
                 Column::Typed(t) => t.borrow(),
                 Column::Bytes(b) => {
                     <<C::Container as columnar::Container<C>>::Borrowed<'_>>::from_bytes(
-                        &mut decode(bytemuck::cast_slice(b)),
+                        &mut Indexed::decode(bytemuck::cast_slice(b)),
                     )
                 }
                 Column::Align(a) => {
                     <<C::Container as columnar::Container<C>>::Borrowed<'_>>::from_bytes(
-                        &mut decode(a),
+                        &mut Indexed::decode(a),
                     )
                 }
             }
@@ -169,7 +168,7 @@ mod container {
 
         fn length_in_bytes(&self) -> usize {
             match self {
-                Column::Typed(t) => 8 * t.borrow().length_in_words(),
+                Column::Typed(t) => Indexed::length_in_bytes(&t.borrow()),
                 Column::Bytes(b) => b.len(),
                 Column::Align(a) => 8 * a.len(),
             }
@@ -177,22 +176,7 @@ mod container {
 
         fn into_bytes<W: ::std::io::Write>(&self, writer: &mut W) {
             match self {
-                Column::Typed(t) => {
-                    use columnar::Container;
-                    // Columnar data is serialized as a sequence of `u64` values, with each `[u8]` slice
-                    // serialize as first its length in bytes, and then as many `u64` values as needed.
-                    // Padding should be added, but only for alignment; no specific values are required.
-                    for (align, bytes) in t.borrow().as_bytes() {
-                        assert!(align <= 8);
-                        let length = u64::cast_from(bytes.len());
-                        writer
-                            .write_all(bytemuck::cast_slice(std::slice::from_ref(&length)))
-                            .unwrap();
-                        writer.write_all(bytes).unwrap();
-                        let padding = usize::cast_from((8 - (length % 8)) % 8);
-                        writer.write_all(&[0; 8][..padding]).unwrap();
-                    }
-                }
+                Column::Typed(t) => Indexed::write(writer, &t.borrow()).unwrap(),
                 Column::Bytes(b) => writer.write_all(b).unwrap(),
                 Column::Align(a) => writer.write_all(bytemuck::cast_slice(a)).unwrap(),
             }
@@ -204,7 +188,8 @@ pub use builder::ColumnBuilder;
 mod builder {
     use std::collections::VecDeque;
 
-    use columnar::{AsBytes, Clear, Columnar, Len, Push};
+    use columnar::bytes::{EncodeDecode, Indexed};
+    use columnar::{Clear, Columnar, Len, Push};
     use timely::container::PushInto;
     use timely::container::{ContainerBuilder, LengthPreservingContainerBuilder};
 
@@ -232,14 +217,11 @@ mod builder {
             self.current.push(item);
             // If there is less than 10% slop with 2MB backing allocations, mint a container.
             use columnar::Container;
-            let words = self.current.borrow().length_in_words();
+            let words = Indexed::length_in_words(&self.current.borrow());
             let round = (words + ((1 << 18) - 1)) & !((1 << 18) - 1);
             if round - words < round / 10 {
                 let mut alloc = Vec::with_capacity(round);
-                columnar::bytes::serialization::encode(
-                    &mut alloc,
-                    self.current.borrow().as_bytes(),
-                );
+                Indexed::encode(&mut alloc, &self.current.borrow());
                 self.pending
                     .push_back(Column::Align(alloc.into_boxed_slice()));
                 self.current.clear();

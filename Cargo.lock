@@ -1784,9 +1784,9 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "columnar"
-version = "0.2.2"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d58a4c12223e2d2140bbf4be9fb38b3a612804230c91388dfa4e56a8a6464bf3"
+checksum = "12f6f48b6441462dc29aa45c037dd94d83b48ab712b4497291afbb90c9d1a70f"
 dependencies = [
  "bincode",
  "bytemuck",
@@ -2390,9 +2390,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dataflow"
-version = "0.13.5"
+version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62e90a3a356ef9af92925918d36f5206cb74ef834a1ec39c1ed9631d00736686"
+checksum = "fc8d6ede5efde0ebabf8f48cdd8d5eadda4ad6c033cf703d58cacfd6be009635"
 dependencies = [
  "columnar",
  "fnv",
@@ -2402,9 +2402,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dogs3"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ecafb7f2d23b07b36a442274be75c4090cfd225b49918aceeba577b119780ea"
+checksum = "ea29c7d272a8b0e95694aa6cbfef7a2a76bedb42a284602cdfec5972ab7d1641"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -10539,9 +10539,9 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.17.1"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1502aad02b725c0efcd64bac7f2b1b05bf402c2ada6d74cd95b6b9ac252d62ed"
+checksum = "91e51af684346c445c24ab3a1650b8fa2d223acd7f8c1d3d14bf7f09b6425f21"
 dependencies = [
  "bincode",
  "byteorder",
@@ -10558,15 +10558,15 @@ dependencies = [
 
 [[package]]
 name = "timely_bytes"
-version = "0.12.2"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99223f9594ab7d4dd36b55b1d7eb9bd2cd205f4304b5cc5381d5cdd417ec06f2"
+checksum = "46e1275de95b4a2713f0850c458d3a550dc323fffda65ce3e075f62545e0484b"
 
 [[package]]
 name = "timely_communication"
-version = "0.16.2"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de7b73d69bd229dae4ea989beb7e48e652c0a576774134e6fed59e29f2a6f52c"
+checksum = "b0e0f0cebfea349f20a8be6e4ba30804f1f5d0661b75131e88140c84e66d1331"
 dependencies = [
  "byteorder",
  "columnar",
