@@ -17,6 +17,7 @@ use std::sync::LazyLock;
 
 use chrono::{DateTime, Utc};
 use clap::Parser;
+use futures::future::join_all;
 use k8s_openapi::api::core::v1::{Event, Pod};
 use kube::api::{Api, ListParams, LogParams};
 use kube::config::KubeConfigOptions;
@@ -125,30 +126,19 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
     match create_k8s_client(context.args.k8s_context.clone()).await {
         Ok(client) => {
             for namespace in context.args.k8s_namespaces.clone() {
-                let _ = match dump_k8s_pod_logs(&context, client.clone(), &namespace).await {
-                    Ok(_) => Some(()),
-                    Err(e) => {
-                        eprintln!(
-                            "Failed to write k8s pod logs for namespace {}: {}",
-                            namespace, e
-                        );
-                        if let Some(_) = e.downcast_ref::<kube::Error>() {
-                            eprintln!("Ensure that {} exists.", namespace);
-                        }
-                        None
-                    }
-                };
+                if let Err(e) = dump_k8s_pod_logs(&context, client.clone(), &namespace).await {
+                    eprintln!(
+                        "Failed to write k8s pod logs for namespace {}: {}",
+                        namespace, e
+                    );
+                }
 
-                let _ = match dump_k8s_events(&context, client.clone(), &namespace).await {
-                    Ok(_) => Some(()),
-                    Err(e) => {
-                        eprintln!(
-                            "Failed to write k8s events for namespace {}: {}",
-                            namespace, e
-                        );
-                        None
-                    }
-                };
+                if let Err(e) = dump_k8s_events(&context, client.clone(), &namespace).await {
+                    eprintln!(
+                        "Failed to write k8s events for namespace {}: {}",
+                        namespace, e
+                    );
+                }
             }
         }
         Err(e) => {
@@ -156,9 +146,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         }
     };
 
-    for handle in describe_handles {
-        let _ = handle.await;
-    }
+    join_all(describe_handles).await;
 
     // TODO: Compress files to ZIP
     Ok(())
@@ -193,51 +181,20 @@ async fn dump_k8s_pod_logs(
 
     for pod in &pod_list.items {
         let pod_name = pod.metadata.name.clone().unwrap_or_default();
-        let previous_logs_file_name = format!("{}/{}.previous.log", file_path, pod_name);
-        let current_logs_file_name = format!("{}/{}.current.log", file_path, pod_name);
+        async fn export_pod_logs(
+            pods: &Api<Pod>,
+            pod_name: &str,
+            file_path: &str,
+            is_previous: bool,
+        ) -> Result<(), anyhow::Error> {
+            let suffix = if is_previous { "previous" } else { "current" };
+            let file_name = format!("{}/{}.{}.log", file_path, pod_name, suffix);
 
-        if let Err(e) = async {
-            let previous_logs = pods
-                .logs(
-                    &pod_name,
-                    &LogParams {
-                        previous: true,
-                        timestamps: true,
-                        ..Default::default()
-                    },
-                )
-                .await?;
-
-            if previous_logs.is_empty() {
-                println!("No previous logs found for pod {}", pod_name);
-                return Ok(());
-            }
-
-            let mut file = File::create(&previous_logs_file_name)?;
-
-            file.write_all(previous_logs.as_bytes())?;
-
-            println!("Exported {}", &previous_logs_file_name);
-            Ok::<(), anyhow::Error>(())
-        }
-        .await
-        {
-            if let Some(kube::Error::Api(e)) = e.downcast_ref::<kube::Error>() {
-                if e.code == 400 {
-                    eprintln!("No previous logs available for pod {}", pod_name);
-                } else {
-                    eprintln!("Failed to export {}: {}", &previous_logs_file_name, e);
-                }
-            } else {
-                eprintln!("Failed to export {}: {}", &previous_logs_file_name, e);
-            }
-        }
-
-        if let Err(e) = async {
             let logs = pods
                 .logs(
-                    &pod_name,
+                    pod_name,
                     &LogParams {
+                        previous: is_previous,
                         timestamps: true,
                         ..Default::default()
                     },
@@ -245,19 +202,38 @@ async fn dump_k8s_pod_logs(
                 .await?;
 
             if logs.is_empty() {
-                println!("No logs found for pod {}", pod_name);
+                println!("No {} logs found for pod {}", suffix, pod_name);
                 return Ok(());
             }
-            let mut file = File::create(&current_logs_file_name)?;
 
+            let mut file = File::create(&file_name)?;
             file.write_all(logs.as_bytes())?;
+            println!("Exported {}", &file_name);
 
-            println!("Exported {}", &current_logs_file_name);
-            Ok::<(), anyhow::Error>(())
+            Ok(())
         }
-        .await
-        {
-            eprintln!("Failed to export {}: {}", &current_logs_file_name, e);
+
+        if let Err(e) = export_pod_logs(&pods, &pod_name, &file_path, true).await {
+            let print_error = || {
+                eprintln!(
+                    "Failed to export previous logs for pod {}: {}",
+                    &pod_name, e
+                );
+            };
+
+            if let Some(kube::Error::Api(e)) = e.downcast_ref::<kube::Error>() {
+                if e.code == 400 {
+                    eprintln!("No previous logs available for pod {}", pod_name);
+                } else {
+                    print_error();
+                }
+            } else {
+                print_error();
+            }
+        }
+
+        if let Err(e) = export_pod_logs(&pods, &pod_name, &file_path, false).await {
+            eprintln!("Failed to export current logs for pod {}: {}", &pod_name, e);
         }
     }
     Ok(())
