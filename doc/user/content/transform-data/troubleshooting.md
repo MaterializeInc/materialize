@@ -355,7 +355,7 @@ SELECT mo.name AS name, global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 
     FROM           mz_introspection.mz_lir_mapping mlm
          LEFT JOIN mz_introspection.mz_compute_operator_durations_histogram mcodh
                 ON (mlm.operator_id_start <= mcodh.id AND mcodh.id < mlm.operator_id_end)
-              JOIN mz_catalog.mz_objects mo
+              JOIN mz_introspection.mz_mappable_objects mo
                 ON (mlm.global_id = mo.id)
    WHERE mo.name IN ('wins_by_item', 'winning_bids')
 GROUP BY mo.name, global_id, lir_id, operator, parent_lir_id, nesting
@@ -392,8 +392,7 @@ To examine the query in more detail:
 `mz_lir_mapping.operator_id_end` exclusive) and summing up the time spent
 (`SUM(duration_ns)`).
 
-- The query joins with
-  [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) to find
+- The query joins with [`mz_introspection.mz_mappable_objects`](/sql/system-catalog/mz_introspection/#mz_mappable_objects) to find
   the actual name corresponding to the `global_id`.  The `WHERE mo.name IN ...`
   clause of the query ensures we only see information about this index and view.
   If you leave this `WHERE` clause out, you will see information on _every_
@@ -423,7 +422,7 @@ with
     FROM           mz_introspection.mz_lir_mapping mlm
          LEFT JOIN mz_introspection.mz_arrangement_sizes mas
                 ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
-              JOIN mz_catalog.mz_objects mo
+              JOIN mz_introspection.mz_mappable_objects mo
                 ON (mlm.global_id = mo.id)
    WHERE mo.name IN ('wins_by_item', 'winning_bids')
 GROUP BY mo.name, global_id, lir_id, operator, parent_lir_id, nesting
@@ -467,7 +466,7 @@ can attribute this to particular parts of our query using
          LEFT JOIN mz_introspection.mz_expected_group_size_advice megsa
                 ON (megsa.dataflow_id = mdgi.id AND
                     mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)
-              JOIN mz_catalog.mz_objects mo
+              JOIN mz_introspection.mz_mappable_objects mo
                 ON (mlm.global_id = mo.id)
    WHERE mo.name IN ('wins_by_item', 'winning_bids')
 ORDER BY mlm.global_id, lir_id DESC;
@@ -539,7 +538,7 @@ overall time spent across all workers:
                                 FROM mz_introspection.mz_scheduling_elapsed_per_worker mse
                                WHERE mlm.operator_id_start <= id AND id < mlm.operator_id_end
                             GROUP BY worker_id) epw
-                      JOIN mz_catalog.mz_objects mo
+                      JOIN mz_introspection.mz_mappable_objects mo
                         ON (mlm.global_id = mo.id)
    WHERE mo.name IN ('wins_by_item', 'winning_bids')
 GROUP BY mo.name, global_id, lir_id, nesting, operator, worker_id
@@ -587,8 +586,8 @@ starting point, you can build your own attribution queries. When building your o
   other, that LIR operator does not correspond to any dataflow operators.
 
 - To only see output for views, materialized views, and indexes you're
-  interested in, join with `mz_catalog.mz_objects` and restrict based on
-  `mz_objects.name`. Otherwise, you will see information on everything installed
+  interested in, join with `mz_introspection.mz_mappable_objects` and restrict based on
+  `mz_mappable_objects.name`. Otherwise, you will see information on every mappable object installed
   in your current cluster.
 
 ## How do I troubleshoot slow queries?
