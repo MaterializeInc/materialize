@@ -5186,6 +5186,7 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-types",
  "mz-repr",
+ "mz-service",
  "mz-storage-operators",
  "mz-storage-types",
  "mz-timely-util",
