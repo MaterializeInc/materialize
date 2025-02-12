@@ -12,7 +12,7 @@ build-row
 ----
 Int32(1)
 Numeric(OrderedDecimal(1))
-Float32(OrderedFloat(2.0))
+Float32(2.0)
 String("\"quoted\" string")
 Timestamp(CheckedTimestamp { t: 2022-10-20T21:34:54 })
 
@@ -21,7 +21,7 @@ build-row
 ----
 String("string")
 Int64(1)
-Float64(OrderedFloat(2.1))
+Float64(2.1)
 True
 False
 Null

@@ -4735,7 +4735,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "num-traits",
- "ordered-float 4.2.0",
+ "ordered-float 4.6.0",
  "serde",
  "serde_json",
  "uuid",
@@ -5553,7 +5553,7 @@ dependencies = [
  "mz-sql-pretty",
  "num",
  "num_enum 0.7.3",
- "ordered-float 4.2.0",
+ "ordered-float 4.6.0",
  "paste",
  "proc-macro2",
  "proptest",
@@ -5756,7 +5756,7 @@ dependencies = [
  "mz-ore",
  "mz-pgrepr",
  "mz-repr",
- "ordered-float 4.2.0",
+ "ordered-float 4.6.0",
  "prost",
  "prost-build",
  "prost-reflect",
@@ -6590,7 +6590,7 @@ dependencies = [
  "mz-sql-parser",
  "num-traits",
  "num_enum 0.7.3",
- "ordered-float 4.2.0",
+ "ordered-float 4.6.0",
  "postgres-protocol",
  "proptest",
  "proptest-derive",
@@ -7463,7 +7463,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "mz-sql",
- "ordered-float 4.2.0",
+ "ordered-float 4.6.0",
  "paste",
  "proc-macro2",
  "proptest",
@@ -7997,9 +7997,9 @@ dependencies = [
 
 [[package]]
 name = "ordered-float"
-version = "4.2.0"
+version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a76df7075c7d4d01fdcb46c912dd17fba5b60c78ea480b475f2b6ab6f666584e"
+checksum = "7bb71e1b3fa6ca1c61f383464aaf2bb0e2f8e772a1f01d486832464de363b951"
 dependencies = [
  "num-traits",
  "rand 0.8.5",
@@ -9696,7 +9696,7 @@ name = "serde-value"
 version = "0.7.0"
 source = "git+https://github.com/MaterializeInc/serde-value.git#a84c6b71825efaffb332c0d19f18c2bdf9ee7b40"
 dependencies = [
- "ordered-float 4.2.0",
+ "ordered-float 4.6.0",
  "serde",
 ]
 
@@ -11915,7 +11915,7 @@ dependencies = [
  "num-traits",
  "openssl",
  "openssl-sys",
- "ordered-float 4.2.0",
+ "ordered-float 4.6.0",
  "parking_lot",
  "parquet",
  "pathdiff",
