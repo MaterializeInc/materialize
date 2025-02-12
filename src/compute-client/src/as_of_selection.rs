@@ -768,6 +768,7 @@ mod tests {
     use async_trait::async_trait;
     use differential_dataflow::lattice::Lattice;
     use futures::future::BoxFuture;
+    use futures::stream::BoxStream;
     use mz_compute_types::dataflows::{IndexDesc, IndexImport};
     use mz_compute_types::sinks::ComputeSinkConnection;
     use mz_compute_types::sinks::ComputeSinkDesc;
@@ -778,14 +779,15 @@ mod tests {
     use mz_persist_types::{Codec64, ShardId};
     use mz_repr::Timestamp;
     use mz_repr::{Diff, RelationDesc, RelationType, RelationVersion, Row};
+    use mz_storage_client::client::TimestamplessUpdateBuilder;
     use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
     use mz_storage_client::storage_collections::{CollectionFrontiers, SnapshotCursor};
     use mz_storage_types::connections::inline::InlinedConnection;
     use mz_storage_types::controller::{CollectionMetadata, StorageError};
     use mz_storage_types::parameters::StorageParameters;
     use mz_storage_types::read_holds::ReadHoldError;
-    use mz_storage_types::sources::SourceExportDataConfig;
     use mz_storage_types::sources::{GenericSourceConnection, SourceDesc};
+    use mz_storage_types::sources::{SourceData, SourceExportDataConfig};
     use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
     use timely::progress::Timestamp as TimelyTimestamp;
 
@@ -895,6 +897,38 @@ mod tests {
         ) -> Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>
         where
             Self::Timestamp: TimelyTimestamp + Lattice + Codec64,
+        {
+            unimplemented!()
+        }
+
+        fn snapshot_and_stream(
+            &self,
+            _id: GlobalId,
+            _as_of: Self::Timestamp,
+        ) -> BoxFuture<
+            'static,
+            Result<
+                BoxStream<'static, (SourceData, Self::Timestamp, Diff)>,
+                StorageError<Self::Timestamp>,
+            >,
+        > {
+            unimplemented!()
+        }
+
+        /// Create a [`TimestamplessUpdateBuilder`] that can be used to stage
+        /// updates for the provided [`GlobalId`].
+        fn create_update_builder(
+            &self,
+            _id: GlobalId,
+        ) -> BoxFuture<
+            'static,
+            Result<
+                TimestamplessUpdateBuilder<SourceData, (), Self::Timestamp, Diff>,
+                StorageError<Self::Timestamp>,
+            >,
+        >
+        where
+            Self::Timestamp: Lattice + Codec64,
         {
             unimplemented!()
         }
