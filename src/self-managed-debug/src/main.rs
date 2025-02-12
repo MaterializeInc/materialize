@@ -281,7 +281,7 @@ async fn dump_k8s_events(
     let file_path = format_resource_path(context.start_time, namespace, &K8sResourceType::Event);
     let file_name = format!("{}/events.yaml", file_path);
     create_dir_all(&file_path)?;
-    let mut file = File::options().append(true).create(true).open(&file_name)?;
+    let mut file = File::create(&file_name)?;
 
     for event in event_list {
         serde_yaml::to_writer(&mut file, &event)?;
