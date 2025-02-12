@@ -12,6 +12,7 @@
 use std::fmt::Debug;
 use std::fs::{create_dir_all, File};
 use std::io::Write;
+use std::path::PathBuf;
 use std::process;
 use std::sync::LazyLock;
 
@@ -176,7 +177,6 @@ async fn dump_k8s_pod_logs(
     create_dir_all(&file_path)?;
 
     let pods: Api<Pod> = Api::<Pod>::namespaced(client.clone(), namespace);
-
     let pod_list = pods.list(&ListParams::default()).await?;
 
     for pod in &pod_list.items {
@@ -184,11 +184,11 @@ async fn dump_k8s_pod_logs(
         async fn export_pod_logs(
             pods: &Api<Pod>,
             pod_name: &str,
-            file_path: &str,
+            file_path: &PathBuf,
             is_previous: bool,
         ) -> Result<(), anyhow::Error> {
             let suffix = if is_previous { "previous" } else { "current" };
-            let file_name = format!("{}/{}.{}.log", file_path, pod_name, suffix);
+            let file_name = file_path.join(format!("{}.{}.log", pod_name, suffix));
 
             let logs = pods
                 .logs(
@@ -208,7 +208,7 @@ async fn dump_k8s_pod_logs(
 
             let mut file = File::create(&file_name)?;
             file.write_all(logs.as_bytes())?;
-            println!("Exported {}", &file_name);
+            println!("Exported {}", file_name.display());
 
             Ok(())
         }
@@ -246,7 +246,6 @@ async fn dump_k8s_events(
     namespace: &String,
 ) -> Result<(), anyhow::Error> {
     let events: Api<Event> = Api::<Event>::namespaced(client.clone(), namespace);
-
     let event_list = events.list(&ListParams::default()).await?;
 
     if event_list.items.is_empty() {
@@ -255,7 +254,7 @@ async fn dump_k8s_events(
     }
 
     let file_path = format_resource_path(context.start_time, namespace, &K8sResourceType::Event);
-    let file_name = format!("{}/events.yaml", file_path);
+    let file_name = file_path.join("events.yaml");
     create_dir_all(&file_path)?;
     let mut file = File::create(&file_name)?;
 
@@ -263,7 +262,7 @@ async fn dump_k8s_events(
         serde_yaml::to_writer(&mut file, &event)?;
     }
 
-    println!("Exported {}", &file_name);
+    println!("Exported {}", file_name.display());
 
     Ok(())
 }
@@ -300,12 +299,12 @@ async fn dump_kubectl_describe(
     }
 
     let file_path = format_resource_path(context.start_time, namespace, resource_type);
-    let file_name = format!("{}/describe.txt", file_path);
+    let file_name = file_path.join("describe.txt");
     create_dir_all(&file_path)?;
     let mut file = File::create(&file_name)?;
     file.write_all(&output.stdout)?;
 
-    println!("Exported {}", &file_name);
+    println!("Exported {}", file_name.display());
 
     Ok(())
 }
@@ -314,11 +313,11 @@ fn format_resource_path(
     date_time: DateTime<Utc>,
     namespace: &str,
     resource_type: &K8sResourceType,
-) -> String {
-    format!(
+) -> PathBuf {
+    PathBuf::from(format!(
         "mz-debug/{}/{}/{}",
         date_time.format("%Y-%m-%dT%H:%MZ"),
         resource_type,
         namespace
-    )
+    ))
 }
