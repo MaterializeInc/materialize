@@ -14,7 +14,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use mz_expr::ColumnOrder;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, RowArena};
-use rand::distributions::{Distribution, Uniform};
+use rand::distr::{Distribution, Uniform};
 
 /// Microbenchmark to test an important part of window function evaluation.
 ///
@@ -53,7 +53,7 @@ fn order_aggregate_datums_benchmark(c: &mut Criterion) {
     let scale = 1000000;
 
     group.bench_function("order_aggregate_datums", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let temp_storage = RowArena::new();
 
         let order_by = vec![ColumnOrder {

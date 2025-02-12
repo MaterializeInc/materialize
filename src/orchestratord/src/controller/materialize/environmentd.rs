@@ -30,7 +30,7 @@ use k8s_openapi::{
 };
 use kube::{api::ObjectMeta, runtime::controller::Action, Api, Client, ResourceExt};
 use maplit::btreemap;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::trace;
@@ -175,7 +175,7 @@ impl Resources {
         // promotion step, this will no longer make a difference and we can
         // remove the extra codepath.
         if increment_generation {
-            let retry_action = Action::requeue(Duration::from_secs(thread_rng().gen_range(5..10)));
+            let retry_action = Action::requeue(Duration::from_secs(rng().random_range(5..10)));
 
             let statefulset = get_resource(
                 &statefulset_api,

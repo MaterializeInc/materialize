@@ -23,10 +23,11 @@ use mz_kafka_util::client::MzClientContext;
 use mz_ore::cast::CastFrom;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::retry::Retry;
-use rand::distributions::uniform::SampleUniform;
-use rand::distributions::{Alphanumeric, Bernoulli, Uniform, WeightedIndex};
+use rand::distr::uniform::SampleUniform;
+use rand::distr::weighted::WeightedIndex;
+use rand::distr::{Alphanumeric, Bernoulli, Uniform};
 use rand::prelude::{Distribution, ThreadRng};
-use rand::thread_rng;
+use rand::rng;
 use rdkafka::error::KafkaError;
 use rdkafka::producer::{BaseRecord, Producer, ThreadedProducer};
 use rdkafka::types::RDKafkaErrorCode;
@@ -247,7 +248,7 @@ impl<'a> RandomAvroGenerator<'a> {
                 x[0].as_i64().unwrap().try_into().unwrap(),
                 x[1].as_i64().unwrap().try_into().unwrap(),
             );
-            let dist = Uniform::new_inclusive(min, max);
+            let dist = Uniform::new_inclusive(min, max).unwrap();
             move |rng| dist.sample(rng)
         }
         fn float_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> f32 + Clone {
@@ -255,13 +256,13 @@ impl<'a> RandomAvroGenerator<'a> {
             // TODO(benesch): rewrite to avoid `as`.
             #[allow(clippy::as_conversions)]
             let (min, max) = (x[0].as_f64().unwrap() as f32, x[1].as_f64().unwrap() as f32);
-            let dist = Uniform::new_inclusive(min, max);
+            let dist = Uniform::new_inclusive(min, max).unwrap();
             move |rng| dist.sample(rng)
         }
         fn double_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> f64 + Clone {
             let x = json.as_array().unwrap();
             let (min, max) = (x[0].as_f64().unwrap(), x[1].as_f64().unwrap());
-            let dist = Uniform::new_inclusive(min, max);
+            let dist = Uniform::new_inclusive(min, max).unwrap();
             move |rng| dist.sample(rng)
         }
         fn string_dist(json: &serde_json::Value) -> impl FnMut(&mut ThreadRng) -> Vec<u8> + Clone {
@@ -276,7 +277,7 @@ impl<'a> RandomAvroGenerator<'a> {
             let mut len = integral_dist::<usize>(json);
             move |rng| {
                 let len = len(rng);
-                let bd = Uniform::new_inclusive(0, 255);
+                let bd = Uniform::new_inclusive(0, 255).unwrap();
                 iter::repeat_with(|| bd.sample(rng)).take(len).collect()
             }
         }
@@ -302,7 +303,7 @@ impl<'a> RandomAvroGenerator<'a> {
                 min,
                 precision
             );
-            let dist = Uniform::<i64>::new_inclusive(min, max);
+            let dist = Uniform::<i64>::new_inclusive(min, max).unwrap();
             move |rng| dist.sample(rng).to_be_bytes().to_vec()
         }
         // TODO(benesch): rewrite to avoid `as`.
@@ -602,8 +603,9 @@ async fn main() -> anyhow::Result<()> {
                 bail!("cannot specify --avro-distribution without --values=avro");
             }
             let len =
-                Uniform::new_inclusive(args.min_value_size.unwrap(), args.max_value_size.unwrap());
-            let bytes = Uniform::new_inclusive(0, 255);
+                Uniform::new_inclusive(args.min_value_size.unwrap(), args.max_value_size.unwrap())
+                    .unwrap();
+            let bytes = Uniform::new_inclusive(0, 255).unwrap();
 
             ValueGenerator::UniformBytes { len, bytes }
         }
@@ -677,10 +679,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let key_dist = if let KeyFormat::Random = args.key_format {
-        Some(Uniform::new_inclusive(
-            args.key_min.unwrap(),
-            args.key_max.unwrap(),
-        ))
+        Some(Uniform::new_inclusive(args.key_min.unwrap(), args.key_max.unwrap()).unwrap())
     } else {
         None
     };
@@ -711,7 +710,7 @@ async fn main() -> anyhow::Result<()> {
                 n += 1;
             }
             scope.spawn(move |_| {
-                let mut rng = thread_rng();
+                let mut rng = rng();
                 for _ in 0..n {
                     let i = counter.fetch_add(1, Ordering::Relaxed);
                     if !args.quiet && i % 100_000 == 0 {

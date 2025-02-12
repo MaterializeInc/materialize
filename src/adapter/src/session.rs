@@ -328,7 +328,7 @@ impl<T: TimestampManipulation> Session<T> {
             notices_tx,
             notices_rx,
             next_transaction_id: 0,
-            secret_key: rand::thread_rng().gen(),
+            secret_key: rand::rng().random(),
             external_metadata_rx,
             qcell_owner: QCellOwner::new(),
             session_oracles: BTreeMap::new(),

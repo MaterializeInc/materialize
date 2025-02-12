@@ -17,7 +17,7 @@ use mz_storage_types::sources::load_generator::{
 };
 use mz_storage_types::sources::MzOffset;
 use rand::prelude::{Rng, SmallRng};
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 use rand::SeedableRng;
 
 /// CREATE TABLE organizations
@@ -126,7 +126,7 @@ impl Generator for Auction {
                         packer.push(Datum::Int64(counter)); // auction id
                         let max_seller_id = i64::try_from(CELEBRETIES.len())
                             .expect("demo entries less than i64::MAX");
-                        packer.push(Datum::Int64(rng.gen_range(1..=max_seller_id))); // seller
+                        packer.push(Datum::Int64(rng.random_range(1..=max_seller_id))); // seller
                         packer.push(Datum::String(AUCTIONS.choose(&mut rng).unwrap())); // item
                         packer.push(Datum::TimestampTz(
                             (now + chrono::Duration::try_seconds(10).unwrap())
@@ -135,15 +135,15 @@ impl Generator for Auction {
                         )); // end time
                         pending.push_back((AuctionView::Auctions, auction));
                         const MAX_BIDS: i64 = 10;
-                        for i in 0..rng.gen_range(2..MAX_BIDS) {
+                        for i in 0..rng.random_range(2..MAX_BIDS) {
                             let bid_id = Datum::Int64(counter * MAX_BIDS + i);
                             let bid = {
                                 let mut bid = Row::with_capacity(5);
                                 let mut packer = bid.packer();
                                 packer.push(bid_id);
-                                packer.push(Datum::Int64(rng.gen_range(1..=max_seller_id))); // buyer
+                                packer.push(Datum::Int64(rng.random_range(1..=max_seller_id))); // buyer
                                 packer.push(Datum::Int64(counter)); // auction id
-                                packer.push(Datum::Int32(rng.gen_range(1..100))); // amount
+                                packer.push(Datum::Int32(rng.random_range(1..100))); // amount
                                 packer.push(Datum::TimestampTz(
                                     (now + chrono::Duration::try_seconds(i)
                                         .expect("time must fit"))
