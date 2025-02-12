@@ -326,6 +326,10 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::batch::STRUCTURED_KEY_LOWER_LEN)
         .add(&crate::batch::MAX_RUN_LEN)
         .add(&crate::batch::MAX_RUNS)
+        .add(&BLOB_OPERATION_TIMEOUT)
+        .add(&BLOB_OPERATION_ATTEMPT_TIMEOUT)
+        .add(&BLOB_CONNECT_TIMEOUT)
+        .add(&BLOB_READ_TIMEOUT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
@@ -593,22 +597,45 @@ impl RetryParameters {
     }
 }
 
-// TODO: Replace with dynamic values when PersistConfig is integrated with LD
+pub(crate) const BLOB_OPERATION_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_operation_timeout",
+    Duration::from_secs(180),
+    "Maximum time allowed for a network call, including retry attempts.",
+);
+
+pub(crate) const BLOB_OPERATION_ATTEMPT_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_operation_attempt_timeout",
+    Duration::from_secs(90),
+    "Maximum time allowed for a single network call.",
+);
+
+pub(crate) const BLOB_CONNECT_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_connect_timeout",
+    Duration::from_secs(7),
+    "Maximum time to wait for a socket connection to be made.",
+);
+
+pub(crate) const BLOB_READ_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_read_timeout",
+    Duration::from_secs(10),
+    "Maximum time to wait to read the first byte of a response, including connection time.",
+);
+
 impl BlobKnobs for PersistConfig {
     fn operation_timeout(&self) -> Duration {
-        Duration::from_secs(180)
+        BLOB_OPERATION_TIMEOUT.get(self)
     }
 
     fn operation_attempt_timeout(&self) -> Duration {
-        Duration::from_secs(90)
+        BLOB_OPERATION_ATTEMPT_TIMEOUT.get(self)
     }
 
     fn connect_timeout(&self) -> Duration {
-        Duration::from_secs(7)
+        BLOB_CONNECT_TIMEOUT.get(self)
     }
 
     fn read_timeout(&self) -> Duration {
-        Duration::from_secs(10)
+        BLOB_READ_TIMEOUT.get(self)
     }
 
     fn is_cc_active(&self) -> bool {
