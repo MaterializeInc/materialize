@@ -175,7 +175,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     matching_files = []
     for files in args.files:
         matching_files.extend(
-            glob.glob(files, root_dir=MZ_ROOT / "test" / "testdrive-old-kafka-src-syntax")
+            glob.glob(
+                files, root_dir=MZ_ROOT / "test" / "testdrive-old-kafka-src-syntax"
+            )
         )
 
     # test files that need to have the schema registry reset
@@ -237,7 +239,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
 
         junit_report = ci_util.junit_report_filename(c.name)
-
 
         try:
             junit_report = ci_util.junit_report_filename(c.name)
