@@ -484,8 +484,7 @@ impl Coordinator {
                 }
                 PendingWriteTxn::System { updates, source } => {
                     for update in updates {
-                        let data = TableData::Rows(vec![(update.row, update.diff)]);
-                        appends.entry(update.id).or_default().push(data);
+                        appends.entry(update.id).or_default().push(update.data);
                     }
                     // Once the write completes we notify any waiters.
                     if let BuiltinTableUpdateSource::Internal(tx) = source {

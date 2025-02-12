@@ -560,7 +560,13 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
             let times = self.datas.get_mut(&data_id).expect("data is initialized");
             // Sanity check that shard is registered.
             assert_eq!(times.last_reg().forget_ts, None);
-            times.writes.push_back(ts);
+
+            // Only add the timestamp if it's not already in the deque. We don't
+            // track all writes in this but track at what timestamps we have
+            // _any_ writes.
+            if times.writes.back() != Some(&ts) {
+                times.writes.push_back(ts);
+            }
         } else if diff == -1 {
             debug!(
                 "cache learned {:.9} applied t={:?} b={}",

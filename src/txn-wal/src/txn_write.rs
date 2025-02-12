@@ -179,22 +179,10 @@ where
                             });
                     let commit_ts = commit_ts.clone();
                     txn_batches_updates.push(async move {
-                        let mut batches = updates
-                            .staged
-                            .into_iter()
-                            .map(|staged| data_write.batch_from_transmittable_batch(staged))
-                            .chain(updates.batches.into_iter())
-                            .map(|mut batch| {
-                                batch
-                                    .rewrite_ts(
-                                        &Antichain::from_elem(commit_ts.clone()),
-                                        Antichain::from_elem(commit_ts.step_forward()),
-                                    )
-                                    .expect("invalid usage");
-                                batch.into_transmittable_batch()
-                            })
-                            .collect::<Vec<_>>();
+                        let mut batches =
+                            Vec::with_capacity(updates.staged.len() + updates.batches.len() + 1);
 
+                        // Form batches for any Row data.
                         if !updates.writes.is_empty() {
                             let mut batch = data_write.builder(Antichain::from_elem(T::minimum()));
                             for (k, v, d) in updates.writes.iter() {
@@ -207,6 +195,30 @@ where
                             let batch = batch.into_transmittable_batch();
                             batches.push(batch);
                         }
+
+                        // Append any already staged Batches.
+                        batches.extend(updates.staged.into_iter());
+                        batches.extend(
+                            updates
+                                .batches
+                                .into_iter()
+                                .map(|b| b.into_transmittable_batch()),
+                        );
+
+                        // Rewrite the timestamp for them all.
+                        let batches: Vec<_> = batches
+                            .into_iter()
+                            .map(|batch| {
+                                let mut batch = data_write.batch_from_transmittable_batch(batch);
+                                batch
+                                    .rewrite_ts(
+                                        &Antichain::from_elem(commit_ts.clone()),
+                                        Antichain::from_elem(commit_ts.step_forward()),
+                                    )
+                                    .expect("invalid usage");
+                                batch.into_transmittable_batch()
+                            })
+                            .collect();
 
                         let batch_updates = batches
                             .into_iter()
