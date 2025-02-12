@@ -4107,6 +4107,22 @@ WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
+    name: "mz_mappable_objects",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::VIEW_MZ_MAPPABLE_OBJECTS_OID,
+    column_defs: None,
+    sql: "
+SELECT SUBSTRING(name FROM 11) AS name, global_id
+FROM mz_introspection.mz_dataflows md JOIN mz_introspection.mz_dataflow_global_ids mdgi USING (id)
+WHERE name LIKE 'Dataflow: %' AND
+      (global_id IN (SELECT id FROM mz_catalog.mz_indexes UNION SELECT on_id FROM mz_catalog.mz_indexes)
+       OR EXISTS (SELECT 1 FROM mz_catalog.mz_materialized_views mmv WHERE POSITION(mmv.name IN name) <> 0))",
+    access: vec![PUBLIC_SELECT],
+}
+});
+
 pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_lir_mapping",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -9400,6 +9416,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_DATAFLOW_CHANNELS),
         Builtin::View(&MZ_DATAFLOW_OPERATORS),
         Builtin::View(&MZ_DATAFLOW_GLOBAL_IDS),
+        Builtin::View(&MZ_MAPPABLE_OBJECTS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
         Builtin::View(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES),

@@ -305,6 +305,17 @@ through a hierarchical scheme for either aggregation or Top K computations.
 | `savings`       | [`numeric`]          | A conservative estimate of the amount of memory in bytes to be saved by applying the hint.                |
 | `hint`          | [`double precision`] | The hint value that will eliminate `to_cut` levels from the region's hierarchy.                           |
 
+## `mz_mappable_objects`
+
+The `mz_mappable_objects` identifies objects which can be debugged using the [`mz_lir_mapping`](#mz_lir_mapping) view. These are indexes (and their underlying views) and materialized views.
+
+<!-- RELATION_SPEC mz_introspection.mz_mappable_objects -->
+| Field        | Type      | Meaning
+| ------------ | --------  | -----------
+| `name`       | [`text`]  | The name of the object.
+| `global_id`  | [`text`]  | The global ID of the object.
+
+
 ## `mz_lir_mapping`
 
 The `mz_lir_mapping` view describes the low-level internal representation (LIR) plan that corresponds to global ids.
