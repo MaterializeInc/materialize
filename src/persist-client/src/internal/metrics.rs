@@ -1932,6 +1932,10 @@ pub struct SinkMetrics {
     correction_max_per_sink_worker_len_updates: raw::UIntGaugeVec,
     /// Maximum capacity observed for any one correction buffer per worker
     correction_max_per_sink_worker_capacity_updates: raw::UIntGaugeVec,
+    /// Total nonzero diffs encountered when advancing the since
+    correction_nonzero_diff_count: IntCounter,
+    /// Total number of updates in nonzero diffs when advancing the since
+    correction_nonzero_diff_update_count: IntCounter,
 }
 
 impl SinkMetrics {
@@ -1962,6 +1966,14 @@ impl SinkMetrics {
                 name: "mz_persist_sink_correction_max_per_sink_worker_capacity_updates",
                 help: "The maximum capacity observed for the correction buffer of any single persist sink per worker.",
                 var_labels: ["worker_id"],
+            )),
+            correction_nonzero_diff_count: registry.register(metric!(
+                name: "mz_persist_sink_correction_nonzero_diff_count",
+                help: "The total number of nonzero diffs encountered when advancing the since.",
+            )),
+            correction_nonzero_diff_update_count: registry.register(metric!(
+                name: "mz_persist_sink_correction_nonzero_diff_update_count",
+                help: "The total number of updates in nonzero diffs encountered when advancing the since.",
             )),
         }
     }
@@ -2011,6 +2023,16 @@ impl SinkMetrics {
                 }
             }
             UpdateDelta::Negative(delta) => self.correction_capacity_decreases_total.inc_by(delta),
+        }
+    }
+
+    /// Reports the number of updates remaining when consolidating data after advancing the since.
+    pub fn report_correction_since_advanced(&self, update_count: usize) {
+        if update_count > 0 {
+            panic!("just checkin... {update_count}");
+            self.correction_nonzero_diff_count.inc();
+            self.correction_nonzero_diff_update_count
+                .inc_by(u64::cast_from(update_count));
         }
     }
 }
