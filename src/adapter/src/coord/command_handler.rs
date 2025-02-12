@@ -12,6 +12,7 @@
 
 use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
+use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
@@ -288,10 +289,21 @@ impl Coordinator {
                     let updates_tracked = updates
                         .iter()
                         .all(|update| required_tables.contains(&update.id));
+                    let all_mz_internal = super::appends::REQUIRED_BUILTIN_TABLES
+                        .iter()
+                        .all(|table| table.schema == MZ_INTERNAL_SCHEMA);
                     mz_ore::soft_assert_or_log!(
                         updates_tracked,
                         "not tracking all required builtin table updates!"
                     );
+                    // TODO(parkmycar): When checking if a query depends on these builtin table
+                    // writes we do not check the transitive dependencies of the query, because
+                    // we don't support creating views on mz_internal objects. If one of these
+                    // tables is promoted out of mz_internal then we'll need to add this check.
+                    mz_ore::soft_assert_or_log!(
+                        all_mz_internal,
+                        "not all builtin tables are in mz_internal! need to check transitive depends".
+                    )
                 }
                 let notify = self.builtin_table_update().background(updates);
 
