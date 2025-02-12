@@ -49,7 +49,7 @@ mod stream {
     where
         G: Scope,
         G::Timestamp: BucketTimestamp,
-        D: Data + Ord,
+        D: Data + Ord + std::fmt::Debug,
     {
         fn delay<CB>(&self, config: &ConfigSet) -> StreamCore<G, CB::Container>
         where
@@ -69,10 +69,13 @@ mod stream {
                         }
                     }
                     let peeled = chain.peel(input.frontier().frontier());
-                    let time = cap.as_ref().expect("must exist");
-                    let mut session = output.session_with_builder(&time);
-                    for ((datum, time), diff) in peeled.into_iter().flatten() {
-                        session.give((datum, time, diff));
+                    if let Some(cap) = cap.as_ref() {
+                        let mut session = output.session_with_builder(cap);
+                        for ((datum, time), diff) in peeled.into_iter().flatten() {
+                            session.give((datum, time, diff));
+                        }
+                    } else {
+                        assert_eq!(peeled.into_iter().flatten().next(), None);
                     }
                     if input.frontier().is_empty() {
                         cap = None;
