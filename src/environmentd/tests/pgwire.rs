@@ -51,7 +51,7 @@ fn test_bind_params() {
 
     // Just ensure it does not panic (see database-issues#871).
     client
-        .query("EXPLAIN PLAN FOR SELECT $1::int", &[&42_i32])
+        .query("EXPLAIN OPTIMIZED PLAN FOR SELECT $1::int", &[&42_i32])
         .unwrap();
 
     // Ensure that a type hint provided by the client is respected.

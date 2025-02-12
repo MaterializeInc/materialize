@@ -226,7 +226,7 @@ SELECT * FROM part1, part2;
 100  16
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN FOR WITH MUTUALLY RECURSIVE
 
     blocks(b INT, block TEXT) AS (
         SELECT b, regexp_split_to_array(input, '\n\n')[b] as block

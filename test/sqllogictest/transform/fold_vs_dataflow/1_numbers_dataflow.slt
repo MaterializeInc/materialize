@@ -33,7 +33,7 @@ FROM t_using_dataflow_rendering;
 0.000000000000000000000000000000000000001 0.000000000000000000000000000000000000001 0.000000000000000000000000000000000000001
 
 query T multiline
-EXPLAIN SELECT * FROM t_using_dataflow_rendering;
+EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM t_using_dataflow_rendering;
 ----
 Explained Query:
   ReadStorage materialize.public.t_using_dataflow_rendering
@@ -66,7 +66,7 @@ FROM t_using_dataflow_rendering;
 100000000000000000000000000000000000000 100000000000000000000000000000000000000 100000000000000000000000000000000000000
 
 query T multiline
-EXPLAIN SELECT * FROM t_using_dataflow_rendering;
+EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM t_using_dataflow_rendering;
 ----
 Explained Query:
   ReadStorage materialize.public.t_using_dataflow_rendering

@@ -20,7 +20,7 @@ statement ok
 CREATE DEFAULT INDEX ON v1
 
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT * FROM t1, (SELECT DISTINCT f1 % 2 AS F FROM t1) T WHERE t1.f1 % 2 = t.f;
 ----
 Explained Query:
@@ -36,7 +36,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT * FROM v1, (SELECT DISTINCT (v1.t1).f1 as f1 FROM v1) Y WHERE (v1.t1).f1 = y.f1;
 ----
 Explained Query (fast path):
@@ -57,7 +57,7 @@ EOF
 # eliminate the `<expr> IS NOT NULL` predicates that are added when pushing the
 # join condition through the CrossJoin.
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 WITH MUTUALLY RECURSIVE
   c0(f1 INT, f2 INT, f INT) AS (
     SELECT * FROM c0
@@ -88,7 +88,7 @@ EOF
 # the join we need to factor out the filter on top of t1 behind a common
 # binding (fixed by database-issues#5342).
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 WITH MUTUALLY RECURSIVE
   c0(f1 INT, f2 INT, f INT) AS (
     SELECT * FROM c0
@@ -119,7 +119,7 @@ EOF
 # Another case that does not work at the moment because of the naive ProvInfo
 # initialization for WMR bindings.
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 WITH
   t0 AS (
     SELECT DISTINCT f1 % 2 AS f, 42 as c FROM t2

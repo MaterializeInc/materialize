@@ -34,7 +34,7 @@ CREATE TABLE numbers (
 # projecting is fine.
 
 query T multiline
-EXPLAIN SELECT * from numbers limit 10;
+EXPLAIN OPTIMIZED PLAN FOR SELECT * from numbers limit 10;
 ----
 Explained Query (fast path):
   Finish limit=10 output=[#0]
@@ -45,7 +45,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT value + 1000 from numbers LIMIT 10;
+EXPLAIN OPTIMIZED PLAN FOR SELECT value + 1000 from numbers LIMIT 10;
 ----
 Explained Query (fast path):
   Finish limit=10 output=[#0]
@@ -58,7 +58,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT * from numbers LIMIT 10 OFFSET 10;
+EXPLAIN OPTIMIZED PLAN FOR SELECT * from numbers LIMIT 10 OFFSET 10;
 ----
 Explained Query (fast path):
   Finish limit=10 offset=10 output=[#0]
@@ -138,7 +138,7 @@ SELECT * FROM erroring LIMIT 10;
 # that might require a full scan.
 
 query T multiline
-EXPLAIN SELECT * from numbers LIMIT 1000;
+EXPLAIN OPTIMIZED PLAN FOR SELECT * from numbers LIMIT 1000;
 ----
 Explained Query:
   Finish limit=1000 output=[#0]
@@ -151,7 +151,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT * from numbers ORDER BY value LIMIT 10;
+EXPLAIN OPTIMIZED PLAN FOR SELECT * from numbers ORDER BY value LIMIT 10;
 ----
 Explained Query:
   Finish order_by=[#0 asc nulls_last] limit=10 output=[#0]
@@ -164,7 +164,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN SELECT * from numbers WHERE value > mz_now() LIMIT 10;
+EXPLAIN OPTIMIZED PLAN FOR SELECT * from numbers WHERE value > mz_now() LIMIT 10;
 ----
 Explained Query:
   Finish limit=10 output=[#0]
@@ -208,7 +208,7 @@ statement ok
 CREATE DEFAULT INDEX ON numbers;
 
 query T multiline
-EXPLAIN SELECT * from numbers LIMIT 10;
+EXPLAIN OPTIMIZED PLAN FOR SELECT * from numbers LIMIT 10;
 ----
 Explained Query (fast path):
   Finish limit=10 output=[#0]

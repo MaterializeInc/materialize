@@ -64,7 +64,7 @@ FROM winning_points;
 184
 
 query T multiline
-EXPLAIN WITH parsed AS (
+EXPLAIN OPTIMIZED PLAN FOR WITH parsed AS (
   SELECT regexp_split_to_table(input, '\n') AS line FROM aoc_1204
 ),
 numbers AS (
@@ -206,7 +206,7 @@ FROM
 978
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN FOR WITH MUTUALLY RECURSIVE
 lines(line string) AS (
     SELECT
         regexp_split_to_table(input, '\n') AS line
@@ -442,7 +442,7 @@ select * from part1, part2;
 23  314
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN FOR WITH MUTUALLY RECURSIVE
     -- PART 0
     -- Parse the input as lines of text with line numbers.
     lines(line TEXT) AS (

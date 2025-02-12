@@ -26,7 +26,7 @@ CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
 # purpose; perhaps we can remove the test if we remove the
 # non_null_requirements transform.
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 WITH MUTUALLY RECURSIVE
   c0(x INT, y INT, z INT) AS (
     SELECT *, null::int FROM t1

@@ -60,7 +60,7 @@ SELECT SUM(game_id) FROM game_cnt WHERE total_set_cnt = possible_set_cnt;
 8
 
 query T multiline
-EXPLAIN WITH game_cnt AS (
+EXPLAIN OPTIMIZED PLAN FOR WITH game_cnt AS (
         SELECT split_part(game_id,' ', 2)::int AS game_id,
                COUNT(set_id) AS total_set_cnt,
                COUNT(set_id) FILTER (WHERE (green_cnt <= 13) AND (red_cnt <= 12) AND (blue_cnt <= 14)) AS possible_set_cnt
@@ -108,7 +108,7 @@ SELECT SUM(green_min*red_min*blue_min) FROM game_min;
 2567
 
 query T multiline
-EXPLAIN WITH game_min AS (
+EXPLAIN OPTIMIZED PLAN FOR WITH game_min AS (
 SELECT split_part(game_id,' ', 2)::int AS game_id,
        MAX(green_cnt) AS green_min,
        MAX(red_cnt) AS red_min,
@@ -179,7 +179,7 @@ select * from part1, part2;
 8  2567
 
 query T multiline
-EXPLAIN with mutually recursive
+EXPLAIN OPTIMIZED PLAN FOR with mutually recursive
     -- Parse the input up
     lines(line TEXT) as (select regexp_split_to_table(input, '\n') as line from input),
     games(game TEXT, report TEXT) as (select regexp_split_to_array(line, ':')[1], regexp_split_to_array(line, ':')[2] from lines),

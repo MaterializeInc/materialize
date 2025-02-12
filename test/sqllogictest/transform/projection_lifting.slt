@@ -17,7 +17,7 @@ CREATE TABLE edges (src int, dst int)
 # Lifting the projections from the inner SELECT enables join fusion, resulting
 # in a single 3-way join in the optimized plan.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 SELECT
   a, b, c
 FROM
@@ -62,7 +62,7 @@ EOF
 
 # The above works also in WMR blocks.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 WITH MUTUALLY RECURSIVE
   triangles(a int, b int, c int) AS (
     SELECT

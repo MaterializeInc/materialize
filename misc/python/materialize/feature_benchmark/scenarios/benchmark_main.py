@@ -709,7 +709,7 @@ class AccumulateReductions(Dataflow):
 
 > SET CLUSTER = idx_cluster;
 
-?[version>=13000] EXPLAIN SELECT count(*) FROM accumulable;
+?[version>=13000] EXPLAIN OPTIMIZED PLAN FOR SELECT count(*) FROM accumulable;
 Explained Query:
   With
     cte l0 =
@@ -732,7 +732,7 @@ Used Indexes:
 
 Target cluster: idx_cluster
 
-?[version<13000] EXPLAIN SELECT count(*) FROM accumulable;
+?[version<13000] EXPLAIN OPTIMIZED PLAN FOR SELECT count(*) FROM accumulable;
 Explained Query:
   Return // { arity: 1 }
     Union // { arity: 1 }
@@ -2122,7 +2122,7 @@ class HydrateIndex(Scenario):
 1
 > ALTER CLUSTER idx_cluster SET (REPLICATION FACTOR 1)
 > SET CLUSTER = idx_cluster
-?[version>=13000] EXPLAIN SELECT COUNT(*) FROM t1
+?[version>=13000] EXPLAIN OPTIMIZED PLAN FOR SELECT COUNT(*) FROM t1
 Explained Query:
   With
     cte l0 =
@@ -2145,7 +2145,7 @@ Used Indexes:
 
 Target cluster: idx_cluster
 
-?[version<13000] EXPLAIN SELECT COUNT(*) FROM t1
+?[version<13000] EXPLAIN OPTIMIZED PLAN FOR SELECT COUNT(*) FROM t1
 Explained Query:
   Return // {{ arity: 1 }}
     Union // {{ arity: 1 }}

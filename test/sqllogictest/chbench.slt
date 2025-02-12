@@ -249,7 +249,7 @@ CREATE TABLE region (
 
 # Query 01
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT
     ol_number,
     sum(ol_quantity) AS sum_qty,
@@ -280,7 +280,7 @@ EOF
 
 # Query 02
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT su_suppkey, su_name, n_name, i_id, i_name, su_address, su_phone, su_comment
 FROM
     item, supplier, stock, nation, region,
@@ -374,7 +374,7 @@ EOF
 
 # Query 03
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT ol_o_id, ol_w_id, ol_d_id, sum(ol_amount) AS revenue, o_entry_d
 FROM customer, neworder, "order", orderline
 WHERE c_state LIKE 'A%'
@@ -428,7 +428,7 @@ EOF
 
 # Query 04
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT o_ol_cnt, count(*) AS order_count
 FROM "order"
 WHERE o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
@@ -483,7 +483,7 @@ EOF
 
 # Query 05
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT
     n_name,
     sum(ol_amount) AS revenue
@@ -561,7 +561,7 @@ EOF
 
 # Query 06
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT sum(ol_amount) AS revenue
 FROM orderline
 WHERE ol_delivery_d >= TIMESTAMP '1999-01-01 00:00:00.000000'
@@ -596,7 +596,7 @@ EOF
 
 # Query 07
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT
     su_nationkey AS supp_nation,
     substr(c_state, 1, 1) AS cust_nation,
@@ -679,7 +679,7 @@ EOF
 
 # Query 08
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT
     EXTRACT(year FROM o_entry_d) AS l_year,
     sum(CASE WHEN n2.n_name = 'GERMANY' THEN ol_amount ELSE 0 END) / CASE WHEN sum(ol_amount) = 0 THEN 1 ELSE sum(ol_amount) END AS mkt_share
@@ -776,7 +776,7 @@ EOF
 
 # Query 09
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT
     n_name, EXTRACT(year FROM o_entry_d) AS l_year,
     sum(ol_amount) AS sum_profit
@@ -841,7 +841,7 @@ EOF
 
 # Query 10
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT
     c_id, c_last, sum(ol_amount) AS revenue, c_city, c_phone, n_name
 FROM customer, "order", orderline, nation
@@ -895,7 +895,7 @@ EOF
 
 # Query 11
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT s_i_id, sum(s_order_cnt) AS ordercount
 FROM stock, supplier, nation
 WHERE s_su_suppkey = su_suppkey
@@ -955,7 +955,7 @@ EOF
 
 # Query 12
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT
     o_ol_cnt,
     sum(CASE WHEN o_carrier_id = 1 OR o_carrier_id = 2 THEN 1 ELSE 0 END) AS high_line_count,
@@ -994,7 +994,7 @@ EOF
 
 # Query 13
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT
     c_count, count(*) AS custdist
 FROM (
@@ -1049,7 +1049,7 @@ EOF
 
 # Query 14
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT
     100.00 * sum(CASE WHEN i_data LIKE 'PR%' THEN ol_amount ELSE 0 END) / (1 + sum(ol_amount)) AS promo_revenue
 FROM orderline, item
@@ -1096,7 +1096,7 @@ EOF
 
 # Query 15
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT su_suppkey, su_name, su_address, su_phone, total_revenue
 FROM
     supplier,
@@ -1171,7 +1171,7 @@ EOF
 
 # Query 16
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT
     i_name,
     substr(i_data, 1, 3) AS brand,
@@ -1240,7 +1240,7 @@ EOF
 
 # Query 17
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT
     sum(ol_amount) / 2.0 AS avg_yearly
 FROM
@@ -1303,7 +1303,7 @@ EOF
 
 # Query 18
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT c_last, c_id, o_id, o_entry_d, o_ol_cnt, sum(ol_amount)
 FROM customer, "order", orderline
 WHERE c_id = o_c_id
@@ -1348,7 +1348,7 @@ EOF
 
 # Query 19
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT sum(ol_amount) AS revenue
 FROM orderline, item
 WHERE (
@@ -1420,7 +1420,7 @@ EOF
 
 # Query 20
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT su_name, su_address
 FROM supplier, nation
 WHERE su_suppkey IN (
@@ -1498,7 +1498,7 @@ EOF
 
 # Query 21
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT
     su_name, count(*) as numwait
 FROM
@@ -1593,7 +1593,7 @@ EOF
 
 # Query 22
 query T multiline
-EXPLAIN WITH(arity, join implementations)
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
 SELECT
     substr(c_state, 1, 1) AS country,
     count(*) AS numcust,

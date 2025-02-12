@@ -974,7 +974,7 @@ CREATE TABLE t1(key int, val int, n int NOT NULL);
 
 # coalesce's output type should be non-nullable when any of its input types are non-nullable
 query T multiline
-EXPLAIN WITH(types)
+EXPLAIN OPTIMIZED PLAN WITH(types) FOR
 SELECT coalesce(key, 0)
 FROM t1;
 ----
@@ -990,7 +990,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(types)
+EXPLAIN OPTIMIZED PLAN WITH(types) FOR
 SELECT coalesce(key, n)
 FROM t1;
 ----
@@ -1006,7 +1006,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(types)
+EXPLAIN OPTIMIZED PLAN WITH(types) FOR
 SELECT coalesce(key, 0), sum(val)
 FROM t1
 GROUP BY key;
@@ -1026,7 +1026,7 @@ EOF
 
 # coalesce's output type should be nullable when all of its input types are nullable
 query T multiline
-EXPLAIN WITH(types)
+EXPLAIN OPTIMIZED PLAN WITH(types) FOR
 SELECT coalesce(key, val)
 FROM t1;
 ----
@@ -1042,7 +1042,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN WITH(types)
+EXPLAIN OPTIMIZED PLAN WITH(types) FOR
 SELECT coalesce(key, val + 5)
 FROM t1;
 ----

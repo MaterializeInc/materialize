@@ -161,7 +161,7 @@ SELECT * FROM part1, part2;
 340665  332531
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN FOR WITH MUTUALLY RECURSIVE
     lines(line TEXT) AS ( SELECT regexp_split_to_table(input, '\n') FROM input ),
     hands(hand TEXT, bid INT) as (
         SELECT regexp_split_to_array(line, ' ')[1],

@@ -77,7 +77,7 @@ SELECT * FROM part1;
 146
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN FOR WITH MUTUALLY RECURSIVE
 
     lines(r INT, line TEXT) AS (
         SELECT r, regexp_split_to_array(input, '\n')[r] as block
@@ -397,7 +397,7 @@ SELECT * FROM part2;
 105
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 142)
+EXPLAIN OPTIMIZED PLAN FOR WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 142)
 
     lines(r INT, line TEXT) AS (
         SELECT r, regexp_split_to_array(input, '\n')[r] as block

@@ -951,7 +951,7 @@ SELECT
 1 1 5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT
   x1 >> x2 << x3 as r1,
   y1 << y2 >> y3 as r2
 FROM nums
@@ -986,7 +986,7 @@ SELECT
 8 8 5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT
   x1 >> x2 & x3 as r1,
   y1 << y2 & y3 as r2
 FROM nums
@@ -1021,7 +1021,7 @@ SELECT
 0 0 1
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT
   x1 & x2 | x3 as r1,
   y1 & y2 | y3 as r2,
   z1 & z2 | z3 as r3,
@@ -1058,7 +1058,7 @@ SELECT
 0 0 1
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT
   x1 # x2 & x3 as r1,
   y1 # y2 & y3 as r2,
   z1 # z2 & z3 as r3,
@@ -1095,7 +1095,7 @@ SELECT
 1 1 0
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT
   x1 # x2 | x3 as r1,
   y1 # y2 | y3 as r2,
   z1 # z2 | z3 as r3,

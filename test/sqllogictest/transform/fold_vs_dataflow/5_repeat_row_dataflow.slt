@@ -41,7 +41,7 @@ CREATE MATERIALIZED VIEW mv_using_dataflow_rendering AS
 # 2023-04-18T09:50:00.705649Z  WARN mz_storage_client::controller::rehydration: storage cluster produced error, reconnecting: status: Unknown, message: "error reading a body from connection: broken pipe", details: [], metadata: MetadataMap { headers: {} }
 
 query T multiline
-EXPLAIN SELECT SUM(data)
+EXPLAIN OPTIMIZED PLAN FOR SELECT SUM(data)
 FROM mv_using_dataflow_rendering;
 ----
 Explained Query:

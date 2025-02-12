@@ -208,7 +208,7 @@ SELECT * FROM t
 ----
 
 query T multiline
-EXPLAIN SHOW VIEWS
+EXPLAIN OPTIMIZED PLAN FOR SHOW VIEWS
 ----
 Explained Query:
   With

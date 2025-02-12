@@ -165,7 +165,7 @@ SELECT * FROM longest ORDER BY d DESC;
 12  20  0  0
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN FOR WITH MUTUALLY RECURSIVE
 
     lines(r INT, line TEXT) AS (
         SELECT r, regexp_split_to_array(input, '\n')[r] as line

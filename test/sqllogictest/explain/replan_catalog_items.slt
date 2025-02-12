@@ -32,7 +32,7 @@ CREATE INDEX ON t1(y);
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
@@ -57,7 +57,7 @@ EOF
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 REPLAN MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
@@ -82,7 +82,7 @@ EOF
 
 # EXPLAIN CREATE should differ from the above two.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 CREATE MATERIALIZED VIEW mv AS SELECT x, sum(z) FROM t1 JOIN t2 USING(y) GROUP BY x;
 ----
 materialize.public.mv:
@@ -110,7 +110,7 @@ CREATE INDEX v_idx ON v(x);
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 INDEX v_idx;
 ----
 materialize.public.v_idx:
@@ -139,7 +139,7 @@ EOF
 
 # EXPLAIN and EXPLAIN REPLAN should coincide.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 REPLAN INDEX v_idx;
 ----
 materialize.public.v_idx:
@@ -168,7 +168,7 @@ EOF
 
 # EXPLAIN CREATE should differ from the above two.
 query T multiline
-EXPLAIN
+EXPLAIN OPTIMIZED PLAN FOR
 CREATE INDEX ON v(x);
 ----
 materialize.public.v_x_idx:

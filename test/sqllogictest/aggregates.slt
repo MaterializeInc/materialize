@@ -225,7 +225,7 @@ SELECT a, sum(b) from agg_pk group by a order by a
 3 4
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a, sum(b) from agg_pk group by a
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT a, sum(b) from agg_pk group by a
 ----
 Explained Query:
   Project (#0, #3) // { arity: 2 }
@@ -246,7 +246,7 @@ SELECT a, sum(c) from agg_pk group by a order by a
 3 5
 
 query T multiline
-EXPLAIN WITH(arity, join implementations) SELECT a, sum(c) from agg_pk group by a
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT a, sum(c) from agg_pk group by a
 ----
 Explained Query:
   Project (#0, #3) // { arity: 2 }

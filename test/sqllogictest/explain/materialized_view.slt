@@ -21,7 +21,7 @@ mode cockroach
 
 # baseline explain (no index used)
 query T multiline
-EXPLAIN MATERIALIZED VIEW mv;
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Filter (#1 = 100)
@@ -76,7 +76,7 @@ CREATE OR REPLACE MATERIALIZED VIEW mv AS
 
 # ensure that the index is now used by the view
 query T multiline
-EXPLAIN MATERIALIZED VIEW mv;
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Project (#0, #1)
@@ -125,7 +125,7 @@ ALTER INDEX accounts_balance_idx RENAME TO accounts_balance_index;
 
 # ensure that the index is still used by the view
 query T multiline
-EXPLAIN OPTIMiZED PLAN FOR MATERIALIZED VIEW mv;
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Project (#0, #1)
@@ -175,7 +175,7 @@ DROP INDEX accounts_balance_index;
 
 # The index is still used by the view
 query T multiline
-EXPLAIN MATERIALIZED VIEW mv;
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
   Project (#0, #1)

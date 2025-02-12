@@ -60,7 +60,7 @@ statement ok
 INSERT INTO t (x, y) VALUES (1, 1), (1, 2), (2, 3), (3, 1)
 
 query T multiline
-EXPLAIN WITH(join implementations) SELECT * FROM t as l, t as r WHERE l.x = r.x;
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) FOR SELECT * FROM t as l, t as r WHERE l.x = r.x;
 ----
 Explained Query:
   With
@@ -86,7 +86,7 @@ statement ok
 INSERT INTO t2 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 200)) AS l, (SELECT generate_series(1, 50)) AS r
 
 query T multiline
-EXPLAIN WITH(join implementations) SELECT * FROM t, t2 WHERE t.x = t2.x;
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) FOR SELECT * FROM t, t2 WHERE t.x = t2.x;
 ----
 Explained Query:
   Project (#0, #1, #0, #3)
@@ -120,7 +120,7 @@ statement ok
 CREATE INDEX Person_knows_Person_Person1id_Person2id ON Person_knows_Person (Person1id, Person2id)
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN FOR WITH MUTUALLY RECURSIVE
   mm (src bigint, dst bigint, w bigint) AS (SELECT 3::bigint, 4::bigint, 5::bigint),
   path (src bigint, dst bigint, w double precision) AS (
       SELECT pp.person1id, pp.person2id, 10::double precision / (coalesce(w, 0) + 10)
@@ -218,7 +218,7 @@ EOF
 # TODO(mgree): we could probably trim this down to be tighter, but the optimizer has been too clever for me
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN FOR WITH MUTUALLY RECURSIVE
   mm (src bigint, dst bigint, w bigint) AS (SELECT 3::bigint, 4::bigint, 5::bigint),
   path (src bigint, dst bigint, w double precision) AS (
       SELECT pp.person1id, pp.person2id, 10::double precision / (coalesce(w, 0) + 10)
@@ -430,7 +430,7 @@ SHOW optimizer_oneshot_stats_timeout;
 COMPLETE 1
 
 query T multiline
-EXPLAIN WITH(join implementations) SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN t3 ON t.x = t3.x JOIN t4 ON t.x = t4.x JOIN t5 ON t.x = t5.x JOIN t6 ON t.x = t6.x JOIN t7 ON t.x = t7.x JOIN t8 ON t.x = t8.x JOIN t9 ON t.x = t9.x JOIN t10 ON t.x = t10.x;
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) FOR SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN t3 ON t.x = t3.x JOIN t4 ON t.x = t4.x JOIN t5 ON t.x = t5.x JOIN t6 ON t.x = t6.x JOIN t7 ON t.x = t7.x JOIN t8 ON t.x = t8.x JOIN t9 ON t.x = t9.x JOIN t10 ON t.x = t10.x;
 ----
 Explained Query:
   Project (#0, #1, #0, #3, #0, #5, #0, #7, #0, #9, #0, #11, #0, #13, #0, #15, #0, #17, #0, #19)
@@ -486,11 +486,11 @@ EOF
 
 # Regression test for gh issue 27348 (cardinality + WMR panic)
 query T multiline
-explain with(cardinality)
-with mutually recursive
-  t(x int) as (select 1 union all select * from u),
-  u(x int) as (select t.x+1 from t where x < 7)
-(select * from t);
+EXPLAIN OPTIMIZED PLAN WITH(cardinality) FOR
+WITH MUTUALLY RECURSIVE
+  t(x int) AS (SELECT 1 UNION ALL SELECT * FROM u),
+  u(x int) AS (SELECT t.x+1 FROM t WHERE x < 7)
+SELECT * FROM t;
 ----
 Explained Query:
   With Mutually Recursive

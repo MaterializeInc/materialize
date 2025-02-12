@@ -17,7 +17,7 @@ CREATE TABLE input (input TEXT);
 # no data
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 30)
+EXPLAIN OPTIMIZED PLAN FOR WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 30)
 
     lines (line TEXT, line_no INT) AS (
         SELECT regexp_split_to_array(input, '\n')[i], i

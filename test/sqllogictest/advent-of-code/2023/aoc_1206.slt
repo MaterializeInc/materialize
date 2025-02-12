@@ -46,7 +46,7 @@ FROM options;
 1180707298
 
 query T multiline
-EXPLAIN WITH options AS
+EXPLAIN OPTIMIZED PLAN FOR WITH options AS
 (
 	SELECT
 	  (floor((time - sqrt(time * time - 4 * distance)) / 2) + 1)::int low,
@@ -100,7 +100,7 @@ SELECT * FROM part12;
 1180707528
 
 query T multiline
-EXPLAIN WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN FOR WITH MUTUALLY RECURSIVE
     ties(slower NUMERIC, faster NUMERIC) AS (
         SELECT
             (time + sqrt(time * time - 4 * distance)) / 2 as slower,
