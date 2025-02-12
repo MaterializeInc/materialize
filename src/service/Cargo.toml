@@ -34,7 +34,7 @@ proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.4", features = ["no-recursion-limit"] }
 semver = "1.0.16"
 serde = { version = "1.0.152", features = ["derive"] }
-sysinfo = "0.27.2"
+sysinfo = "0.29.11"
 timely = "0.17.1"
 tokio = "1.38.0"
 tokio-stream = "0.1.11"
