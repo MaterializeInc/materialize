@@ -133,6 +133,8 @@ skip = [
     # Used by rdkafka-sys
     { name = "num_enum", version = "0.5.11" },
     { name = "num_enum_derive", version = "0.5.11" },
+    # Used by protobuf-parse
+    { name = "which", version = "4.4.2" },
 ]
 
 # Use `tracing` instead.
@@ -215,7 +217,6 @@ wrappers = [
     "rayon-core",
     "schannel",
     "sharded-slab",
-    "which",
 ]
 
 # The `uncased` crate serves the same purpose as `unicase` and is more
@@ -238,8 +239,6 @@ wrappers = [
 [advisories]
 version = 2
 ignore = [
-    # Consider switching `yaml-rust` to the actively maintained `yaml-rust2` fork of the original project
-    "RUSTSEC-2024-0320",
     # Consider `encoding_rs` instead of `encoding` (unmaintained)
     "RUSTSEC-2021-0153",
     # proc-macro-error is unmaintained, possible alternative: proc-macro-error2
