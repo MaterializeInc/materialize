@@ -87,10 +87,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
+        # TODO: Reenable test-github-8734 when database-issues#8963 is fixed
         if name in (
             "default",
             "test-incident-70",
             "test-concurrent-connections",
+            "test-github-8734",
         ):
             return
         with c.test_case(name):
