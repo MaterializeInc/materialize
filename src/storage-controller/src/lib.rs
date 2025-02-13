@@ -1772,7 +1772,22 @@ where
                         // same as for the "main" ingestion.
                         ingestions_to_drop.insert(id);
                     }
-                    DataSource::Other | DataSource::Introspection(_) | DataSource::Progress => (),
+                    DataSource::Progress => {
+                        let pending_compaction_command = PendingCompactionCommand {
+                            id: *id,
+                            read_frontier: Antichain::new(),
+                            cluster_id: None,
+                        };
+
+                        tracing::debug!(
+                            ?pending_compaction_command,
+                            "pushing pending compaction for progress collection"
+                        );
+
+                        self.pending_compaction_commands
+                            .push(pending_compaction_command);
+                    }
+                    DataSource::Other | DataSource::Introspection(_) => (),
                     DataSource::Sink { .. } => {}
                 }
             }
@@ -2125,10 +2140,12 @@ where
                                     fut,
                                 );
                             }
+                            DataSource::Progress => {
+                                pending_collection_drops.push(id);
+                            }
                             DataSource::Ingestion(_) => (),
                             DataSource::IngestionExport { .. } => (),
                             DataSource::Introspection(_) => (),
-                            DataSource::Progress => (),
                             DataSource::Other => (),
                             DataSource::Sink { .. } => (),
                         }
