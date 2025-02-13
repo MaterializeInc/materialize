@@ -94,6 +94,8 @@ node instance type, etc.), see the
 
 {{< /tip >}}
 
+1. Open a Terminal window.
+
 1. Clone the [Materialize's sample Terraform
    repo](https://github.com/MaterializeInc/terraform-google-materialize) and
    checkout the `v0.2.2` tag.

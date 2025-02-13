@@ -77,38 +77,9 @@ Otherwise, you will need to manually install the `gke-gcloud-auth-plugin` for
 If you don't have Helm version 3.2.0+ installed, refer to the [Helm
 documentation](https://helm.sh/docs/intro/install/).
 
-## Set up GCP Kubernetes environment and install Materialize
+## A. Configure GCP project andservice account
 
-{{< warning >}}
-
-{{< self-managed/terraform-disclaimer >}}
-
-{{< /warning >}}
-
-Materialize provides [sample Terraform
-modules](https://github.com/MaterializeInc/terraform-google-materialize) for
-evaluation purposes only. The modules deploy a sample infrastructure on GCP
-(region `us-central1`) with the following components:
-
-- Google Kubernetes Engine (GKE) cluster
-- Cloud SQL PostgreSQL database for metadata storage
-- Cloud Storage bucket for blob storage
-- A dedicated VPC
-- Service accounts with proper IAM permissions
-- Materialize Operator
-- Materialize instances (during subsequent runs after the Operator is running)
-
-{{< tip >}}
-The tutorial uses the module found in the `examples/simple/`
-directory, which requires minimal user input. For more configuration options,
-you can run the modules at the [root of the
-repository](https://github.com/MaterializeInc/terraform-google-materialize/)
-instead.
-
-For details on the  `examples/simple/` infrastructure configuration (such as the
-node instance type, etc.), see the
-[examples/simple/main.tf](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/examples/simple/main.tf).
-{{< /tip >}}
+1. Open a Terminal window.
 
 1. Enable the following services for your GCP project:
 
@@ -175,7 +146,7 @@ node instance type, etc.), see the
       --role="roles/storage.admin"
       ```
 
-1. For the account or the service account, authenticate to allow Terraform to
+1. For the service account, authenticate to allow Terraform to
    interact with your GCP project. For details, see [Terraform: Google Cloud
    Provider Configuration
    reference](https://registry.terraform.io/providers/hashicorp/google/latest/docs/guides/provider_reference#authentication).
@@ -186,6 +157,40 @@ node instance type, etc.), see the
    ```bash
    gcloud auth application-default login
    ```
+
+## B. Set up GCP Kubernetes environment and install Materialize
+
+{{< warning >}}
+
+{{< self-managed/terraform-disclaimer >}}
+
+{{< /warning >}}
+
+Materialize provides [sample Terraform
+modules](https://github.com/MaterializeInc/terraform-google-materialize) for
+evaluation purposes only. The modules deploy a sample infrastructure on GCP
+(region `us-central1`) with the following components:
+
+- Google Kubernetes Engine (GKE) cluster
+- Cloud SQL PostgreSQL database for metadata storage
+- Cloud Storage bucket for blob storage
+- A dedicated VPC
+- Service accounts with proper IAM permissions
+- Materialize Operator
+- Materialize instances (during subsequent runs after the Operator is running)
+
+{{< tip >}}
+The tutorial uses the module found in the `examples/simple/`
+directory, which requires minimal user input. For more configuration options,
+you can run the modules at the [root of the
+repository](https://github.com/MaterializeInc/terraform-google-materialize/)
+instead.
+
+For details on the  `examples/simple/` infrastructure configuration (such as the
+node instance type, etc.), see the
+[examples/simple/main.tf](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/examples/simple/main.tf).
+{{< /tip >}}
+
 
 1. Clone the [Materialize's sample Terraform
    repo](https://github.com/MaterializeInc/terraform-google-materialize) and
