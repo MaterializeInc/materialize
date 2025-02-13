@@ -14,6 +14,7 @@ use std::time::Duration;
 use columnar::Columnar;
 use dec::TryFromDecimalError;
 use mz_proto::{RustType, TryFromProtoError};
+use mz_timely_util::temporal::BucketTimestamp;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -64,6 +65,13 @@ impl RustType<ProtoTimestamp> for Timestamp {
 
     fn from_proto(proto: ProtoTimestamp) -> Result<Self, TryFromProtoError> {
         Ok(Timestamp::new(proto.internal))
+    }
+}
+
+impl BucketTimestamp for Timestamp {
+    fn advance_by_exponent(&self, exponent: usize) -> Option<Self> {
+        let rhs = 1_u64.checked_shl(exponent.try_into().expect("must fit"))?;
+        Some(self.internal.checked_add(rhs)?.into())
     }
 }
 
