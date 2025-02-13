@@ -47,6 +47,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
+use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
 use tracing::{debug, info, warn};
 
 /// Creates communication mesh from cluster config
@@ -110,11 +111,26 @@ where
         }
     }
 
-    match initialize_networking_from_sockets(sockets, process, workers, Arc::new(|_| None)) {
+    match initialize_networking_from_sockets::<
+        _,
+        timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder,
+    >(
+        sockets,
+        process,
+        workers,
+        BytesRefill {
+            logic: Arc::new(|size| Box::new(vec![0; size])),
+            limit: None,
+        },
+        Arc::new(|_| None),
+    ) {
         Ok((stuff, guard)) => {
             info!(process = process, "successfully initialized network");
             Ok((
-                stuff.into_iter().map(GenericBuilder::ZeroCopy).collect(),
+                stuff
+                    .into_iter()
+                    .map(GenericBuilder::ZeroCopyBinary)
+                    .collect(),
                 Box::new(guard),
             ))
         }
