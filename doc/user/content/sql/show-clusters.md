@@ -55,7 +55,6 @@ your session via the `auto_route_catalog_queries`
 
 The following characteristics apply to the `mz_catalog_server` cluster:
 
-  * You are **not billed** for this cluster.
   * You cannot create objects in this cluster.
   * You cannot drop this cluster.
   * You can run `SELECT` or `SUBSCRIBE` queries in this cluster as long
@@ -68,7 +67,6 @@ This cluster is used for internal uptime monitoring.
 
 The following characteristics apply to the `mz_probe` cluster:
 
-  * You are **not billed** for this cluster.
   * You cannot create objects in this cluster.
   * You cannot drop this cluster.
   * You cannot run `SELECT` or `SUBSCRIBE` queries in this cluster.
@@ -80,7 +78,6 @@ This cluster is used for internal support tasks.
 
 The following characteristics apply to the `mz_support` cluster:
 
-  * You are **not billed** for this cluster.
   * You cannot create objects in this cluster.
   * You cannot drop this cluster.
   * You cannot run `SELECT` or `SUBSCRIBE` queries in this cluster.
@@ -92,7 +89,6 @@ This cluster is used for internal system jobs.
 
 The following characteristics apply to the `mz_system` cluster:
 
-  * You are **not billed** for this cluster.
   * You cannot create objects in this cluster.
   * You cannot drop this cluster.
   * You cannot run `SELECT` or `SUBSCRIBE` queries in this cluster.
