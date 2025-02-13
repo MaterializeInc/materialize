@@ -7819,10 +7819,7 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
             creates.replica_name,
             creates.occurred_at AS created_at,
             drops.occurred_at AS dropped_at,
-            mz_unsafe.mz_error_if_null(
-                    mz_cluster_replica_sizes.credits_per_hour, 'Replica of unknown size'
-                )
-                AS credits_per_hour
+            mz_cluster_replica_sizes.credits_per_hour as credits_per_hour
         FROM
             creates
                 LEFT JOIN drops ON creates.replica_id = drops.replica_id
