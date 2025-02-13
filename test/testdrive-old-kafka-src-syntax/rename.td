@@ -237,10 +237,15 @@ name                                create_sql
 ------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.dependent_view   "CREATE VIEW \"materialize\".\"public\".\"dependent_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_view\""
 
+$ skip-if
+SELECT mz_version_num() < 13300;
+
 > SHOW CREATE SINK renamed_sink
 name                            create_sql
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM \"materialize\".\"public\".\"renamed_mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM"
+
+$ skip-end
 
 # Simple dependencies with both fully qualified and unqualified item references are renamed
 > SHOW CREATE VIEW byzantine_view
@@ -868,11 +873,16 @@ name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.to_be_renamed.mz_data  "CREATE SOURCE \"materialize\".\"to_be_renamed\".\"mz_data\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-${testdrive.seed}') FORMAT AVRO USING SCHEMA '{   \"name\": \"row\",   \"type\": \"record\",   \"fields\": [     {\"name\": \"a\", \"type\": \"long\"},     {\"name\": \"b\", \"type\": \"string\"}   ] }' EXPOSE PROGRESS AS \"materialize\".\"to_be_renamed\".\"mz_data_progress\""
 
+$ skip-if
+SELECT mz_version_num() < 13300;
+
 > SHOW CREATE SINK to_be_renamed.sink1;
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.to_be_renamed.sink1    "CREATE SINK \"materialize\".\"to_be_renamed\".\"sink1\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM \"materialize\".\"to_be_renamed\".\"mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM"
 # Make sure the create_sql got updated.
+
+$ skip-end
 
 > ALTER SCHEMA to_be_renamed RENAME TO foo_bar;
 
@@ -880,6 +890,9 @@ materialize.to_be_renamed.sink1    "CREATE SINK \"materialize\".\"to_be_renamed\
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.foo_bar.mz_data  "CREATE SOURCE \"materialize\".\"foo_bar\".\"mz_data\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-${testdrive.seed}') FORMAT AVRO USING SCHEMA '{   \"name\": \"row\",   \"type\": \"record\",   \"fields\": [     {\"name\": \"a\", \"type\": \"long\"},     {\"name\": \"b\", \"type\": \"string\"}   ] }' EXPOSE PROGRESS AS \"materialize\".\"foo_bar\".\"mz_data_progress\""
+
+$ skip-if
+SELECT mz_version_num() < 13300;
 
 > SHOW CREATE SINK foo_bar.sink1;
 name                                create_sql
