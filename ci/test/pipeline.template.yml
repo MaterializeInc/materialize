@@ -290,7 +290,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cargo-test
     agents:
-      queue: hetzner-x86-64-dedi-32cpu-128gb
+      queue: hetzner-x86-64-dedi-48cpu-192gb
 
   - id: testdrive
     label: "Testdrive"
