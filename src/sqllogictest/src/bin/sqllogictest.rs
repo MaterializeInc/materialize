@@ -27,6 +27,7 @@ use mz_sql::session::vars::{
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
 use mz_sqllogictest::util;
 use mz_tracing::CloneableEnvFilter;
+#[allow(deprecated)] // fails with libraries still using old time lib
 use time::Instant;
 use walkdir::WalkDir;
 
@@ -223,6 +224,7 @@ async fn main() -> ExitCode {
         for entry in WalkDir::new(path) {
             match entry {
                 Ok(entry) if entry.file_type().is_file() => {
+                    #[allow(deprecated)] // fails with libraries still using old time lib
                     let start_time = Instant::now();
                     match runner::run_file(&mut runner, entry.path()).await {
                         Ok(o) => {
