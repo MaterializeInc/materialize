@@ -94,7 +94,18 @@ When provisioning replicas,
 
 When creating a cluster, you must choose its [size](/sql/create-cluster/#size)
 (e.g., `25cc`, `50cc`, `100cc`), which determines its resource allocation
-(CPU, memory, and scratch disk space) and [cost](/administration/billing/#compute).
+(CPU, memory, and scratch disk space).
+
+{{% self-managed/materialize-cluster-sizes %}}
+
+{{< note >}}
+
+If you have modified the default cluster size configurations, you can query the
+[`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
+system catalog table for the specific resource allocations.
+
+{{< /note >}}
+
 The appropriate size for a cluster depends on the resource requirements of your
 workload. Larger clusters have more compute
 resources available and can therefore process data faster and handle larger data
