@@ -5414,6 +5414,16 @@ pub static MZ_COMPUTE_HYDRATION_TIMES: LazyLock<BuiltinSource> = LazyLock::new(|
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_COMPUTE_HYDRATION_TIMES_IND: LazyLock<BuiltinIndex> =
+    LazyLock::new(|| BuiltinIndex {
+        name: "mz_compute_hydration_times_ind",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::INDEX_MZ_COMPUTE_HYDRATION_TIMES_IND_OID,
+        sql: "IN CLUSTER mz_catalog_server
+    ON mz_internal.mz_compute_hydration_times (replica_id)",
+        is_retained_metrics_object: true,
+    });
+
 pub static MZ_COMPUTE_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_compute_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -9635,6 +9645,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND),
         Builtin::Index(&MZ_CLUSTER_DEPLOYMENT_LINEAGE_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_FRONTIERS_IND),
+        Builtin::Index(&MZ_COMPUTE_HYDRATION_TIMES_IND),
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
         Builtin::Connection(&MZ_ANALYTICS),
