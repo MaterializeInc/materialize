@@ -29,6 +29,7 @@ use mz_testdrive::{CatalogConfig, Config, ConsistencyCheckLevel};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
+#[allow(deprecated)] // fails with libraries still using old time lib
 use time::Instant;
 use tracing::info;
 use tracing_subscriber::filter::EnvFilter;
@@ -503,6 +504,7 @@ async fn main() {
     };
 
     for file in files.into_iter().take(args.max_tests) {
+        #[allow(deprecated)] // fails with libraries still using old time lib
         let start_time = Instant::now();
         let res = if file == Path::new("-") {
             if args.rewrite_results {
