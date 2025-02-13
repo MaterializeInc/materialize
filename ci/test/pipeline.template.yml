@@ -287,12 +287,10 @@ steps:
       # some tests run into stack overflows
       RUST_MIN_STACK: "4194304"
     plugins:
-      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: cargo-test
     agents:
-      # Because of scratch-aws-access
-      queue: builder-linux-aarch64-mem
+      queue: hetzner-x86-64-dedi-32cpu-128gb
 
   - id: testdrive
     label: "Testdrive"
