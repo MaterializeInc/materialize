@@ -4172,9 +4172,7 @@ pub fn serve(
             connection_limit_callback,
         );
 
-        let dyncfgs = catalog.system_config().dyncfgs();
-        let group_commit_metrics = metrics.group_commit_metrics();
-        let (group_commit_tx, group_commit_rx) = appends::notifier(dyncfgs, group_commit_metrics);
+        let (group_commit_tx, group_commit_rx) = appends::notifier();
 
         let parent_span = tracing::Span::current();
         let thread = thread::Builder::new()

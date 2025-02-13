@@ -13,14 +13,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::GROUP_COMMIT_BATCH_DURATION;
 use mz_catalog::builtin::{BuiltinTable, MZ_SESSIONS};
-use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::CollectionPlan;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::task;
@@ -32,14 +30,12 @@ use mz_sql::plan::{ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeSt
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
 use mz_timestamp_oracle::WriteTimestamp;
-use prometheus::Histogram;
 use smallvec::SmallVec;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 use tracing::{debug_span, info, warn, Instrument, Span};
 
 use crate::catalog::{BuiltinTableUpdate, Catalog};
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
-use crate::metrics::GroupCommitMetrics;
 use crate::session::{GroupCommitWriteLocks, Session, WriteLocks};
 use crate::util::{CompletedClientTransmitter, ResultExt};
 use crate::{AdapterError, ExecuteContext};
@@ -844,13 +840,9 @@ impl<'a> BuiltinTableAppend<'a> {
 
 /// Returns two sides of a "channel" that can be used to notify the coordinator when we want a
 /// group commit to be run.
-pub fn notifier(
-    dyncfgs: &ConfigSet,
-    metrics: GroupCommitMetrics,
-) -> (GroupCommitNotifier, GroupCommitWaiter) {
+pub fn notifier() -> (GroupCommitNotifier, GroupCommitWaiter) {
     let notify = Arc::new(Notify::new());
     let in_progress = Arc::new(Semaphore::new(1));
-    let batch_duration = GROUP_COMMIT_BATCH_DURATION.handle(dyncfgs);
 
     let notifier = GroupCommitNotifier {
         notify: Arc::clone(&notify),
@@ -858,8 +850,6 @@ pub fn notifier(
     let waiter = GroupCommitWaiter {
         notify,
         in_progress,
-        batch_duration,
-        metrics,
     };
 
     (notifier, waiter)
@@ -888,10 +878,6 @@ pub struct GroupCommitWaiter {
     notify: Arc<Notify>,
     /// Distributes permits which tracks in progress group commits.
     in_progress: Arc<Semaphore>,
-    /// Minimum amount of time we wait after acquiring a permit before dropping it.
-    batch_duration: ConfigValHandle<Duration>,
-    /// Metrics to measure how group commits are performing.
-    metrics: GroupCommitMetrics,
 }
 static_assertions::assert_not_impl_all!(GroupCommitWaiter: Clone);
 
@@ -915,22 +901,7 @@ impl GroupCommitWaiter {
         // safety.
         self.notify.notified().await;
 
-        // Record when we returned so we know how long to hold the permit for.
-        let start = Instant::now();
-        let hold_until = match start.checked_add(self.batch_duration.get()) {
-            Some(instant) => instant,
-            None => {
-                mz_ore::soft_panic_or_log!("group commit batch duration overflow!");
-                start
-            }
-        };
-
-        self.metrics.group_commit_trigger_count.inc();
-        let hold_histogram = self.metrics.group_commit_batch_defer_seconds.clone();
-
         GroupCommitPermit {
-            hold_until,
-            hold_histogram,
             _permit: Some(permit),
         }
     }
@@ -942,38 +913,10 @@ impl GroupCommitWaiter {
 /// permit allows us to do.
 #[derive(Debug)]
 pub struct GroupCommitPermit {
-    /// How long we want this permit to last before dropping.
-    hold_until: Instant,
-    /// Histogram used to measure how long we delayed for, if we delayed.
-    hold_histogram: Histogram,
     /// Permit that is preventing other group commits from running.
     ///
     /// Only `None` if the permit has been moved into a tokio task for waiting.
     _permit: Option<OwnedSemaphorePermit>,
-}
-
-impl Drop for GroupCommitPermit {
-    fn drop(&mut self) {
-        let now = Instant::now();
-
-        // We don't want to drop this permit yet so move it into a task that
-        // will wait until we reached our desired duration.
-        if self.hold_until > now {
-            let hold_until = self.hold_until.clone();
-            let permit = self._permit.take();
-
-            let hold_duration = hold_until.duration_since(now);
-            self.hold_histogram.observe(hold_duration.as_secs_f64());
-            tracing::debug!(?hold_duration, "defering drop of GroupCommit permit");
-
-            mz_ore::task::spawn(|| "group-commit-permit-waiter".to_string(), async move {
-                tokio::time::sleep_until(hold_until.into()).await;
-                // Explicitly drop our permit once our timeout has elapsed.
-                drop(permit);
-                tracing::debug!(?hold_duration, "drop GroupCommit permit");
-            });
-        }
-    }
 }
 
 /// When we start a [`Session`] we need to update some builtin tables, we don't want to wait for
