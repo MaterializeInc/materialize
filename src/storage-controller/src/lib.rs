@@ -1716,8 +1716,17 @@ where
         storage_metadata: &StorageMetadata,
         ids: Vec<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
+        // Keep track of which ingestions we have to execute still, and which we
+        // have to change because of dropped subsources.
         let mut ingestions_to_execute = BTreeSet::new();
         let mut ingestions_to_drop = BTreeSet::new();
+        let mut source_statistics_to_drop = Vec::new();
+
+        // Ingestions (and their exports) are also collections, but we keep
+        // track of non-ingestion collections separately, because they have
+        // slightly different cleanup logic below.
+        let mut collections_to_drop = Vec::new();
+
         for id in ids.iter() {
             let metadata = storage_metadata.get_collection_shard::<T>(*id);
             mz_ore::soft_assert_or_log!(
@@ -1730,27 +1739,23 @@ where
 
             if let Some(collection_state) = collection_state {
                 match collection_state.data_source {
-                    // Webhooks and tables are dropped differently from
-                    // ingestions and other collections.
-                    //
-                    // We can immediately compact them, because they don't
-                    // interact with clusterd.
-                    DataSource::Webhook | DataSource::Table { primary: None } => {
-                        let pending_compaction_command = PendingCompactionCommand {
-                            id: *id,
-                            read_frontier: Antichain::new(),
-                            cluster_id: None,
-                        };
+                    DataSource::Webhook => {
+                        // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
+                        // could probably use some love and maybe get merged together?
+                        let fut = self.collection_manager.unregister_collection(*id);
+                        mz_ore::task::spawn(|| format!("storage-webhook-cleanup-{id}"), fut);
 
-                        tracing::debug!(?pending_compaction_command, "pushing pending compaction");
-
-                        self.pending_compaction_commands
-                            .push(pending_compaction_command);
+                        collections_to_drop.push(*id);
+                        source_statistics_to_drop.push(*id);
+                    }
+                    DataSource::Table { primary: None } => {
+                        collections_to_drop.push(*id);
                     }
                     // Tables that are not the primary collection do not need Persist compaction applied.
                     DataSource::Table { primary: Some(_) } => (),
                     DataSource::Ingestion(_) => {
-                        ingestions_to_drop.insert(id);
+                        ingestions_to_drop.insert(*id);
+                        source_statistics_to_drop.push(*id);
                     }
                     DataSource::IngestionExport { ingestion_id, .. } => {
                         // If we are dropping source exports, we need to modify the
@@ -1785,7 +1790,8 @@ where
                         // Ingestion exports also have ReadHolds that we need to
                         // downgrade, and much of their drop machinery is the
                         // same as for the "main" ingestion.
-                        ingestions_to_drop.insert(id);
+                        ingestions_to_drop.insert(*id);
+                        source_statistics_to_drop.push(*id);
                     }
                     DataSource::Other | DataSource::Introspection(_) | DataSource::Progress => (),
                     DataSource::Sink { .. } => {}
@@ -1807,7 +1813,7 @@ where
         // to the storage dependencies.
         let ingestion_policies = ingestions_to_drop
             .iter()
-            .map(|id| (**id, ReadPolicy::ValidFrom(Antichain::new())))
+            .map(|id| (*id, ReadPolicy::ValidFrom(Antichain::new())))
             .collect();
 
         tracing::debug!(
@@ -1815,6 +1821,43 @@ where
             "dropping sources by setting read hold policies"
         );
         self.set_hold_policies(ingestion_policies);
+
+        // Delete all collection->shard mappings
+        let shards_to_update: BTreeSet<_> = ingestions_to_drop
+            .iter()
+            .chain(collections_to_drop.iter())
+            .cloned()
+            .collect();
+        self.append_shard_mappings(shards_to_update.into_iter(), -1);
+
+        let status_now = mz_ore::now::to_datetime((self.now)());
+        let mut status_updates = vec![];
+        for id in ingestions_to_drop.iter() {
+            status_updates.push(StatusUpdate::new(*id, status_now, Status::Dropped));
+        }
+
+        if !self.read_only {
+            self.append_status_introspection_updates(
+                IntrospectionType::SourceStatusHistory,
+                status_updates,
+            );
+        }
+
+        {
+            let mut source_statistics = self.source_statistics.lock().expect("poisoned");
+            for id in source_statistics_to_drop {
+                source_statistics.source_statistics.remove(&id);
+                source_statistics.webhook_statistics.remove(&id);
+            }
+        }
+
+        // Remove collection state
+        for id in ingestions_to_drop.iter().chain(collections_to_drop.iter()) {
+            tracing::info!(%id, "dropping collection state");
+            self.collections
+                .remove(id)
+                .expect("list populated after checking that self.collections contains it");
+        }
 
         // Also let StorageCollections know!
         self.storage_collections
@@ -1972,16 +2015,7 @@ where
                 updated_frontiers = Some(Response::FrontierUpdates(updates));
             }
             Some(StorageResponse::DroppedId(id)) => {
-                tracing::debug!("DroppedId for collection {id}");
-
-                if let Entry::Occupied(mut entry) = self.collections.entry(id) {
-                    entry.get_mut().active_copies -= 1;
-                    if entry.get().active_copies == 0 {
-                        entry.remove();
-                    }
-                    // Nothing to do, we already dropped read holds in
-                    // `drop_sources_unvalidated`.
-                }
+                tracing::debug!("DroppedId for {id}");
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
@@ -2083,18 +2117,9 @@ where
             }
         }
 
-        // IDs of sources that were dropped whose statuses should be updated.
-        let mut pending_source_drops = vec![];
-
-        // IDs of all collections that were dropped whose shard mappings should be deleted.
-        let mut pending_collection_drops = vec![];
-
         // IDs of sinks that were dropped whose statuses should be updated (and statistics
         // cleared).
         let mut pending_sink_drops = vec![];
-
-        // IDs of sources (and subsources) whose statistics should be cleared.
-        let mut source_statistics_to_drop = vec![];
 
         // Process dropped tables in a single batch.
         let mut dropped_table_ids = Vec::new();
@@ -2124,50 +2149,19 @@ where
                 if let Some(collection) = self.collections.get(&id) {
                     if instance.is_some() {
                         match collection.extra_state {
-                            CollectionStateExtra::Ingestion(_) => {
-                                pending_source_drops.push(id);
-                            }
-                            CollectionStateExtra::None => {
+                            CollectionStateExtra::Ingestion(_) | CollectionStateExtra::None => {
                                 // Nothing to do
                             }
                             CollectionStateExtra::Export(_) => {
                                 pending_sink_drops.push(id);
                             }
                         }
-                    } else {
-                        match collection.data_source {
-                            DataSource::Table { .. } => {
-                                pending_collection_drops.push(id);
-                            }
-                            DataSource::Webhook => {
-                                pending_collection_drops.push(id);
-                                // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
-                                // could probably use some love and maybe get merged together?
-                                let fut = self.collection_manager.unregister_collection(id);
-                                mz_ore::task::spawn(
-                                    || format!("storage-webhook-cleanup-{id}"),
-                                    fut,
-                                );
-                            }
-                            DataSource::Ingestion(_) => (),
-                            DataSource::IngestionExport { .. } => (),
-                            DataSource::Introspection(_) => (),
-                            DataSource::Progress => (),
-                            DataSource::Other => (),
-                            DataSource::Sink { .. } => (),
-                        }
                     }
                 } else if instance.is_none() {
                     tracing::info!("Compaction command for id {id}, but we don't have a client.");
                 } else {
-                    soft_panic_or_log!("Reference to absent collection {id}");
+                    tracing::debug!("Reference to absent collection {id}");
                 };
-            }
-
-            // Sources can have subsources, which don't have associated clusters, which
-            // is why this operates differently than sinks.
-            if read_frontier.is_empty() {
-                source_statistics_to_drop.push(id);
             }
 
             // Note that while collections are dropped, the `client` may already
@@ -2180,47 +2174,13 @@ where
             }
         }
 
-        // Delete all collection->shard mappings, making sure to de-duplicate.
-        let shards_to_update: BTreeSet<_> = pending_source_drops
-            .iter()
-            .chain(pending_collection_drops.iter())
-            .cloned()
-            .collect();
-        self.append_shard_mappings(shards_to_update.into_iter(), -1);
-
-        for id in pending_collection_drops {
-            self.collections
-                .remove(&id)
-                .expect("list populated after checking that self.collections contains it");
-        }
-
-        // Record the drop status for all pending source and sink drops.
+        // Record the drop status for all pending sink drops.
         //
         // We also delete the items' statistics objects.
         //
         // The locks are held for a short time, only while we do some hash map removals.
 
         let status_now = mz_ore::now::to_datetime((self.now)());
-
-        let mut dropped_sources = vec![];
-        for id in pending_source_drops.drain(..) {
-            dropped_sources.push(StatusUpdate::new(id, status_now, Status::Dropped));
-        }
-
-        if !self.read_only {
-            self.append_status_introspection_updates(
-                IntrospectionType::SourceStatusHistory,
-                dropped_sources,
-            );
-        }
-
-        {
-            let mut source_statistics = self.source_statistics.lock().expect("poisoned");
-            for id in source_statistics_to_drop {
-                source_statistics.source_statistics.remove(&id);
-                source_statistics.webhook_statistics.remove(&id);
-            }
-        }
 
         // Record the drop status for all pending sink drops.
         let mut dropped_sinks = vec![];
@@ -2640,18 +2600,13 @@ where
                 if !update.is_empty() {
                     read_capability_changes.insert(*id, update);
                 }
-            } else if self.storage_collections.check_exists(*id).is_ok() {
-                // StorageCollections is handling it!
             } else {
                 // TODO: This can happen because subsources report back an upper
                 // but we don't store them in our `ingestions` field, _nor_ do
                 // we acquire read holds for them. Also because we don't get
                 // `DroppedId` messages for them, so we wouldn't know when to
                 // clean up read holds.
-                info!(
-                    "Reference to absent collection {id}, new_upper={:?}",
-                    new_upper
-                );
+                debug!(?new_upper, "spurious upper update for {id}");
             }
         }
 
