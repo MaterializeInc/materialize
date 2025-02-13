@@ -25,7 +25,7 @@ use k8s_openapi::api::networking::v1::NetworkPolicy;
 use k8s_openapi::ListableResource;
 use kube::api::{Api, ListParams, LogParams};
 use kube::config::KubeConfigOptions;
-use kube::{Client, Config};
+use kube::{Client, Config, Resource};
 use mz_build_info::{build_info, BuildInfo};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
@@ -355,6 +355,7 @@ async fn dump_k8s_resources<T>(
 ) -> Result<(), anyhow::Error>
 where
     T: ListableResource,
+    T: Resource<DynamicType = ()>,
     T: Clone,
     T: std::fmt::Debug,
     T: serde::Serialize,
@@ -370,17 +371,25 @@ where
         println!("{}", err_msg);
         return Ok(());
     }
-
     let file_path = format_resource_path(context.start_time, &resource_type.to_string(), namespace);
-    let file_name = file_path.join(format!("{}.yaml", resource_type));
     create_dir_all(&file_path)?;
-    let mut file = File::create(&file_name)?;
 
+    // for object in &object_list.items {
+    //     let file_name = file_path.join(format!("{}.yaml", resource_type));
+    //     let mut file = File::create(&file_name)?;
+    //     serde_yaml::to_writer(&mut file, &object)?;
+    //     println!("Exported {}", file_name.display());
+    // }
+    create_dir_all(&file_path)?;
     for item in &object_list.items {
+        let file_name = file_path.join(format!(
+            "{}.yaml",
+            &item.meta().name.clone().unwrap_or_default()
+        ));
+        let mut file = File::create(&file_name)?;
         serde_yaml::to_writer(&mut file, &item)?;
+        println!("Exporting {}", file_name.display());
     }
-
-    println!("Exported {}", file_name.display());
 
     Ok(())
 }
