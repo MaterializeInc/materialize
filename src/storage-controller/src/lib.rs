@@ -1799,7 +1799,10 @@ where
                         ingestions_to_drop.insert(*id);
                         source_statistics_to_drop.push(*id);
                     }
-                    DataSource::Other | DataSource::Introspection(_) | DataSource::Progress => (),
+                    DataSource::Progress => {
+                        collections_to_drop.push(*id);
+                    }
+                    DataSource::Other | DataSource::Introspection(_) => (),
                     DataSource::Sink { .. } => {}
                 }
             }
