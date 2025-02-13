@@ -28,7 +28,7 @@ pub mod stack;
 pub use container::Column;
 
 mod container {
-    use columnar::bytes::{EncodeDecode, Indexed};
+    use columnar::bytes::{EncodeDecode, Sequence};
     use columnar::common::IterOwn;
     use columnar::Columnar;
     use columnar::Container as _;
@@ -62,12 +62,12 @@ mod container {
                 Column::Typed(t) => t.borrow(),
                 Column::Bytes(b) => {
                     <<C::Container as columnar::Container<C>>::Borrowed<'_>>::from_bytes(
-                        &mut Indexed::decode(bytemuck::cast_slice(b)),
+                        &mut Sequence::decode(bytemuck::cast_slice(b)),
                     )
                 }
                 Column::Align(a) => {
                     <<C::Container as columnar::Container<C>>::Borrowed<'_>>::from_bytes(
-                        &mut Indexed::decode(a),
+                        &mut Sequence::decode(a),
                     )
                 }
             }
@@ -168,7 +168,7 @@ mod container {
 
         fn length_in_bytes(&self) -> usize {
             match self {
-                Column::Typed(t) => Indexed::length_in_bytes(&t.borrow()),
+                Column::Typed(t) => Sequence::length_in_bytes(&t.borrow()),
                 Column::Bytes(b) => b.len(),
                 Column::Align(a) => 8 * a.len(),
             }
@@ -176,7 +176,7 @@ mod container {
 
         fn into_bytes<W: ::std::io::Write>(&self, writer: &mut W) {
             match self {
-                Column::Typed(t) => Indexed::write(writer, &t.borrow()).unwrap(),
+                Column::Typed(t) => Sequence::write(writer, &t.borrow()).unwrap(),
                 Column::Bytes(b) => writer.write_all(b).unwrap(),
                 Column::Align(a) => writer.write_all(bytemuck::cast_slice(a)).unwrap(),
             }
@@ -188,7 +188,7 @@ pub use builder::ColumnBuilder;
 mod builder {
     use std::collections::VecDeque;
 
-    use columnar::bytes::{EncodeDecode, Indexed};
+    use columnar::bytes::{EncodeDecode, Sequence};
     use columnar::{Clear, Columnar, Len, Push};
     use timely::container::PushInto;
     use timely::container::{ContainerBuilder, LengthPreservingContainerBuilder};
@@ -217,11 +217,11 @@ mod builder {
             self.current.push(item);
             // If there is less than 10% slop with 2MB backing allocations, mint a container.
             use columnar::Container;
-            let words = Indexed::length_in_words(&self.current.borrow());
+            let words = Sequence::length_in_words(&self.current.borrow());
             let round = (words + ((1 << 18) - 1)) & !((1 << 18) - 1);
             if round - words < round / 10 {
                 let mut alloc = Vec::with_capacity(round);
-                Indexed::encode(&mut alloc, &self.current.borrow());
+                Sequence::encode(&mut alloc, &self.current.borrow());
                 self.pending
                     .push_back(Column::Align(alloc.into_boxed_slice()));
                 self.current.clear();
