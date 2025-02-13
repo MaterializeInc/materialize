@@ -14,6 +14,7 @@ anyhow = "1.0.66"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 futures = "0.3.25"
 mz-adapter = { path = "../adapter" }
+mz-adapter-types = { path = "../adapter-types" }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
 mz-cloud-resources = { path = "../cloud-resources" }

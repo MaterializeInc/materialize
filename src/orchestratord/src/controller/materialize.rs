@@ -108,6 +108,14 @@ pub struct MaterializeControllerArgs {
     bootstrap_builtin_catalog_server_cluster_replica_size: Option<String>,
     #[clap(long)]
     bootstrap_builtin_analytics_cluster_replica_size: Option<String>,
+    #[clap(long)]
+    bootstrap_builtin_system_cluster_replication_factor: Option<u32>,
+    #[clap(long)]
+    bootstrap_builtin_probe_cluster_replication_factor: Option<u32>,
+    #[clap(long)]
+    bootstrap_builtin_support_cluster_replication_factor: Option<u32>,
+    #[clap(long)]
+    bootstrap_builtin_analytics_cluster_replication_factor: Option<u32>,
 
     #[clap(
         long,

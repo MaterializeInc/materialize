@@ -9,6 +9,7 @@
 
 //! Types for the adapter.
 
+pub mod bootstrap_builtin_cluster_config;
 pub mod compaction;
 pub mod connection;
 pub mod dyncfgs;

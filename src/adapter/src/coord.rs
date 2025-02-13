@@ -88,6 +88,7 @@ use futures::StreamExt;
 use http::Uri;
 use ipnet::IpNet;
 use itertools::{Either, Itertools};
+use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL;
@@ -991,11 +992,11 @@ pub struct Config {
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    pub builtin_system_cluster_replica_size: String,
-    pub builtin_catalog_server_cluster_replica_size: String,
-    pub builtin_probe_cluster_replica_size: String,
-    pub builtin_support_cluster_replica_size: String,
-    pub builtin_analytics_cluster_replica_size: String,
+    pub builtin_system_cluster_config: BootstrapBuiltinClusterConfig,
+    pub builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig,
+    pub builtin_probe_cluster_config: BootstrapBuiltinClusterConfig,
+    pub builtin_support_cluster_config: BootstrapBuiltinClusterConfig,
+    pub builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig,
     pub system_parameter_defaults: BTreeMap<String, String>,
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
@@ -3816,11 +3817,11 @@ pub fn serve(
         secrets_controller,
         cloud_resource_controller,
         cluster_replica_sizes,
-        builtin_system_cluster_replica_size,
-        builtin_catalog_server_cluster_replica_size,
-        builtin_probe_cluster_replica_size,
-        builtin_support_cluster_replica_size,
-        builtin_analytics_cluster_replica_size,
+        builtin_system_cluster_config,
+        builtin_catalog_server_cluster_config,
+        builtin_probe_cluster_config,
+        builtin_support_cluster_config,
+        builtin_analytics_cluster_config,
         system_parameter_defaults,
         availability_zones,
         storage_usage_client,
@@ -3974,11 +3975,11 @@ pub fn serve(
                 boot_ts: boot_ts.clone(),
                 skip_migrations: false,
                 cluster_replica_sizes,
-                builtin_system_cluster_replica_size,
-                builtin_catalog_server_cluster_replica_size,
-                builtin_probe_cluster_replica_size,
-                builtin_support_cluster_replica_size,
-                builtin_analytics_cluster_replica_size,
+                builtin_system_cluster_config,
+                builtin_catalog_server_cluster_config,
+                builtin_probe_cluster_config,
+                builtin_support_cluster_config,
+                builtin_analytics_cluster_config,
                 system_parameter_defaults,
                 remote_system_parameters,
                 availability_zones,

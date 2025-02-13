@@ -19,6 +19,11 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use futures::{Future, FutureExt};
 use itertools::Itertools;
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    BootstrapBuiltinClusterConfig, ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::{EventType, FullNameV1, ObjectType, VersionedStorageUsage};
 use mz_build_info::DUMMY_BUILD_INFO;
@@ -691,11 +696,26 @@ impl Catalog {
                 boot_ts: previous_ts,
                 skip_migrations: true,
                 cluster_replica_sizes: bootstrap_args.cluster_replica_size_map.clone(),
-                builtin_system_cluster_replica_size: replica_size.clone(),
-                builtin_catalog_server_cluster_replica_size: replica_size.clone(),
-                builtin_probe_cluster_replica_size: replica_size.clone(),
-                builtin_support_cluster_replica_size: replica_size.clone(),
-                builtin_analytics_cluster_replica_size: replica_size.clone(),
+                builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                },
+                builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                },
+                builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                },
+                builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                },
+                builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: replica_size.clone(),
+                    replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                },
                 system_parameter_defaults,
                 remote_system_parameters: None,
                 availability_zones: vec![],

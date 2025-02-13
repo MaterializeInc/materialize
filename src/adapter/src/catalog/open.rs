@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt};
 use itertools::{Either, Itertools};
+use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::dyncfgs::{ENABLE_CONTINUAL_TASK_BUILTINS, ENABLE_EXPRESSION_CACHE};
 use mz_catalog::builtin::{
@@ -317,22 +318,22 @@ impl Catalog {
             // Add any new builtin objects and remove old ones.
             let (migrated_builtins, new_builtin_collections) =
                 add_new_remove_old_builtin_items_migration(&state.config().builtins_cfg, &mut txn)?;
-            let cluster_sizes = BuiltinBootstrapClusterSizes {
-                system_cluster: config.builtin_system_cluster_replica_size,
-                catalog_server_cluster: config.builtin_catalog_server_cluster_replica_size,
-                probe_cluster: config.builtin_probe_cluster_replica_size,
-                support_cluster: config.builtin_support_cluster_replica_size,
-                analytics_cluster: config.builtin_analytics_cluster_replica_size,
+            let builtin_bootstrap_cluster_config_map = BuiltinBootstrapClusterConfigMap {
+                system_cluster: config.builtin_system_cluster_config,
+                catalog_server_cluster: config.builtin_catalog_server_cluster_config,
+                probe_cluster: config.builtin_probe_cluster_config,
+                support_cluster: config.builtin_support_cluster_config,
+                analytics_cluster: config.builtin_analytics_cluster_config,
             };
             add_new_remove_old_builtin_clusters_migration(
                 &mut txn,
-                &cluster_sizes,
+                &builtin_bootstrap_cluster_config_map,
                 &state.cluster_replica_sizes,
             )?;
             add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
             add_new_remove_old_builtin_cluster_replicas_migration(
                 &mut txn,
-                &cluster_sizes,
+                &builtin_bootstrap_cluster_config_map,
                 &state.cluster_replica_sizes,
             )?;
             add_new_remove_old_builtin_roles_migration(&mut txn)?;
@@ -1222,7 +1223,7 @@ fn add_new_remove_old_builtin_items_migration(
 
 fn add_new_remove_old_builtin_clusters_migration(
     txn: &mut mz_catalog::durable::Transaction<'_>,
-    builtin_cluster_sizes: &BuiltinBootstrapClusterSizes,
+    builtin_cluster_config_map: &BuiltinBootstrapClusterConfigMap,
     cluster_sizes: &ClusterReplicaSizeMap,
 ) -> Result<(), mz_catalog::durable::CatalogError> {
     let mut durable_clusters: BTreeMap<_, _> = txn
@@ -1234,8 +1235,9 @@ fn add_new_remove_old_builtin_clusters_migration(
     // Add new clusters.
     for builtin_cluster in BUILTIN_CLUSTERS {
         if durable_clusters.remove(builtin_cluster.name).is_none() {
-            let cluster_size = builtin_cluster_sizes.get_size(builtin_cluster.name)?;
-            let cluster_allocation = cluster_sizes.get_allocation_by_name(&cluster_size)?;
+            let cluster_config = builtin_cluster_config_map.get_config(builtin_cluster.name)?;
+            let cluster_allocation = cluster_sizes.get_allocation_by_name(&cluster_config.size)?;
+
             txn.insert_system_cluster(
                 builtin_cluster.name,
                 vec![],
@@ -1243,9 +1245,9 @@ fn add_new_remove_old_builtin_clusters_migration(
                 builtin_cluster.owner_id.to_owned(),
                 mz_catalog::durable::ClusterConfig {
                     variant: mz_catalog::durable::ClusterVariant::Managed(ClusterVariantManaged {
-                        size: cluster_size,
+                        size: cluster_config.size,
                         availability_zones: vec![],
-                        replication_factor: builtin_cluster.replication_factor,
+                        replication_factor: cluster_config.replication_factor,
                         disk: cluster_allocation.is_cc,
                         logging: default_logging_config(),
                         optimizer_feature_overrides: Default::default(),
@@ -1335,7 +1337,7 @@ fn add_new_remove_old_builtin_roles_migration(
 
 fn add_new_remove_old_builtin_cluster_replicas_migration(
     txn: &mut Transaction<'_>,
-    builtin_cluster_sizes: &BuiltinBootstrapClusterSizes,
+    builtin_cluster_config_map: &BuiltinBootstrapClusterConfigMap,
     cluster_sizes: &ClusterReplicaSizeMap,
 ) -> Result<(), AdapterError> {
     let cluster_lookup: BTreeMap<_, _> = txn
@@ -1363,12 +1365,18 @@ fn add_new_remove_old_builtin_cluster_replicas_migration(
         let replica_names = durable_replicas
             .get_mut(&cluster.id)
             .unwrap_or(&mut empty_map);
-        if replica_names.remove(builtin_replica.name).is_none() {
+
+        let builtin_cluster_boostrap_config =
+            builtin_cluster_config_map.get_config(builtin_replica.cluster_name)?;
+        if replica_names.remove(builtin_replica.name).is_none()
+            // NOTE(SangJunBak): We need to explicitly check the replication factor because
+            // BUILT_IN_CLUSTER_REPLICAS is constant throughout all deployments but the replication
+            // factor is configurable on bootstrap.
+            && builtin_cluster_boostrap_config.replication_factor > 0
+        {
             let replica_size = match cluster.config.variant {
                 ClusterVariant::Managed(ClusterVariantManaged { ref size, .. }) => size.clone(),
-                ClusterVariant::Unmanaged => {
-                    builtin_cluster_sizes.get_size(builtin_replica.cluster_name)?
-                }
+                ClusterVariant::Unmanaged => builtin_cluster_boostrap_config.size,
             };
             let replica_allocation = cluster_sizes.get_allocation_by_name(&replica_size)?;
 
@@ -1482,37 +1490,43 @@ fn default_logging_config() -> ReplicaLogging {
         interval: Some(Duration::from_secs(1)),
     }
 }
-pub struct BuiltinBootstrapClusterSizes {
-    /// Size to default system_cluster on bootstrap
-    pub system_cluster: String,
-    /// Size to default catalog_server_cluster on bootstrap
-    pub catalog_server_cluster: String,
-    /// Size to default probe_cluster on bootstrap
-    pub probe_cluster: String,
-    /// Size to default support_cluster on bootstrap
-    pub support_cluster: String,
+
+#[derive(Debug)]
+pub struct BuiltinBootstrapClusterConfigMap {
+    /// Size and replication factor to default system_cluster on bootstrap
+    pub system_cluster: BootstrapBuiltinClusterConfig,
+    /// Size and replication factor to default catalog_server_cluster on bootstrap
+    pub catalog_server_cluster: BootstrapBuiltinClusterConfig,
+    /// Size and replication factor to default probe_cluster on bootstrap
+    pub probe_cluster: BootstrapBuiltinClusterConfig,
+    /// Size and replication factor to default support_cluster on bootstrap
+    pub support_cluster: BootstrapBuiltinClusterConfig,
     /// Size to default analytics_cluster on bootstrap
-    pub analytics_cluster: String,
+    pub analytics_cluster: BootstrapBuiltinClusterConfig,
 }
 
-impl BuiltinBootstrapClusterSizes {
+impl BuiltinBootstrapClusterConfigMap {
     /// Gets the size of the builtin cluster based on the provided name
-    fn get_size(&self, cluster_name: &str) -> Result<String, mz_catalog::durable::CatalogError> {
-        if cluster_name == mz_catalog::builtin::MZ_SYSTEM_CLUSTER.name {
-            Ok(self.system_cluster.clone())
+    fn get_config(
+        &self,
+        cluster_name: &str,
+    ) -> Result<BootstrapBuiltinClusterConfig, mz_catalog::durable::CatalogError> {
+        let cluster_config = if cluster_name == mz_catalog::builtin::MZ_SYSTEM_CLUSTER.name {
+            &self.system_cluster
         } else if cluster_name == mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER.name {
-            Ok(self.catalog_server_cluster.clone())
+            &self.catalog_server_cluster
         } else if cluster_name == mz_catalog::builtin::MZ_PROBE_CLUSTER.name {
-            Ok(self.probe_cluster.clone())
+            &self.probe_cluster
         } else if cluster_name == mz_catalog::builtin::MZ_SUPPORT_CLUSTER.name {
-            Ok(self.support_cluster.clone())
+            &self.support_cluster
         } else if cluster_name == mz_catalog::builtin::MZ_ANALYTICS_CLUSTER.name {
-            Ok(self.analytics_cluster.clone())
+            &self.analytics_cluster
         } else {
-            Err(mz_catalog::durable::CatalogError::Catalog(
+            return Err(mz_catalog::durable::CatalogError::Catalog(
                 SqlCatalogError::UnexpectedBuiltinCluster(cluster_name.to_owned()),
-            ))
-        }
+            ));
+        };
+        Ok(cluster_config.clone())
     }
 }
 

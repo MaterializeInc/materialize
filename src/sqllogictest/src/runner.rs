@@ -43,6 +43,11 @@ use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use itertools::Itertools;
 use md5::{Digest, Md5};
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    BootstrapBuiltinClusterConfig, ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
 use mz_environmentd::CatalogConfig;
@@ -1074,11 +1079,26 @@ impl<'a> RunnerInner<'a> {
             environment_id,
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             bootstrap_default_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_system_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_catalog_server_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_probe_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_support_cluster_replica_size: config.replicas.to_string(),
-            bootstrap_builtin_analytics_cluster_replica_size: config.replicas.to_string(),
+            bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
+            bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
+            bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
+            bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
+            bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+                size: config.replicas.to_string(),
+            },
             system_parameter_defaults: {
                 let mut params = BTreeMap::new();
                 params.insert(
