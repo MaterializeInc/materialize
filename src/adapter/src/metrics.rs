@@ -43,8 +43,6 @@ pub struct Metrics {
     pub handle_scheduling_decisions_seconds: HistogramVec,
     pub row_set_finishing_seconds: HistogramVec,
     pub session_startup_table_writes_seconds: HistogramVec,
-    pub group_commit_trigger_count: IntCounter,
-    pub group_commit_batch_defer_seconds: HistogramVec,
 }
 
 impl Metrics {
@@ -182,15 +180,6 @@ impl Metrics {
                 help: "If we had to wait for builtin table writes before processing a query, how long did we wait for.",
                 buckets: histogram_seconds_buckets(0.000_008, 4.0),
             )),
-            group_commit_trigger_count: registry.register(metric!(
-                name: "mz_group_commit_trigger_count",
-                help: "How many group commits where explicitly triggered and run.",
-            )),
-            group_commit_batch_defer_seconds: registry.register(metric!(
-                name: "mz_group_commit_batch_defer_seconds",
-                help: "If we defered dropping a group commit permit, how long did we defer for.",
-                buckets: histogram_seconds_buckets(0.000_008, 1.0),
-            )),
         }
     }
 
@@ -203,15 +192,6 @@ impl Metrics {
             row_set_finishing_seconds: self.row_set_finishing_seconds(),
             session_startup_table_writes_seconds: self
                 .session_startup_table_writes_seconds
-                .with_label_values(&[]),
-        }
-    }
-
-    pub(crate) fn group_commit_metrics(&self) -> GroupCommitMetrics {
-        GroupCommitMetrics {
-            group_commit_trigger_count: self.group_commit_trigger_count.clone(),
-            group_commit_batch_defer_seconds: self
-                .group_commit_batch_defer_seconds
                 .with_label_values(&[]),
         }
     }
@@ -232,13 +212,6 @@ impl SessionMetrics {
     pub(crate) fn session_startup_table_writes_seconds(&self) -> &Histogram {
         &self.session_startup_table_writes_seconds
     }
-}
-
-/// Metrics associated with explicitly triggering a group commit.
-#[derive(Debug, Clone)]
-pub struct GroupCommitMetrics {
-    pub(crate) group_commit_trigger_count: IntCounter,
-    pub(crate) group_commit_batch_defer_seconds: Histogram,
 }
 
 pub(crate) fn session_type_label_value(user: &User) -> &'static str {
