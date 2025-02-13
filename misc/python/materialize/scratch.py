@@ -27,7 +27,7 @@ from mypy_boto3_ec2.type_defs import (
     FilterTypeDef,
     InstanceNetworkInterfaceSpecificationTypeDef,
     InstanceTypeDef,
-    RunInstancesRequestRequestTypeDef,
+    RunInstancesRequestServiceResourceCreateInstancesTypeDef,
 )
 from prettytable import PrettyTable
 from pydantic import BaseModel
@@ -179,7 +179,7 @@ def launch(
     say(f"launching instance {display_name or '(unnamed)'}")
     with open(MZ_ROOT / "misc" / "scratch" / "provision.bash") as f:
         provisioning_script = f.read()
-    kwargs: RunInstancesRequestRequestTypeDef = {
+    kwargs: RunInstancesRequestServiceResourceCreateInstancesTypeDef = {
         "MinCount": 1,
         "MaxCount": 1,
         "ImageId": ami,
