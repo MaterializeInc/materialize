@@ -833,13 +833,29 @@ fn create_environmentd_statefulset_object(
             config
                 .bootstrap_builtin_catalog_server_cluster_replica_size
                 .as_ref()
-                .map(|size| {
-                    format!("--bootstrap-builtin-catalog-server-cluster-replica-size={size}")
-                }),
+                .map(|size| format!("--bootstrap-builtin-catalog-server-cluster-replica-size={size}")),
             config
                 .bootstrap_builtin_analytics_cluster_replica_size
                 .as_ref()
                 .map(|size| format!("--bootstrap-builtin-analytics-cluster-replica-size={size}")),
+            config
+                .bootstrap_builtin_system_cluster_replication_factor
+                .as_ref()
+                .map(|replication_factor| {
+                    format!("--bootstrap-builtin-system-cluster-replication-factor={replication_factor}")
+                }),
+            config
+                .bootstrap_builtin_probe_cluster_replication_factor
+                .as_ref()
+                .map(|replication_factor| format!("--bootstrap-builtin-probe-cluster-replication-factor={replication_factor}")),
+            config
+                .bootstrap_builtin_support_cluster_replication_factor
+                .as_ref()
+                .map(|replication_factor| format!("--bootstrap-builtin-support-cluster-replication-factor={replication_factor}")),
+            config
+                .bootstrap_builtin_analytics_cluster_replication_factor
+                .as_ref()
+                .map(|replication_factor| format!("--bootstrap-builtin-analytics-cluster-replication-factor={replication_factor}")),
         ]
         .into_iter()
         .flatten(),

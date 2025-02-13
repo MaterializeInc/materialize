@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bytesize::ByteSize;
 use ipnet::IpNet;
+use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
@@ -55,16 +56,16 @@ pub struct StateConfig {
     pub skip_migrations: bool,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    /// Builtin system cluster replica size.
-    pub builtin_system_cluster_replica_size: String,
-    /// Builtin catalog server cluster replica size.
-    pub builtin_catalog_server_cluster_replica_size: String,
-    /// Builtin probe cluster replica size.
-    pub builtin_probe_cluster_replica_size: String,
-    /// Builtin support cluster replica size.
-    pub builtin_support_cluster_replica_size: String,
-    /// Builtin analytics cluster replica size.
-    pub builtin_analytics_cluster_replica_size: String,
+    /// Builtin system cluster config.
+    pub builtin_system_cluster_config: BootstrapBuiltinClusterConfig,
+    /// Builtin catalog server cluster config.
+    pub builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig,
+    /// Builtin probe cluster config.
+    pub builtin_probe_cluster_config: BootstrapBuiltinClusterConfig,
+    /// Builtin support cluster config.
+    pub builtin_support_cluster_config: BootstrapBuiltinClusterConfig,
+    /// Builtin analytics cluster config.
+    pub builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig,
     /// Dynamic defaults for system parameters.
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// An optional map of system parameters pulled from a remote frontend.

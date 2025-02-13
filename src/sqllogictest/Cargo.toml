@@ -20,6 +20,7 @@ futures = "0.3.25"
 itertools = "0.12.1"
 junit-report = "0.8.3"
 md-5 = "0.10.5"
+mz-adapter-types = { path = "../adapter-types" }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
 mz-controller = { path = "../controller" }

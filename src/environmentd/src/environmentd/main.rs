@@ -28,6 +28,11 @@ use http::header::HeaderValue;
 use ipnet::IpNet;
 use itertools::Itertools;
 use mz_adapter::ResultExt;
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    BootstrapBuiltinClusterConfig, ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{
@@ -544,6 +549,46 @@ pub struct Args {
         default_value = "1"
     )]
     bootstrap_builtin_analytics_cluster_replica_size: String,
+    /// The replication factor of the builtin system cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR",
+        default_value = SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_system_cluster_replication_factor: u32,
+    /// The replication factor of the builtin catalog server cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICATION_FACTOR",
+        default_value = CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_catalog_server_cluster_replication_factor: u32,
+    /// The replication factor of the builtin probe cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR",
+        default_value = PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_probe_cluster_replication_factor: u32,
+    /// The replication factor of the builtin support cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICATION_FACTOR",
+        default_value = SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_support_cluster_replication_factor: u32,
+    /// The replication factor of the builtin analytics cluster replicas if bootstrapping.
+    #[clap(
+        long,
+        env = "BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICATION_FACTOR",
+        default_value = ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
+        value_parser = clap::value_parser!(u32).range(0..=2)
+    )]
+    bootstrap_builtin_analytics_cluster_replication_factor: u32,
     /// An list of NAME=VALUE pairs used to override static defaults
     /// for system parameters.
     #[clap(
@@ -1041,16 +1086,27 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 environment_id: args.environment_id,
                 bootstrap_role: args.bootstrap_role,
                 bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
-                bootstrap_builtin_system_cluster_replica_size: args
-                    .bootstrap_builtin_system_cluster_replica_size,
-                bootstrap_builtin_catalog_server_cluster_replica_size: args
-                    .bootstrap_builtin_catalog_server_cluster_replica_size,
-                bootstrap_builtin_probe_cluster_replica_size: args
-                    .bootstrap_builtin_probe_cluster_replica_size,
-                bootstrap_builtin_support_cluster_replica_size: args
-                    .bootstrap_builtin_support_cluster_replica_size,
-                bootstrap_builtin_analytics_cluster_replica_size: args
-                    .bootstrap_builtin_analytics_cluster_replica_size,
+                bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_system_cluster_replica_size,
+                    replication_factor: args.bootstrap_builtin_system_cluster_replication_factor,
+                },
+                bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_catalog_server_cluster_replica_size,
+                    replication_factor: args
+                        .bootstrap_builtin_catalog_server_cluster_replication_factor,
+                },
+                bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_probe_cluster_replica_size,
+                    replication_factor: args.bootstrap_builtin_probe_cluster_replication_factor,
+                },
+                bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_support_cluster_replica_size,
+                    replication_factor: args.bootstrap_builtin_support_cluster_replication_factor,
+                },
+                bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                    size: args.bootstrap_builtin_analytics_cluster_replica_size,
+                    replication_factor: args.bootstrap_builtin_analytics_cluster_replication_factor,
+                },
                 system_parameter_defaults: args
                     .system_parameter_default
                     .into_iter()
