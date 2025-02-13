@@ -554,7 +554,7 @@ pub struct Args {
         long,
         env = "BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR",
         default_value = SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
-        value_parser = clap::value_parser!(u32).range(0..=1)
+        value_parser = clap::value_parser!(u32).range(0..=2)
     )]
     bootstrap_builtin_system_cluster_replication_factor: u32,
     /// The replication factor of the builtin catalog server cluster replicas if bootstrapping.
@@ -562,7 +562,7 @@ pub struct Args {
         long,
         env = "BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICATION_FACTOR",
         default_value = CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
-        value_parser = clap::value_parser!(u32).range(0..=1)
+        value_parser = clap::value_parser!(u32).range(0..=2)
     )]
     bootstrap_builtin_catalog_server_cluster_replication_factor: u32,
     /// The replication factor of the builtin probe cluster replicas if bootstrapping.
@@ -570,7 +570,7 @@ pub struct Args {
         long,
         env = "BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR",
         default_value = PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
-        value_parser = clap::value_parser!(u32).range(0..=1)
+        value_parser = clap::value_parser!(u32).range(0..=2)
     )]
     bootstrap_builtin_probe_cluster_replication_factor: u32,
     /// The replication factor of the builtin support cluster replicas if bootstrapping.
@@ -578,7 +578,7 @@ pub struct Args {
         long,
         env = "BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICATION_FACTOR",
         default_value = SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
-        value_parser = clap::value_parser!(u32).range(0..=1)
+        value_parser = clap::value_parser!(u32).range(0..=2)
     )]
     bootstrap_builtin_support_cluster_replication_factor: u32,
     /// The replication factor of the builtin analytics cluster replicas if bootstrapping.
@@ -586,7 +586,7 @@ pub struct Args {
         long,
         env = "BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICATION_FACTOR",
         default_value = ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR.to_string(),
-        value_parser = clap::value_parser!(u32).range(0..=1)
+        value_parser = clap::value_parser!(u32).range(0..=2)
     )]
     bootstrap_builtin_analytics_cluster_replication_factor: u32,
     /// An list of NAME=VALUE pairs used to override static defaults

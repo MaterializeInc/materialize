@@ -18,5 +18,7 @@ pub struct BootstrapBuiltinClusterConfig {
 pub const SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR: u32 = 1;
 pub const CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR: u32 = 1;
 pub const PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR: u32 = 1;
+// Support and analytics clusters are ephemeral - they are only spun up temporarily when needed.
+// Since they are short-lived, they don't need replication by default.
 pub const SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR: u32 = 0;
 pub const ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR: u32 = 0;

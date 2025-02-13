@@ -1144,21 +1144,20 @@ impl BuiltinBootstrapClusterConfigMap {
         &self,
         cluster_name: &str,
     ) -> Result<BootstrapBuiltinClusterConfig, mz_catalog::durable::CatalogError> {
-        let cluster_config = match cluster_name {
-            name if name == mz_catalog::builtin::MZ_SYSTEM_CLUSTER.name => &self.system_cluster,
-            name if name == mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER.name => {
-                &self.catalog_server_cluster
-            }
-            name if name == mz_catalog::builtin::MZ_PROBE_CLUSTER.name => &self.probe_cluster,
-            name if name == mz_catalog::builtin::MZ_SUPPORT_CLUSTER.name => &self.support_cluster,
-            name if name == mz_catalog::builtin::MZ_ANALYTICS_CLUSTER.name => {
-                &self.analytics_cluster
-            }
-            _ => {
-                return Err(mz_catalog::durable::CatalogError::Catalog(
-                    SqlCatalogError::UnexpectedBuiltinCluster(cluster_name.to_owned()),
-                ))
-            }
+        let cluster_config = if cluster_name == mz_catalog::builtin::MZ_SYSTEM_CLUSTER.name {
+            &self.system_cluster
+        } else if cluster_name == mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER.name {
+            &self.catalog_server_cluster
+        } else if cluster_name == mz_catalog::builtin::MZ_PROBE_CLUSTER.name {
+            &self.probe_cluster
+        } else if cluster_name == mz_catalog::builtin::MZ_SUPPORT_CLUSTER.name {
+            &self.support_cluster
+        } else if cluster_name == mz_catalog::builtin::MZ_ANALYTICS_CLUSTER.name {
+            &self.analytics_cluster
+        } else {
+            return Err(mz_catalog::durable::CatalogError::Catalog(
+                SqlCatalogError::UnexpectedBuiltinCluster(cluster_name.to_owned()),
+            ));
         };
         Ok(cluster_config.clone())
     }
