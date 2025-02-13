@@ -3499,6 +3499,15 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =
         access: vec![PUBLIC_SELECT],
     });
 
+pub static MZ_CLUSTER_REPLICA_FRONTIERS_IND: LazyLock<BuiltinIndex> =
+    LazyLock::new(|| BuiltinIndex {
+        name: "mz_cluster_replica_frontiers_ind",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::INDEX_MZ_CLUSTER_REPLICA_FRONTIERS_IND_OID,
+        sql: "IN CLUSTER mz_catalog_server ON mz_catalog.mz_cluster_replica_frontiers (object_id)",
+        is_retained_metrics_object: false,
+    });
+
 pub static MZ_FRONTIERS: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
@@ -9634,6 +9643,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_VIEWS_IND),
         Builtin::Index(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW_IND),
         Builtin::Index(&MZ_CLUSTER_DEPLOYMENT_LINEAGE_IND),
+        Builtin::Index(&MZ_CLUSTER_REPLICA_FRONTIERS_IND),
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
         Builtin::Connection(&MZ_ANALYTICS),
