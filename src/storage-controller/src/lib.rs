@@ -79,7 +79,7 @@ use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceConnection, SourceData, SourceDesc,
     SourceExport, SourceExportDataConfig,
 };
-use mz_storage_types::AlterCompatible;
+use mz_storage_types::{dyncfgs, AlterCompatible};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::TxnsRead;
 use mz_txn_wal::txns::TxnsHandle;
@@ -3156,10 +3156,14 @@ where
         // Choose an as-of frontier for this execution of the sink. If the write frontier of the sink
         // is strictly larger than its read hold, it must have at least written out its snapshot, and we can skip
         // reading it; otherwise assume we may have to replay from the beginning.
+        let enable_snapshot_frontier =
+            dyncfgs::STORAGE_SINK_SNAPSHOT_FRONTIER.get(self.config().config_set());
         let export_state = self.storage_collections.collection_frontiers(id)?;
         let mut as_of = description.sink.as_of.clone();
         as_of.join_assign(&export_state.implied_capability);
-        let with_snapshot = if PartialOrder::less_than(&as_of, &export_state.write_frontier) {
+        let with_snapshot = if enable_snapshot_frontier
+            && PartialOrder::less_than(&as_of, &export_state.write_frontier)
+        {
             false
         } else {
             description.sink.with_snapshot
