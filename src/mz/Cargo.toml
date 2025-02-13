@@ -45,7 +45,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 assert_cmd = "2.0.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-security-framework = "2.7.0"
+security-framework = "2.10.0"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
