@@ -114,21 +114,17 @@ displays cluster resource utilization and sizing advice.
 
 {{< /tip >}}
 
-#### Resource allocation
+#### Cluster sizes
 
-The allocation of resources increases proportionally to the size of the cluster.
-For example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as
-a cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster
-of size `400cc`.
+{{% self-managed/materialize-cluster-sizes %}}
 
-To determine the specific resource allocation for a given cluster size, query
-the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
-system catalog table.
+{{< note >}}
 
-{{< warning >}}
-The values in the `mz_cluster_replica_sizes` system catalog table may change at
-any time. You should not rely on them for any kind of capacity planning.
-{{< /warning >}}
+If you have modified the default cluster size configurations, you can query the
+[`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
+system catalog table for the specific resource allocations.
+
+{{< /note >}}
 
 #### Downtime
 

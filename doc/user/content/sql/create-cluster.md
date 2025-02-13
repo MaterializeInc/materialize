@@ -72,34 +72,17 @@ example, you could place your development workloads in a cluster named
 ### Size
 
 The `SIZE` option determines the amount of compute resources (CPU, memory, and
-disk) available to the cluster. Valid sizes are:
+disk) available to the cluster.
 
-* `25cc`
-* `50cc`
-* `100cc`
-* `200cc`
-* `300cc`
-* `400cc`
-* `600cc`
-* `800cc`
-* `1200cc`
-* `1600cc`
-* `3200cc`
-* `6400cc`
-* `128C`
-* `256C`
-* `512C`
+{{% self-managed/materialize-cluster-sizes %}}
 
-The resource allocations are proportional to the number in the size name. For
-example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as a
-cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
-size `400cc`. To determine the specific resource allocations for a size,
-query the [`mz_cluster_replica_sizes`] table.
+{{< note >}}
 
-{{< warning >}}
-The values in the `mz_cluster_replica_sizes` table may change at any
-time. You should not rely on them for any kind of capacity planning.
-{{< /warning >}}
+If you have modified the default cluster size configurations, you can query the
+[`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
+system catalog table for the specific resource allocations.
+
+{{< /note >}}
 
 Clusters of larger sizes can process data faster and handle larger data volumes.
 
