@@ -103,6 +103,18 @@ spec:
         {{ if .Values.operator.clusters.defaultSizes.analytics }}
         - "--bootstrap-builtin-analytics-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.analytics }}"
         {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.system nil }}
+        - "--bootstrap-builtin-system-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.system }}"
+        {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.probe nil }}
+        - "--bootstrap-builtin-probe-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.probe }}"
+        {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.support nil }}
+        - "--bootstrap-builtin-support-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.support }}"
+        {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.analytics nil }}
+        - "--bootstrap-builtin-analytics-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.analytics }}"
+        {{- end }}
         {{- end }}
         - "--image-pull-policy={{ kebabcase .Values.operator.image.pullPolicy }}"
         {{- range $key, $value := .Values.environmentd.nodeSelector }}

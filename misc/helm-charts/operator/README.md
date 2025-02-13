@@ -125,6 +125,10 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.cloudProvider.providers.gcp` | GCP Configuration (placeholder for future use) | ``{"enabled":false}`` |
 | `operator.cloudProvider.region` | Common cloud provider settings | ``"kind"`` |
 | `operator.cloudProvider.type` | Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local' | ``"local"`` |
+| `operator.clusters.defaultReplicationFactor.analytics` |  | ``0`` |
+| `operator.clusters.defaultReplicationFactor.probe` |  | ``0`` |
+| `operator.clusters.defaultReplicationFactor.support` |  | ``0`` |
+| `operator.clusters.defaultReplicationFactor.system` |  | ``0`` |
 | `operator.clusters.defaultSizes.analytics` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.catalogServer` |  | ``"50cc"`` |
 | `operator.clusters.defaultSizes.default` |  | ``"25cc"`` |

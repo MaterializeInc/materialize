@@ -23,6 +23,11 @@ use anyhow::Context;
 use clap::Parser;
 use futures::future::FutureExt;
 use mz_adapter::catalog::{Catalog, InitializeStateResult};
+use mz_adapter_types::bootstrap_builtin_cluster_config::{
+    BootstrapBuiltinClusterConfig, ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+    SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+};
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
@@ -590,11 +595,26 @@ async fn upgrade_check(
             boot_ts,
             skip_migrations: false,
             cluster_replica_sizes,
-            builtin_system_cluster_replica_size: builtin_clusters_replica_size.clone(),
-            builtin_catalog_server_cluster_replica_size: builtin_clusters_replica_size.clone(),
-            builtin_probe_cluster_replica_size: builtin_clusters_replica_size.clone(),
-            builtin_support_cluster_replica_size: builtin_clusters_replica_size.clone(),
-            builtin_analytics_cluster_replica_size: builtin_clusters_replica_size,
+            builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                size: builtin_clusters_replica_size.clone(),
+                replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                size: builtin_clusters_replica_size.clone(),
+                replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                size: builtin_clusters_replica_size.clone(),
+                replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                size: builtin_clusters_replica_size.clone(),
+                replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
+            builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                size: builtin_clusters_replica_size.clone(),
+                replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
+            },
             system_parameter_defaults: Default::default(),
             remote_system_parameters: None,
             availability_zones: vec![],
