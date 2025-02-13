@@ -581,39 +581,30 @@ Explained Query:
   Return
     Join::Linear
       linear_stage[0]
-        lookup={ relation=1, key=[#0, #1] }
-        stream={ key=[#0, #1], thinning=() }
-      source={ relation=0, key=[#0, #1] }
-      ArrangeBy
-        input_key=[#0]
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-        arrangements[1]={ key=[#0, #1], permutation=id, thinning=() }
-        types=[integer, text[]]
-        Reduce::Basic
-          aggr=(0, array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #1)))
-          val_plan
-            project=(#2)
-            map=(row(array[#1], #1))
-          key_plan
-            project=(#0)
-          Get::PassArrangements l0
-            raw=true
-      ArrangeBy
-        input_key=[#0]
-        raw=false
-        arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-        arrangements[1]={ key=[#0, #1], permutation=id, thinning=() }
-        types=[integer, text[]]
-        Reduce::Basic
-          aggr=(0, array_agg[order_by=[#0 desc nulls_first]](row(array[#1], #1)))
-          val_plan
-            project=(#2)
-            map=(row(array[#1], #1))
-          key_plan
-            project=(#0)
-          Get::PassArrangements l0
-            raw=true
+        closure
+          project=(#0, #1)
+          ready_equivalences=#2 = #1
+        lookup={ relation=1, key=[#0] }
+        stream={ key=[#0], thinning=(#1) }
+      source={ relation=0, key=[#0] }
+      Reduce::Basic
+        aggr=(0, array_agg[order_by=[#0 asc nulls_last]](row(array[#1], #1)))
+        val_plan
+          project=(#2)
+          map=(row(array[#1], #1))
+        key_plan
+          project=(#0)
+        Get::PassArrangements l0
+          raw=true
+      Reduce::Basic
+        aggr=(0, array_agg[order_by=[#0 desc nulls_first]](row(array[#1], #1)))
+        val_plan
+          project=(#2)
+          map=(row(array[#1], #1))
+        key_plan
+          project=(#0)
+        Get::PassArrangements l0
+          raw=true
 
 Source materialize.public.t
   project=(#0, #1)

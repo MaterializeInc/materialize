@@ -2187,6 +2187,12 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_join_prioritize_arranged,
+        desc: "Whether join planning should prioritize already-arranged keys over keys with more fields.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2202,6 +2208,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_reduce_reduction: vars.enable_reduce_reduction(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
+            enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),
         }
     }
 }

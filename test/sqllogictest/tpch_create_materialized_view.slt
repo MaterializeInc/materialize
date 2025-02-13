@@ -453,27 +453,24 @@ ORDER BY
 ----
 materialize.public.q05:
   Reduce group_by=[#2{n_name}] aggregates=[sum((#0{l_extendedprice} * (1 - #1{l_discount})))] // { arity: 2 }
-    Project (#19{l_extendedprice}, #20{l_discount}, #24{n_name}) // { arity: 3 }
-      Filter (#28{r_name} = "ASIA") AND (#12{o_orderdate} < 1995-01-01) AND (#12{o_orderdate} >= 1994-01-01) // { arity: 30 }
-        Join on=(#0{c_custkey} = #9{o_custkey} AND #3{c_nationkey} = #22{s_nationkey} = #23{n_nationkey} AND #8{o_orderkey} = #17{l_orderkey} AND #18{l_suppkey} = #21{s_suppkey} AND #25{n_regionkey} = #27{r_regionkey}) type=delta // { arity: 30 }
+    Project (#22{l_extendedprice}, #23{l_discount}, #41{n_name}) // { arity: 3 }
+      Filter (#45{r_name} = "ASIA") AND (#12{o_orderdate} < 1995-01-01) AND (#12{o_orderdate} >= 1994-01-01) // { arity: 47 }
+        Join on=(#0{c_custkey} = #9{o_custkey} AND #3{c_nationkey} = #36{s_nationkey} = #40{n_nationkey} AND #8{o_orderkey} = #17{l_orderkey} AND #19{l_suppkey} = #33{s_suppkey} AND #42{n_regionkey} = #44{r_regionkey}) type=delta // { arity: 47 }
           implementation
-            %0:customer » %1:orders[#1]KAiif » %2:lineitem[#0]KA » %3:supplier[#0, #1]KK » %4:nation[#0]KA » %5:region[#0]KAef
-            %1:orders » %0:customer[#0]KA » %2:lineitem[#0]KA » %3:supplier[#0, #1]KK » %4:nation[#0]KA » %5:region[#0]KAef
-            %2:lineitem » %1:orders[#0]KAiif » %0:customer[#0]KA » %3:supplier[#0, #1]KK » %4:nation[#0]KA » %5:region[#0]KAef
-            %3:supplier » %0:customer[#3]KA » %1:orders[#1]KAiif » %2:lineitem[#0, #1]KK » %4:nation[#0]KA » %5:region[#0]KAef
-            %4:nation » %5:region[#0]KAef » %0:customer[#3]KA » %1:orders[#1]KAiif » %2:lineitem[#0]KA » %3:supplier[#0, #1]KK
-            %5:region » %4:nation[#2]KA » %0:customer[#3]KA » %1:orders[#1]KAiif » %2:lineitem[#0]KA » %3:supplier[#0, #1]KK
+            %0:customer » %1:orders[#1]KAiif » %2:lineitem[#0]KA » %3:supplier[#3]KA » %4:nation[#0]KA » %5:region[#0]KAef
+            %1:orders » %0:customer[#0]KA » %2:lineitem[#0]KA » %3:supplier[#3]KA » %4:nation[#0]KA » %5:region[#0]KAef
+            %2:lineitem » %1:orders[#0]KAiif » %0:customer[#0]KA » %3:supplier[#3]KA » %4:nation[#0]KA » %5:region[#0]KAef
+            %3:supplier » %0:customer[#3]KA » %1:orders[#1]KAiif » %2:lineitem[#2]KA » %4:nation[#0]KA » %5:region[#0]KAef
+            %4:nation » %5:region[#0]KAef » %0:customer[#3]KA » %1:orders[#1]KAiif » %2:lineitem[#0]KA » %3:supplier[#3]KA
+            %5:region » %4:nation[#2]KA » %0:customer[#3]KA » %1:orders[#1]KAiif » %2:lineitem[#0]KA » %3:supplier[#3]KA
           ArrangeBy keys=[[#0{c_custkey}], [#3{c_nationkey}]] // { arity: 8 }
             ReadIndex on=customer pk_customer_custkey=[delta join 1st input (full scan)] fk_customer_nationkey=[delta join lookup] // { arity: 8 }
           ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] // { arity: 9 }
             ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
-          ArrangeBy keys=[[#0{l_orderkey}], [#0{l_orderkey}, #1{l_suppkey}]] // { arity: 4 }
-            Project (#0{l_orderkey}, #2{l_suppkey}, #5{l_extendedprice}, #6{l_discount}) // { arity: 4 }
-              ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
-          ArrangeBy keys=[[#0{s_suppkey}, #1{s_nationkey}]] // { arity: 2 }
-            Project (#0{s_suppkey}, #3{s_nationkey}) // { arity: 2 }
-              Filter (#0{s_suppkey}) IS NOT NULL // { arity: 7 }
-                ReadIndex on=supplier pk_supplier_suppkey=[*** full scan ***] // { arity: 7 }
+          ArrangeBy keys=[[#0{l_orderkey}], [#2{l_suppkey}]] // { arity: 16 }
+            ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] fk_lineitem_suppkey=[delta join lookup] // { arity: 16 }
+          ArrangeBy keys=[[#3{s_nationkey}]] // { arity: 7 }
+            ReadIndex on=supplier fk_supplier_nationkey=[delta join lookup] // { arity: 7 }
           ArrangeBy keys=[[#0{n_nationkey}], [#2{n_regionkey}]] // { arity: 4 }
             ReadIndex on=nation pk_nation_nationkey=[delta join lookup] fk_nation_regionkey=[delta join lookup] // { arity: 4 }
           ArrangeBy keys=[[#0{r_regionkey}]] // { arity: 3 }
@@ -483,12 +480,13 @@ Used Indexes:
   - materialize.public.pk_nation_nationkey (delta join lookup)
   - materialize.public.fk_nation_regionkey (delta join lookup)
   - materialize.public.pk_region_regionkey (delta join lookup)
-  - materialize.public.pk_supplier_suppkey (*** full scan ***)
+  - materialize.public.fk_supplier_nationkey (delta join lookup)
   - materialize.public.pk_customer_custkey (delta join 1st input (full scan))
   - materialize.public.fk_customer_nationkey (delta join lookup)
   - materialize.public.pk_orders_orderkey (delta join lookup)
   - materialize.public.fk_orders_custkey (delta join lookup)
-  - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
+  - materialize.public.fk_lineitem_orderkey (delta join lookup)
+  - materialize.public.fk_lineitem_suppkey (delta join lookup)
 
 Target cluster: quickstart
 
