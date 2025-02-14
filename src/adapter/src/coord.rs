@@ -3386,13 +3386,18 @@ impl Coordinator {
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
                     _ = self.advance_timelines_interval.tick() => {
-                        if self.controller.read_only() {
-                            tracing::info!("not advancing timelines in read-only mode");
-                            continue;
-                        }
                         let span = info_span!(parent: None, "coord::advance_timelines_interval");
                         span.follows_from(Span::current());
-                        messages.push(Message::GroupCommitInitiate(span, None));
+
+                        // Group commit sends an `AdvanceTimelines` message when
+                        // done, which is what downgrades read holds. In
+                        // read-only mode we send this message directly because
+                        // we're not doing group commits.
+                        if self.controller.read_only() {
+                            messages.push(Message::AdvanceTimelines);
+                        } else {
+                            messages.push(Message::GroupCommitInitiate(span, None));
+                        }
                     },
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety

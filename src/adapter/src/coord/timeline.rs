@@ -678,7 +678,7 @@ impl Coordinator {
         {
             // Timeline::EpochMilliseconds is advanced in group commits and doesn't need to be
             // manually advanced here.
-            if timeline != Timeline::EpochMilliseconds {
+            if timeline != Timeline::EpochMilliseconds && !self.read_only_controllers {
                 // For non realtime sources, we define now as the largest timestamp, not in
                 // advance of any object's upper. This is the largest timestamp that is closed
                 // to writes.
