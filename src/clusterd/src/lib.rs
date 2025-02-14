@@ -302,7 +302,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let grpc_server_metrics = GrpcServerMetrics::register_with(&metrics_registry);
 
     // Start storage server.
-    let (_storage_server, storage_client) = mz_storage::serve(
+    let storage_client_builder = mz_storage::serve(
         mz_cluster::server::ClusterConfig {
             metrics_registry: metrics_registry.clone(),
             persist_clients: Arc::clone(&persist_clients),
@@ -324,13 +324,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host.clone(),
-            storage_client,
+            storage_client_builder,
             |svc| ProtoStorageServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         ),
     );
 
     // Start compute server.
-    let (_compute_server, compute_client) = mz_compute::server::serve(
+    let compute_client_builder = mz_compute::server::serve(
         mz_cluster::server::ClusterConfig {
             metrics_registry,
             persist_clients,
@@ -354,7 +354,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host,
-            compute_client,
+            compute_client_builder,
             |svc| ProtoComputeServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         ),
     );

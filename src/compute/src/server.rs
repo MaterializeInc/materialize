@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
-use mz_cluster::server::TimelyContainerRef;
+use mz_cluster::server::ClusterClient;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
@@ -71,31 +71,29 @@ pub struct Config {
 
 /// Initiates a timely dataflow computation, processing compute commands.
 pub fn serve(
-    config: mz_cluster::server::ClusterConfig,
+    generic_config: mz_cluster::server::ClusterConfig,
     context: ComputeInstanceContext,
-) -> Result<
-    (
-        TimelyContainerRef<ComputeCommand, ComputeResponse>,
-        impl Fn() -> Box<dyn ComputeClient>,
-    ),
-    Error,
-> {
-    let metrics = ComputeMetrics::register_with(&config.metrics_registry);
-    let compute_config = Config { metrics, context };
+) -> Result<impl Fn() -> Box<dyn ComputeClient>, Error> {
+    let metrics = ComputeMetrics::register_with(&generic_config.metrics_registry);
+    let config = Config { metrics, context };
 
-    let (timely_container, client_builder) = mz_cluster::server::serve::<
-        Config,
-        ComputeCommand,
-        ComputeResponse,
-    >(config, compute_config)?;
-    let client_builder = {
-        move || {
-            let client: Box<dyn ComputeClient> = client_builder();
-            client
-        }
+    let tokio_executor = tokio::runtime::Handle::current();
+    let timely_container = Arc::new(tokio::sync::Mutex::new(None));
+
+    let client_builder = move || {
+        let client = ClusterClient::new(
+            Arc::clone(&timely_container),
+            Arc::clone(&generic_config.persist_clients),
+            generic_config.txns_ctx.clone(),
+            tokio_executor.clone(),
+            Arc::clone(&generic_config.tracing_handle),
+            config.clone(),
+        );
+        let client: Box<dyn ComputeClient> = Box::new(client);
+        client
     };
 
-    Ok((timely_container, client_builder))
+    Ok(client_builder)
 }
 
 /// Endpoint used by workers to receive compute commands.

@@ -92,47 +92,7 @@ impl<C, R> Drop for TimelyContainer<C, R> {
 }
 
 /// Threadsafe reference to an optional TimelyContainer
-pub type TimelyContainerRef<C, R> = Arc<tokio::sync::Mutex<Option<TimelyContainer<C, R>>>>;
-
-/// Initiates a timely dataflow computation, processing cluster commands.
-pub fn serve<Worker, C, R>(
-    config: ClusterConfig,
-    worker_config: Worker,
-) -> Result<
-    (
-        TimelyContainerRef<C, R>,
-        impl Fn() -> Box<ClusterClient<PartitionedClient<C, R>, Worker, C, R>>,
-    ),
-    Error,
->
-where
-    C: Send + 'static,
-    R: Send + 'static,
-    (C, R): Partitionable<C, R>,
-    Worker: crate::types::AsRunnableWorker<C, R> + Clone + Send + Sync + 'static,
-{
-    let tokio_executor = tokio::runtime::Handle::current();
-    let timely_container = Arc::new(tokio::sync::Mutex::new(None));
-
-    let client_builder = {
-        let timely_container = Arc::clone(&timely_container);
-        move || {
-            let worker_config = worker_config.clone();
-            let client = ClusterClient::new(
-                Arc::clone(&timely_container),
-                Arc::clone(&config.persist_clients),
-                config.txns_ctx.clone(),
-                tokio_executor.clone(),
-                Arc::clone(&config.tracing_handle),
-                worker_config,
-            );
-            let client = Box::new(client);
-            client
-        }
-    };
-
-    Ok((timely_container, client_builder))
-}
+type TimelyContainerRef<C, R> = Arc<tokio::sync::Mutex<Option<TimelyContainer<C, R>>>>;
 
 impl<Worker, C, R> ClusterClient<PartitionedClient<C, R>, Worker, C, R>
 where
@@ -141,7 +101,8 @@ where
     (C, R): Partitionable<C, R>,
     Worker: crate::types::AsRunnableWorker<C, R> + Clone + Send + Sync + 'static,
 {
-    fn new(
+    /// Create a new `ClusterClient`.
+    pub fn new(
         timely_container: TimelyContainerRef<C, R>,
         persist_clients: Arc<PersistClientCache>,
         txns_ctx: TxnsContext,
@@ -311,7 +272,7 @@ where
 
         // Order is important here: If our future is canceled, we need to drop the `command_txs`
         // before the `activators` so when the workers are unparked by the dropping of the
-        // activators they can observed that the senders have disconnected.
+        // activators they can observe that the senders have disconnected.
         let mut activators = Vec::with_capacity(workers);
         let mut command_txs = Vec::with_capacity(workers);
         let mut response_rxs = Vec::with_capacity(workers);

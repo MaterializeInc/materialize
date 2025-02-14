@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use mz_cluster::server::TimelyContainerRef;
+use mz_cluster::server::ClusterClient;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
@@ -56,17 +56,8 @@ pub fn serve(
     now: NowFn,
     connection_context: ConnectionContext,
     instance_context: StorageInstanceContext,
-) -> Result<
-    (
-        TimelyContainerRef<StorageCommand, StorageResponse>,
-        impl Fn() -> Box<dyn StorageClient>,
-    ),
-    anyhow::Error,
-> {
-    // Various metrics related things.
+) -> Result<impl Fn() -> Box<dyn StorageClient>, anyhow::Error> {
     let metrics = StorageMetrics::register_with(&generic_config.metrics_registry);
-
-    let shared_rocksdb_write_buffer_manager = Default::default();
 
     let config = Config {
         now,
@@ -74,23 +65,28 @@ pub fn serve(
         instance_context,
         metrics,
         // The shared RocksDB `WriteBufferManager` is shared between the workers.
-        // It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the first worker attempts to initialize it.
-        shared_rocksdb_write_buffer_manager,
+        // It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the
+        // first worker attempts to initialize it.
+        shared_rocksdb_write_buffer_manager: Default::default(),
     };
 
-    let (timely_container, client_builder) = mz_cluster::server::serve::<
-        Config,
-        StorageCommand,
-        StorageResponse,
-    >(generic_config, config)?;
-    let client_builder = {
-        move || {
-            let client: Box<dyn StorageClient> = client_builder();
-            client
-        }
+    let tokio_executor = tokio::runtime::Handle::current();
+    let timely_container = Arc::new(tokio::sync::Mutex::new(None));
+
+    let client_builder = move || {
+        let client = ClusterClient::new(
+            Arc::clone(&timely_container),
+            Arc::clone(&generic_config.persist_clients),
+            generic_config.txns_ctx.clone(),
+            tokio_executor.clone(),
+            Arc::clone(&generic_config.tracing_handle),
+            config.clone(),
+        );
+        let client: Box<dyn StorageClient> = Box::new(client);
+        client
     };
 
-    Ok((timely_container, client_builder))
+    Ok(client_builder)
 }
 
 impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Config {
