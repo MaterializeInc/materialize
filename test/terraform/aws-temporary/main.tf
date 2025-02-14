@@ -11,14 +11,20 @@ provider "aws" {
   region = "us-east-1"
 }
 
+resource "random_password" "db_password" {
+  length  = 32
+  special = false
+}
+
 module "materialize_infrastructure" {
   source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.2.0"
 
   # Basic settings
   # The namespace and environment variables are used to construct the names of the resources
   # e.g. ${namespace}-${environment}-eks and etc.
-  namespace    = "terraform-aws-test"
+  namespace    = "aws-test"
   environment  = "dev"
+  install_materialize_operator = true
 
   # VPC Configuration
   vpc_cidr             = "10.0.0.0/16"
@@ -44,7 +50,7 @@ module "materialize_infrastructure" {
   enable_bucket_encryption = false
 
   # Database Configuration
-  database_password    = "someRANDOMpasswordNOTsecure"
+  database_password    = random_password.db_password.result
   postgres_version     = "15"
   db_instance_class    = "db.t3.micro"
   db_allocated_storage = 20
@@ -59,7 +65,7 @@ module "materialize_infrastructure" {
   # Tags
   tags = {
     Environment = "dev"
-    Project     = "terraform-aws-test"
+    Project     = "aws-test"
     Terraform   = "true"
   }
 }

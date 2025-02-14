@@ -1267,7 +1267,7 @@ steps:
         - ./ci/plugins/scratch-aws-access: ~
         - ./ci/plugins/mzcompose:
             composition: terraform
-            run: aws
+            run: aws-temporary
       branches: "main v*.* lts-v*"
 
     - id: terraform-gcp
@@ -1283,7 +1283,7 @@ steps:
         - ./ci/plugins/scratch-aws-access: ~
         - ./ci/plugins/mzcompose:
             composition: terraform
-            run: gcp
+            run: gcp-temporary
       branches: "main v*.* lts-v*"
 
   - group: "Output consistency"
