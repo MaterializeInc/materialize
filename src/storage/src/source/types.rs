@@ -25,9 +25,9 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
-use mz_timely_util::containers::stack::StackWrapper;
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
+use timely::container::columnation::TimelyStack;
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::progress::Antichain;
 use tokio::sync::Semaphore;
@@ -55,7 +55,7 @@ pub enum ProgressStatisticsUpdate {
 }
 
 pub type StackedCollection<G, T> =
-    Collection<G, T, Diff, StackWrapper<(T, <G as ScopeParent>::Timestamp, Diff)>>;
+    Collection<G, T, Diff, TimelyStack<(T, <G as ScopeParent>::Timestamp, Diff)>>;
 
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {

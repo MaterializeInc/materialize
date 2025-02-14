@@ -559,11 +559,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut final_row = Row::default();
     let mut datum_vec = DatumVec::new();
     let snapshot_updates = raw_data
+        .map::<Vec<_>, _, _>(Clone::clone)
         .distribute()
         .map(move |((oid, output_index, event), time, diff)| {
             let output = &table_info
-                .get(oid)
-                .and_then(|outputs| outputs.get(output_index))
+                .get(&oid)
+                .and_then(|outputs| outputs.get(&output_index))
                 .expect("table_info contains all outputs");
 
             let event = event
@@ -580,7 +581,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     })
                 });
 
-            ((*output_index, event), *time, *diff)
+            ((output_index, event), time, diff)
         })
         .as_collection();
 

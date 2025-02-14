@@ -64,8 +64,9 @@ use mz_repr::Diff;
 use mz_repr::GlobalId;
 use mz_storage_types::errors::{DataflowError, SourceError};
 use mz_storage_types::sources::SourceExport;
-use mz_timely_util::containers::stack::{AccountedStackBuilder, StackWrapper};
+use mz_timely_util::containers::stack::AccountedStackBuilder;
 use serde::{Deserialize, Serialize};
+use timely::container::columnation::TimelyStack;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::core::Partition;
@@ -365,8 +366,8 @@ pub(crate) struct RewindRequest {
 
 type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
     T,
-    AccountedStackBuilder<CapacityContainerBuilder<StackWrapper<(D, T, Diff)>>>,
-    Tee<T, StackWrapper<(D, T, Diff)>>,
+    AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<(D, T, Diff)>>>,
+    Tee<T, TimelyStack<(D, T, Diff)>>,
 >;
 
 async fn return_definite_error(

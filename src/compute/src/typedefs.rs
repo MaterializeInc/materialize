@@ -45,7 +45,6 @@ pub(crate) mod spines {
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::implementations::{Layout, Update};
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
-    use mz_timely_util::containers::stack::StackWrapper;
     use timely::container::columnation::{Columnation, TimelyStack};
     use timely::container::flatcontainer::{FlatStack, Push, Region};
     use timely::progress::Timestamp;
@@ -78,10 +77,10 @@ pub(crate) mod spines {
         U::Diff: Columnation,
     {
         type Target = U;
-        type KeyContainer = StackWrapper<U::Key>;
-        type ValContainer = StackWrapper<U::Val>;
-        type TimeContainer = StackWrapper<U::Time>;
-        type DiffContainer = StackWrapper<U::Diff>;
+        type KeyContainer = TimelyStack<U::Key>;
+        type ValContainer = TimelyStack<U::Val>;
+        type TimeContainer = TimelyStack<U::Time>;
+        type DiffContainer = TimelyStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
 

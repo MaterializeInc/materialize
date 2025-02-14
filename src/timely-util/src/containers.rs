@@ -22,7 +22,6 @@ use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, Me
 use differential_dataflow::Hashable;
 use timely::container::columnation::TimelyStack;
 
-pub mod array;
 pub mod stack;
 
 pub use container::Column;

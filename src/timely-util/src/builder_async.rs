@@ -27,7 +27,7 @@ use std::task::{ready, Context, Poll, Waker};
 use futures_util::task::ArcWake;
 use futures_util::Stream;
 use timely::communication::{Pull, Push};
-use timely::container::columnation::Columnation;
+use timely::container::columnation::{Columnation, TimelyStack};
 use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::ParallelizationContract;
 use timely::dataflow::channels::pushers::Tee;
@@ -42,7 +42,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
 use timely::{Bincode, Container, PartialOrder};
 
-use crate::containers::stack::{AccountedStackBuilder, StackWrapper};
+use crate::containers::stack::AccountedStackBuilder;
 
 /// Builds async operators with generic shape.
 pub struct OperatorBuilder<G: Scope> {
@@ -291,11 +291,11 @@ where
 }
 
 impl<T, D, P>
-    AsyncOutputHandle<T, AccountedStackBuilder<CapacityContainerBuilder<StackWrapper<D>>>, P>
+    AsyncOutputHandle<T, AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<D>>>, P>
 where
     D: timely::Data + Columnation,
     T: Timestamp,
-    P: Push<Message<T, StackWrapper<D>>>,
+    P: Push<Message<T, TimelyStack<D>>>,
 {
     pub const MAX_OUTSTANDING_BYTES: usize = 128 * 1024 * 1024;
 
@@ -303,7 +303,7 @@ where
     /// yield back to timely after [Self::MAX_OUTSTANDING_BYTES] have been produced.
     pub async fn give_fueled<D2>(&self, cap: &Capability<T>, data: D2)
     where
-        StackWrapper<D>: PushInto<D2>,
+        TimelyStack<D>: PushInto<D2>,
     {
         let should_yield = {
             let mut handle = self.handle.borrow_mut();
