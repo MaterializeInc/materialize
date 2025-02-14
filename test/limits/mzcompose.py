@@ -1281,6 +1281,7 @@ class ArrayAgg(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("> SET statement_timeout='300s'")
         print(
             f"""> CREATE TABLE t ({
             ", ".join(
@@ -1498,6 +1499,7 @@ class PostgresSources(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("> SET statement_timeout='300s'")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
