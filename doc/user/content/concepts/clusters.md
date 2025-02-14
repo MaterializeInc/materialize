@@ -77,24 +77,13 @@ Materialize automatically assigns names to replicas (e.g., `r1`, `r2`). You
 can view information about individual replicas in the Materialize console and the system
 catalog.
 
-### Availability guarantees
-
-When provisioning replicas,
-
-- For clusters sized **under `3200cc`**, Materialize guarantees that all
-  provisioned replicas in a cluster are spread across the underlying cloud
-  provider's availability zones.
-
-- For clusters sized at **`3200cc` and above**, even distribution of replicas
-  across availability zones **cannot** be guaranteed.
-
 <a name="sizing-your-clusters"></a>
 
 ## Cluster sizing
 
-When creating a cluster, you must choose its [size](/sql/create-cluster/#size)
-(e.g., `25cc`, `50cc`, `100cc`), which determines its resource allocation
-(CPU, memory, and scratch disk space).
+When [creating a cluster](/sql/create-cluster/), you must choose its size (e.g.,
+`25cc`, `50cc`, `100cc`), which determines its resource allocation (CPU, memory,
+and scratch disk space).
 
 {{% self-managed/materialize-cluster-sizes %}}
 
