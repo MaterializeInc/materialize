@@ -92,7 +92,15 @@ To swap the name of this cluster with another cluster:
 
 ### Cluster configuration
 
-{{% alter-cluster/alter-cluster-options %}}
+Configuration                       | Value      | Description
+------------------------------------|------------|------------------------
+`SIZE`                              | `text`     | The size of the resource allocations for the cluster. Available sizes are: {{< self-managed/create-alter-cluster-sizes-table >}}<br><ul><li>Changing the size of a cluster may incur downtime. For more information, see [Resizing considerations](#resizing).</li><li>Not available for `ALTER CLUSTER ... RESET` since there is no default `SIZE` value.</li></ul><br>
+`REPLICATION FACTOR`                | `int`     | The number of replicas to provision for the cluster. Each replica of the cluster provisions a new pool of compute resources to perform exactly the same computations on exactly the same data. Clusters that contain sources or sinks can only have a replication factor of `0` or `1`. For more information, see [Replication factor considerations](#replication-factor).<br>Default: `1`
+`INTROSPECTION INTERVAL`            | [`interval`](/sql/types/interval/) | The interval at which to collect introspection data. See [Troubleshooting](/ops/troubleshooting) for details about introspection data. The special value `0` entirely disables the gathering of introspection data.<br>Default: `1s`
+`INTROSPECTION DEBUGGING`           | `bool`     | Indicates whether to introspect the gathering of the introspection data.<br>Default: `FALSE`
+`MANAGED`                           | `bool`     | Whether to automatically manage the cluster's replicas based on the configured size and replication factor.<br>If `FALSE`, enables the use of the <em>deprecated</em> [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica) command.<br>Default: `TRUE`
+`SCHEDULE`                          | [`MANUAL`,`ON REFRESH`]     | The [scheduling type](/sql/create-cluster/#scheduling) for the cluster. <br>Default: `MANUAL`
+
 
 ### `WITH` options
 
