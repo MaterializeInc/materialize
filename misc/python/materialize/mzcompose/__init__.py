@@ -49,6 +49,9 @@ ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
     # performance in benchmarks, see for example FastPathLimit scenario: 55%
     # more memory, 5% faster
     "persist_blob_cache_mem_limit_bytes": "1048576",
+    # This would increase the memory usage of many tests, making it harder to
+    # tell small memory increase regressions
+    "persist_blob_cache_scale_with_threads": "false",
 }
 
 
