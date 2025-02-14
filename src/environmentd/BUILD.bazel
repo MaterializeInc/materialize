@@ -302,6 +302,7 @@ rust_test(
     crate_name = "bootstrap_builtin_clusters",
     data = [],
     env = {},
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(
         proc_macro = True,
         proc_macro_dev = True,
