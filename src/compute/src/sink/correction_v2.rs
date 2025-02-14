@@ -132,8 +132,7 @@ use std::rc::Rc;
 use differential_dataflow::trace::implementations::BatchContainer;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
-use mz_timely_util::containers::stack::StackWrapper;
-use timely::container::columnation::Columnation;
+use timely::container::columnation::{Columnation, TimelyStack};
 use timely::container::SizableContainer;
 use timely::progress::Antichain;
 use timely::{Container, PartialOrder};
@@ -786,14 +785,14 @@ impl<D: Data> From<Cursor<D>> for Chain<D> {
 /// spirit.
 struct Chunk<D: Data> {
     /// The contained updates.
-    data: StackWrapper<(D, Timestamp, Diff)>,
+    data: TimelyStack<(D, Timestamp, Diff)>,
     /// Cached value of the current chunk size, for efficient updating of metrics.
     cached_size: Option<LengthAndCapacity>,
 }
 
 impl<D: Data> Default for Chunk<D> {
     fn default() -> Self {
-        let mut data = StackWrapper::default();
+        let mut data = TimelyStack::default();
         data.ensure_capacity(&mut None);
 
         Self {

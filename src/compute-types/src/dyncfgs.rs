@@ -61,13 +61,6 @@ pub const ENABLE_LGALLOC_EAGER_RECLAMATION: Config<bool> = Config::new(
     "Enable lgalloc's eager return behavior.",
 );
 
-/// Enable the chunked stack implementation.
-pub const ENABLE_CHUNKED_STACK: Config<bool> = Config::new(
-    "enable_compute_chunked_stack",
-    false,
-    "Enable the chunked stack implementation in compute.",
-);
-
 /// The interval at which the compute server performs maintenance tasks.
 pub const COMPUTE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
     "compute_server_maintenance_interval",
@@ -191,7 +184,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
-        .add(&ENABLE_CHUNKED_STACK)
         .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)

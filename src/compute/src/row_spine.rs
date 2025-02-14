@@ -27,7 +27,6 @@ mod spines {
     use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
-    use mz_timely_util::containers::stack::StackWrapper;
     use timely::container::columnation::{Columnation, TimelyStack};
 
     use crate::row_spine::{DatumContainer, OffsetOptimized};
@@ -67,8 +66,8 @@ mod spines {
         type Target = U;
         type KeyContainer = DatumContainer;
         type ValContainer = DatumContainer;
-        type TimeContainer = StackWrapper<U::Time>;
-        type DiffContainer = StackWrapper<U::Diff>;
+        type TimeContainer = TimelyStack<U::Time>;
+        type DiffContainer = TimelyStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row>> Layout for RowValLayout<U>
@@ -79,9 +78,9 @@ mod spines {
     {
         type Target = U;
         type KeyContainer = DatumContainer;
-        type ValContainer = StackWrapper<U::Val>;
-        type TimeContainer = StackWrapper<U::Time>;
-        type DiffContainer = StackWrapper<U::Diff>;
+        type ValContainer = TimelyStack<U::Val>;
+        type TimeContainer = TimelyStack<U::Time>;
+        type DiffContainer = TimelyStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row, Val = ()>> Layout for RowLayout<U>
@@ -91,9 +90,9 @@ mod spines {
     {
         type Target = U;
         type KeyContainer = DatumContainer;
-        type ValContainer = StackWrapper<()>;
-        type TimeContainer = StackWrapper<U::Time>;
-        type DiffContainer = StackWrapper<U::Diff>;
+        type ValContainer = TimelyStack<()>;
+        type TimeContainer = TimelyStack<U::Time>;
+        type DiffContainer = TimelyStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
 }
