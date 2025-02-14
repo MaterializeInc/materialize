@@ -5092,6 +5092,7 @@ dependencies = [
  "crossbeam-channel",
  "differential-dataflow",
  "futures",
+ "lgalloc",
  "mz-cluster-client",
  "mz-ore",
  "mz-service",

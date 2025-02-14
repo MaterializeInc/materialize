@@ -45,9 +45,9 @@ use futures::{FutureExt, StreamExt};
 use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
+use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
-use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
 use tracing::{debug, info, warn};
 
 /// Creates communication mesh from cluster config
@@ -119,7 +119,8 @@ where
         process,
         workers,
         BytesRefill {
-            logic: Arc::new(|size| Box::new(vec![0; size])),
+            // logic: Arc::new(|size| Box::new(vec![0; size])),
+            logic: Arc::new(|size| alloc::lgalloc_refill(size)),
             limit: None,
         },
         Arc::new(|_| None),
@@ -372,6 +373,65 @@ async fn await_connection(
                 );
             }
             Ordering::Equal => return Ok((s, peer_index)),
+        }
+    }
+}
+
+mod alloc {
+    pub(crate) fn lgalloc_refill(size: usize) -> Box<LgallocHandle> {
+        match lgalloc::allocate::<u8>(size) {
+            Ok((pointer, capacity, handle)) => {
+                let handle = Some(handle);
+                Box::new(LgallocHandle {
+                    handle,
+                    pointer,
+                    capacity,
+                })
+            }
+            Err(_) => {
+                let mut alloc = vec![0_u8; size];
+                alloc.shrink_to_fit();
+                let pointer = std::ptr::NonNull::new(alloc.as_mut_ptr()).unwrap();
+                std::mem::forget(alloc);
+                Box::new(LgallocHandle {
+                    handle: None,
+                    pointer,
+                    capacity: size,
+                })
+            }
+        }
+    }
+
+    pub(crate) struct LgallocHandle {
+        handle: Option<lgalloc::Handle>,
+        pointer: std::ptr::NonNull<u8>,
+        capacity: usize,
+    }
+
+    impl std::ops::Deref for LgallocHandle {
+        type Target = [u8];
+        #[inline(always)]
+        fn deref(&self) -> &Self::Target {
+            unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), self.capacity) }
+        }
+    }
+
+    impl std::ops::DerefMut for LgallocHandle {
+        #[inline(always)]
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            unsafe { std::slice::from_raw_parts_mut(self.pointer.as_ptr(), self.capacity) }
+        }
+    }
+
+    impl Drop for LgallocHandle {
+        fn drop(&mut self) {
+            if let Some(handle) = self.handle.take() {
+                lgalloc::deallocate(handle);
+            } else {
+                unsafe { Vec::from_raw_parts(self.pointer.as_ptr(), 0, self.capacity) };
+            }
+            self.pointer = std::ptr::NonNull::dangling();
+            self.capacity = 0;
         }
     }
 }
