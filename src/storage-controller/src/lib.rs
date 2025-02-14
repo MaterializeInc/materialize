@@ -1883,10 +1883,10 @@ where
     fn drop_sinks_unvalidated(
         &mut self,
         storage_metadata: &StorageMetadata,
-        mut identifiers: Vec<GlobalId>,
+        mut sinks_to_drop: Vec<GlobalId>,
     ) {
         // Ignore exports that have already been removed.
-        identifiers.retain(|id| self.export(*id).is_ok());
+        sinks_to_drop.retain(|id| self.export(*id).is_ok());
 
         // TODO: ideally we'd advance the write frontier ourselves here, but this function's
         // not yet marked async.
@@ -1894,7 +1894,7 @@ where
         // We don't explicitly remove read capabilities! Downgrading the
         // frontier of the source to `[]` (the empty Antichain), will propagate
         // to the storage dependencies.
-        let drop_policy = identifiers
+        let drop_policy = sinks_to_drop
             .iter()
             .map(|id| (*id, ReadPolicy::ValidFrom(Antichain::new())))
             .collect();
@@ -1905,9 +1905,42 @@ where
         );
         self.set_hold_policies(drop_policy);
 
+        // Record the drop status for all sink drops.
+        //
+        // We also delete the items' statistics objects.
+        //
+        // The locks are held for a short time, only while we do some removals from a map.
+
+        let status_now = mz_ore::now::to_datetime((self.now)());
+
+        // Record the drop status for all pending sink drops.
+        let mut status_updates = vec![];
+        {
+            let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
+            for id in sinks_to_drop.iter() {
+                status_updates.push(StatusUpdate::new(*id, status_now, Status::Dropped));
+                sink_statistics.remove(id);
+            }
+        }
+
+        if !self.read_only {
+            self.append_status_introspection_updates(
+                IntrospectionType::SinkStatusHistory,
+                status_updates,
+            );
+        }
+
+        // Remove collection/export state
+        for id in sinks_to_drop.iter() {
+            tracing::info!(%id, "dropping export state");
+            self.collections
+                .remove(id)
+                .expect("list populated after checking that self.collections contains it");
+        }
+
         // Also let StorageCollections know!
         self.storage_collections
-            .drop_collections_unvalidated(storage_metadata, identifiers);
+            .drop_collections_unvalidated(storage_metadata, sinks_to_drop);
     }
 
     #[instrument(level = "debug")]
@@ -2120,10 +2153,6 @@ where
             }
         }
 
-        // IDs of sinks that were dropped whose statuses should be updated (and statistics
-        // cleared).
-        let mut pending_sink_drops = vec![];
-
         // Process dropped tables in a single batch.
         let mut dropped_table_ids = Vec::new();
         while let Ok(dropped_id) = self.pending_table_handle_drops_rx.try_recv() {
@@ -2148,25 +2177,6 @@ where
             // be cleared out, before we do this post-processing!
             let instance = cluster_id.and_then(|cluster_id| self.instances.get_mut(&cluster_id));
 
-            if read_frontier.is_empty() {
-                if let Some(collection) = self.collections.get(&id) {
-                    if instance.is_some() {
-                        match collection.extra_state {
-                            CollectionStateExtra::Ingestion(_) | CollectionStateExtra::None => {
-                                // Nothing to do
-                            }
-                            CollectionStateExtra::Export(_) => {
-                                pending_sink_drops.push(id);
-                            }
-                        }
-                    }
-                } else if instance.is_none() {
-                    tracing::info!("Compaction command for id {id}, but we don't have a client.");
-                } else {
-                    tracing::debug!("Reference to absent collection {id}");
-                };
-            }
-
             // Note that while collections are dropped, the `client` may already
             // be cleared out, before we do this post-processing!
             if let Some(client) = instance {
@@ -2175,31 +2185,6 @@ where
                     read_frontier.clone(),
                 )]));
             }
-        }
-
-        // Record the drop status for all pending sink drops.
-        //
-        // We also delete the items' statistics objects.
-        //
-        // The locks are held for a short time, only while we do some hash map removals.
-
-        let status_now = mz_ore::now::to_datetime((self.now)());
-
-        // Record the drop status for all pending sink drops.
-        let mut dropped_sinks = vec![];
-        {
-            let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
-            for id in pending_sink_drops.drain(..) {
-                dropped_sinks.push(StatusUpdate::new(id, status_now, Status::Dropped));
-                sink_statistics.remove(&id);
-            }
-        }
-
-        if !self.read_only {
-            self.append_status_introspection_updates(
-                IntrospectionType::SinkStatusHistory,
-                dropped_sinks,
-            );
         }
 
         Ok(updated_frontiers)
