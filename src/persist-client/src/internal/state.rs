@@ -1660,7 +1660,14 @@ where
             return Break(NoOpStateTransition(Since(Antichain::new())));
         }
 
-        let reader_state = self.leased_reader(reader_id);
+        // The only way to have a missing reader in state is if it's been expired... and in that
+        // case, we behave the same as though that reader had been downgraded to the empty antichain.
+        let Some(reader_state) = self.leased_reader(reader_id) else {
+            tracing::warn!(
+                "Leased reader {reader_id} was expired due to inactivity. Did the machine go to sleep?",
+            );
+            return Break(NoOpStateTransition(Since(Antichain::new())));
+        };
 
         // Also use this as an opportunity to heartbeat the reader and downgrade
         // the seqno capability.
@@ -1856,20 +1863,8 @@ where
         Continue(existed)
     }
 
-    fn leased_reader(&mut self, id: &LeasedReaderId) -> &mut LeasedReaderState<T> {
-        self.leased_readers
-            .get_mut(id)
-            // The only (tm) ways to hit this are (1) inventing a LeasedReaderId
-            // instead of getting it from Register or (2) if a lease expired.
-            // (1) is a gross mis-use and (2) may happen if a reader did not get
-            // to heartbeat for a long time. Readers are expected to
-            // heartbeat/downgrade their since regularly.
-            .unwrap_or_else(|| {
-                panic!(
-                    "LeasedReaderId({}) was expired due to inactivity. Did the machine go to sleep?",
-                    id
-                )
-            })
+    fn leased_reader(&mut self, id: &LeasedReaderId) -> Option<&mut LeasedReaderState<T>> {
+        self.leased_readers.get_mut(id)
     }
 
     fn critical_reader(&mut self, id: &CriticalReaderId) -> &mut CriticalReaderState<T> {
@@ -2310,19 +2305,26 @@ where
     pub fn expire_at(&mut self, walltime_ms: EpochMillis) -> ExpiryMetrics {
         let mut metrics = ExpiryMetrics::default();
         let shard_id = self.shard_id();
-        self.collections.leased_readers.retain(|k, v| {
-            let retain = v.last_heartbeat_timestamp_ms + v.lease_duration_ms >= walltime_ms;
+        self.collections.leased_readers.retain(|id, state| {
+            let retain = state.last_heartbeat_timestamp_ms + state.lease_duration_ms >= walltime_ms;
             if !retain {
-                info!("Force expiring reader ({k}) of shard ({shard_id}) due to inactivity");
+                info!(
+                    "Force expiring reader {id} ({}) of shard {shard_id} due to inactivity",
+                    state.debug.purpose
+                );
                 metrics.readers_expired += 1;
             }
             retain
         });
         // critical_readers don't need forced expiration. (In fact, that's the point!)
-        self.collections.writers.retain(|k, v| {
-            let retain = (v.last_heartbeat_timestamp_ms + v.lease_duration_ms) >= walltime_ms;
+        self.collections.writers.retain(|id, state| {
+            let retain =
+                (state.last_heartbeat_timestamp_ms + state.lease_duration_ms) >= walltime_ms;
             if !retain {
-                info!("Force expiring writer ({k}) of shard ({shard_id}) due to inactivity");
+                info!(
+                    "Force expiring writer {id} ({}) of shard {shard_id} due to inactivity",
+                    state.debug.purpose
+                );
                 metrics.writers_expired += 1;
             }
             retain

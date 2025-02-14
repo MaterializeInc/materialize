@@ -1061,14 +1061,6 @@ where
                 Err(seqno) => seqno,
             };
 
-            // There might be some holdup in the next batch being
-            // produced. Perhaps we've quiesced a table or maybe a
-            // dataflow is taking a long time to start up because it has
-            // to read a lot of data. Heartbeat ourself so we don't
-            // accidentally lose our lease while we wait for things to
-            // resume.
-            // self.maybe_heartbeat_reader().await;
-
             // Wait a bit and try again. Intentionally don't ever log
             // this at info level.
             match wake {
