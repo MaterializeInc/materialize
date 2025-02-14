@@ -32,6 +32,7 @@ use futures::stream::{BoxStream, FuturesUnordered, TryStreamExt};
 use itertools::Itertools;
 use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
+use mz_orchestrator::scheduling_config::ServiceSchedulingConfig;
 use mz_orchestrator::{
     CpuLimit, DiskLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
     ServiceEvent, ServiceProcessMetrics, ServiceStatus,
@@ -286,6 +287,7 @@ impl Orchestrator for ProcessOrchestrator {
                 services,
                 service_event_rx,
                 command_tx,
+                scheduling_config: Default::default(),
                 _worker: worker,
             })
         }))
@@ -326,6 +328,7 @@ struct NamespacedProcessOrchestrator {
     services: Arc<Mutex<BTreeMap<String, Vec<ProcessState>>>>,
     service_event_rx: broadcast::Receiver<ServiceEvent>,
     command_tx: mpsc::UnboundedSender<WorkerCommand>,
+    scheduling_config: std::sync::RwLock<ServiceSchedulingConfig>,
     _worker: AbortOnDropHandle<()>,
 }
 
@@ -342,6 +345,9 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         id: &str,
         config: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
+        let scheduling_config: ServiceSchedulingConfig =
+            self.scheduling_config.read().expect("poisoned").clone();
+
         let service = ProcessService {
             run_dir: self.config.service_run_dir(id),
             scale: config.scale,
@@ -350,6 +356,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         self.send_command(WorkerCommand::EnsureService {
             id: id.to_string(),
             config,
+            scheduling_config,
         });
 
         Ok(Box::new(service))
@@ -408,9 +415,9 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
     fn update_scheduling_config(
         &self,
-        _config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
+        config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
     ) {
-        // This orchestrator ignores scheduling constraints.
+        *self.scheduling_config.write().expect("poisoned") = config;
     }
 }
 
@@ -423,6 +430,7 @@ enum WorkerCommand {
     EnsureService {
         id: String,
         config: ServiceConfig,
+        scheduling_config: ServiceSchedulingConfig,
     },
     DropService {
         id: String,
@@ -465,7 +473,11 @@ impl OrchestratorWorker {
         while let Some(cmd) = self.command_rx.recv().await {
             use WorkerCommand::*;
             let result = match cmd {
-                EnsureService { id, config } => self.ensure_service(id, config).await,
+                EnsureService {
+                    id,
+                    config,
+                    scheduling_config,
+                } => self.ensure_service(id, config, scheduling_config).await,
                 DropService { id } => self.drop_service(&id).await,
                 ListServices { result_tx } => {
                     let _ = result_tx.send(self.list_services().await);
@@ -549,21 +561,33 @@ impl OrchestratorWorker {
             availability_zones: _,
             other_replicas_selector: _,
             replicas_selector: _,
-            disk,
+            disk: disk_in,
             disk_limit,
             node_selector: _,
         }: ServiceConfig,
+        scheduling_config: ServiceSchedulingConfig,
     ) -> Result<(), anyhow::Error> {
         let full_id = self.config.full_id(&id);
 
-        // Enable disk if 1) the user requested it when creating the service
-        // *and* 2) the size declared by the system administrator does not
-        // specify a disk limit of zero.
-        //
-        // Arguably we should not allow enabling disk for sizes with a zero disk
-        // limit, but configuring disk on a replica by replica basis is a legacy
-        // option that we hope to remove someday.
-        let disk = disk && disk_limit != Some(DiskLimit::ZERO);
+        // Determining whether to enable disk is subtle because we need to
+        // support historical sizes in the managed service and custom sizes in
+        // self hosted deployments.
+        let disk = {
+            // Whether the user specified `DISK = TRUE` when creating the
+            // replica OR whether the feature flag to force disk is enabled.
+            let user_requested_disk = disk_in || scheduling_config.always_use_disk;
+            // Whether the cluster replica size map provided by the
+            // administrator explicitly indicates that the size does not support
+            // disk.
+            let size_disables_disk = disk_limit == Some(DiskLimit::ZERO);
+            // Enable disk if the user requested it and the size does not
+            // disable it.
+            //
+            // Arguably we should not allow the user to request disk with sizes
+            // that have a zero disk limit, but configuring disk on a replica by
+            // replica basis is a legacy option that we hope to remove someday.
+            user_requested_disk && !size_disables_disk
+        };
 
         let run_dir = self.config.service_run_dir(&id);
         fs::create_dir_all(&run_dir)
