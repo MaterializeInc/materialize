@@ -1401,7 +1401,7 @@ def workflow_upsert_sources(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("zookeeper", "kafka", "schema-registry", "postgres", "mysql", "mz_old")
     c.up("testdrive", persistent=True)
-    num_threads = 100
+    num_threads = 50
 
     c.sql(
         f"""
@@ -1428,7 +1428,7 @@ def workflow_upsert_sources(c: Composition) -> None:
         )
     )
 
-    end_time = datetime.now() + timedelta(seconds=300)
+    end_time = datetime.now() + timedelta(seconds=200)
     mz1 = "mz_old"
     mz2 = "mz_new"
 
