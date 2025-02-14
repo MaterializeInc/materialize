@@ -259,7 +259,7 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
         workers: int,
         scale: int,
         disabled: bool = False,
-        is_cc: bool = False,
+        is_cc: bool = True,
         memory_limit: str | None = None,
     ) -> dict[str, Any]:
         return {

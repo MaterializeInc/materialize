@@ -275,7 +275,7 @@ impl ComputeState {
 
         self.linear_join_spec = LinearJoinSpec::from_config(config);
 
-        if ENABLE_COLUMNATION_LGALLOC.get(config) {
+        if ENABLE_LGALLOC.get(config) {
             if let Some(path) = &self.context.scratch_directory {
                 let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
                 let interval = LGALLOC_BACKGROUND_INTERVAL.get(config);
@@ -306,6 +306,11 @@ impl ComputeState {
         let chunked_stack = ENABLE_CHUNKED_STACK.get(config);
         info!("using chunked stack: {chunked_stack}");
         mz_timely_util::containers::stack::use_chunked_stack(chunked_stack);
+
+        mz_ore::region::ENABLE_LGALLOC_REGION.store(
+            ENABLE_COLUMNATION_LGALLOC.get(config),
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
