@@ -571,7 +571,7 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 - [Views](/concepts/views/)
 - [Idiomatic Materialize SQL
   chart](/transform-data/idiomatic-materialize-sql/appendix/idiomatic-sql-chart/)
-- [Usage & Billing](/administration/billing/#compute)
+- [Usage](/administration/billing/#compute)
 - [`CREATE INDEX`](/sql/create-index/)
 - [`CREATE SCHEMA`](/sql/create-schema/)
 - [`CREATE SOURCE`](/sql/create-source/)
