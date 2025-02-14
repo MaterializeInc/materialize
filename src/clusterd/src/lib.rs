@@ -303,12 +303,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Start storage server.
     let storage_client_builder = mz_storage::serve(
-        mz_cluster::server::ClusterConfig {
-            metrics_registry: metrics_registry.clone(),
-            persist_clients: Arc::clone(&persist_clients),
-            txns_ctx: txns_ctx.clone(),
-            tracing_handle: Arc::clone(&tracing_handle),
-        },
+        &metrics_registry,
+        Arc::clone(&persist_clients),
+        txns_ctx.clone(),
+        Arc::clone(&tracing_handle),
         SYSTEM_TIME.clone(),
         connection_context.clone(),
         StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
@@ -331,12 +329,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Start compute server.
     let compute_client_builder = mz_compute::server::serve(
-        mz_cluster::server::ClusterConfig {
-            metrics_registry,
-            persist_clients,
-            txns_ctx,
-            tracing_handle,
-        },
+        &metrics_registry,
+        persist_clients,
+        txns_ctx,
+        tracing_handle,
         ComputeInstanceContext {
             scratch_directory: args.scratch_directory,
             worker_core_affinity: args.worker_core_affinity,

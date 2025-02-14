@@ -27,6 +27,7 @@ use mz_compute_client::service::ComputeClient;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_ore::halt;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_service::local::LocalActivator;
@@ -60,10 +61,14 @@ pub struct ComputeInstanceContext {
 
 /// Configures the server with compute-specific metrics.
 #[derive(Debug, Clone)]
-pub struct Config {
+struct Config {
+    /// `persist` client cache.
+    pub persist_clients: Arc<PersistClientCache>,
+    /// Context necessary for rendering txn-wal operators.
+    pub txns_ctx: TxnsContext,
+    /// A process-global handle to tracing configuration.
+    pub tracing_handle: Arc<TracingHandle>,
     /// Metrics exposed by compute replicas.
-    // TODO(guswynn): cluster-unification: ensure these stats
-    // also work for storage when merging.
     pub metrics: ComputeMetrics,
     /// Other configuration for compute.
     pub context: ComputeInstanceContext,
@@ -71,22 +76,26 @@ pub struct Config {
 
 /// Initiates a timely dataflow computation, processing compute commands.
 pub fn serve(
-    generic_config: mz_cluster::server::ClusterConfig,
+    metrics_registry: &MetricsRegistry,
+    persist_clients: Arc<PersistClientCache>,
+    txns_ctx: TxnsContext,
+    tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
 ) -> Result<impl Fn() -> Box<dyn ComputeClient>, Error> {
-    let metrics = ComputeMetrics::register_with(&generic_config.metrics_registry);
-    let config = Config { metrics, context };
-
+    let config = Config {
+        persist_clients,
+        txns_ctx,
+        tracing_handle,
+        metrics: ComputeMetrics::register_with(metrics_registry),
+        context,
+    };
     let tokio_executor = tokio::runtime::Handle::current();
     let timely_container = Arc::new(tokio::sync::Mutex::new(None));
 
     let client_builder = move || {
         let client = ClusterClient::new(
             Arc::clone(&timely_container),
-            Arc::clone(&generic_config.persist_clients),
-            generic_config.txns_ctx.clone(),
             tokio_executor.clone(),
-            Arc::clone(&generic_config.tracing_handle),
             config.clone(),
         );
         let client: Box<dyn ComputeClient> = Box::new(client);
@@ -205,9 +214,6 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
             mpsc::UnboundedSender<ComputeResponse>,
             mpsc::UnboundedSender<LocalActivator>,
         )>,
-        persist_clients: Arc<PersistClientCache>,
-        txns_ctx: TxnsContext,
-        tracing_handle: Arc<TracingHandle>,
     ) {
         if config.context.worker_core_affinity {
             set_core_affinity(timely_worker.index());
@@ -221,10 +227,10 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
             client_rx,
             metrics,
             context: config.context,
-            persist_clients,
-            txns_ctx,
+            persist_clients: config.persist_clients,
+            txns_ctx: config.txns_ctx,
             compute_state: None,
-            tracing_handle,
+            tracing_handle: config.tracing_handle,
         }
         .run()
     }

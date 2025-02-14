@@ -9,12 +9,7 @@
 
 //! Types and traits required to setup clusters.
 
-use std::sync::Arc;
-
-use mz_ore::tracing::TracingHandle;
-use mz_persist_client::cache::PersistClientCache;
 use mz_service::local::LocalActivator;
-use mz_txn_wal::operator::TxnsContext;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
@@ -32,8 +27,5 @@ pub trait AsRunnableWorker<C, R> {
             mpsc::UnboundedSender<R>,
             mpsc::UnboundedSender<LocalActivator>,
         )>,
-        persist_clients: Arc<PersistClientCache>,
-        txns_ctx: TxnsContext,
-        tracing_handle: Arc<TracingHandle>,
     );
 }

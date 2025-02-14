@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use mz_cluster::server::ClusterClient;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
@@ -20,7 +21,6 @@ use mz_service::local::LocalActivator;
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
-use timely::communication::initialize::WorkerGuards;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
@@ -29,7 +29,13 @@ use crate::storage_state::{StorageInstanceContext, Worker};
 
 /// Configures a dataflow server.
 #[derive(Clone)]
-pub struct Config {
+struct Config {
+    /// `persist` client cache.
+    pub persist_clients: Arc<PersistClientCache>,
+    /// Context necessary for rendering txn-wal operators.
+    pub txns_ctx: TxnsContext,
+    /// A process-global handle to tracing configuration.
+    pub tracing_handle: Arc<TracingHandle>,
     /// Function to get wall time now.
     pub now: NowFn,
     /// Configuration for source and sink connection.
@@ -43,43 +49,36 @@ pub struct Config {
     pub shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
 
-/// A handle to a running dataflow server.
-///
-/// Dropping this object will block until the dataflow computation ceases.
-pub struct Server {
-    _worker_guards: WorkerGuards<()>,
-}
-
 /// Initiates a timely dataflow computation, processing storage commands.
 pub fn serve(
-    generic_config: mz_cluster::server::ClusterConfig,
+    metrics_registry: &MetricsRegistry,
+    persist_clients: Arc<PersistClientCache>,
+    txns_ctx: TxnsContext,
+    tracing_handle: Arc<TracingHandle>,
     now: NowFn,
     connection_context: ConnectionContext,
     instance_context: StorageInstanceContext,
 ) -> Result<impl Fn() -> Box<dyn StorageClient>, anyhow::Error> {
-    let metrics = StorageMetrics::register_with(&generic_config.metrics_registry);
-
     let config = Config {
+        persist_clients,
+        txns_ctx,
+        tracing_handle,
         now,
         connection_context,
         instance_context,
-        metrics,
+        metrics: StorageMetrics::register_with(metrics_registry),
         // The shared RocksDB `WriteBufferManager` is shared between the workers.
         // It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the
         // first worker attempts to initialize it.
         shared_rocksdb_write_buffer_manager: Default::default(),
     };
-
     let tokio_executor = tokio::runtime::Handle::current();
     let timely_container = Arc::new(tokio::sync::Mutex::new(None));
 
     let client_builder = move || {
         let client = ClusterClient::new(
             Arc::clone(&timely_container),
-            Arc::clone(&generic_config.persist_clients),
-            generic_config.txns_ctx.clone(),
             tokio_executor.clone(),
-            Arc::clone(&generic_config.tracing_handle),
             config.clone(),
         );
         let client: Box<dyn StorageClient> = Box::new(client);
@@ -98,20 +97,17 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
             mpsc::UnboundedSender<StorageResponse>,
             mpsc::UnboundedSender<LocalActivator>,
         )>,
-        persist_clients: Arc<PersistClientCache>,
-        txns_ctx: TxnsContext,
-        tracing_handle: Arc<TracingHandle>,
     ) {
         Worker::new(
             timely_worker,
             client_rx,
             config.metrics,
-            config.now.clone(),
+            config.now,
             config.connection_context,
             config.instance_context,
-            persist_clients,
-            txns_ctx,
-            tracing_handle,
+            config.persist_clients,
+            config.txns_ctx,
+            config.tracing_handle,
             config.shared_rocksdb_write_buffer_manager,
         )
         .run();

@@ -19,12 +19,8 @@ use futures::future;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::halt;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::tracing::TracingHandle;
-use mz_persist_client::cache::PersistClientCache;
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
 use mz_service::local::{LocalActivator, LocalClient};
-use mz_txn_wal::operator::TxnsContext;
 use timely::communication::initialize::WorkerGuards;
 use timely::execute::execute_from;
 use timely::WorkerConfig;
@@ -36,19 +32,6 @@ use crate::communication::initialize_networking;
 
 type PartitionedClient<C, R> = Partitioned<LocalClient<C, R>, C, R>;
 
-/// Configures a cluster server.
-#[derive(Debug)]
-pub struct ClusterConfig {
-    /// Metrics registry through which dataflow metrics will be reported.
-    pub metrics_registry: MetricsRegistry,
-    /// `persist` client cache.
-    pub persist_clients: Arc<PersistClientCache>,
-    /// Context necessary for rendering txn-wal operators.
-    pub txns_ctx: TxnsContext,
-    /// A process-global handle to tracing configuration.
-    pub tracing_handle: Arc<TracingHandle>,
-}
-
 /// A client managing access to the local portion of a Timely cluster
 pub struct ClusterClient<Client, Worker, C, R>
 where
@@ -58,14 +41,8 @@ where
     inner: Option<Client>,
     /// The running timely instance
     timely_container: TimelyContainerRef<C, R>,
-    /// Handle to the persist infrastructure.
-    persist_clients: Arc<PersistClientCache>,
-    /// Context necessary for rendering txn-wal operators.
-    txns_ctx: TxnsContext,
     /// The handle to the Tokio runtime.
     tokio_handle: tokio::runtime::Handle,
-    /// A process-global handle to tracing configuration.
-    tracing_handle: Arc<TracingHandle>,
     worker: Worker,
 }
 
@@ -104,19 +81,13 @@ where
     /// Create a new `ClusterClient`.
     pub fn new(
         timely_container: TimelyContainerRef<C, R>,
-        persist_clients: Arc<PersistClientCache>,
-        txns_ctx: TxnsContext,
         tokio_handle: tokio::runtime::Handle,
-        tracing_handle: Arc<TracingHandle>,
         worker_config: Worker,
     ) -> Self {
         Self {
             timely_container,
             inner: None,
-            persist_clients,
-            txns_ctx,
             tokio_handle,
-            tracing_handle,
             worker: worker_config,
         }
     }
@@ -125,9 +96,6 @@ where
         user_worker_config: Worker,
         config: TimelyConfig,
         epoch: ClusterStartupEpoch,
-        persist_clients: Arc<PersistClientCache>,
-        txns_ctx: TxnsContext,
-        tracing_handle: Arc<TracingHandle>,
         tokio_executor: Handle,
     ) -> Result<TimelyContainer<C, R>, Error> {
         info!("Building timely container with config {config:?}");
@@ -195,18 +163,8 @@ where
             let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
                 .take()
                 .unwrap();
-            let persist_clients = Arc::clone(&persist_clients);
-            let txns_ctx = txns_ctx.clone();
             let user_worker_config = user_worker_config.clone();
-            let tracing_handle = Arc::clone(&tracing_handle);
-            Worker::build_and_run(
-                user_worker_config,
-                timely_worker,
-                client_rx,
-                persist_clients,
-                txns_ctx,
-                tracing_handle,
-            )
+            Worker::build_and_run(user_worker_config, timely_worker, client_rx)
         })
         .map_err(|e| anyhow!("{e}"))?;
 
@@ -230,10 +188,7 @@ where
         // timely_container. As we don't terminate timely workers, the thread join would hang
         // forever, possibly creating a fair share of confusion in the orchestrator.
 
-        let persist_clients = Arc::clone(&self.persist_clients);
-        let txns_ctx = self.txns_ctx.clone();
         let handle = self.tokio_handle.clone();
-        let tracing_handle = Arc::clone(&self.tracing_handle);
 
         let worker_config = self.worker.clone();
         let mut timely_container = self.timely_container.lock().await;
@@ -249,20 +204,12 @@ where
                 info!("Timely already initialized; re-using.",);
             }
             None => {
-                let timely = Self::build_timely(
-                    worker_config,
-                    config,
-                    epoch,
-                    persist_clients,
-                    txns_ctx,
-                    tracing_handle,
-                    handle,
-                )
-                .await
-                .map_err(|e| {
-                    warn!("timely initialization failed: {}", e.display_with_causes());
-                    e
-                })?;
+                let timely = Self::build_timely(worker_config, config, epoch, handle)
+                    .await
+                    .map_err(|e| {
+                        warn!("timely initialization failed: {}", e.display_with_causes());
+                        e
+                    })?;
 
                 *timely_container = Some(timely);
             }
@@ -312,7 +259,6 @@ impl<Client: Debug, Worker: crate::types::AsRunnableWorker<C, R>, C, R> Debug
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClusterClient")
-            .field("persist_clients", &self.persist_clients)
             .field("inner", &self.inner)
             .finish_non_exhaustive()
     }
