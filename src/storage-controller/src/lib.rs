@@ -1003,6 +1003,8 @@ where
                 data_source,
                 collection_metadata: metadata,
                 extra_state,
+                // Default to 1, which is good for tables and webhooks. For
+                // ingestions, this will be updated in run_ingestion.
                 active_copies: 1,
                 wallclock_lag_max: Default::default(),
                 wallclock_lag_metrics,
