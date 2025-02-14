@@ -386,7 +386,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
         input=dedent(
             """
             ! ALTER CLUSTER cluster_with_source set (size='2') WITH (WAIT UNTIL READY (TIMEOUT='10s', ON TIMEOUT ROLLBACK))
-            contains: cannot create more than one replica of clusters containing sources or sinks
+            contains: cannot create more than one replica of a cluster containing sources or sinks
             """
         ),
         no_reset=True,
