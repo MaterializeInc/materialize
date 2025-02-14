@@ -59,10 +59,6 @@ and serve queries.
 
 {{< note >}}
 
-- Each replica incurs cost, calculated as `cluster size *
-  replication factor` per second. See [Usage &
-  billing](/administration/billing/) for more details.
-
 - Increasing the replication factor does **not** increase the cluster's work
   capacity. Replicas are exact copies of one another: each replica must do
   exactly the same work as all the other replicas of the cluster(i.e., maintain
@@ -70,6 +66,8 @@ and serve queries.
 
   To increase the capacity of a cluster, you must increase its
   [size](#cluster-sizing).
+
+- See also [Usage](/administration/billing/).
 
 {{< /note >}}
 
@@ -116,4 +114,4 @@ To gauge the performance and utilization of your clusters, use the
 - [`CREATE CLUSTER`](/sql/create-cluster)
 - [`ALTER CLUSTER`](/sql/alter-cluster)
 - [System clusters](/sql/system-clusters)
-- [Usage & billing](/administration/billing/)
+- [Usage](/administration/billing/)
