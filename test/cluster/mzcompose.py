@@ -87,12 +87,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
-        # TODO: Reenable test-github-8734 when database-issues#8963 is fixed
         if name in (
             "default",
             "test-incident-70",
             "test-concurrent-connections",
-            "test-github-8734",
         ):
             return
         with c.test_case(name):
@@ -3704,9 +3702,11 @@ def check_read_frontier_not_stuck(c: Composition, object_name: str):
         result = c.sql_query(query)
 
     before = int(result[0][0])
-    time.sleep(2)
+    time.sleep(3)
     after = int(c.sql_query(query)[0][0])
-    assert before < after, f"read frontier of {object_name} is stuck"
+    assert (
+        before < after
+    ), f"read frontier of {object_name} is stuck, {before} >= {after}"
 
 
 def workflow_test_refresh_mv_restart(
