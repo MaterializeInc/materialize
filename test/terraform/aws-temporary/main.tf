@@ -11,15 +11,20 @@ provider "aws" {
   region = "us-east-1"
 }
 
+resource "random_password" "db_password" {
+  length  = 32
+  special = false
+}
+
 module "materialize_infrastructure" {
-  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.1.4"
+  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.2.0"
 
   # Basic settings
+  # The namespace and environment variables are used to construct the names of the resources
+  # e.g. ${namespace}-${environment}-eks and etc.
+  namespace    = "aws-test"
   environment  = "dev"
-  vpc_name     = "terraform-aws-test-vpc"
-  cluster_name = "terraform-aws-test-cluster"
-  mz_iam_service_account_name = "terraform-aws-test-user"
-  mz_iam_role_name = "terraform-aws-test-s3-role"
+  install_materialize_operator = true
 
   helm_values = {
       defaultReplicationFactor = {
@@ -46,14 +51,15 @@ module "materialize_infrastructure" {
   node_group_capacity_type  = "ON_DEMAND"
 
   # Storage Configuration
-  bucket_name              = "terraform-aws-test-storage-${random_id.suffix.hex}"
-  enable_bucket_versioning = true
-  enable_bucket_encryption = true
-  bucket_force_destroy     = true
+  bucket_force_destroy = true
+
+  # For testing purposes, we are disabling encryption and versioning to allow for easier cleanup
+  # This should be enabled in production environments for security and data integrity
+  enable_bucket_versioning = false
+  enable_bucket_encryption = false
 
   # Database Configuration
-  database_password    = "someRANDOMpasswordNOTsecure"
-  db_identifier        = "terraform-aws-test-metadata-db"
+  database_password    = random_password.db_password.result
   postgres_version     = "15"
   db_instance_class    = "db.t3.micro"
   db_allocated_storage = 20
@@ -68,7 +74,7 @@ module "materialize_infrastructure" {
   # Tags
   tags = {
     Environment = "dev"
-    Project     = "terraform-aws-test"
+    Project     = "aws-test"
     Terraform   = "true"
   }
 }
