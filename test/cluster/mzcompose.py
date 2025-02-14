@@ -2532,6 +2532,16 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
+    def get_compute_collection_count(self, type_: str, hydrated: str) -> float:
+        metrics = self.with_name("mz_compute_collection_count")
+        values = [
+            v
+            for k, v in metrics.items()
+            if f'type="{type_}"' in k and f'hydrated="{hydrated}"' in k
+        ]
+        assert len(values) == 1
+        return values[0]
+
 
 def workflow_test_replica_metrics(c: Composition) -> None:
     """Test metrics exposed by replicas."""
@@ -2637,9 +2647,32 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         mv_correction_max_cap_per_worker > 0
     ), f"unexpected persist sink max correction capacity per worker: {mv_correction_max_cap_per_worker}"
 
-    # Can take a few seconds, don't request the metrics too quickly
-    time.sleep(2)
     assert metrics.get_last_command_received("compute") >= before_connection_time
+
+    count = metrics.get_compute_collection_count("log", "0")
+    assert count == 0, "unexpected number of unhydrated log collections"
+    count = metrics.get_compute_collection_count("log", "1")
+    assert count > 0, "unexpected number of hydrated log collections"
+    count = metrics.get_compute_collection_count("user", "0")
+    assert count == 0, "unexpected number of unhydrated user collections"
+    count = metrics.get_compute_collection_count("user", "1")
+    assert count == 2, "unexpected number of hydrated user collections"
+
+    # Check that collection metrics update when collections are dropped.
+    c.sql(
+        """
+        DROP INDEX idx;
+        DROP MATERIALIZED VIEW mv;
+        """
+    )
+
+    time.sleep(2)
+    metrics = fetch_metrics()
+
+    count = metrics.get_compute_collection_count("user", "0")
+    assert count == 0, "unexpected number of unhydrated user collections"
+    count = metrics.get_compute_collection_count("user", "1")
+    assert count == 0, "unexpected number of hydrated user collections"
 
 
 def workflow_test_compute_controller_metrics(c: Composition) -> None:

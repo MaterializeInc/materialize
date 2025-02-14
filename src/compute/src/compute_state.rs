@@ -65,7 +65,7 @@ use uuid::Uuid;
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
-use crate::metrics::WorkerMetrics;
+use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
@@ -507,7 +507,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // Initialize compute and logging state for each object.
         for object_id in dataflow.export_ids() {
             let is_subscribe_or_copy = subscribe_copy_ids.contains(&object_id);
-            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of.clone());
+            let metrics = self.compute_state.metrics.for_collection(object_id);
+            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of.clone(), metrics);
 
             if let Some(logger) = self.compute_state.compute_logger.clone() {
                 let logging = CollectionLogging::new(
@@ -659,7 +660,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             // Initialize compute and logging state for the logging index.
             let is_subscribe_or_copy = false;
             let as_of = Antichain::from_elem(Timestamp::MIN);
-            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of);
+            let metrics = self.compute_state.metrics.for_collection(id);
+            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of, metrics);
 
             let logging =
                 CollectionLogging::new(id, logger.clone(), dataflow_index, std::iter::empty());
@@ -1624,10 +1626,16 @@ pub struct CollectionState {
     pub compute_probe: Option<probe::Handle<Timestamp>>,
     /// Logging state maintained for this collection.
     logging: Option<CollectionLogging>,
+    /// Metrics tracked for this collection.
+    metrics: CollectionMetrics,
 }
 
 impl CollectionState {
-    fn new(is_subscribe_or_copy: bool, as_of: Antichain<Timestamp>) -> Self {
+    fn new(
+        is_subscribe_or_copy: bool,
+        as_of: Antichain<Timestamp>,
+        metrics: CollectionMetrics,
+    ) -> Self {
         Self {
             reported_frontiers: ReportedFrontiers::new(),
             is_subscribe_or_copy,
@@ -1637,6 +1645,7 @@ impl CollectionState {
             input_probes: Default::default(),
             compute_probe: None,
             logging: None,
+            metrics,
         }
     }
 
@@ -1688,6 +1697,7 @@ impl CollectionState {
             if let Some(logging) = &mut self.logging {
                 logging.set_hydrated();
             }
+            self.metrics.record_collection_hydrated();
         }
     }
 
