@@ -19,6 +19,10 @@ use std::fmt::{Debug, Formatter};
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 
+/// Enable allocations through `new_auto` to use lgalloc. `new_mmap` will always use lgalloc.
+pub const ENABLE_LGALLOC_REGION: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// A region allocator which holds items at stable memory locations.
 ///
 /// Items once inserted will not be moved, and their locations in memory
@@ -253,11 +257,14 @@ impl<T> Region<T> {
     /// Returns a [`Region::MMap`] if possible, and falls back to [`Region::Heap`] otherwise.
     #[must_use]
     pub fn new_auto(capacity: usize) -> Region<T> {
-        match Region::new_mmap(capacity) {
-            Ok(r) => return r,
-            Err(lgalloc::AllocError::Disabled) | Err(lgalloc::AllocError::InvalidSizeClass(_)) => {}
-            Err(e) => {
-                eprintln!("lgalloc error: {e}, falling back to heap");
+        if ENABLE_LGALLOC_REGION.load(std::sync::atomic::Ordering::Relaxed) {
+            match Region::new_mmap(capacity) {
+                Ok(r) => return r,
+                Err(lgalloc::AllocError::Disabled)
+                | Err(lgalloc::AllocError::InvalidSizeClass(_)) => {}
+                Err(e) => {
+                    eprintln!("lgalloc error: {e}, falling back to heap");
+                }
             }
         }
         // Fall-through
