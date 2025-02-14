@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
-use mz_cluster::server::ClusterClient;
+use mz_cluster::client::ClusterClient;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;

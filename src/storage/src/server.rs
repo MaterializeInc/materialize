@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use mz_cluster::server::ClusterClient;
+use mz_cluster::client::ClusterClient;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
