@@ -24,6 +24,15 @@ module "materialize_infrastructure" {
   environment  = "dev"
   install_materialize_operator = true
 
+  helm_values = {
+      defaultReplicationFactor = {
+          system = 1
+          probe = 1
+          support = 1
+          analytics = 1
+      }
+  }
+
   # VPC Configuration
   vpc_cidr             = "10.0.0.0/16"
   availability_zones   = ["us-east-1a", "us-east-1b"]
