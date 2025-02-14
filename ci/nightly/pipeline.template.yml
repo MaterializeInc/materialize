@@ -367,7 +367,7 @@ steps:
         label: "Product limits"
         depends_on: build-x86_64
         agents:
-          queue: hetzner-x86-64-dedi-8cpu-32gb
+          queue: hetzner-x86-64-dedi-16cpu-64gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: limits
