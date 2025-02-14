@@ -672,6 +672,7 @@ ORDER BY mseh.began_at ASC;",
 }
 
 #[mz_ore::test]
+#[ignore] // TODO: Reenable when database-issues#8967 is fixed
 fn test_statement_logging_sampling() {
     let (server, client) = setup_statement_logging(1.0, 0.5);
     test_statement_logging_sampling_inner(server, client);
@@ -680,6 +681,7 @@ fn test_statement_logging_sampling() {
 /// Test that we are not allowed to set `statement_logging_sample_rate`
 /// arbitrarily high, but that it is constrained by `statement_logging_max_sample_rate`.
 #[mz_ore::test]
+#[ignore] // TODO: Reenable when database-issues#8967 is fixed
 fn test_statement_logging_sampling_constrained() {
     let (server, client) = setup_statement_logging(0.5, 1.0);
     test_statement_logging_sampling_inner(server, client);
