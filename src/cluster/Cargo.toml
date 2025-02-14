@@ -15,6 +15,7 @@ async-trait = "0.1.83"
 crossbeam-channel = "0.5.14"
 differential-dataflow = "0.13.6"
 futures = "0.3.25"
+lgalloc = "0.4.0"
 mz-cluster-client = { path = "../cluster-client" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
 mz-service = { path = "../service" }
