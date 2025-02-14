@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 # The parts of the file between the BEGIN HAKARI SECTION and END HAKARI SECTION
 # comments are managed by hakari.
 #

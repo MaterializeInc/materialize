@@ -92,7 +92,9 @@ WARN_CLIPPY_LINTS = [
     "todo",
     # Wildcard dependencies are, by definition, incorrect. It is impossible
     # to be compatible with all future breaking changes in a crate.
-    "wildcard_dependencies",
+    #
+    # TODO(parkmycar): Re-enable this lint when it's supported in Bazel.
+    # "wildcard_dependencies",
     # Zero-prefixed literals may be incorrectly interpreted as octal literals.
     "zero_prefixed_literal",
     # Purely redundant tokens.

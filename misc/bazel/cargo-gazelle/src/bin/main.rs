@@ -16,7 +16,9 @@ use cargo_gazelle::args::Args;
 use cargo_gazelle::config::{CrateConfig, GlobalConfig};
 use cargo_gazelle::context::CrateContext;
 use cargo_gazelle::header::BazelHeader;
-use cargo_gazelle::targets::{CargoBuildScript, RustBinary, RustLibrary, RustTarget, RustTest};
+use cargo_gazelle::targets::{
+    CargoBuildScript, ExtractCargoLints, RustBinary, RustLibrary, RustTarget, RustTest,
+};
 use cargo_gazelle::BazelBuildFile;
 use cargo_toml::Manifest;
 use clap::Parser;
@@ -181,18 +183,17 @@ fn generage_build_bazel<'a>(
 
     let build_script = CargoBuildScript::generate(config, &crate_context, &crate_config, package)?;
     let library = RustLibrary::generate(config, package, &crate_config, build_script.as_ref())?;
-
     let integration_tests: Vec<_> = package
         .build_targets()
         .filter(|target| matches!(target.id(), BuildTargetId::Test(_)))
         .map(|target| RustTest::integration(config, package, &crate_config, &target))
         .collect::<Result<_, _>>()?;
-
     let binaries: Vec<_> = package
         .build_targets()
         .filter(|target| matches!(target.id(), BuildTargetId::Binary(_)))
         .map(|target| RustBinary::generate(config, package, &crate_config, &target))
         .collect::<Result<_, _>>()?;
+    let lints = ExtractCargoLints::generate();
 
     #[allow(clippy::as_conversions)]
     let targets: Vec<Box<dyn RustTarget>> = [Box::new(library) as Box<dyn RustTarget>]
@@ -213,6 +214,7 @@ fn generage_build_bazel<'a>(
                 .map(|t| Box::new(t) as Box<dyn RustTarget>),
         )
         .chain(additive_content.map(|t| Box::new(t) as Box<dyn RustTarget>))
+        .chain(std::iter::once(lints).map(|t| Box::new(t) as Box<dyn RustTarget>))
         .collect();
 
     Ok(Some(BazelBuildFile {

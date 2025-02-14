@@ -10,6 +10,7 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "extract_cargo_lints")
 load("@rules_rust//rust:defs.bzl", "rust_binary")
 
 package(default_visibility = ["//visibility:public"])
@@ -26,6 +27,7 @@ rust_binary(
     data = [],
     env = {},
     features = [],
+    lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
@@ -34,4 +36,10 @@ rust_binary(
         "//src/clusterd:mz_clusterd",
         "//src/environmentd:mz_environmentd",
     ] + all_crate_deps(normal = True),
+)
+
+extract_cargo_lints(
+    name = "lints",
+    manifest = "Cargo.toml",
+    workspace = "@//:Cargo.toml",
 )
