@@ -576,7 +576,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     });
 
     // Distribute the raw slot data to all workers.
-    let data_stream = data_stream.distribute();
+    let data_stream = data_stream.map::<Vec<_>, _, _>(Clone::clone).distribute();
 
     // We now process the slot updates and apply the cast expressions
     let mut final_row = Row::default();
@@ -584,8 +584,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let replication_updates = data_stream
         .map(move |((oid, output_index, event), time, diff)| {
             let output = &table_info
-                .get(oid)
-                .and_then(|outputs| outputs.get(output_index))
+                .get(&oid)
+                .and_then(|outputs| outputs.get(&output_index))
                 .expect("table_info contains all outputs");
             let event = event.as_ref().map_err(|e| e.clone()).and_then(|row| {
                 let mut datums = datum_vec.borrow();
@@ -601,7 +601,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 })
             });
 
-            ((*output_index, event), *time, *diff)
+            ((output_index, event), time, diff)
         })
         .as_collection();
 
