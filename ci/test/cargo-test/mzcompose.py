@@ -93,8 +93,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         POSTGRES_URL=postgres_url,
         COCKROACH_URL=cockroach_url,
         MZ_SOFT_ASSERTIONS="1",
-        MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mz-test-persist-1d-lifecycle-delete",
-        MZ_S3_UPLOADER_TEST_S3_BUCKET="mz-test-1d-lifecycle-delete",
+        # For now we are running cargo test in CI on Hetzner, and don't have access
+        # to the S3 buckets from there, so don't run the tests requiring them.
+        # TODO: We could run against minio instead to get this coverage
+        # MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mz-test-persist-1d-lifecycle-delete",
+        # MZ_S3_UPLOADER_TEST_S3_BUCKET="mz-test-1d-lifecycle-delete",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_AZURE_CONTAINER="mz-test-azure",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=cockroach_url,
     )
