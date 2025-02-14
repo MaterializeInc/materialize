@@ -3704,9 +3704,9 @@ def check_read_frontier_not_stuck(c: Composition, object_name: str):
         result = c.sql_query(query)
 
     before = int(result[0][0])
-    time.sleep(2)
+    time.sleep(3)
     after = int(c.sql_query(query)[0][0])
-    assert before < after, f"read frontier of {object_name} is stuck"
+    assert before < after, f"read frontier of {object_name} is stuck, {before} >= {after}"
 
 
 def workflow_test_refresh_mv_restart(
