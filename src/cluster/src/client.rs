@@ -106,14 +106,13 @@ where
         // timely_container. As we don't terminate timely workers, the thread join would hang
         // forever, possibly creating a fair share of confusion in the orchestrator.
 
-        let handle = self.tokio_handle.clone();
-
         let mut timely_container = self.timely_container.lock().await;
         match &*timely_container {
             Some(existing) => {
                 if config != existing.config {
                     halt!(
-                        "new timely configuration does not match existing timely configuration:\n{:?}\nvs\n{:?}",
+                        "new timely configuration does not match existing timely configuration: \
+                         \n{:?}\nvs\n{:?}",
                         config,
                         existing.config,
                     );
@@ -123,11 +122,10 @@ where
             None => {
                 let timely = self
                     .cluster_spec
-                    .build_cluster(config, epoch, handle)
+                    .build_cluster(config, epoch, self.tokio_handle.clone())
                     .await
-                    .map_err(|e| {
-                        warn!("timely initialization failed: {}", e.display_with_causes());
-                        e
+                    .inspect_err(|e| {
+                        warn!("timely initialization failed: {}", e.display_with_causes())
                     })?;
 
                 *timely_container = Some(timely);
@@ -312,7 +310,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
                 .unwrap();
             spec.run_worker(timely_worker, client_rx);
         })
-        .map_err(|e| anyhow!("{e}"))?;
+        .map_err(|e| anyhow!(e))?;
 
         Ok(TimelyContainer {
             config,
