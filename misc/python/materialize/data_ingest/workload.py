@@ -25,6 +25,7 @@ from materialize.data_ingest.definition import (
     Upsert,
 )
 from materialize.data_ingest.executor import (
+    KafkaExecutor,
     PgExecutor,
     PrintExecutor,
 )
@@ -285,7 +286,14 @@ def execute_workload(
 
     executors = [
         executor_class(
-            num, ports, fields, "materialize", mz_service=workload.mz_service
+            num,
+            ports,
+            fields,
+            "materialize",
+            mz_service=workload.mz_service,
+            cluster=(
+                "quickstart" if executor_class == KafkaExecutor else "singlereplica"
+            ),
         )
         for executor_class in [PgExecutor] + executor_classes
     ]
