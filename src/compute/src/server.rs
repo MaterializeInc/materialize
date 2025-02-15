@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
-use mz_cluster::client::ClusterClient;
+use mz_cluster::client::{ClusterClient, ClusterSpec};
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
@@ -205,9 +205,12 @@ struct Worker<'w, A: Allocate> {
     context: ComputeInstanceContext,
 }
 
-impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Config {
-    fn build_and_run<A: Allocate + 'static>(
-        config: Self,
+impl ClusterSpec for Config {
+    type Command = ComputeCommand;
+    type Response = ComputeResponse;
+
+    fn run_worker<A: Allocate + 'static>(
+        &self,
         timely_worker: &mut TimelyWorker<A>,
         client_rx: crossbeam_channel::Receiver<(
             crossbeam_channel::Receiver<ComputeCommand>,
@@ -215,22 +218,22 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
             mpsc::UnboundedSender<LocalActivator>,
         )>,
     ) {
-        if config.context.worker_core_affinity {
+        if self.context.worker_core_affinity {
             set_core_affinity(timely_worker.index());
         }
 
         let worker_id = timely_worker.index();
-        let metrics = config.metrics.for_worker(worker_id);
+        let metrics = self.metrics.for_worker(worker_id);
 
         Worker {
             timely_worker,
             client_rx,
             metrics,
-            context: config.context,
-            persist_clients: config.persist_clients,
-            txns_ctx: config.txns_ctx,
+            context: self.context.clone(),
+            persist_clients: Arc::clone(&self.persist_clients),
+            txns_ctx: self.txns_ctx.clone(),
             compute_state: None,
-            tracing_handle: config.tracing_handle,
+            tracing_handle: Arc::clone(&self.tracing_handle),
         }
         .run()
     }

@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use mz_cluster::client::ClusterClient;
+use mz_cluster::client::{ClusterClient, ClusterSpec};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
@@ -21,6 +21,7 @@ use mz_service::local::LocalActivator;
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
+use timely::communication::Allocate;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
@@ -88,9 +89,12 @@ pub fn serve(
     Ok(client_builder)
 }
 
-impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Config {
-    fn build_and_run<A: timely::communication::Allocate>(
-        config: Self,
+impl ClusterSpec for Config {
+    type Command = StorageCommand;
+    type Response = StorageResponse;
+
+    fn run_worker<A: Allocate + 'static>(
+        &self,
         timely_worker: &mut TimelyWorker<A>,
         client_rx: crossbeam_channel::Receiver<(
             crossbeam_channel::Receiver<StorageCommand>,
@@ -101,14 +105,14 @@ impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Co
         Worker::new(
             timely_worker,
             client_rx,
-            config.metrics,
-            config.now,
-            config.connection_context,
-            config.instance_context,
-            config.persist_clients,
-            config.txns_ctx,
-            config.tracing_handle,
-            config.shared_rocksdb_write_buffer_manager,
+            self.metrics.clone(),
+            self.now.clone(),
+            self.connection_context.clone(),
+            self.instance_context.clone(),
+            Arc::clone(&self.persist_clients),
+            self.txns_ctx.clone(),
+            Arc::clone(&self.tracing_handle),
+            self.shared_rocksdb_write_buffer_manager.clone(),
         )
         .run();
     }
