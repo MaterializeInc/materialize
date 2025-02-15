@@ -9202,7 +9202,6 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper 0.1.2",
- "system-configuration",
  "tokio",
  "tokio-native-tls",
  "tokio-util",
