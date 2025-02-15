@@ -63,9 +63,7 @@ use mz_storage_types::connections::{
     SshConnection,
 };
 use mz_storage_types::instances::StorageInstanceId;
-use mz_storage_types::sinks::{
-    S3SinkFormat, SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection,
-};
+use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
     SourceDesc, SourceExportDataConfig, SourceExportDetails, Timeline,
 };
@@ -1749,7 +1747,6 @@ pub struct Sink {
     pub from: GlobalId,
     /// Type of connection to the external service we sink into.
     pub connection: StorageSinkConnection<ReferencedConnection>,
-    pub partition_strategy: SinkPartitionStrategy,
     // TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
     pub version: u64,

@@ -9,8 +9,7 @@
 
 $ set-arg-default single-replica-cluster=quickstart
 
-# Test the PARTITION BY option for Kafka sinks, which allows specifying a custom
-# partition strategy.
+# Test the PARTITION BY option for Kafka sinks
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_kafka_sink_partition_by = true

@@ -1288,7 +1288,6 @@ impl Coordinator {
             global_id,
             from: sink.from,
             connection: sink.connection,
-            partition_strategy: sink.partition_strategy,
             envelope: sink.envelope,
             version: sink.version,
             with_snapshot,
@@ -3562,7 +3561,6 @@ impl Coordinator {
             connection: sink.connection.clone(),
             envelope: sink.envelope,
             version: sink.version,
-            partition_strategy: sink.partition_strategy.clone(),
             with_snapshot,
             resolved_ids: ctx.resolved_ids.clone(),
             cluster_id: in_cluster,
@@ -3600,7 +3598,6 @@ impl Coordinator {
             as_of,
             with_snapshot,
             version: sink.version,
-            partition_strategy: sink.partition_strategy,
             from_storage_metadata: (),
             to_storage_metadata: (),
         };
