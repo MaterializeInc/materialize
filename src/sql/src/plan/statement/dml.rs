@@ -564,6 +564,7 @@ pub fn plan_explain_plan(
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
+        mz_sql_parser::ast::ExplainFormat::Sql => ExplainFormat::Sql,
     };
     let stage = explain.stage();
 
@@ -676,6 +677,7 @@ pub fn plan_explain_timestamp(
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
+        mz_sql_parser::ast::ExplainFormat::Sql => ExplainFormat::Sql,
     };
 
     let raw_plan = {
