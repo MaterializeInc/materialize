@@ -2962,8 +2962,8 @@ impl ScalarType {
                         })
             }
             //////////////// todo: comment
-            (String, VarChar {max_length: None}) => true,
-            (VarChar {max_length: None}, String) => true,
+            (String, VarChar { max_length: None }) => true,
+            (VarChar { max_length: None }, String) => true,
             (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
         }
     }

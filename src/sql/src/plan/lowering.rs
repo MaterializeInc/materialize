@@ -969,16 +969,9 @@ impl HirScalarExpr {
                             )?),
                         }
                     } else {
-                        expr.applied_to(
-                            id_gen,
-                            col_map,
-                            cte_map,
-                            inner,
-                            subquery_map,
-                            context,
-                        )?
+                        expr.applied_to(id_gen, col_map, cte_map, inner, subquery_map, context)?
                     }
-                },
+                }
                 CallBinary { func, expr1, expr2 } => SS::CallBinary {
                     func,
                     expr1: Box::new(expr1.applied_to(
