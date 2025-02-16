@@ -117,6 +117,18 @@ pub const ENABLE_EXPRESSION_CACHE: Config<bool> = Config::new(
     "Use a cache to store optimized expressions to help speed up start times.",
 );
 
+/// CYA to disable tiered storage for the progress topic of a Kafka sink, if the downstream system
+/// is RedPanda.
+///
+/// We've encountered a number of issues with tiered storage not working correctly for the progress
+/// topic specifically, this has caused incidents as the sink is unable to restart.
+pub const KAFKA_REDPANDA_PROGRESS_TOPIC_DISABLE_TIERED_STORAGE: Config<bool> = Config::new(
+    "kafka_redpanda_progress_topic_disable_tiered_storage",
+    true,
+    "If we disable tiered storage for the progress topic of a Kafka sink. \
+        Only takes effect if the downstream system is RedPanda.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -135,4 +147,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&DEFAULT_SINK_PARTITION_STRATEGY)
         .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
         .add(&ENABLE_EXPRESSION_CACHE)
+        .add(&KAFKA_REDPANDA_PROGRESS_TOPIC_DISABLE_TIERED_STORAGE)
 }
