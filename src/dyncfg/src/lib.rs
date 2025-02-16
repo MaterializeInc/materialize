@@ -319,6 +319,8 @@ pub enum ConfigVal {
     String(String),
     /// A `Duration` value.
     Duration(Duration),
+    /// An `Option<Duration>` value.
+    OptDuration(Option<Duration>),
     /// A JSON value.
     Json(serde_json::Value),
 }
@@ -340,6 +342,7 @@ enum ConfigValAtomic {
     F64(Arc<AtomicU64>),
     String(Arc<RwLock<String>>),
     Duration(Arc<RwLock<Duration>>),
+    OptDuration(Arc<RwLock<Option<Duration>>>),
     Json(Arc<RwLock<serde_json::Value>>),
 }
 
@@ -353,6 +356,7 @@ impl From<ConfigVal> for ConfigValAtomic {
             ConfigVal::F64(x) => ConfigValAtomic::F64(Arc::new(AtomicU64::new(x.to_bits()))),
             ConfigVal::String(x) => ConfigValAtomic::String(Arc::new(RwLock::new(x))),
             ConfigVal::Duration(x) => ConfigValAtomic::Duration(Arc::new(RwLock::new(x))),
+            ConfigVal::OptDuration(x) => ConfigValAtomic::OptDuration(Arc::new(RwLock::new(x))),
             ConfigVal::Json(x) => ConfigValAtomic::Json(Arc::new(RwLock::new(x))),
         }
     }
@@ -370,6 +374,9 @@ impl ConfigValAtomic {
                 ConfigVal::String(x.read().expect("lock poisoned").clone())
             }
             ConfigValAtomic::Duration(x) => ConfigVal::Duration(*x.read().expect("lock poisoned")),
+            ConfigValAtomic::OptDuration(x) => {
+                ConfigVal::OptDuration(*x.read().expect("lock poisoned"))
+            }
             ConfigValAtomic::Json(x) => ConfigVal::Json(x.read().expect("lock poisoned").clone()),
         }
     }
@@ -389,6 +396,9 @@ impl ConfigValAtomic {
             (ConfigValAtomic::Duration(x), ConfigVal::Duration(val)) => {
                 *x.write().expect("lock poisoned") = val
             }
+            (ConfigValAtomic::OptDuration(x), ConfigVal::OptDuration(val)) => {
+                *x.write().expect("lock poisoned") = val
+            }
             (ConfigValAtomic::Json(x), ConfigVal::Json(val)) => {
                 *x.write().expect("lock poisoned") = val
             }
@@ -399,6 +409,7 @@ impl ConfigValAtomic {
             | (ConfigValAtomic::F64(_), val)
             | (ConfigValAtomic::String(_), val)
             | (ConfigValAtomic::Duration(_), val)
+            | (ConfigValAtomic::OptDuration(_), val)
             | (ConfigValAtomic::Json(_), val) => {
                 panic!("attempted to store {val:?} value in {self:?} parameter")
             }
@@ -476,7 +487,8 @@ mod impls {
     use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
     use crate::{
-        proto_config_val, ConfigDefault, ConfigSet, ConfigType, ConfigVal, ProtoOptionU64,
+        proto_config_val, ConfigDefault, ConfigSet, ConfigType, ConfigVal, ProtoOptionDuration,
+        ProtoOptionU64,
     };
 
     impl ConfigType for bool {
@@ -630,6 +642,30 @@ mod impls {
         }
     }
 
+    impl ConfigType for Option<Duration> {
+        fn from_val(val: ConfigVal) -> Self {
+            match val {
+                ConfigVal::OptDuration(x) => x,
+                x => panic!("expected Option<Duration> value got {:?}", x),
+            }
+        }
+
+        fn parse(s: &str) -> Result<Self, String> {
+            if s.is_empty() {
+                Ok(None)
+            } else {
+                let val = humantime::parse_duration(s).map_err(|e| e.to_string())?;
+                Ok(Some(val))
+            }
+        }
+    }
+
+    impl From<Option<Duration>> for ConfigVal {
+        fn from(val: Option<Duration>) -> ConfigVal {
+            ConfigVal::OptDuration(val)
+        }
+    }
+
     impl ConfigType for serde_json::Value {
         fn from_val(val: ConfigVal) -> Self {
             match val {
@@ -662,6 +698,9 @@ mod impls {
                 ConfigVal::F64(x) => Val::F64(*x),
                 ConfigVal::String(x) => Val::String(x.into_proto()),
                 ConfigVal::Duration(x) => Val::Duration(x.into_proto()),
+                ConfigVal::OptDuration(x) => Val::OptDuration(ProtoOptionDuration {
+                    val: x.as_ref().map(RustType::into_proto),
+                }),
                 ConfigVal::Json(x) => Val::Json(x.to_string()),
             };
             Some(val)
@@ -678,6 +717,9 @@ mod impls {
                 Some(proto_config_val::Val::F64(x)) => ConfigVal::F64(x),
                 Some(proto_config_val::Val::String(x)) => ConfigVal::String(x),
                 Some(proto_config_val::Val::Duration(x)) => ConfigVal::Duration(x.into_rust()?),
+                Some(proto_config_val::Val::OptDuration(ProtoOptionDuration { val })) => {
+                    ConfigVal::OptDuration(val.map(ProtoType::into_rust).transpose()?)
+                }
                 Some(proto_config_val::Val::Json(x)) => ConfigVal::Json(serde_json::from_str(&x)?),
                 None => {
                     return Err(TryFromProtoError::unknown_enum_variant(
@@ -712,6 +754,8 @@ mod tests {
     const F64: Config<f64> = Config::new("f64", 5.0, "");
     const STRING: Config<&str> = Config::new("string", "a", "");
     const DURATION: Config<Duration> = Config::new("duration", Duration::from_nanos(3), "");
+    const OPT_DURATION: Config<Option<Duration>> =
+        Config::new("duration", Some(Duration::from_nanos(5)), "");
     const JSON: Config<fn() -> serde_json::Value> =
         Config::new("json", || serde_json::json!({}), "");
 
@@ -725,6 +769,7 @@ mod tests {
             .add(&F64)
             .add(&STRING)
             .add(&DURATION)
+            .add(&OPT_DURATION)
             .add(&JSON);
         assert_eq!(BOOL.get(&configs), true);
         assert_eq!(U32.get(&configs), 4);
@@ -733,6 +778,7 @@ mod tests {
         assert_eq!(F64.get(&configs), 5.0);
         assert_eq!(STRING.get(&configs), "a");
         assert_eq!(DURATION.get(&configs), Duration::from_nanos(3));
+        assert_eq!(OPT_DURATION.get(&configs), Some(Duration::from_nanos(5)));
         assert_eq!(JSON.get(&configs), serde_json::json!({}));
 
         let mut updates = ConfigUpdates::default();
@@ -743,6 +789,7 @@ mod tests {
         updates.add(&F64, 8.0);
         updates.add(&STRING, "b");
         updates.add(&DURATION, Duration::from_nanos(4));
+        updates.add(&OPT_DURATION, Some(Duration::from_nanos(6)));
         updates.add(&JSON, serde_json::json!({"a": 1}));
         updates.apply(&configs);
 
@@ -753,6 +800,7 @@ mod tests {
         assert_eq!(F64.get(&configs), 8.0);
         assert_eq!(STRING.get(&configs), "b");
         assert_eq!(DURATION.get(&configs), Duration::from_nanos(4));
+        assert_eq!(OPT_DURATION.get(&configs), Duration::from_nanos(6));
         assert_eq!(JSON.get(&configs), serde_json::json!({"a": 1}));
     }
 
@@ -915,6 +963,17 @@ mod tests {
         assert_eq!(
             DURATION.parse_val("5 s"),
             Ok(ConfigVal::Duration(Duration::from_secs(5)))
+        );
+
+        assert_err!(OPT_DURATION.parse_val("true"));
+        assert_err!(OPT_DURATION.parse_val("false"));
+        assert_err!(OPT_DURATION.parse_val("42"));
+        assert_err!(OPT_DURATION.parse_val("66.6"));
+        assert_err!(OPT_DURATION.parse_val("farragut"));
+        assert_eq!(OPT_DURATION.parse_val(""), Ok(ConfigVal::OptDuration(None)));
+        assert_eq!(
+            OPT_DURATION.parse_val("5 s"),
+            Ok(ConfigVal::OptDuration(Some(Duration::from_secs(5))))
         );
 
         assert_eq!(
