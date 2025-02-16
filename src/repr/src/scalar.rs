@@ -2961,6 +2961,9 @@ impl ScalarType {
                                 && a.1.scalar_type.eq_inner(&b.1.scalar_type, structure_only)
                         })
             }
+            //////////////// todo: comment
+            (String, VarChar {max_length: None}) => true,
+            (VarChar {max_length: None}, String) => true,
             (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
         }
     }
