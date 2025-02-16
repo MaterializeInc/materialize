@@ -317,7 +317,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 'a'::"char" < 'a'::varchar;
 ----
-Map (("char"_to_text(text_to_"char"("a")) < varchar_to_text(text_to_varchar("a"))))
+Map (("char"_to_text(text_to_"char"("a")) < text_to_varchar("a")))
   Constant
     - ()
 
@@ -343,7 +343,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 'a'::char < 'a'::varchar;
 ----
-Map ((text_to_char(text_to_char("a")) < text_to_char(text_to_varchar("a"))))
+Map ((char_to_text(text_to_char(text_to_char("a"))) < text_to_varchar("a")))
   Constant
     - ()
 
@@ -369,7 +369,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 'a'::varchar < 'a'::text;
 ----
-Map ((varchar_to_text(text_to_varchar("a")) < "a"))
+Map ((text_to_varchar("a") < "a"))
   Constant
     - ()
 
