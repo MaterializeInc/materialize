@@ -258,9 +258,8 @@ impl Blob for AzureBlob {
 
             let mut body = response.data;
             while let Some(value) = body.next().await {
-                let value = value.map_err(|e| {
-                    ExternalError::from(anyhow!("Azure blob get body error: {}", e))
-                })?;
+                let value = value
+                    .map_err(|e| ExternalError::from(e.context("azure blob get body error")))?;
 
                 match &mut buffer {
                     PreSizedBuffer::Sized(region) => region.extend_from_slice(&value),
@@ -307,10 +306,7 @@ impl Blob for AzureBlob {
                         }
                     }
 
-                    return Err(ExternalError::from(anyhow!(
-                        "Azure blob get error: {:?}",
-                        e
-                    )));
+                    return Err(ExternalError::from(e.context("azure blob get error")));
                 }
             };
 
@@ -322,7 +318,7 @@ impl Blob for AzureBlob {
         // Await on all of our chunks.
         let mut segments = SegmentedBytes::with_capacity(requests.len());
         while let Some(body) = requests.next().await {
-            let segment = body.context("azure get body err")?;
+            let segment = body.context("azure blob get body err")?;
             segments.push(segment);
         }
 
@@ -344,8 +340,8 @@ impl Blob for AzureBlob {
             .into_stream();
 
         while let Some(response) = stream.next().await {
-            let response = response
-                .map_err(|e| ExternalError::from(anyhow!("Azure list blobs error: {}", e)))?;
+            let response =
+                response.map_err(|e| ExternalError::from(e.context("azure blob list error")))?;
 
             for blob in response.blobs.items {
                 let azure_storage_blobs::container::operations::list_blobs::BlobItem::Blob(blob) =
@@ -370,7 +366,7 @@ impl Blob for AzureBlob {
 
         blob.put_block_blob(value)
             .await
-            .map_err(|e| ExternalError::from(anyhow!("Azure blob put error: {}", e)))?;
+            .map_err(|e| ExternalError::from(e.context("azure blob put error")))?;
 
         Ok(())
     }
@@ -384,7 +380,7 @@ impl Blob for AzureBlob {
                 let size = usize::cast_from(props.blob.properties.content_length);
                 blob.delete()
                     .await
-                    .map_err(|e| ExternalError::from(anyhow!("Azure blob delete error: {}", e)))?;
+                    .map_err(|e| ExternalError::from(e.context("azure blob delete error")))?;
                 Ok(Some(size))
             }
             Err(e) => {
@@ -394,7 +390,7 @@ impl Blob for AzureBlob {
                     }
                 }
 
-                Err(ExternalError::from(anyhow!("Azure blob error: {}", e)))
+                Err(ExternalError::from(e.context("azure blob error")))
             }
         }
     }
@@ -409,13 +405,13 @@ impl Blob for AzureBlob {
                 if let Some(e) = e.as_http_error() {
                     if e.status() == StatusCode::NotFound {
                         return Err(Determinate::new(anyhow!(
-                            "unable to restore {key} in Azure Blob Storage: blob does not exist"
+                            "azure blob error: unable to restore non-existent key {key}"
                         ))
                         .into());
                     }
                 }
 
-                Err(ExternalError::from(anyhow!("Azure blob error: {}", e)))
+                Err(ExternalError::from(e.context("azure blob error")))
             }
         }
     }
