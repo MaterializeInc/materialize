@@ -661,6 +661,7 @@ crates_repository(
         "//:src/s3-datagen/Cargo.toml",
         "//:src/secrets/Cargo.toml",
         "//:src/segment/Cargo.toml",
+        "//:src/self-managed-debug/Cargo.toml",
         "//:src/server-core/Cargo.toml",
         "//:src/service/Cargo.toml",
         "//:src/sql-lexer/Cargo.toml",
