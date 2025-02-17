@@ -76,6 +76,11 @@ def main():
         )
         print(f"Pushing to {remote_lts_branch}")
         spawn.runv(["git", "push", args.remote, f"HEAD:{lts_branch}"])
+
+        tag = f"self-managed-{helm_chart_version}"
+        print(f"Pushing tag {tag} to remote")
+        spawn.runv(["git", "tag", tag])
+        spawn.runv(["git", "push", args.remote, tag])
     finally:
         # The caller may have started in a detached HEAD state.
         if current_branch:
