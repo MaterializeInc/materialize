@@ -218,7 +218,7 @@ impl Coordinator {
         let mut update_metrics_retention = false;
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
-        let mut update_arrangement_exert_proportionality = false;
+        let mut update_initial_compute_config = false;
         let mut update_http_config = false;
 
         for op in &ops {
@@ -331,8 +331,11 @@ impl Coordinator {
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
                     update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
-                    update_arrangement_exert_proportionality |=
-                        name == vars::ARRANGEMENT_EXERT_PROPORTIONALITY.name();
+                    update_initial_compute_config |= self
+                        .catalog()
+                        .state()
+                        .system_config()
+                        .is_initial_compute_config_var(name);
                     update_http_config |= vars::is_http_config_var(name);
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
@@ -346,7 +349,7 @@ impl Coordinator {
                     update_metrics_retention = true;
                     update_secrets_caching_config = true;
                     update_cluster_scheduling_config = true;
-                    update_arrangement_exert_proportionality = true;
+                    update_initial_compute_config = true;
                     update_http_config = true;
                 }
                 catalog::Op::RenameItem { id, .. } => {
@@ -817,8 +820,8 @@ impl Coordinator {
             if update_cluster_scheduling_config {
                 self.update_cluster_scheduling_config();
             }
-            if update_arrangement_exert_proportionality {
-                self.update_arrangement_exert_proportionality();
+            if update_initial_compute_config {
+                self.update_initial_compute_config();
             }
             if update_http_config {
                 self.update_http_config();
@@ -1292,14 +1295,24 @@ impl Coordinator {
         self.update_compute_read_policies(compute_policies);
     }
 
-    fn update_arrangement_exert_proportionality(&mut self) {
-        let prop = self
-            .catalog()
-            .system_config()
-            .arrangement_exert_proportionality();
+    fn update_initial_compute_config(&mut self) {
+        let vars = self.catalog().system_config();
+        let prop = vars.arrangement_exert_proportionality();
+        let enable_zero_copy = vars.enable_timely_zero_copy();
+        let enable_zero_copy_lgalloc = vars.enable_timely_zero_copy_lgalloc();
+        let zero_copy_limit = vars.timely_zero_copy_limit();
+        let _ = vars;
+
         self.controller
             .compute
             .set_arrangement_exert_proportionality(prop);
+        self.controller
+            .compute
+            .set_enable_zero_copy(enable_zero_copy);
+        self.controller
+            .compute
+            .set_enable_zero_copy_lgalloc(enable_zero_copy_lgalloc);
+        self.controller.compute.set_zero_copy_limit(zero_copy_limit);
     }
 
     fn update_http_config(&mut self) {

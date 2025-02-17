@@ -427,6 +427,12 @@ where
                 // This value is not currently used by storage, so we just choose
                 // some identifiable value.
                 arrangement_exert_proportionality: 1337,
+                // TODO
+                enable_zero_copy: false,
+                // TODO
+                enable_zero_copy_lgalloc: false,
+                // TODO
+                zero_copy_limit: None,
             };
             *epoch = self.epoch;
         }

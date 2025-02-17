@@ -74,7 +74,7 @@ use crate::controller::instance::{Instance, SharedCollectionState};
 use crate::controller::replica::ReplicaConfig;
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
-use crate::protocol::command::{ComputeParameters, PeekTarget};
+use crate::protocol::command::{ComputeParameters, InitialComputeParameters, PeekTarget};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -176,8 +176,8 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     read_only: bool,
     /// Compute configuration to apply to new instances.
     config: ComputeParameters,
-    /// `arrangement_exert_proportionality` value passed to new replicas.
-    arrangement_exert_proportionality: u32,
+    /// Compute configuration to apply to new instances as part of the Timely initialization.
+    initial_config: InitialComputeParameters,
     /// A controller response to be returned on the next call to [`ComputeController::process`].
     stashed_response: Option<ComputeControllerResponse<T>>,
     /// A number that increases on every `environmentd` restart.
@@ -271,6 +271,13 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
 
         let metrics = ComputeControllerMetrics::new(metrics_registry, controller_metrics);
 
+        let initial_config = InitialComputeParameters {
+            arrangement_exert_proportionality: 16,
+            enable_zero_copy: false,
+            enable_zero_copy_lgalloc: false,
+            zero_copy_limit: None,
+        };
+
         Self {
             instances: BTreeMap::new(),
             instance_workload_classes,
@@ -279,7 +286,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             initialized: false,
             read_only,
             config: Default::default(),
-            arrangement_exert_proportionality: 16,
+            initial_config,
             stashed_response: None,
             envd_epoch,
             metrics,
@@ -359,7 +366,22 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
 
     /// Set the `arrangement_exert_proportionality` value to be passed to new replicas.
     pub fn set_arrangement_exert_proportionality(&mut self, value: u32) {
-        self.arrangement_exert_proportionality = value;
+        self.initial_config.arrangement_exert_proportionality = value;
+    }
+
+    /// Set the `enable_zero_copy` value to be passed to new replicas.
+    pub fn set_enable_zero_copy(&mut self, value: bool) {
+        self.initial_config.enable_zero_copy = value;
+    }
+
+    /// Set the `enable_zero_copy_lgalloc` value to be passed to new replicas.
+    pub fn set_enable_zero_copy_lgalloc(&mut self, value: bool) {
+        self.initial_config.enable_zero_copy_lgalloc = value;
+    }
+
+    /// Set the `zero_copy_limit` value to be passed to new replicas.
+    pub fn set_zero_copy_limit(&mut self, value: Option<usize>) {
+        self.initial_config.zero_copy_limit = value;
     }
 
     /// Returns `true` if all non-transient, non-excluded collections on all clusters have been
@@ -461,7 +483,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             initialized,
             read_only,
             config: _,
-            arrangement_exert_proportionality,
+            initial_config,
             stashed_response,
             envd_epoch,
             metrics: _,
@@ -502,10 +524,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             field("instance_workload_classes", instance_workload_classes)?,
             field("initialized", initialized)?,
             field("read_only", read_only)?,
-            field(
-                "arrangement_exert_proportionality",
-                arrangement_exert_proportionality,
-            )?,
+            field("initial_config", initial_config)?,
             field("stashed_response", format!("{stashed_response:?}"))?,
             field("envd_epoch", envd_epoch)?,
             field("maintenance_scheduled", maintenance_scheduled)?,
@@ -712,9 +731,9 @@ where
                 log_logging: config.logging.log_logging,
                 index_logs: Default::default(),
             },
-            arrangement_exert_proportionality: self.arrangement_exert_proportionality,
             grpc_client: self.config.grpc_client.clone(),
             expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
+            initial_config: self.initial_config.clone(),
         };
 
         let instance = self.instance_mut(instance_id).expect("validated");

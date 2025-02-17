@@ -1188,6 +1188,9 @@ impl SystemVars {
             &KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES,
             &REPLICA_STATUS_HISTORY_RETENTION_WINDOW,
             &ARRANGEMENT_EXERT_PROPORTIONALITY,
+            &ENABLE_TIMELY_ZERO_COPY,
+            &ENABLE_TIMELY_ZERO_COPY_LGALLOC,
+            &TIMELY_ZERO_COPY_LIMIT,
             &ENABLE_STORAGE_SHARD_FINALIZATION,
             &ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE,
             &ENABLE_DEFAULT_CONNECTION_VALIDATION,
@@ -2010,6 +2013,18 @@ impl SystemVars {
     /// Returns the `arrangement_exert_proportionality` configuration parameter.
     pub fn arrangement_exert_proportionality(&self) -> u32 {
         *self.expect_value(&ARRANGEMENT_EXERT_PROPORTIONALITY)
+    }
+
+    pub fn enable_timely_zero_copy(&self) -> bool {
+        *self.expect_value(&ENABLE_TIMELY_ZERO_COPY)
+    }
+
+    pub fn enable_timely_zero_copy_lgalloc(&self) -> bool {
+        *self.expect_value(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)
+    }
+
+    pub fn timely_zero_copy_limit(&self) -> Option<usize> {
+        *self.expect_value(&TIMELY_ZERO_COPY_LIMIT)
     }
 
     /// Returns the `enable_storage_shard_finalization` configuration parameter.
