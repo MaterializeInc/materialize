@@ -25,4 +25,4 @@ mod upsert_continual_feedback;
 
 pub(crate) mod healthcheck;
 
-pub use server::{serve, Config, Server};
+pub use server::serve;

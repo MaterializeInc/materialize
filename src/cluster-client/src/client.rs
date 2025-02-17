@@ -188,12 +188,10 @@ impl TimelyConfig {
     }
 }
 
-/// A trait for specific cluster commands that can be unpacked into
-/// `CreateTimely` variants.
-pub trait TryIntoTimelyConfig {
-    /// Attempt to unpack `self` into a `(TimelyConfig, ClusterStartupEpoch)`. Otherwise,
-    /// fail and return `self` back.
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self>
+/// A trait for specific cluster commands that can be converted into Timely configs.
+pub trait TryAsTimelyConfig {
+    /// Attempt to convert `self` into a `(TimelyConfig, ClusterStartupEpoch)`.
+    fn try_as_timely_config(&self) -> Option<(TimelyConfig, ClusterStartupEpoch)>
     where
         Self: Sized;
 }
