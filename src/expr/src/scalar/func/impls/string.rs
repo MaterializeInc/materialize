@@ -579,7 +579,17 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToChar {
 
 impl fmt::Display for CastStringToChar {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("text_to_char")
+        match self.length {
+            Some(length) => {
+                write!(
+                    f,
+                    "text_to_char[len={}, fail_on_len={}]",
+                    length.into_u32(),
+                    self.fail_on_len
+                )
+            }
+            None => f.write_str("text_to_char[len=None]"),
+        }
     }
 }
 
@@ -707,7 +717,17 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
 
 impl fmt::Display for CastStringToVarChar {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("text_to_varchar")
+        match self.length {
+            Some(length) => {
+                write!(
+                    f,
+                    "text_to_varchar[len={}, fail_on_len={}]",
+                    length.into_u32(),
+                    self.fail_on_len
+                )
+            }
+            None => f.write_str("text_to_varchar[len=None]"),
+        }
     }
 }
 

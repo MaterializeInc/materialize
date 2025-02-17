@@ -1929,7 +1929,7 @@ TopK order_by=[#0 asc nulls_last]
               Filter (select(Get l1) AND (integer_to_numeric(#2) > select(Get l2)))
                 Get materialize.public.partsupp
     Return
-      Filter ((select(Get l3) AND (#3 = #7)) AND (#8 = text_to_char("CANADA")))
+      Filter ((select(Get l3) AND (#3 = #7)) AND (#8 = text_to_char[len=None]("CANADA")))
         CrossJoin
           Get materialize.public.supplier
           Get materialize.public.nation
