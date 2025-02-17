@@ -2908,10 +2908,23 @@ impl ScalarType {
         self.eq_inner(other, false)
     }
 
-    // Determines equality among scalar types that ignores any custom OIDs or
-    // embedded values.
+    /// Determines equality among scalar types that ignores any custom OIDs or
+    /// embedded values.
     pub fn structural_eq(&self, other: &ScalarType) -> bool {
         self.eq_inner(other, true)
+    }
+
+    /// //////////// todo: comment
+    pub fn physical_eq(&self, other: &ScalarType) -> bool {
+        use ScalarType::*;
+        if self.base_eq(other) {
+            return true;
+        }
+        match (self, other) {
+            (String, VarChar { max_length: None }) => true,
+            (VarChar { max_length: None }, String) => true,
+            _ => false,
+        }
     }
 
     pub fn eq_inner(&self, other: &ScalarType, structure_only: bool) -> bool {
@@ -2961,9 +2974,6 @@ impl ScalarType {
                                 && a.1.scalar_type.eq_inner(&b.1.scalar_type, structure_only)
                         })
             }
-            //////////////// todo: comment
-            (String, VarChar { max_length: None }) => true,
-            (VarChar { max_length: None }, String) => true,
             (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
         }
     }

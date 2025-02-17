@@ -1707,7 +1707,7 @@ impl MirRelationExpr {
                 .column_types
                 .iter()
                 .zip_eq(typ.column_types.iter())
-                .all(|(t1, t2)| t1.scalar_type.base_eq(&t2.scalar_type)));
+                .all(|(t1, t2)| t1.scalar_type.physical_eq(&t2.scalar_type)));
         }
         let mut typ = typ.unwrap_or_else(|| self.typ());
         typ.keys = vec![vec![]];

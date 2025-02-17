@@ -397,8 +397,7 @@ pub fn scalar_subtype_difference(sub: &ScalarType, sup: &ScalarType) -> Vec<Colu
             }
         }
         (_, _) => {
-            // TODO(mgree) confirm that we don't want to allow numeric subtyping
-            if ScalarBaseType::from(sub) != ScalarBaseType::from(sup) {
+            if !sub.physical_eq(sup) {
                 diffs.push(ColumnTypeDifference::NotSubtype {
                     sub: sub.clone(),
                     sup: sup.clone(),
