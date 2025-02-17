@@ -410,20 +410,6 @@ pub fn scalar_subtype_difference(sub: &ScalarType, sup: &ScalarType) -> Vec<Colu
     diffs
 }
 
-/// Returns true when it is safe to treat a `sub` row as an `sup` row
-///
-/// In particular, the core types must be equal, and if a column in `sup` is nullable, that column should also be nullable in `sub`
-/// Conversely, it is okay to treat a known non-nullable column as nullable: `sub` may be nullable when `sup` is not
-pub fn is_subtype_of(sub: &[ColumnType], sup: &[ColumnType]) -> bool {
-    if sub.len() != sup.len() {
-        return false;
-    }
-
-    sub.iter().zip_eq(sup.iter()).all(|(got, known)| {
-        (!known.nullable || got.nullable) && got.scalar_type.base_eq(&known.scalar_type)
-    })
-}
-
 /// Check that the visible type of each query has not been changed
 #[derive(Debug)]
 pub struct Typecheck {
@@ -459,7 +445,7 @@ impl Typecheck {
 
     /// New non-transient global IDs will be treated as an error
     ///
-    /// Only turn this on after the context has been appropraitely populated by, e.g., an earlier run
+    /// Only turn this on after the context has been appropriately populated by, e.g., an earlier run
     pub fn disallow_new_globals(mut self) -> Self {
         self.disallow_new_globals = true;
         self
@@ -1362,7 +1348,7 @@ impl ColumnTypeDifference {
                 let sub = h.humanize_scalar_type(sub);
                 let sup = h.humanize_scalar_type(sup);
 
-                writeln!(f, "{sub} is a not a subtype of {sup}")
+                writeln!(f, "{sub} is not a subtype of {sup}")
             }
             Nullability { sub, sup } => {
                 let sub = h.humanize_column_type(sub);
