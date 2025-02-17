@@ -17,6 +17,10 @@
 //! the same order. So the controller instead sends commands only to worker 0, which then
 //! broadcasts them to other workers through the Timely fabric, taking care of the correct
 //! sequencing.
+//!
+//! Commands in the command channel are tagged with an epoch identifying the iteration of the
+//! compute protocol the command belongs to, allowing clients to recognize client reconnects that
+//! require a reconciliation.
 
 use std::sync::{Arc, Mutex};
 
@@ -33,14 +37,14 @@ use timely::worker::Worker as TimelyWorker;
 
 /// A sender pushing commands onto the command channel.
 pub struct Sender {
-    tx: crossbeam_channel::Sender<ComputeCommand>,
+    tx: crossbeam_channel::Sender<(ComputeCommand, u64)>,
     activator: Arc<Mutex<Option<SyncActivator>>>,
 }
 
 impl Sender {
     /// Broadcasts the given command to all workers.
-    pub fn send(&self, command: ComputeCommand) {
-        if self.tx.send(command).is_err() {
+    pub fn send(&self, message: (ComputeCommand, u64)) {
+        if self.tx.send(message).is_err() {
             panic!("command channel disconnected");
         }
 
@@ -54,7 +58,7 @@ impl Sender {
 
 /// A receiver reading commands from the command channel.
 pub struct Receiver {
-    rx: crossbeam_channel::Receiver<ComputeCommand>,
+    rx: crossbeam_channel::Receiver<(ComputeCommand, u64)>,
 }
 
 impl Receiver {
@@ -62,9 +66,9 @@ impl Receiver {
     ///
     /// This returns `None` when there are currently no commands but there might be commands again
     /// in the future.
-    pub fn try_recv(&self) -> Option<ComputeCommand> {
+    pub fn try_recv(&self) -> Option<(ComputeCommand, u64)> {
         match self.rx.try_recv() {
-            Ok(cmd) => Some(cmd),
+            Ok(msg) => Some(msg),
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => {
                 panic!("command channel disconnected")
@@ -74,9 +78,7 @@ impl Receiver {
 }
 
 /// Render the command channel dataflow.
-pub fn render<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
-) -> (Sender, Receiver) {
+pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Receiver) {
     let (input_tx, input_rx) = crossbeam_channel::unbounded();
     let (output_tx, output_rx) = crossbeam_channel::unbounded();
     let activator = Arc::new(Mutex::new(None));
@@ -100,9 +102,9 @@ pub fn render<A: Allocate>(
 
                 move |output| {
                     let Some(cap) = &mut capability else {
-                        // Non-leader workers will still receive `UpdateConfiguration` commands
-                        // and we must drain those to not leak memory.
-                        while let Ok(cmd) = input_rx.try_recv() {
+                        // Non-leader workers will still receive `UpdateConfiguration` commands and
+                        // we must drain those to not leak memory.
+                        while let Ok((cmd, _epoch)) = input_rx.try_recv() {
                             assert_ne!(worker_id, 0);
                             assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
                         }
@@ -110,13 +112,8 @@ pub fn render<A: Allocate>(
                     };
 
                     loop {
-                        match input_rx.try_recv() {
-                            Ok(cmd) => {
-                                assert_eq!(worker_id, 0);
-                                let worker_cmds = split_command(cmd, peers).into_iter().enumerate();
-                                output.session(&cap).give_iterator(worker_cmds);
-                                cap.downgrade(&(cap.time() + 1));
-                            }
+                        let (cmd, epoch) = match input_rx.try_recv() {
+                            Ok(msg) => msg,
                             Err(TryRecvError::Empty) => break,
                             Err(TryRecvError::Disconnected) => {
                                 // Drop our capability to shut down.
@@ -124,6 +121,16 @@ pub fn render<A: Allocate>(
                                 break;
                             }
                         };
+
+                        assert_eq!(worker_id, 0);
+
+                        let worker_cmds = split_command(cmd, peers)
+                            .into_iter()
+                            .map(|cmd| (cmd, epoch))
+                            .enumerate();
+                        output.session(&cap).give_iterator(worker_cmds);
+
+                        cap.downgrade(&(cap.time() + 1));
                     }
                 }
             })
@@ -132,8 +139,8 @@ pub fn render<A: Allocate>(
                 "command_channel::sink",
                 move |input| {
                     while let Some((_cap, data)) = input.next() {
-                        for (_idx, cmd) in data.drain(..) {
-                            let _ = output_tx.send(cmd);
+                        for (_idx, msg) in data.drain(..) {
+                            let _ = output_tx.send(msg);
                         }
                     }
                 },
