@@ -50,14 +50,14 @@ def main():
     args = parser.parse_args()
     mz_version = f"v{args.mz_version}"
     helm_chart_version = f"v{args.helm_chart_version}"
-    lts_branch = f"lts-v{args.mz_version.major}.{args.mz_version.minor}"
-    remote_lts_branch = f"{args.remote}/{lts_branch}"
+    self_managed_branch = f"self-managed/{helm_chart_version}"
+    remote_self_managed_branch = f"{args.remote}/{self_managed_branch}"
     current_branch = get_branch_name()
 
     try:
         fetch(args.remote)
-        print(f"Checking out LTS branch {remote_lts_branch}")
-        checkout(remote_lts_branch)
+        print(f"Checking out self-managed branch {remote_self_managed_branch}")
+        checkout(remote_self_managed_branch)
         print(
             f"Bumping helm-chart version to {helm_chart_version} with Materialize {mz_version}"
         )
@@ -74,8 +74,13 @@ def main():
         commit_all_changed(
             f"Bumping helm-chart version to {helm_chart_version} with Materialize {mz_version}"
         )
-        print(f"Pushing to {remote_lts_branch}")
-        spawn.runv(["git", "push", args.remote, f"HEAD:{lts_branch}"])
+        print(f"Pushing to {remote_self_managed_branch}")
+        spawn.runv(["git", "push", args.remote, f"HEAD:{self_managed_branch}"])
+
+        tag = f"self-managed-{helm_chart_version}"
+        print(f"Pushing tag {tag} to remote")
+        spawn.runv(["git", "tag", tag])
+        spawn.runv(["git", "push", args.remote, tag])
     finally:
         # The caller may have started in a detached HEAD state.
         if current_branch:
