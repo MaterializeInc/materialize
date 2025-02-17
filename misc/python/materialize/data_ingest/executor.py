@@ -602,7 +602,9 @@ class KafkaRoundtripExecutor(Executor):
             )
             self.execute(
                 cur,
-                f"""CREATE SINK {identifier(self.database)}.{identifier(self.schema)}.sink{self.num} FROM {identifier(self.table_original)}
+                f"""CREATE SINK {identifier(self.database)}.{identifier(self.schema)}.sink{self.num}
+                    {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
+                    FROM {identifier(self.table_original)}
                     INTO KAFKA CONNECTION kafka_conn (TOPIC '{self.topic}')
                     KEY ({", ".join([identifier(key) for key in keys])})
                     FORMAT AVRO

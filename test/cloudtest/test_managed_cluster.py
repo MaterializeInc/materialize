@@ -385,8 +385,8 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     mz.testdrive.run(
         input=dedent(
             """
-            ! ALTER CLUSTER cluster_with_source set (size='2') WITH (WAIT UNTIL READY (TIMEOUT='10s', ON TIMEOUT ROLLBACK))
-            contains: cannot create more than one replica of a cluster containing sources or sinks
+            ! ALTER CLUSTER cluster_with_source set (replication factor 2000) WITH (WAIT UNTIL READY (TIMEOUT='10s', ON TIMEOUT ROLLBACK))
+            contains: creating cluster replica would violate max_replicas_per_cluster limit
             """
         ),
         no_reset=True,

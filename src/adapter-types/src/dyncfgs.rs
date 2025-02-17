@@ -117,6 +117,13 @@ pub const ENABLE_EXPRESSION_CACHE: Config<bool> = Config::new(
     "Use a cache to store optimized expressions to help speed up start times.",
 );
 
+/// Whether we allow sources in multi-replica clusters.
+pub const ENABLE_MULTI_REPLICA_SOURCES: Config<bool> = Config::new(
+    "enable_multi_replica_sources",
+    false,
+    "Enable multi-replica sources.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -135,4 +142,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&DEFAULT_SINK_PARTITION_STRATEGY)
         .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
         .add(&ENABLE_EXPRESSION_CACHE)
+        .add(&ENABLE_MULTI_REPLICA_SOURCES)
 }
