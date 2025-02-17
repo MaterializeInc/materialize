@@ -38,7 +38,7 @@ pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
      work, respectively, rather than falling back to some default.",
 );
 
-/// Enable lgalloc for columnation.
+/// Enable lgalloc.
 pub const ENABLE_LGALLOC: Config<bool> = Config::new("enable_lgalloc", true, "Enable lgalloc.");
 
 /// Enable lgalloc for columnation.
