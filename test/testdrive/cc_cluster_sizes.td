@@ -26,7 +26,7 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 contains:unknown cluster replica size 1cc
 
 # The existing cluster names are fine
-> CREATE CLUSTER c SIZE '1';
+> CREATE CLUSTER c SIZE '1-no-disk';
 
 # But ensure we cannot ALTER our way to a cc name either
 ! ALTER CLUSTER c SET (SIZE '1cc');
@@ -50,7 +50,7 @@ true
 > DROP CLUSTER c
 
 # Create a cluster with a legacy size with disk enabled.
-> CREATE CLUSTER c SIZE '1', DISK = true
+> CREATE CLUSTER c SIZE '1-no-disk', DISK = true
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 true
 
@@ -70,7 +70,7 @@ true
 
 # Same test as before, except the legacy size cluster has disk explicitly
 # disabled.
-> CREATE CLUSTER c SIZE '1', DISK = false
+> CREATE CLUSTER c SIZE '1-no-disk', DISK = false
 > ALTER CLUSTER c SET (SIZE = '1cc')
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 true
@@ -78,7 +78,7 @@ true
 
 # Same test as before, except the legacy size cluster has no disk explicitly
 # configured.
-> CREATE CLUSTER c SIZE = '1'
+> CREATE CLUSTER c SIZE = '1-no-disk'
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 false
 > ALTER CLUSTER c SET (SIZE = '1cc')
@@ -98,10 +98,10 @@ true
 > DROP CLUSTER c
 
 # Ensure that altering from a legacy size to a legacy size does not enable disk.
-> CREATE CLUSTER c SIZE = '1'
+> CREATE CLUSTER c SIZE = '1-no-disk'
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 false
-> ALTER CLUSTER c SET (SIZE = '2')
+> ALTER CLUSTER c SET (SIZE = '2-no-disk')
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 false
 > DROP CLUSTER c
