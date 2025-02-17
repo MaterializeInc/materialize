@@ -958,7 +958,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
         for command in &mut commands {
             match command {
                 StorageCommand::CreateTimely { .. } => {
-                    panic!("CreateTimely must be captured before")
+                    // The Timely config was already applied/checked in `ClusterClient::send`.
+                    // Nothing to do here.
                 }
                 StorageCommand::AllowCompaction(sinces) => {
                     info!(%worker_id, ?sinces, "reconcile: received AllowCompaction command");
@@ -1026,9 +1027,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // description.
         for command in commands.iter_mut().rev() {
             match command {
-                StorageCommand::CreateTimely { .. } => {
-                    panic!("CreateTimely must be captured before")
-                }
+                StorageCommand::CreateTimely { .. } => {}
                 StorageCommand::RunIngestions(ingestions) => {
                     ingestions.retain_mut(|ingestion| {
                         // Subsources can be dropped independently of their
