@@ -33,7 +33,7 @@ use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
 use mz_ore::result::ResultExt;
-use mz_ore::soft_assert_eq_or_log;
+use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log};
 use mz_ore::str::StrExt;
 use mz_pgrepr::Type;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
@@ -8033,7 +8033,7 @@ impl VariadicFunc {
             }
             .nullable(true),
             ArrayCreate { elem_type } => {
-                debug_assert!(
+                soft_assert_or_log!(
                     input_types.iter().all(|t| t.scalar_type.base_eq(elem_type)),
                     "Args to ArrayCreate should have types that are compatible with the elem_type"
                 );
