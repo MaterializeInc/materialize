@@ -25,6 +25,8 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
 use mz_service::local::{LocalActivator, LocalClient};
 use mz_txn_wal::operator::TxnsContext;
+use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
+use timely::communication::allocator::GenericBuilder;
 use timely::communication::initialize::WorkerGuards;
 use timely::execute::execute_from;
 use timely::WorkerConfig;
@@ -175,13 +177,41 @@ where
             .unzip();
         let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
-        let (builders, other) = initialize_networking(
-            config.workers,
-            config.process,
-            config.addresses.clone(),
-            epoch,
-        )
-        .await?;
+        let refill = if config.enable_zero_copy_lgalloc {
+            BytesRefill {
+                logic: Arc::new(|size| Box::new(alloc::lgalloc_refill(size))),
+                limit: config.zero_copy_limit,
+            }
+        } else {
+            BytesRefill {
+                logic: Arc::new(|size| Box::new(vec![0; size])),
+                limit: config.zero_copy_limit,
+            }
+        };
+
+        let (builders, other) = if config.enable_zero_copy {
+            initialize_networking::<
+                timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder,
+            >(
+                config.workers,
+                config.process,
+                config.addresses.clone(),
+                epoch,
+                refill,
+                |builder| GenericBuilder::ZeroCopyBinary(builder),
+            )
+            .await?
+        } else {
+            initialize_networking::<timely::communication::allocator::Process>(
+                config.workers,
+                config.process,
+                config.addresses.clone(),
+                epoch,
+                refill,
+                |builder| GenericBuilder::ZeroCopy(builder),
+            )
+            .await?
+        };
 
         let mut worker_config = WorkerConfig::default();
 
@@ -385,6 +415,65 @@ where
             client.recv().await
         } else {
             future::pending().await
+        }
+    }
+}
+
+mod alloc {
+    pub(crate) fn lgalloc_refill(size: usize) -> LgallocHandle {
+        match lgalloc::allocate::<u8>(size) {
+            Ok((pointer, capacity, handle)) => {
+                let handle = Some(handle);
+                LgallocHandle {
+                    handle,
+                    pointer,
+                    capacity,
+                }
+            }
+            Err(_) => {
+                let mut alloc = vec![0_u8; size];
+                alloc.shrink_to_fit();
+                let pointer = std::ptr::NonNull::new(alloc.as_mut_ptr()).unwrap();
+                std::mem::forget(alloc);
+                LgallocHandle {
+                    handle: None,
+                    pointer,
+                    capacity: size,
+                }
+            }
+        }
+    }
+
+    pub(crate) struct LgallocHandle {
+        handle: Option<lgalloc::Handle>,
+        pointer: std::ptr::NonNull<u8>,
+        capacity: usize,
+    }
+
+    impl std::ops::Deref for LgallocHandle {
+        type Target = [u8];
+        #[inline(always)]
+        fn deref(&self) -> &Self::Target {
+            unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), self.capacity) }
+        }
+    }
+
+    impl std::ops::DerefMut for LgallocHandle {
+        #[inline(always)]
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            unsafe { std::slice::from_raw_parts_mut(self.pointer.as_ptr(), self.capacity) }
+        }
+    }
+
+    impl Drop for LgallocHandle {
+        fn drop(&mut self) {
+            if let Some(handle) = self.handle.take() {
+                lgalloc::deallocate(handle);
+            } else {
+                unsafe { Vec::from_raw_parts(self.pointer.as_ptr(), 0, self.capacity) };
+            }
+            self.pointer = std::ptr::NonNull::dangling();
+            self.capacity = 0;
         }
     }
 }
