@@ -95,29 +95,29 @@ def run(
     with system_conn.cursor() as system_cur:
         system_exe = Executor(rng, system_cur, None, database)
         system_exe.execute(
-            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_schemas_per_database = {MAX_SCHEMAS * 40 + num_threads}"
         )
         # The presence of ALTER TABLE RENAME can cause the total number of tables to exceed MAX_TABLES
         system_exe.execute(
-            f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_tables = {MAX_TABLES * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_materialized_views = {MAX_VIEWS * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_sources = {(MAX_WEBHOOK_SOURCES + MAX_KAFKA_SOURCES + MAX_POSTGRES_SOURCES) * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 20 + num_threads}"
+            f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 40 + num_threads}"
         )
         system_exe.execute("ALTER SYSTEM SET max_secrets = 1000000")
         # Most queries should not fail because of privileges
