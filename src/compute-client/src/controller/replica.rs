@@ -33,7 +33,7 @@ use crate::controller::{ComputeControllerTimestamp, ReplicaId};
 use crate::logging::LoggingConfig;
 use crate::metrics::IntCounter;
 use crate::metrics::ReplicaMetrics;
-use crate::protocol::command::{ComputeCommand, InstanceConfig};
+use crate::protocol::command::{ComputeCommand, InitialComputeParameters, InstanceConfig};
 use crate::protocol::response::ComputeResponse;
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -44,10 +44,10 @@ type Client<T> = SequentialHydration<T>;
 pub(super) struct ReplicaConfig {
     pub location: ClusterReplicaLocation,
     pub logging: LoggingConfig,
-    pub arrangement_exert_proportionality: u32,
     pub grpc_client: GrpcClientParameters,
     /// The offset to use for replica expiration, if any.
     pub expiration_offset: Option<Duration>,
+    pub initial_config: InitialComputeParameters,
 }
 
 /// A client for a replica task.
@@ -266,7 +266,11 @@ where
                     addresses: self.config.location.dataflow_addrs.clone(),
                     arrangement_exert_proportionality: self
                         .config
+                        .initial_config
                         .arrangement_exert_proportionality,
+                    enable_zero_copy: self.config.initial_config.enable_zero_copy,
+                    enable_zero_copy_lgalloc: self.config.initial_config.enable_zero_copy_lgalloc,
+                    zero_copy_limit: self.config.initial_config.zero_copy_limit,
                 };
                 *epoch = self.epoch;
             }
