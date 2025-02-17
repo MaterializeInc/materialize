@@ -291,7 +291,7 @@ Explained Query:
           Get l6
   Return
     Project (#0, #13, #11)
-      Map (case when (#8) IS NULL then null else #7 end, (((((#2 * case when (#3 <= 3) then 1.2 else case when ((#3 <= 10) AND (#3 >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#5 / 100)), 1)) * case when (#12 <= 3) then 1.1 else case when ((#12 <= 10) AND (#12 >= 4)) then 1.05 else 1 end end) * case when (#2 > #4) then (1 + ((#2 - #4) / #4)) else (1 - ((#4 - #2) / #4)) end) * case when ilike["%cheap%"](varchar_to_text(#1)) then 0.8 else 1 end))
+      Map (case when (#8) IS NULL then null else #7 end, (((((#2 * case when (#3 <= 3) then 1.2 else case when ((#3 <= 10) AND (#3 >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#5 / 100)), 1)) * case when (#12 <= 3) then 1.1 else case when ((#12 <= 10) AND (#12 >= 4)) then 1.05 else 1 end end) * case when (#2 > #4) then (1 + ((#2 - #4) / #4)) else (1 - ((#4 - #2) / #4)) end) * case when ilike["%cheap%"](#1) then 0.8 else 1 end))
         Join on=(#0 = #6 = #9 = #10) type=delta
           ArrangeBy keys=[[#0]]
             Get l6
@@ -639,7 +639,7 @@ Explained Query:
           Get l7
     cte l11 =
       Project (#0, #1, #3, #5, #18)
-        Map (case when (#14) IS NULL then null else #13 end, (((((#8 * case when (#9 <= 3) then 1.2 else case when ((#9 <= 10) AND (#9 >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#11 / 100)), 1)) * case when (#17 <= 3) then 1.1 else case when ((#17 <= 10) AND (#17 >= 4)) then 1.05 else 1 end end) * case when (#8 > #10) then (1 + ((#8 - #10) / #10)) else (1 - ((#10 - #8) / #10)) end) * case when ilike["%cheap%"](varchar_to_text(#7)) then 0.8 else 1 end))
+        Map (case when (#14) IS NULL then null else #13 end, (((((#8 * case when (#9 <= 3) then 1.2 else case when ((#9 <= 10) AND (#9 >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#11 / 100)), 1)) * case when (#17 <= 3) then 1.1 else case when ((#17 <= 10) AND (#17 >= 4)) then 1.05 else 1 end end) * case when (#8 > #10) then (1 + ((#8 - #10) / #10)) else (1 - ((#10 - #8) / #10)) end) * case when ilike["%cheap%"](#7) then 0.8 else 1 end))
           Join on=(#0 = #2 = #6 = #12 = #15 = #16 AND #3 = #4) type=delta
             ArrangeBy keys=[[#0]]
               Project (#0, #1)
@@ -895,7 +895,7 @@ Explained Query:
           Get l7
     cte l11 =
       Project (#0, #1, #3, #5, #18)
-        Map (case when (#14) IS NULL then null else #13 end, (((((#8 * case when (#9 <= 3) then 1.2 else case when ((#9 <= 10) AND (#9 >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#11 / 100)), 1)) * case when (#17 <= 3) then 1.1 else case when ((#17 <= 10) AND (#17 >= 4)) then 1.05 else 1 end end) * case when (#8 > #10) then (1 + ((#8 - #10) / #10)) else (1 - ((#10 - #8) / #10)) end) * case when ilike["%cheap%"](varchar_to_text(#7)) then 0.8 else 1 end))
+        Map (case when (#14) IS NULL then null else #13 end, (((((#8 * case when (#9 <= 3) then 1.2 else case when ((#9 <= 10) AND (#9 >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#11 / 100)), 1)) * case when (#17 <= 3) then 1.1 else case when ((#17 <= 10) AND (#17 >= 4)) then 1.05 else 1 end end) * case when (#8 > #10) then (1 + ((#8 - #10) / #10)) else (1 - ((#10 - #8) / #10)) end) * case when ilike["%cheap%"](#7) then 0.8 else 1 end))
           Join on=(#0 = #2 = #6 = #12 = #15 = #16 AND #3 = #4) type=delta
             ArrangeBy keys=[[#0]]
               Project (#0, #1)

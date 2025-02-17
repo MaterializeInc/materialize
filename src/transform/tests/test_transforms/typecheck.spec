@@ -225,7 +225,7 @@ Return
 mismatched column types: couldn't compute union of column types in let rec: Can't union types: Bool and Int64
       got Int64
 expected Bool?
-  Bool is a not a subtype of Int64
+  Bool is not a subtype of Int64
   Bool? is nullable but Int64 is not
 ----
 ----
@@ -344,7 +344,7 @@ Filter #2
 mismatched column types: expected boolean condition
       got String
 expected Bool?
-  String is a not a subtype of Bool
+  String is not a subtype of Bool
 ----
 ----
 
