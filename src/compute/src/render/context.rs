@@ -30,11 +30,11 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::containers::{columnar_exchange, Col2ValBatcher, ColumnBuilder};
+use mz_timely_util::containers::{Col2ValBatcher, ColumnBuilder};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::columnation::Columnation;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::scopes::Child;
@@ -45,7 +45,7 @@ use timely::Container;
 use tracing::error;
 
 use crate::compute_state::{ComputeState, HydrationEvent};
-use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
+use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowRowBuilder};
@@ -927,9 +927,7 @@ where
                 },
             );
         let oks = oks
-            .mz_arrange_core::<_, Col2ValBatcher<_, _,_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, S::Timestamp, Diff>),name
-            );
+            .mz_arrange::<Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name);
         (oks, errs.as_collection())
     }
 }
