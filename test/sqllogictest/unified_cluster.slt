@@ -17,16 +17,13 @@ reset-server
 statement ok
 CREATE CLUSTER c SIZE '1', REPLICATION FACTOR 2;
 
-statement error db error: ERROR: cannot create source in cluster with more than one replica
-CREATE SOURCE ldgen IN CLUSTER c FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s');
-
 statement ok
 ALTER CLUSTER c SET (REPLICATION FACTOR 1)
 
 statement ok
 CREATE SOURCE ldgen IN CLUSTER c FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s');
 
-statement error db error: ERROR: cannot create more than one replica of a cluster containing sources or sinks
+statement ok
 ALTER CLUSTER c SET (REPLICATION FACTOR 2)
 
 statement ok
@@ -53,9 +50,6 @@ SELECT * FROM t;
 
 statement ok
 ALTER CLUSTER c SET (REPLICATION FACTOR 0);
-
-statement error db error: ERROR: cannot create more than one replica of a cluster containing sources or sinks
-ALTER CLUSTER c SET (SIZE '2', REPLICATION FACTOR 2);
 
 statement ok
 ALTER CLUSTER c SET (REPLICATION FACTOR 1);

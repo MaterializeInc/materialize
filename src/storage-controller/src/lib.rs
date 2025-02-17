@@ -439,8 +439,11 @@ where
         self.storage_collections.active_collection_metadatas()
     }
 
-    fn active_ingestions(&self, instance_id: StorageInstanceId) -> &BTreeSet<GlobalId> {
-        self.instances[&instance_id].active_ingestions()
+    fn active_ingestions(&self, instance_id: StorageInstanceId) -> Vec<GlobalId> {
+        self.instances[&instance_id]
+            .active_ingestions()
+            .copied()
+            .collect()
     }
 
     fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
@@ -493,10 +496,11 @@ where
     }
 
     fn drop_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId) {
-        self.instances
+        let instance = self
+            .instances
             .get_mut(&instance_id)
-            .unwrap_or_else(|| panic!("instance {instance_id} does not exist"))
-            .drop_replica(replica_id);
+            .unwrap_or_else(|| panic!("instance {instance_id} does not exist"));
+        instance.drop_replica(replica_id);
     }
 
     async fn evolve_nullability_for_bootstrap(
@@ -1287,7 +1291,9 @@ where
                 )
                 .await?;
 
-            existing.collection_metadata.data_shard.clone()
+            let data_shard = existing.collection_metadata.data_shard.clone();
+
+            data_shard
         };
 
         let persist_client = self
@@ -1766,7 +1772,22 @@ where
                         // same as for the "main" ingestion.
                         ingestions_to_drop.insert(id);
                     }
-                    DataSource::Other | DataSource::Introspection(_) | DataSource::Progress => (),
+                    DataSource::Progress => {
+                        let pending_compaction_command = PendingCompactionCommand {
+                            id: *id,
+                            read_frontier: Antichain::new(),
+                            cluster_id: None,
+                        };
+
+                        tracing::debug!(
+                            ?pending_compaction_command,
+                            "pushing pending compaction for progress collection"
+                        );
+
+                        self.pending_compaction_commands
+                            .push(pending_compaction_command);
+                    }
+                    DataSource::Other | DataSource::Introspection(_) => (),
                     DataSource::Sink { .. } => {}
                 }
             }
@@ -1951,17 +1972,7 @@ where
                 updated_frontiers = Some(Response::FrontierUpdates(updates));
             }
             Some(StorageResponse::DroppedId(id)) => {
-                tracing::debug!("DroppedId for collection {id}");
-
-                if let Some(_collection) = self.collections.remove(&id) {
-                    // Nothing to do, we already dropped read holds in
-                    // `drop_sources_unvalidated`.
-                } else {
-                    soft_panic_or_log!(
-                        "DroppedId for ID {id} but we have neither ingestion nor export \
-                         under that ID"
-                    );
-                }
+                tracing::debug!("DroppedId for {id}");
             }
             Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
@@ -2129,10 +2140,12 @@ where
                                     fut,
                                 );
                             }
+                            DataSource::Progress => {
+                                pending_collection_drops.push(id);
+                            }
                             DataSource::Ingestion(_) => (),
                             DataSource::IngestionExport { .. } => (),
                             DataSource::Introspection(_) => (),
-                            DataSource::Progress => (),
                             DataSource::Other => (),
                             DataSource::Sink { .. } => (),
                         }
@@ -2168,7 +2181,8 @@ where
             .collect();
         self.append_shard_mappings(shards_to_update.into_iter(), -1);
 
-        for id in pending_collection_drops {
+        for id in itertools::chain(pending_source_drops.iter(), pending_collection_drops.iter()) {
+            tracing::info!(%id, "dropping collection state");
             self.collections
                 .remove(&id)
                 .expect("list populated after checking that self.collections contains it");
@@ -2620,18 +2634,13 @@ where
                 if !update.is_empty() {
                     read_capability_changes.insert(*id, update);
                 }
-            } else if self.storage_collections.check_exists(*id).is_ok() {
-                // StorageCollections is handling it!
             } else {
                 // TODO: This can happen because subsources report back an upper
                 // but we don't store them in our `ingestions` field, _nor_ do
                 // we acquire read holds for them. Also because we don't get
                 // `DroppedId` messages for them, so we wouldn't know when to
                 // clean up read holds.
-                info!(
-                    "Reference to absent collection {id}, new_upper={:?}",
-                    new_upper
-                );
+                debug!(?new_upper, "spurious upper update for {id}");
             }
         }
 

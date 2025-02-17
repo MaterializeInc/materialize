@@ -167,6 +167,10 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     fn supports_read_only(&self) -> bool {
         true
     }
+
+    fn prefers_single_replica(&self) -> bool {
+        true
+    }
 }
 
 impl crate::AlterCompatible for LoadGeneratorSourceConnection {}
