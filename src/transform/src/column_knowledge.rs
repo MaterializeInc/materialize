@@ -635,7 +635,7 @@ impl DatumKnowledge {
                 unreachable!();
             };
 
-            if !s_typ.base_eq(o_typ) {
+            if !s_typ.physical_eq(o_typ) {
                 ::tracing::error!("Undefined join of non-equal base types {s_typ:?} != {o_typ:?}");
                 *self = Self::top();
             } else if s_val != o_val {
@@ -735,7 +735,7 @@ impl DatumKnowledge {
                 unreachable!();
             };
 
-            if !s_typ.base_eq(o_typ) {
+            if !s_typ.physical_eq(o_typ) {
                 soft_panic_or_log!("Undefined meet of non-equal base types {s_typ:?} != {o_typ:?}");
                 *self = Self::top(); // this really should be Nothing
             } else if s_val != o_val {

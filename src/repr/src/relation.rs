@@ -69,7 +69,7 @@ impl ColumnType {
                     nullable: self.nullable || other.nullable,
                 })
             }
-            (scalar_type, other_scalar_type) if scalar_type.base_eq(&other_scalar_type) => {
+            (scalar_type, other_scalar_type) if scalar_type.physical_eq(&other_scalar_type) => {
                 Ok(ColumnType {
                     scalar_type: scalar_type.without_modifiers(),
                     nullable: self.nullable || other.nullable,
