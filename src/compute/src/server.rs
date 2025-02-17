@@ -10,16 +10,18 @@
 //! An interactive dataflow server.
 
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
-use std::{iter, thread};
 
 use anyhow::Error;
-use crossbeam_channel::{RecvError, SendError};
+use crossbeam_channel::SendError;
 use mz_cluster::client::{ClusterClient, ClusterSpec};
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
@@ -100,43 +102,102 @@ pub fn serve(
     Ok(client_builder)
 }
 
+/// Error type returned on connection epoch changes.
+///
+/// An epoch change informs workers that subsequent commands come a from a new client connection
+/// and therefore require reconciliation.
+struct EpochChange(u64);
+
 /// Endpoint used by workers to receive compute commands.
+///
+/// Observes epoch changes in the command stream and converts them into receive errors.
 struct CommandReceiver {
     /// The channel supplying commands.
     inner: command_channel::Receiver,
     /// The ID of the Timely worker.
     worker_id: usize,
+    /// The epoch identifying the current cluster protocol incarnation.
+    epoch: Option<u64>,
+    /// A stash to enable peeking the next command, used in `try_recv`.
+    stashed_command: Option<ComputeCommand>,
 }
 
 impl CommandReceiver {
     fn new(inner: command_channel::Receiver, worker_id: usize) -> Self {
-        Self { inner, worker_id }
+        Self {
+            inner,
+            worker_id,
+            epoch: None,
+            stashed_command: None,
+        }
     }
 
-    fn try_recv(&self) -> Option<ComputeCommand> {
-        self.inner.try_recv().map(|cmd| {
-            trace!(worker = ?self.worker_id, command = ?cmd, "received command");
-            cmd
-        })
+    /// Receive the next pending command, if any.
+    ///
+    /// If the next command is at a different epoch, this method instead returns an `Err`
+    /// containing the new epoch.
+    fn try_recv(&mut self) -> Result<Option<ComputeCommand>, EpochChange> {
+        if let Some(command) = self.stashed_command.take() {
+            return Ok(Some(command));
+        }
+        let Some((command, epoch)) = self.inner.try_recv() else {
+            return Ok(None);
+        };
+
+        trace!(worker = self.worker_id, %epoch, ?command, "received command");
+
+        match self.epoch.cmp(&Some(epoch)) {
+            Ordering::Less => {
+                self.epoch = Some(epoch);
+                self.stashed_command = Some(command);
+                Err(EpochChange(epoch))
+            }
+            Ordering::Equal => Ok(Some(command)),
+            Ordering::Greater => panic!("epoch regression: {epoch} < {}", self.epoch.unwrap()),
+        }
     }
 }
 
 /// Endpoint used by workers to send sending compute responses.
+///
+/// Tags responses with the current epoch, allowing receivers to filter out responses intended for
+/// previous client connections.
 pub(crate) struct ResponseSender {
     /// The channel consuming responses.
-    inner: crossbeam_channel::Sender<ComputeResponse>,
+    inner: crossbeam_channel::Sender<(ComputeResponse, u64)>,
     /// The ID of the Timely worker.
     worker_id: usize,
+    /// The epoch identifying the current cluster protocol incarnation.
+    epoch: Option<u64>,
 }
 
 impl ResponseSender {
-    fn new(inner: crossbeam_channel::Sender<ComputeResponse>, worker_id: usize) -> Self {
-        Self { inner, worker_id }
+    fn new(inner: crossbeam_channel::Sender<(ComputeResponse, u64)>, worker_id: usize) -> Self {
+        Self {
+            inner,
+            worker_id,
+            epoch: None,
+        }
     }
 
+    /// Advance to the given epoch.
+    fn advance_epoch(&mut self, epoch: u64) {
+        assert!(
+            Some(epoch) > self.epoch,
+            "epoch regression: {epoch} <= {}",
+            self.epoch.unwrap(),
+        );
+        self.epoch = Some(epoch);
+    }
+
+    /// Send a compute response.
     pub fn send(&self, response: ComputeResponse) -> Result<(), SendError<ComputeResponse>> {
-        trace!(worker = ?self.worker_id, response = ?response, "sending response");
-        self.inner.send(response)
+        let epoch = self.epoch.expect("epoch must be initialized");
+
+        trace!(worker = self.worker_id, %epoch, ?response, "sending response");
+        self.inner
+            .send((response, epoch))
+            .map_err(|SendError((resp, _))| SendError(resp))
     }
 }
 
@@ -255,16 +316,24 @@ fn set_core_affinity(_worker_id: usize) {
 impl<'w, A: Allocate + 'static> Worker<'w, A> {
     /// Runs a compute worker.
     pub fn run(&mut self) {
+        // The command receiver is initialized without an epoch, so receiving the first command
+        // always triggers an epoch change.
+        let EpochChange(epoch) = self.recv_command().expect_err("change to first epoch");
+        self.advance_epoch(epoch);
+
         loop {
-            self.run_client();
+            let Err(EpochChange(epoch)) = self.run_client();
+            self.advance_epoch(epoch);
         }
     }
 
+    fn advance_epoch(&mut self, epoch: u64) {
+        self.response_tx.advance_epoch(epoch);
+    }
+
     /// Handles commands for a client connection, returns when the epoch changes.
-    fn run_client(&mut self) {
-        if let Err(_) = self.reconcile() {
-            return;
-        }
+    fn run_client(&mut self) -> Result<Infallible, EpochChange> {
+        self.reconcile()?;
 
         // The last time we did periodic maintenance.
         let mut last_maintenance = Instant::now();
@@ -309,11 +378,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             self.timely_worker.step_or_park(sleep_duration);
             timer.observe_duration();
 
-            // Handle any received commands.
-            let cmds: Vec<_> = iter::from_fn(|| self.command_rx.try_recv()).collect();
-            for cmd in cmds {
-                self.handle_command(cmd);
-            }
+            self.handle_pending_commands()?;
 
             if let Some(mut compute_state) = self.activate_compute() {
                 compute_state.process_peeks();
@@ -321,6 +386,13 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 compute_state.process_copy_tos();
             }
         }
+    }
+
+    fn handle_pending_commands(&mut self) -> Result<(), EpochChange> {
+        while let Some(cmd) = self.command_rx.try_recv()? {
+            self.handle_command(cmd);
+        }
+        Ok(())
     }
 
     fn handle_command(&mut self, cmd: ComputeCommand) {
@@ -355,10 +427,10 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     ///
     /// This method blocks if no command is currently available, but takes care to step the Timely
     /// worker while doing so.
-    fn recv_command(&mut self) -> ComputeCommand {
+    fn recv_command(&mut self) -> Result<ComputeCommand, EpochChange> {
         loop {
-            if let Some(cmd) = self.command_rx.try_recv() {
-                return cmd;
+            if let Some(cmd) = self.command_rx.try_recv()? {
+                return Ok(cmd);
             }
 
             let start = Instant::now();
@@ -387,12 +459,12 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     /// Some additional tidying happens, cleaning up pending peeks, reported frontiers, and creating a new
     /// subscribe response buffer. We will need to be vigilant with future modifications to `ComputeState` to
     /// line up changes there with clean resets here.
-    fn reconcile(&mut self) -> Result<(), RecvError> {
+    fn reconcile(&mut self) -> Result<(), EpochChange> {
         // To initialize the connection, we want to drain all commands until we receive a
         // `ComputeCommand::InitializationComplete` command to form a target command state.
         let mut new_commands = Vec::new();
         loop {
-            match self.recv_command() {
+            match self.recv_command()? {
                 ComputeCommand::InitializationComplete => break,
                 command => new_commands.push(command),
             }
@@ -664,7 +736,7 @@ fn spawn_channel_adapter(
         mpsc::UnboundedSender<LocalActivator>,
     )>,
     command_tx: command_channel::Sender,
-    response_rx: crossbeam_channel::Receiver<ComputeResponse>,
+    response_rx: crossbeam_channel::Receiver<(ComputeResponse, u64)>,
     worker_id: usize,
 ) {
     thread::Builder::new()
@@ -672,7 +744,15 @@ fn spawn_channel_adapter(
         // 15-character limit for thread names.
         .name(format!("cca-{worker_id}"))
         .spawn(move || {
+            // To make workers aware of the individual client connections, we tag forwarded
+            // commands with an epoch that increases on every new client connection. Additionally,
+            // we use the epoch to filter out responses with a different epoch, which were intended
+            // for previous clients.
+            let mut epoch = 0;
+
             while let Ok((command_rx, response_tx, activator_tx)) = client_rx.recv() {
+                epoch += 1;
+
                 // Serve this connection until we see any of the channels disconnect.
 
                 let activator = LocalActivator::new(thread::current());
@@ -683,11 +763,18 @@ fn spawn_channel_adapter(
                 loop {
                     crossbeam_channel::select! {
                         recv(command_rx) -> msg => match msg {
-                            Ok(cmd) => command_tx.send(cmd),
+                            Ok(cmd) => command_tx.send((cmd, epoch)),
                             Err(_) => break,
                         },
                         recv(response_rx) -> msg => {
-                            let resp = msg.expect("worker connected");
+                            let (resp, resp_epoch) = msg.expect("worker connected");
+
+                            if resp_epoch < epoch {
+                                continue; // response for a previous connection
+                            } else if resp_epoch > epoch {
+                                panic!("epoch from the future: {resp_epoch} > {epoch}");
+                            }
+
                             if response_tx.send(resp).is_err() {
                                 break;
                             }
