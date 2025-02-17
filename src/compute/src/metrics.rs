@@ -13,7 +13,7 @@ use mz_compute_client::metrics::{CommandMetrics, HistoryMetrics};
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{raw, MetricsRegistry, UIntGauge};
-use mz_repr::SharedRow;
+use mz_repr::{GlobalId, SharedRow};
 use prometheus::core::{AtomicF64, GenericCounter};
 use prometheus::proto::LabelPair;
 use prometheus::{Histogram, HistogramVec};
@@ -64,6 +64,9 @@ pub struct ComputeMetrics {
     // replica expiration
     replica_expiration_timestamp_seconds: raw::UIntGaugeVec,
     replica_expiration_remaining_seconds: raw::GaugeVec,
+
+    // collections
+    collection_count: raw::UIntGaugeVec,
 }
 
 impl ComputeMetrics {
@@ -160,6 +163,11 @@ impl ComputeMetrics {
                 name: "mz_dataflow_replica_expiration_remaining_seconds",
                 help: "The remaining seconds until replica expiration. Can go negative, can lag behind.",
                 var_labels: ["worker_id"],
+            )),
+            collection_count: registry.register(metric!(
+                name: "mz_compute_collection_count",
+                help: "The number and hydration status of maintained compute collections.",
+                var_labels: ["worker_id", "type", "hydrated"],
             )),
         }
     }
@@ -303,8 +311,83 @@ impl WorkerMetrics {
             .set(u64::cast_from(binding.borrow().byte_capacity()));
     }
 
+    /// Increase the count of maintained collections.
+    fn inc_collection_count(&self, collection_type: &str, hydrated: bool) {
+        let hydrated = if hydrated { "1" } else { "0" };
+        self.metrics
+            .collection_count
+            .with_label_values(&[&self.worker_label, collection_type, hydrated])
+            .inc();
+    }
+
+    /// Decrease the count of maintained collections.
+    fn dec_collection_count(&self, collection_type: &str, hydrated: bool) {
+        let hydrated = if hydrated { "1" } else { "0" };
+        self.metrics
+            .collection_count
+            .with_label_values(&[&self.worker_label, collection_type, hydrated])
+            .dec();
+    }
+
     /// Sets the workload class for the compute metrics.
     pub fn set_workload_class(&self, workload_class: Option<String>) {
         self.metrics.set_workload_class(workload_class);
+    }
+
+    pub fn for_collection(&self, id: GlobalId) -> CollectionMetrics {
+        CollectionMetrics::new(id, self.clone())
+    }
+}
+
+/// Collection metrics.
+///
+/// Note that these metrics do _not_ have a `collection_id` label. We avoid introducing
+/// per-collection, per-worker metrics because the number of resulting time series would
+/// potentially be huge. Instead we count classes of collections, such as hydrated collections.
+#[derive(Clone, Debug)]
+pub struct CollectionMetrics {
+    metrics: WorkerMetrics,
+    collection_type: &'static str,
+    collection_hydrated: bool,
+}
+
+impl CollectionMetrics {
+    pub fn new(collection_id: GlobalId, metrics: WorkerMetrics) -> Self {
+        let collection_type = match collection_id {
+            GlobalId::System(_) => "system",
+            GlobalId::IntrospectionSourceIndex(_) => "log",
+            GlobalId::User(_) => "user",
+            GlobalId::Transient(_) => "transient",
+            GlobalId::Explain => "explain",
+        };
+        let collection_hydrated = false;
+
+        metrics.inc_collection_count(collection_type, collection_hydrated);
+
+        Self {
+            metrics,
+            collection_type,
+            collection_hydrated,
+        }
+    }
+
+    /// Record this collection as hydration.
+    pub fn record_collection_hydrated(&mut self) {
+        if self.collection_hydrated {
+            return;
+        }
+
+        self.metrics
+            .dec_collection_count(self.collection_type, false);
+        self.metrics
+            .inc_collection_count(self.collection_type, true);
+        self.collection_hydrated = true;
+    }
+}
+
+impl Drop for CollectionMetrics {
+    fn drop(&mut self) {
+        self.metrics
+            .dec_collection_count(self.collection_type, self.collection_hydrated);
     }
 }
