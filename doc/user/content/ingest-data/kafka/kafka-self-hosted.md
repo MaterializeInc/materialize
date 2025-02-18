@@ -66,16 +66,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](/console/), or your preferred SQL
-   client connected to Materialize, find the static egress IP addresses for the
-   Materialize region you are running in:
-
-    ```mzsql
-    SELECT * FROM mz_egress_ips;
-    ```
-
-1. Update your Kafka cluster firewall rules to allow traffic from each IP
-   address from the previous step.
+1. Update your Kafka cluster firewall rules to allow traffic from Materialize.
 
 1. Create a [Kafka connection](/sql/create-connection/#kafka) that references
    your Kafka cluster:

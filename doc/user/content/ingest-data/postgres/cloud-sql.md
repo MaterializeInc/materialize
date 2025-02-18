@@ -36,40 +36,16 @@ documentation](https://cloud.google.com/sql/docs/postgres/replication/configure-
 
 {{% postgres-direct/create-a-publication-other %}}
 
-## B. (Optional) Configure network security
+## B. Configure network security
 
-{{< note >}}
-If you are prototyping and your Google Cloud SQL instance is publicly
-accessible, **you can skip this step**. For production scenarios, we recommend
-configuring one of the network security options below.
-{{</ note >}}
-
-There are various ways to configure your database's network to allow Materialize
-to connect:
-
-- **Allow Materialize IPs:** If your database is publicly accessible, you can
-    configure your database's firewall to allow connections from a set of
-    static Materialize IP addresses.
-
-- **Use an SSH tunnel:** If your database is running in a private network, you
-    can use an SSH tunnel to connect Materialize to the database.
-
-Select the option that works best for you.
+{{% ingest-data/configure-network-security-intro %}}
 
 {{< tabs >}}
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [Materialize console's SQL Shell](/console/),
-   or your preferred SQL client connected to Materialize, find the static egress
-   IP addresses for the Materialize region you are running in:
-
-    ```mzsql
-    SELECT * FROM mz_egress_ips;
-    ```
-
-1. Update your Google Cloud SQL firewall rules to allow traffic from each IP
-   address from the previous step.
+1. Update your Google Cloud SQL firewall rules to allow traffic from Materialize
+   IPs.
 
 {{< /tab >}}
 

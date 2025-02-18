@@ -103,38 +103,16 @@ binary logging.
 
 {{% mysql-direct/create-a-user-for-replication %}}
 
-## B. (Optional) Configure network security
+## B. Configure network security
 
-{{< note >}}
-If you are prototyping and your RDS instance is publicly accessible, **you can
-skip this step**. For production scenarios, we recommend configuring one of the
-network security options below.
-{{< /note >}}
-
-There are various ways to configure your database's network to allow Materialize
-to connect:
-
-- **Allow Materialize IPs:** If your database is publicly accessible, you can
-    configure your database's security group to allow connections from a set of
-    static Materialize IP addresses.
-
-- **Use an SSH tunnel:** If your database is running in a private network, you
-    can use an SSH tunnel to connect Materialize to the database.
+{{% ingest-data/configure-network-security-intro %}}
 
 {{< tabs >}}
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](/console/), or your preferred SQL
-   client connected to Materialize, find the static egress IP addresses for the
-   Materialize region you are running in:
-
-    ```mzsql
-    SELECT * FROM mz_egress_ips;
-    ```
-
 1. In the RDS Console, [add an inbound rule to your RDS security group](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/working-with-security-groups.html#adding-security-group-rule)
-   for each IP address from the previous step.
+   to allow traffic from Materialize IPs.
 
     In each rule:
 

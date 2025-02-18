@@ -197,21 +197,12 @@ If you use Neon's [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
 feature to limit the IP addresses that can connect to your Neon instance, you
 will need to allow inbound traffic from Materialize IP addresses.
 
-1. In the [Materialize console's SQL Shell](/console/),
-   or your preferred SQL client connected to
-   Materialize, run the following query to find the static egress IP addresses,
-   for the Materialize region you are running in:
-
-    ```mzsql
-    SELECT * FROM mz_egress_ips;
-    ```
-
 2. In your Neon project, add the IPs to your **IP Allow** list:
 
    1. Select your project in the Neon Console.
    2. On the Neon **Dashboard**, select **Settings**.
    3. Select **IP Allow**.
-   4. Add each Materialize IP address to the list.
+   4. Add Materialize IP addresses to the list.
 
 ## C. Ingest data in Materialize
 

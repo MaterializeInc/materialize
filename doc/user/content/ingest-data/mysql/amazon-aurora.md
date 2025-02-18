@@ -49,40 +49,16 @@ For guidance on enabling GTID-based binlog replication in Aurora, see the
 
 {{% mysql-direct/create-a-user-for-replication %}}
 
-## B. (Optional) Configure network security
+## B. Configure network security
 
-{{< note >}}
-If you are prototyping and your Aurora instance is publicly accessible, **you
-can skip this step**. For production scenarios, we recommend configuring one of
-the network security options below.
-{{< /note >}}
-
-There are various ways to configure your database's network to allow Materialize
-to connect:
-
-- **Allow Materialize IPs:** If your database is publicly accessible, you can
-    configure your database's security group to allow connections from a set of
-    static Materialize IP addresses.
-
-- **Use an SSH tunnel:** If your database is running in a private network, you
-    can use an SSH tunnel to connect Materialize to the database.
-
-Select the option that works best for you.
+{{% ingest-data/configure-network-security-intro %}}
 
 {{< tabs >}}
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](/console/), or your preferred SQL
-   client connected to Materialize, find the static egress IP addresses for the
-   Materialize region you are running in:
-
-    ```mzsql
-    SELECT * FROM mz_egress_ips;
-    ```
-
 1. [Add an inbound rule to your Aurora security group](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Overview.RDSSecurityGroups.html)
-    for each IP address from the previous step.
+    to allow traffic from Materialize IPs.
 
     In each rule:
 
@@ -90,8 +66,6 @@ Select the option that works best for you.
     - Set **Source** to the IP address in CIDR notation.
 
 {{< /tab >}}
-
-
 {{< tab "Use an SSH tunnel">}}
 
 To create an SSH tunnel from Materialize to your database, you launch an

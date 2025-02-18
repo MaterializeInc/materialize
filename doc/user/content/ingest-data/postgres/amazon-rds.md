@@ -98,41 +98,16 @@ As a first step, you need to make sure logical replication is enabled.
 
 {{% postgres-direct/create-a-publication-aws %}}
 
-## B. (Optional) Configure network security
+## B. Configure network security
 
-{{< note >}}
-If you are prototyping and your RDS instance is publicly accessible, **you can
-skip this step**. For production scenarios, we recommend configuring one of the
-network security options below.
-{{< /note >}}
-
-There are various ways to configure your database's network to allow Materialize
-to connect:
-
-- **Allow Materialize IPs:** If your database is publicly accessible, you can
-    configure your database's security group to allow connections from a set of
-    static Materialize IP addresses.
-
-- **Use AWS PrivateLink** or **Use an SSH tunnel:** If your database is running
-    in a private network, you can use either [AWS PrivateLink](https://aws.amazon.com/privatelink/)
-    or an SSH tunnel to connect Materialize to the database.
-
-Select the option that works best for you.
+{{% ingest-data/configure-network-security-intro %}}
 
 {{< tabs >}}
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [Materialize console's SQL Shell](/console/),
-   or your preferred SQL client connected to Materialize, find the static egress
-   IP addresses for the Materialize region you are running in:
-
-    ```mzsql
-    SELECT * FROM mz_egress_ips;
-    ```
-
 1. In the AWS Management Console, [add an inbound rule to your RDS security group](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/changing-security-group.html#add-remove-instance-security-groups)
-   for each IP address from the previous step.
+   to allow traffic from Materialize IPs.
 
     In each rule:
 
@@ -275,7 +250,7 @@ start by selecting the relevant option.
     ```
 
     - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT`> with the public IP
-      address and port of the SSH bastion host you created [earlier](#b-optional-configure-network-security).
+      address and port of the SSH bastion host you created [earlier](#b-configure-network-security).
 
     - Replace `<SSH_BASTION_USER>` with the username for the key pair you
       created for your SSH bastion host.
