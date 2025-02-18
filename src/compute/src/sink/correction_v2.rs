@@ -272,12 +272,17 @@ impl<D: Data> CorrectionV2<D> {
     /// Once this method returns, all remaining updates before `upper` are contained in a single
     /// chain. Note that this chain might also contain updates beyond `upper` though!
     fn consolidate_before(&mut self, upper: &Antichain<Timestamp>) {
-        let mut chains = std::mem::take(&mut self.chains);
-        if let Some(chain) = self.stage.flush() {
-            chains.push(chain);
+        if self.chains.is_empty() && self.stage.is_empty() {
+            return;
         }
 
+        let mut chains = std::mem::take(&mut self.chains);
+        chains.extend(self.stage.flush());
+
         if chains.is_empty() {
+            // We can only get here if the stage contained updates but they all got consolidated
+            // away by `flush`, so we need to update the metrics before we return.
+            self.update_metrics();
             return;
         }
 
@@ -923,6 +928,10 @@ impl<D: Data> Default for Stage<D> {
 }
 
 impl<D: Data> Stage<D> {
+    fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
     /// Insert a batch of updates, possibly producing a ready [`Chain`].
     fn insert(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) -> Option<Chain<D>> {
         if updates.is_empty() {
