@@ -33,9 +33,7 @@ rust_library(
     deps = [
         "//src/cluster-client:mz_cluster_client",
         "//src/ore:mz_ore",
-        "//src/persist-client:mz_persist_client",
         "//src/service:mz_service",
-        "//src/txn-wal:mz_txn_wal",
     ] + all_crate_deps(normal = True),
 )
 
@@ -69,9 +67,7 @@ rust_test(
     deps = [
         "//src/cluster-client:mz_cluster_client",
         "//src/ore:mz_ore",
-        "//src/persist-client:mz_persist_client",
         "//src/service:mz_service",
-        "//src/txn-wal:mz_txn_wal",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -84,9 +80,7 @@ rust_doc_test(
     deps = [
         "//src/cluster-client:mz_cluster_client",
         "//src/ore:mz_ore",
-        "//src/persist-client:mz_persist_client",
         "//src/service:mz_service",
-        "//src/txn-wal:mz_txn_wal",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
