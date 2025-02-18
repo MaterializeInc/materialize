@@ -5,6 +5,7 @@ following default resource allocations:
 <thead>
 <tr>
 <th>Size</th>
+<th>Scale</th>
 <th>CPU Limit</th>
 <th>Disk Limit</th>
 <th>Memory Limit</th>
@@ -14,6 +15,7 @@ following default resource allocations:
 {{ range $.Site.Data.self_managed.self_managed_cluster_sizes.cluster_sizes }}
 <tr>
 <td><code>{{ .size }}</code></td>
+<td><code>{{ .scale }}</code></td>
 <td><code>{{ .cpu_limit }}</code></td>
 <td><code>{{ .disk_limit }}</code></td>
 <td><code>{{ .memory_limit }}</code></td>
