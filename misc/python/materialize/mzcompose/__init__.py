@@ -270,7 +270,7 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
         workers: int,
         scale: int,
         disabled: bool = False,
-        is_cc: bool = False,
+        is_cc: bool = True,
         memory_limit: str | None = None,
     ) -> dict[str, Any]:
         return {
@@ -290,8 +290,10 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
         bootstrap_cluster_replica_size(): replica_size(1, 1),
         "2-4": replica_size(4, 2),
         "free": replica_size(0, 0, disabled=True),
-        "1cc": replica_size(1, 1, is_cc=True),
-        "1C": replica_size(1, 1, is_cc=True),
+        "1cc": replica_size(1, 1),
+        "1C": replica_size(1, 1),
+        "1-no-disk": replica_size(1, 1, is_cc=False),
+        "2-no-disk": replica_size(2, 1, is_cc=False),
     }
 
     for i in range(0, 6):
