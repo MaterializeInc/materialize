@@ -311,6 +311,11 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
       ![Image of  self-managed Materialize Console running on local kind](/images/self-managed/self-managed-console-kind.png)
 
+      
+{{< note >}}
+If you experience long loading screens or unresponsiveness in the Materialize Console, we recommend increasing the size of the `mz_catalog_server` cluster. Refer to the [Troubleshooting Console Unresponsiveness](/self-hosted/troubleshooting/#troubleshooting-console-unresponsiveness) guide.   
+{{< /note >}}
+
 ## See also
 
 - [Materialize Operator Configuration](/installation/configuration/)

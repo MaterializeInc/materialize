@@ -398,6 +398,10 @@ node instance type, etc.), see the
    1. Open a browser and navigate to
       [http://localhost:8080](http://localhost:8080). From the Console, you can get started with the Quickstart.
 
+{{< note >}}
+If you experience long loading screens or unresponsiveness in the Materialize Console, we recommend increasing the size of the `mz_catalog_server` cluster. Refer to the [Troubleshooting Console Unresponsiveness](/self-hosted/troubleshooting/#troubleshooting-console-unresponsiveness) guide.   
+{{< /note >}}
+
 ## Troubleshooting
 
 If you encounter issues:
