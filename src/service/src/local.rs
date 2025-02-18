@@ -15,27 +15,9 @@ use std::thread::Thread;
 use async_trait::async_trait;
 use crossbeam_channel::Sender;
 use itertools::Itertools;
-use timely::scheduling::SyncActivator;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
-
-/// A trait for types that can be used to activate threads.
-pub trait Activatable: fmt::Debug + Send {
-    fn activate(&self);
-}
-
-impl Activatable for SyncActivator {
-    fn activate(&self) {
-        self.activate().unwrap()
-    }
-}
-
-impl Activatable for Thread {
-    fn activate(&self) {
-        self.unpark()
-    }
-}
 
 /// A client to a thread in the same process.
 ///

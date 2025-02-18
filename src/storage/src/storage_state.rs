@@ -192,9 +192,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // part of the per-worker state, and must be treated as such, meaning
         // they must survive between invocations of `run_client`.
 
-        // TODO(aljoscha): This `Activatable` business seems brittle, but that's
+        // TODO(aljoscha): This thread unparking business seems brittle, but that's
         // also how the command channel works currently. We can wrap it inside a
-        // struct that holds both a channel and an `Activatable`, but I don't
+        // struct that holds both a channel and a `Thread`, but I don't
         // think that would help too much.
         let async_worker = async_storage_worker::AsyncStorageWorker::new(
             thread::current(),
