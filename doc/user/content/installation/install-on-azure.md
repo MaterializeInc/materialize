@@ -214,7 +214,7 @@ node instance type, etc.), see the
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   Apply complete! Resources: 19 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 21 added, 0 changed, 0 destroyed.
 
    Outputs:
 
