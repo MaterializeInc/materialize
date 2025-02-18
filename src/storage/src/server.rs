@@ -11,7 +11,8 @@
 
 use std::sync::Arc;
 
-use mz_cluster::server::TimelyContainerRef;
+use mz_cluster::client::{ClusterClient, ClusterSpec};
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
@@ -20,7 +21,7 @@ use mz_service::local::LocalActivator;
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
-use timely::communication::initialize::WorkerGuards;
+use timely::communication::Allocate;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
@@ -29,7 +30,13 @@ use crate::storage_state::{StorageInstanceContext, Worker};
 
 /// Configures a dataflow server.
 #[derive(Clone)]
-pub struct Config {
+struct Config {
+    /// `persist` client cache.
+    pub persist_clients: Arc<PersistClientCache>,
+    /// Context necessary for rendering txn-wal operators.
+    pub txns_ctx: TxnsContext,
+    /// A process-global handle to tracing configuration.
+    pub tracing_handle: Arc<TracingHandle>,
     /// Function to get wall time now.
     pub now: NowFn,
     /// Configuration for source and sink connection.
@@ -43,80 +50,69 @@ pub struct Config {
     pub shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
 
-/// A handle to a running dataflow server.
-///
-/// Dropping this object will block until the dataflow computation ceases.
-pub struct Server {
-    _worker_guards: WorkerGuards<()>,
-}
-
 /// Initiates a timely dataflow computation, processing storage commands.
 pub fn serve(
-    generic_config: mz_cluster::server::ClusterConfig,
+    metrics_registry: &MetricsRegistry,
+    persist_clients: Arc<PersistClientCache>,
+    txns_ctx: TxnsContext,
+    tracing_handle: Arc<TracingHandle>,
     now: NowFn,
     connection_context: ConnectionContext,
     instance_context: StorageInstanceContext,
-) -> Result<
-    (
-        TimelyContainerRef<StorageCommand, StorageResponse>,
-        impl Fn() -> Box<dyn StorageClient>,
-    ),
-    anyhow::Error,
-> {
-    // Various metrics related things.
-    let metrics = StorageMetrics::register_with(&generic_config.metrics_registry);
-
-    let shared_rocksdb_write_buffer_manager = Default::default();
-
+) -> Result<impl Fn() -> Box<dyn StorageClient>, anyhow::Error> {
     let config = Config {
+        persist_clients,
+        txns_ctx,
+        tracing_handle,
         now,
         connection_context,
         instance_context,
-        metrics,
+        metrics: StorageMetrics::register_with(metrics_registry),
         // The shared RocksDB `WriteBufferManager` is shared between the workers.
-        // It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the first worker attempts to initialize it.
-        shared_rocksdb_write_buffer_manager,
+        // It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the
+        // first worker attempts to initialize it.
+        shared_rocksdb_write_buffer_manager: Default::default(),
+    };
+    let tokio_executor = tokio::runtime::Handle::current();
+    let timely_container = Arc::new(tokio::sync::Mutex::new(None));
+
+    let client_builder = move || {
+        let client = ClusterClient::new(
+            Arc::clone(&timely_container),
+            tokio_executor.clone(),
+            config.clone(),
+        );
+        let client: Box<dyn StorageClient> = Box::new(client);
+        client
     };
 
-    let (timely_container, client_builder) = mz_cluster::server::serve::<
-        Config,
-        StorageCommand,
-        StorageResponse,
-    >(generic_config, config)?;
-    let client_builder = {
-        move || {
-            let client: Box<dyn StorageClient> = client_builder();
-            client
-        }
-    };
-
-    Ok((timely_container, client_builder))
+    Ok(client_builder)
 }
 
-impl mz_cluster::types::AsRunnableWorker<StorageCommand, StorageResponse> for Config {
-    fn build_and_run<A: timely::communication::Allocate>(
-        config: Self,
+impl ClusterSpec for Config {
+    type Command = StorageCommand;
+    type Response = StorageResponse;
+
+    fn run_worker<A: Allocate + 'static>(
+        &self,
         timely_worker: &mut TimelyWorker<A>,
         client_rx: crossbeam_channel::Receiver<(
             crossbeam_channel::Receiver<StorageCommand>,
             mpsc::UnboundedSender<StorageResponse>,
             mpsc::UnboundedSender<LocalActivator>,
         )>,
-        persist_clients: Arc<PersistClientCache>,
-        txns_ctx: TxnsContext,
-        tracing_handle: Arc<TracingHandle>,
     ) {
         Worker::new(
             timely_worker,
             client_rx,
-            config.metrics,
-            config.now.clone(),
-            config.connection_context,
-            config.instance_context,
-            persist_clients,
-            txns_ctx,
-            tracing_handle,
-            config.shared_rocksdb_write_buffer_manager,
+            self.metrics.clone(),
+            self.now.clone(),
+            self.connection_context.clone(),
+            self.instance_context.clone(),
+            Arc::clone(&self.persist_clients),
+            self.txns_ctx.clone(),
+            Arc::clone(&self.tracing_handle),
+            self.shared_rocksdb_write_buffer_manager.clone(),
         )
         .run();
     }

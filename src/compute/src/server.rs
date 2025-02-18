@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Error;
 use crossbeam_channel::{RecvError, TryRecvError};
-use mz_cluster::server::TimelyContainerRef;
+use mz_cluster::client::{ClusterClient, ClusterSpec};
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
@@ -27,6 +27,7 @@ use mz_compute_client::service::ComputeClient;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_ore::halt;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_service::local::LocalActivator;
@@ -60,10 +61,14 @@ pub struct ComputeInstanceContext {
 
 /// Configures the server with compute-specific metrics.
 #[derive(Debug, Clone)]
-pub struct Config {
+struct Config {
+    /// `persist` client cache.
+    pub persist_clients: Arc<PersistClientCache>,
+    /// Context necessary for rendering txn-wal operators.
+    pub txns_ctx: TxnsContext,
+    /// A process-global handle to tracing configuration.
+    pub tracing_handle: Arc<TracingHandle>,
     /// Metrics exposed by compute replicas.
-    // TODO(guswynn): cluster-unification: ensure these stats
-    // also work for storage when merging.
     pub metrics: ComputeMetrics,
     /// Other configuration for compute.
     pub context: ComputeInstanceContext,
@@ -71,31 +76,33 @@ pub struct Config {
 
 /// Initiates a timely dataflow computation, processing compute commands.
 pub fn serve(
-    config: mz_cluster::server::ClusterConfig,
+    metrics_registry: &MetricsRegistry,
+    persist_clients: Arc<PersistClientCache>,
+    txns_ctx: TxnsContext,
+    tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
-) -> Result<
-    (
-        TimelyContainerRef<ComputeCommand, ComputeResponse>,
-        impl Fn() -> Box<dyn ComputeClient>,
-    ),
-    Error,
-> {
-    let metrics = ComputeMetrics::register_with(&config.metrics_registry);
-    let compute_config = Config { metrics, context };
+) -> Result<impl Fn() -> Box<dyn ComputeClient>, Error> {
+    let config = Config {
+        persist_clients,
+        txns_ctx,
+        tracing_handle,
+        metrics: ComputeMetrics::register_with(metrics_registry),
+        context,
+    };
+    let tokio_executor = tokio::runtime::Handle::current();
+    let timely_container = Arc::new(tokio::sync::Mutex::new(None));
 
-    let (timely_container, client_builder) = mz_cluster::server::serve::<
-        Config,
-        ComputeCommand,
-        ComputeResponse,
-    >(config, compute_config)?;
-    let client_builder = {
-        move || {
-            let client: Box<dyn ComputeClient> = client_builder();
-            client
-        }
+    let client_builder = move || {
+        let client = ClusterClient::new(
+            Arc::clone(&timely_container),
+            tokio_executor.clone(),
+            config.clone(),
+        );
+        let client: Box<dyn ComputeClient> = Box::new(client);
+        client
     };
 
-    Ok((timely_container, client_builder))
+    Ok(client_builder)
 }
 
 /// Endpoint used by workers to receive compute commands.
@@ -198,35 +205,35 @@ struct Worker<'w, A: Allocate> {
     context: ComputeInstanceContext,
 }
 
-impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Config {
-    fn build_and_run<A: Allocate + 'static>(
-        config: Self,
+impl ClusterSpec for Config {
+    type Command = ComputeCommand;
+    type Response = ComputeResponse;
+
+    fn run_worker<A: Allocate + 'static>(
+        &self,
         timely_worker: &mut TimelyWorker<A>,
         client_rx: crossbeam_channel::Receiver<(
             crossbeam_channel::Receiver<ComputeCommand>,
             mpsc::UnboundedSender<ComputeResponse>,
             mpsc::UnboundedSender<LocalActivator>,
         )>,
-        persist_clients: Arc<PersistClientCache>,
-        txns_ctx: TxnsContext,
-        tracing_handle: Arc<TracingHandle>,
     ) {
-        if config.context.worker_core_affinity {
+        if self.context.worker_core_affinity {
             set_core_affinity(timely_worker.index());
         }
 
         let worker_id = timely_worker.index();
-        let metrics = config.metrics.for_worker(worker_id);
+        let metrics = self.metrics.for_worker(worker_id);
 
         Worker {
             timely_worker,
             client_rx,
             metrics,
-            context: config.context,
-            persist_clients,
-            txns_ctx,
+            context: self.context.clone(),
+            persist_clients: Arc::clone(&self.persist_clients),
+            txns_ctx: self.txns_ctx.clone(),
             compute_state: None,
-            tracing_handle,
+            tracing_handle: Arc::clone(&self.tracing_handle),
         }
         .run()
     }

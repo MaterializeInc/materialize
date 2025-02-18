@@ -318,13 +318,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let grpc_server_metrics = GrpcServerMetrics::register_with(&metrics_registry);
 
     // Start storage server.
-    let (_storage_server, storage_client) = mz_storage::serve(
-        mz_cluster::server::ClusterConfig {
-            metrics_registry: metrics_registry.clone(),
-            persist_clients: Arc::clone(&persist_clients),
-            txns_ctx: txns_ctx.clone(),
-            tracing_handle: Arc::clone(&tracing_handle),
-        },
+    let storage_client_builder = mz_storage::serve(
+        &metrics_registry,
+        Arc::clone(&persist_clients),
+        txns_ctx.clone(),
+        Arc::clone(&tracing_handle),
         SYSTEM_TIME.clone(),
         connection_context.clone(),
         StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
@@ -340,19 +338,17 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host.clone(),
-            storage_client,
+            storage_client_builder,
             |svc| ProtoStorageServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         ),
     );
 
     // Start compute server.
-    let (_compute_server, compute_client) = mz_compute::server::serve(
-        mz_cluster::server::ClusterConfig {
-            metrics_registry,
-            persist_clients,
-            txns_ctx,
-            tracing_handle,
-        },
+    let compute_client_builder = mz_compute::server::serve(
+        &metrics_registry,
+        persist_clients,
+        txns_ctx,
+        tracing_handle,
         ComputeInstanceContext {
             scratch_directory: args.scratch_directory,
             worker_core_affinity: args.worker_core_affinity,
@@ -370,7 +366,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host,
-            compute_client,
+            compute_client_builder,
             |svc| ProtoComputeServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
         ),
     );
