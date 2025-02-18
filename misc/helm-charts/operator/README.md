@@ -107,7 +107,9 @@ The following table lists the configurable parameters of the Materialize operato
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
+| `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``{}`` |
 | `clusterd.nodeSelector` | Node selector to use for clusterd pods spawned by the operator | ``{}`` |
+| `console.nodeSelector` | Node selector to use for console pods spawned by the operator | ``{}`` |
 | `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``{}`` |
 | `networkPolicies.egress` | egress from Materialize pods to sources and sinks | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
 | `networkPolicies.enabled` | Whether to enable network policies for securing communication between pods | ``false`` |
