@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET allowed_cluster_replica_sizes = "1";
+ALTER SYSTEM SET allowed_cluster_replica_sizes = '1-no-disk';
 ALTER SYSTEM SET disk_cluster_replicas_default = false;
 
 # Cannot create clusters with cc cluster size naming schemes
@@ -92,7 +92,7 @@ contains: DISK option not supported for modern cluster sizes because disk is alw
 contains: DISK option not supported for modern cluster sizes because disk is always enabled
 
 # But it's okay if you're going back to a legacy size.
-> ALTER CLUSTER c SET (DISK = true, SIZE = '1')
+> ALTER CLUSTER c SET (DISK = true, SIZE = '1-no-disk')
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 true
 > DROP CLUSTER c
