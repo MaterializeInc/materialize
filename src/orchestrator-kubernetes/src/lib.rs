@@ -896,11 +896,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         };
 
         let container_name = image
-            .splitn(2, '/')
-            .skip(1)
-            .next()
-            .and_then(|name_version| name_version.splitn(2, ':').next())
+            .rsplit_once('/')
+            .and_then(|(_, name_version)| name_version.rsplit_once(':'))
             .context("`image` is not ORG/NAME:VERSION")?
+            .0
             .to_string();
 
         let container_security_context = if scheduling_config.security_context_enabled {
