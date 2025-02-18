@@ -17,9 +17,7 @@ differential-dataflow = "0.13.6"
 futures = "0.3.25"
 mz-cluster-client = { path = "../cluster-client" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing_"] }
-mz-persist-client = { path = "../persist-client" }
 mz-service = { path = "../service" }
-mz-txn-wal = { path = "../txn-wal" }
 regex = "1.7.0"
 timely = "0.18.1"
 tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "net"] }
