@@ -173,6 +173,7 @@ IGNORE_RE = re.compile(
     | \ ANOM_ABEND\ .*\ exe="/usr/bin/qemu
     # This can happen in "K8s recovery: envd on failing node", but the test still succeeds, old environmentd will just be crashed, see database-issues#8749
     | \[pod/environmentd-0/environmentd\]\ .*\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out)
+    | cannot\ load\ unknown\ system\ parameter
     )
     """,
     re.VERBOSE | re.MULTILINE,

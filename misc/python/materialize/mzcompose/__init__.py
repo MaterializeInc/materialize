@@ -70,7 +70,6 @@ def get_default_system_parameters(
     return {
         # -----
         # Unsafe functions
-        "enable_unsafe_functions": "true",
         "unsafe_enable_unsafe_functions": "true",
         # -----
         # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
@@ -98,7 +97,6 @@ def get_default_system_parameters(
         ),
         "enable_alter_swap": "true",
         "enable_columnation_lgalloc": "true",
-        "enable_compute_chunked_stack": "true",
         "enable_compute_correction_v2": "true",
         "enable_connection_validation_syntax": "true",
         "enable_continual_task_builtins": (
@@ -123,7 +121,6 @@ def get_default_system_parameters(
         "enable_refresh_every_mvs": "true",
         "enable_cluster_schedule_refresh": "true",
         "enable_statement_lifecycle_logging": "true",
-        "enable_table_keys": "true",
         "unsafe_enable_table_keys": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
@@ -162,7 +159,6 @@ def get_default_system_parameters(
         "storage_statistics_collection_interval": "1000",
         "storage_statistics_interval": "2000",
         "storage_use_continual_feedback_upsert": "true",
-        "storage_use_reclock_v2": "true",
         "with_0dt_deployment_max_wait": "1800s",
         # End of list (ordered by name)
     }
