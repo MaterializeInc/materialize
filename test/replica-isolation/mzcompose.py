@@ -38,7 +38,7 @@ SERVICES = [
     Localstack(),
     Materialized(
         additional_system_parameter_defaults={
-            "log_filter": "mz_cluster::server=debug,info",
+            "log_filter": "mz_cluster::client=debug,info",
         },
     ),
     Clusterd(name="clusterd_1_1"),
