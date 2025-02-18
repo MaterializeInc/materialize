@@ -846,7 +846,22 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // If we haven't done the initial status report, report all current
         // statuses
         if !self.storage_state.initial_status_reported {
-            to_report.extend(self.storage_state.latest_status_updates.values().cloned());
+            // We pull initially reported status updates to "now", so that they
+            // sort as the latest update in internal status collections. This
+            // makes it so that a newly bootstrapped envd can append status
+            // updates to internal status collections that report an accurate
+            // view as of the time when they came up.
+            let now_ts = mz_ore::now::to_datetime((self.storage_state.now)());
+            let status_updates = self
+                .storage_state
+                .latest_status_updates
+                .values()
+                .cloned()
+                .map(|mut update| {
+                    update.timestamp = now_ts.clone();
+                    update
+                });
+            to_report.extend(status_updates);
             self.storage_state.initial_status_reported = true;
         }
 

@@ -1202,6 +1202,113 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         ), f"Took {duration}s to SELECT on MySQL source after 0dt upgrade, is it hydrated?"
 
 
+def workflow_kafka_source_failpoint(c: Composition) -> None:
+    """Verify that source status updates of the newly deployed environment take
+    precedent over older source status updates when promoted.
+
+    The original Materialized instance (mz_old) is started with a failpoint
+    that simulates a failure during state multi-put. After creating a Kafka
+    source, we promote a new deployment (mz_new) and verify that the source
+    status in mz_source_statuses is marked as 'running', indicating that the
+    source has rehydrated correctly despite the injected failure."""
+    c.down(destroy_volumes=True)
+    # Start the required services.
+    c.up("zookeeper", "kafka", "schema-registry")
+    c.up("testdrive", persistent=True)
+
+    # Start the original Materialized instance with the failpoint enabled.
+    with c.override(
+        Materialized(
+            name="mz_old",
+            sanity_restart=False,
+            deploy_generation=0,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            external_metadata_store=True,
+            environment_extra=["FAILPOINTS=fail_state_multi_put=return"],
+        )
+    ):
+        c.up("mz_old")
+
+        # Make sure cluster is owned by the system so it doesn't get dropped
+        # between testdrive runs.
+        c.sql(
+            dedent(
+                """
+                DROP CLUSTER IF EXISTS cluster CASCADE;
+                CREATE CLUSTER cluster SIZE '1';
+                GRANT ALL ON CLUSTER cluster TO materialize;
+                ALTER SYSTEM SET cluster = cluster;
+                """
+            ),
+            service="mz_old",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.testdrive(
+            dedent(
+                """
+                > SET CLUSTER = cluster;
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL = 'PLAINTEXT';
+
+                $ kafka-create-topic topic=kafka-fp
+                $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka-fp
+                keyA,keyA:valA,valA
+
+                > CREATE SOURCE kafka_source_fp
+                  IN CLUSTER cluster
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-fp-${testdrive.seed}');
+
+                > CREATE TABLE kafka_source_tbl (key1, key2, value1, value2)
+                  FROM SOURCE kafka_source_fp (REFERENCE "testdrive-kafka-fp-${testdrive.seed}")
+                  KEY FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+                  VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ','
+                  ENVELOPE UPSERT;
+
+                > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'kafka_source_fp';
+                stalled
+                """
+            )
+        )
+
+    with c.override(
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+        ),
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "cluster"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        ),
+    ):
+        c.up("mz_new")
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        c.promote_mz("mz_new")
+
+        c.await_mz_deployment_status(
+            DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
+        )
+
+        # Verify that the Kafka source's status is marked as "running" in mz_source_statuses.
+        c.testdrive(
+            dedent(
+                """
+                > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'kafka_source_fp';
+                running
+                """
+            )
+        )
+
+
 def fetch_reconciliation_metrics(c: Composition, process: str) -> tuple[int, int]:
     # TODO: Replace me with mz_internal.mz_cluster_replica_ports when it exists
     internal_http = c.exec(
