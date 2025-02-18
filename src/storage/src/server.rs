@@ -17,7 +17,6 @@ use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_rocksdb::config::SharedWriteBufferManager;
-use mz_service::local::LocalActivator;
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
@@ -99,7 +98,6 @@ impl ClusterSpec for Config {
         client_rx: crossbeam_channel::Receiver<(
             crossbeam_channel::Receiver<StorageCommand>,
             mpsc::UnboundedSender<StorageResponse>,
-            mpsc::UnboundedSender<LocalActivator>,
         )>,
     ) {
         Worker::new(
