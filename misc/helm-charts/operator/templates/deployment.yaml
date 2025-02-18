@@ -123,6 +123,12 @@ spec:
         {{- range $key, $value := .Values.clusterd.nodeSelector }}
         - "--clusterd-node-selector={{ $key }}={{ $value }}"
         {{- end }}
+        {{- range $key, $value := .Values.balancerd.nodeSelector }}
+        - "--balancerd-node-selector={{ $key }}={{ $value }}"
+        {{- end }}
+        {{- range $key, $value := .Values.console.nodeSelector }}
+        - "--console-node-selector={{ $key }}={{ $value }}"
+        {{- end }}
         {{- if .Values.storage.storageClass.name }}
         - "--ephemeral-volume-class={{ .Values.storage.storageClass.name }}"
         {{- end }}
