@@ -1235,8 +1235,9 @@ steps:
         - ./ci/plugins/scratch-aws-access: ~
         - ./ci/plugins/mzcompose:
             composition: terraform
-            run: aws
-      branches: "main v*.* lts-v*"
+            run: aws-temporary
+      # same test runs in test pipeline for changes that touch relevant files
+      branches: "main v*.* self-managed/v*"
 
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
@@ -1251,8 +1252,9 @@ steps:
         - ./ci/plugins/scratch-aws-access: ~
         - ./ci/plugins/mzcompose:
             composition: terraform
-            run: gcp
-      branches: "main v*.* lts-v*"
+            run: gcp-temporary
+      # same test runs in test pipeline for changes that touch relevant files
+      branches: "main v*.* self-managed/v*"
 
   - group: "Output consistency"
     key: output-consistency

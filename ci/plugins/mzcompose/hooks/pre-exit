@@ -148,6 +148,6 @@ run down --volumes
 
 if [[ "$BUILDKITE_LABEL" =~ Terraform\ .* ]]; then
   ci_unimportant_heading "terraform: Destroying leftover state in case job was cancelled or timed out..."
-  bin/ci-builder run stable terraform -chdir=test/terraform/aws destroy || true
-  bin/ci-builder run stable terraform -chdir=test/terraform/gcp destroy || true
+  bin/ci-builder run stable terraform -chdir=test/terraform/aws-temporary destroy || true
+  bin/ci-builder run stable terraform -chdir=test/terraform/gcp-temporary destroy || true
 fi
