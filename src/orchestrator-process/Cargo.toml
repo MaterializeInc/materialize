@@ -23,7 +23,7 @@ mz-orchestrator = { path = "../orchestrator", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "network"] }
 mz-repr = { path = "../repr", default-features = false }
 mz-secrets = { path = "../secrets", default-features = false }
-nix = "0.26.1"
+nix = "0.29.0"
 serde = "1.0.147"
 serde_json = "1.0.125"
 scopeguard = "1.1.0"

@@ -72,7 +72,7 @@ mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing", optional = true }
-nix = "0.26.1"
+nix = "0.29.0"
 num_cpus = "1.14.0"
 openssl = { version = "0.10.48", features = ["vendored"] }
 openssl-sys = { version = "0.9.80", features = ["vendored"] }
