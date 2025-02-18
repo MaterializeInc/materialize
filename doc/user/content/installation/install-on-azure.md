@@ -8,15 +8,20 @@ menu:
     parent: "installation"
 ---
 
-The tutorial deploys Materialize to Azure Kubernetes Service (AKS) with a
-PostgreSQL database as the metadata database and Azure Blob Storage for blob
-storage. The tutorial uses Terraform both to set up the Azure Kubernetes
-environment and to deploy the Materialize Operator and Materialize instance to
-that AKS cluster.
-
 Self-managed Materialize requires:
 
 {{% self-managed/materialize-components-list %}}
+
+The tutorial deploys Materialize to Azure Kubernetes Service (AKS) with a
+PostgreSQL database as the metadata database and Azure Blob Storage for blob
+storage. The tutorial uses [Materialize on Azure Terraform
+modules](https://github.com/MaterializeInc/terraform-azurerm-materialize) to:
+
+- Set up the AWS Kubernetes environment
+- Call
+   [terraform-helm-materialize](https://github.com/MaterializeInc/terraform-helm-materialize)
+   module to deploy Materialize Operator and Materialize instances to that EKS
+   cluster
 
 {{< warning >}}
 
@@ -99,7 +104,7 @@ documentation](https://helm.sh/docs/intro/install/).
 
 {{< /warning >}}
 
-Materialize provides [sample Terraform
+Materialize provides the [Materialize on Azure Terraform
 modules](https://github.com/MaterializeInc/terraform-azurerm-materialize) for
 evaluation purposes only. The modules deploy a sample infrastructure on Azure
 with the following components:
