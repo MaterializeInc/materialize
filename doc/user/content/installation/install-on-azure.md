@@ -443,6 +443,11 @@ terraform destroy
 
 When prompted to proceed, type `yes` to confirm the deletion.
 
+{{< tip>}}
+If the `terraform destroy` command is unable to delete the subnet because it is
+in use, you can try rerunning the `terraform destroy` command.
+{{</ tip >}}
+
 ## See also
 
 - [Materialize Operator Configuration](/installation/configuration/)
