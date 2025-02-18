@@ -107,8 +107,11 @@ The following table lists the configurable parameters of the Materialize operato
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
+| `balancerd.enabled` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
 | `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``{}`` |
 | `clusterd.nodeSelector` | Node selector to use for clusterd pods spawned by the operator | ``{}`` |
+| `console.enabled` | Flag to indicate whether to create console pods for the environments | ``true`` |
+| `console.imageTagMapOverride` | Override the mapping of environmentd versions to console versions | ``{}`` |
 | `console.nodeSelector` | Node selector to use for console pods spawned by the operator | ``{}`` |
 | `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``{}`` |
 | `networkPolicies.egress` | egress from Materialize pods to sources and sinks | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
@@ -138,9 +141,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.defaultSizes.support` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.system` |  | ``"25cc"`` |
 | `operator.features.authentication` | Whether to enable environmentd rbac checks TODO: this is not yet supported in the helm chart | ``false`` |
-| `operator.features.consoleImageTagMapOverride` | Override the mapping of environmentd versions to console versions | ``{}`` |
-| `operator.features.createBalancers` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
-| `operator.features.createConsole` | Flag to indicate whether to create console pods for the environments | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
 | `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.130.3"`` |
