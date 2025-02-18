@@ -138,12 +138,28 @@ where
         let metrics = self.metrics.for_replica(id);
         let replica = Replica::new(id, config, self.epoch, metrics, self.response_tx.clone());
 
+        self.replicas.insert(id, replica);
+
+        self.schedule_ingestions();
+
+        self.replay_commands(id);
+    }
+
+    /// Replays commands to the specified replica.
+    pub fn replay_commands(&mut self, id: ReplicaId) {
+        let replica = self.replicas.get_mut(&id).expect("replica must exist");
+
         // Replay the commands at the new replica.
         for command in self.history.iter() {
             // replica.send(command.clone());
             match command.clone() {
-                StorageCommand::RunIngestions(_) => {
-                    // Ingestions are handled by schedule_ingestions below.
+                StorageCommand::RunIngestions(cmds) => {
+                    for cmd in cmds {
+                        let active_replicas = self.active_ingestions.get(&cmd.id).expect("ingestion must exist").active_replicas.clone();
+                        if active_replicas.contains(&id) {
+                            replica.send(StorageCommand::RunIngestions(vec![cmd.clone()]));
+                        }
+                    }
                 }
                 StorageCommand::AllowCompaction(_) => {
                     // Compactions are handled by send_compactions below.
@@ -153,10 +169,6 @@ where
                 }
             }
         }
-
-        self.replicas.insert(id, replica);
-
-        self.schedule_ingestions();
 
         let compactions = self
             .history
@@ -169,6 +181,7 @@ where
                 }
             })
             .collect();
+
         self.send_compactions(&compactions);
     }
 
