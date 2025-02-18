@@ -66,14 +66,14 @@ spec:
         {{- end }}
 
         {{/* Feature Flags */}}
-        {{- if .Values.operator.features.createBalancers }}
+        {{- if .Values.balancerd.enabled }}
         - "--create-balancers"
         {{- end }}
-        {{- if .Values.operator.features.createConsole }}
+        {{- if .Values.console.enabled }}
         - "--create-console"
         {{- end }}
         - "--console-image-tag-default=25.1.1"
-        {{- range $key, $value := .Values.operator.features.consoleImageTagMapOverride }}
+        {{- range $key, $value := .Values.console.imageTagMapOverride }}
         - "--console-image-tag-map={{ $key }}={{ $value }}"
         {{- end }}
         {{- if not .Values.operator.features.authentication }}
