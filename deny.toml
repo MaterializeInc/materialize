@@ -48,7 +48,7 @@ skip = [
     { name = "windows-sys", version = "0.52.0" },
     # Newer versions of crates like `tempfile` are held back by crates like `atty`.
     # This is very Unfortunate as we don't actually use these platforms.
-    { name = "hermit-abi", version = "0.2.6" },
+    { name = "hermit-abi", version = "0.3.9" },
     { name = "redox_syscall", version = "0.2.10" },
 
     # Will require updating many crates

@@ -16,7 +16,7 @@ derivative = "2.2.0"
 itertools = { version = "0.12.1" }
 mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
 mz-rocksdb-types = { path = "../rocksdb-types" }
-num_cpus = "1.14.0"
+num_cpus = "1.16.0"
 prometheus = { version = "0.13.3", default-features = false }
 tokio = { version = "1.38.0", features = ["macros", "sync", "rt"] }
 serde = { version = "1.0.152", features = ["derive"] }

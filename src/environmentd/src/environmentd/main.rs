@@ -700,7 +700,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             // length, so pick something shorter.
             .thread_name_fn(|| {
                 static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
-                let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
+                let id = ATOMIC_ID.fetch_add(1, Ordering::Relaxed);
                 format!("tokio:work-{}", id)
             })
             .enable_all()

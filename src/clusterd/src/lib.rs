@@ -141,15 +141,31 @@ struct Args {
     worker_core_affinity: bool,
 }
 
-#[tokio::main]
-pub async fn main() {
+pub fn main() {
     mz_ore::panic::install_enhanced_handler();
 
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("CLUSTERD_"),
         enable_version_flag: true,
     });
-    if let Err(err) = run(args).await {
+
+    let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(ncpus_useful)
+        // The default thread name exceeds the Linux limit on thread name
+        // length, so pick something shorter. The maximum length is 16 including
+        // a \0 terminator. This gives us four decimals, which should be enough
+        // for most existing computers.
+        .thread_name_fn(|| {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
+            let id = ATOMIC_ID.fetch_add(1, Ordering::Relaxed);
+            format!("tokio:work-{}", id)
+        })
+        .enable_all()
+        .build()
+        .unwrap();
+    if let Err(err) = runtime.block_on(run(args)) {
         panic!("clusterd: fatal: {}", err.display_with_causes());
     }
 }
