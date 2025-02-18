@@ -173,7 +173,7 @@ operator:
       system: 25cc
       probe: mz_probe
       support: 25cc
-      catalogServer: 50cc
+      catalogServer: 25cc
       analytics: 25cc
     defaultReplicationFactor:
       system: 0
