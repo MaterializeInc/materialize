@@ -1662,3 +1662,117 @@ values ('2023-01-01T00:00:00.666'::timestamp(6)) union all values ('2023-01-01T0
 
 query error numeric field overflow
 SELECT '1e-307'::float8::numeric
+
+statement ok
+CREATE TABLE t1(a varchar(3));
+
+statement ok
+CREATE TABLE t2(b varchar(4));
+
+statement error db error: ERROR: value too long for type character varying\(3\)
+INSERT INTO t1 VALUES ('123456');
+
+# From the Postgres docs: https://www.postgresql.org/docs/current/datatype-character.html
+# "An attempt to store a longer string into a column of these types will result in an error, unless the excess
+# characters are all spaces, in which case the string will be truncated to the maximum length. (This somewhat bizarre
+# exception is required by the SQL standard.)"
+statement ok
+INSERT INTO t1 VALUES ('111   ');
+
+statement ok
+INSERT INTO t1 VALUES ('123');
+
+statement ok
+INSERT INTO t2 VALUES ('1234');
+
+query T multiline
+EXPLAIN WITH (TYPES)
+(SELECT * FROM t1) UNION ALL (SELECT * FROM t2);
+----
+Explained Query:
+  Union // { types: "(varchar?)" }
+    ReadStorage materialize.public.t1 // { types: "(varchar(3)?)" }
+    ReadStorage materialize.public.t2 // { types: "(varchar(4)?)" }
+
+Source materialize.public.t1
+Source materialize.public.t2
+
+Target cluster: quickstart
+
+EOF
+
+query T
+(SELECT * FROM t1) UNION ALL (SELECT * FROM t2);
+----
+111
+123
+1234
+
+query T
+(SELECT * FROM t2) UNION ALL (SELECT * FROM t1);
+----
+111
+123
+1234
+
+statement ok
+CREATE TABLE t3(b char(2));
+
+statement ok
+INSERT INTO t3 VALUES ('ab');
+
+query T multiline
+EXPLAIN WITH (TYPES)
+(SELECT * FROM t1) UNION ALL (SELECT * FROM t3);
+----
+Explained Query:
+  Union // { types: "(varchar?)" }
+    ReadStorage materialize.public.t1 // { types: "(varchar(3)?)" }
+    Project (#1) // { types: "(varchar?)" }
+      Map (text_to_varchar[len=None](#0)) // { types: "(char(2)?, varchar?)" }
+        ReadStorage materialize.public.t3 // { types: "(char(2)?)" }
+
+Source materialize.public.t1
+Source materialize.public.t3
+
+Target cluster: quickstart
+
+EOF
+
+query T
+(SELECT * FROM t1) UNION ALL (SELECT * FROM t3);
+----
+ab
+111
+123
+
+statement ok
+CREATE TABLE t4(b char(3));
+
+statement ok
+INSERT INTO t4 VALUES ('ab ');
+
+query T multiline
+EXPLAIN WITH (TYPES)
+(SELECT * FROM t3) UNION (SELECT * FROM t4);
+----
+Explained Query:
+  Distinct project=[#0] // { types: "(char?)" }
+    Union // { types: "(char?)" }
+      ReadStorage materialize.public.t3 // { types: "(char(2)?)" }
+      ReadStorage materialize.public.t4 // { types: "(char(3)?)" }
+
+Source materialize.public.t3
+Source materialize.public.t4
+
+Target cluster: quickstart
+
+EOF
+
+# Trailing spaces are treated as semantically insignificant in both Postgres and Materialize, so the above
+# 'ab' and 'ab ' end up deduplicated.
+# See also in char-varchar-distinct.td
+query T
+(SELECT * FROM t3) UNION (SELECT * FROM t4);
+----
+ab

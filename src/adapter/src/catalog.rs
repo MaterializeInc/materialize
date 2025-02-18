@@ -1672,6 +1672,14 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .join(",")
             ),
             PgLegacyChar => "\"char\"".into(),
+            Char { length } => match length {
+                None => "char".into(),
+                Some(length) => format!("char({})", length.into_u32()),
+            },
+            VarChar { max_length } => match max_length {
+                None => "varchar".into(),
+                Some(length) => format!("varchar({})", length.into_u32()),
+            },
             UInt16 => "uint2".into(),
             UInt32 => "uint4".into(),
             UInt64 => "uint8".into(),

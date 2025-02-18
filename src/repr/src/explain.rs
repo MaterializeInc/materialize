@@ -438,9 +438,11 @@ pub trait ExprHumanizer: fmt::Debug {
     fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>>;
 
     /// Returns a human-readable name for the specified scalar type.
+    /// Used in, e.g., EXPLAIN and error msgs.
     fn humanize_scalar_type(&self, ty: &ScalarType) -> String;
 
     /// Returns a human-readable name for the specified column type.
+    /// Used in, e.g., EXPLAIN and error msgs.
     fn humanize_column_type(&self, typ: &ColumnType) -> String {
         format!(
             "{}{}",
