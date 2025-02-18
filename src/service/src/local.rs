@@ -37,45 +37,15 @@ impl Activatable for Thread {
     }
 }
 
-/// An activator for a thread.
-///
-/// This wraps any `Activatable` and has a `Drop` impl to ensure the thread is always activated
-/// when the activator is dropped. This is important to ensure workers have a chance to observe
-/// that their command channel has closed and prepare for reconnection.
-#[derive(Debug)]
-pub struct LocalActivator {
-    inner: Box<dyn Activatable>,
-}
-
-impl LocalActivator {
-    pub fn new<A: Activatable + 'static>(inner: A) -> Self {
-        Self {
-            inner: Box::new(inner),
-        }
-    }
-
-    fn activate(&self) {
-        self.inner.activate();
-    }
-}
-
-impl Drop for LocalActivator {
-    fn drop(&mut self) {
-        self.inner.activate();
-    }
-}
-
 /// A client to a thread in the same process.
 ///
 /// The thread is unparked on every call to [`send`](LocalClient::send) and on
 /// `Drop`.
 #[derive(Debug)]
 pub struct LocalClient<C, R> {
-    // Order is important here: We need to drop the `tx` before the activator so when the thread is
-    // unparked by the dropping of the activator it can observed that the sender has disconnected.
     rx: UnboundedReceiver<R>,
     tx: Sender<C>,
-    tx_activator: LocalActivator,
+    thread: Thread,
 }
 
 #[async_trait]
@@ -89,7 +59,7 @@ where
             .send(cmd)
             .expect("worker command receiver should not drop first");
 
-        self.tx_activator.activate();
+        self.thread.unpark();
 
         Ok(())
     }
@@ -107,19 +77,15 @@ where
 
 impl<C, R> LocalClient<C, R> {
     /// Create a new instance of [`LocalClient`] from its parts.
-    pub fn new(rx: UnboundedReceiver<R>, tx: Sender<C>, tx_activator: LocalActivator) -> Self {
-        Self {
-            rx,
-            tx,
-            tx_activator,
-        }
+    pub fn new(rx: UnboundedReceiver<R>, tx: Sender<C>, thread: Thread) -> Self {
+        Self { rx, tx, thread }
     }
 
     /// Create a new partitioned local client from parts for each client.
     pub fn new_partitioned(
         rxs: Vec<UnboundedReceiver<R>>,
         txs: Vec<Sender<C>>,
-        tx_activators: Vec<LocalActivator>,
+        threads: Vec<Thread>,
     ) -> Partitioned<Self, C, R>
     where
         (C, R): Partitionable<C, R>,
@@ -127,9 +93,15 @@ impl<C, R> LocalClient<C, R> {
         let clients = rxs
             .into_iter()
             .zip_eq(txs)
-            .zip_eq(tx_activators)
-            .map(|((rx, tx), tx_activator)| LocalClient::new(rx, tx, tx_activator))
+            .zip_eq(threads)
+            .map(|((rx, tx), thread)| LocalClient::new(rx, tx, thread))
             .collect();
         Partitioned::new(clients)
+    }
+}
+
+impl<C, R> Drop for LocalClient<C, R> {
+    fn drop(&mut self) {
+        self.thread.unpark();
     }
 }
