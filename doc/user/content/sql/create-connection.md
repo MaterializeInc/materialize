@@ -194,7 +194,6 @@ connections to create [sources](/sql/create-source/kafka) and [sinks](/sql/creat
 | `SSL KEY`                                 | secret           | Your TLS certificate's key in PEM format.<br><br>Required and only valid when `SSL CERTIFICATE` is specified.
 | `SSH TUNNEL`                              | object name      | The name of an [SSH tunnel connection](#ssh-tunnel) to route network traffic through by default.
 | `AWS CONNECTION` <a name="kafka-aws-connection"></a>  | object name      | The name of an [AWS connection](#aws) to use when performing IAM authentication with an Amazon MSK cluster.<br><br>Only valid if the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.<br><br>***Private preview.** This option has known performance or stability issues and is under active development.*
-| `AWS PRIVATELINK`                         | object name      | The name of an [AWS PrivateLink connection](#aws-privatelink) to route network traffic through. <br><br>Exactly one of `BROKER`, `BROKERS`, or `AWS PRIVATELINK` must be specified.
 | `PROGRESS TOPIC`                          | `text`           | The name of a topic that Kafka sinks can use to track internal consistency metadata. Default: `_materialize-progress-{REGION ID}-{CONNECTION ID}`.
 | `PROGRESS TOPIC REPLICATION FACTOR`       | `int`            | The partition count to use when creating the progress topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
 
@@ -329,114 +328,7 @@ CREATE CONNECTION kafka_msk TO KAFKA (
 #### Network security {#kafka-network-security}
 
 If your Kafka broker is not exposed to the public internet, you can tunnel the
-connection through an AWS PrivateLink service or an SSH bastion host.
-
-{{< tabs >}}
-{{< tab "AWS PrivateLink">}}
-
-Depending on the hosted service you are connecting to, you might need to specify
-a PrivateLink connection [per advertised broker](#kafka-privatelink-syntax)
-(e.g. Amazon MSK), or a single [default PrivateLink connection](#kafka-privatelink-default) (e.g. Redpanda Cloud).
-
-##### Broker connection syntax {#kafka-privatelink-syntax}
-
-{{< warning >}}
-If your Kafka cluster advertises brokers that are not specified
-in the `BROKERS` clause, Materialize will attempt to connect to
-those brokers without any tunneling.
-{{< /warning >}}
-
-{{< diagram "create-connection-kafka-brokers.svg" >}}
-
-##### `kafka_broker`
-
-{{< diagram "create-connection-kafka-broker-aws-privatelink.svg" >}}
-
-##### `broker_option`
-
-{{< diagram "broker-option.svg" >}}
-
-The `USING` clause specifies that Materialize should connect to the designated
-broker via an AWS PrivateLink service. Brokers do not need to be configured the
-same way, but the clause must be individually attached to each broker that you
-want to connect to via the tunnel.
-
-##### Broker connection options {#kafka-privatelink-options}
-
-Field                                   | Value            | Required | Description
-----------------------------------------|------------------|:--------:|-------------------------------
-`AWS PRIVATELINK`                       | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic for this broker should be routed.
-`AVAILABILITY ZONE`                     | `text`           |          | The ID of the availability zone of the AWS PrivateLink service in which the broker is accessible. If unspecified, traffic will be routed to each availability zone declared in the [AWS PrivateLink connection](#aws-privatelink) in sequence until the correct availability zone for the broker is discovered. If specified, Materialize will always route connections via the specified availability zone.
-`PORT`                                  | `integer`        |          | The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
-
-##### Example {#kafka-privatelink-example}
-
-Suppose you have the following infrastructure:
-
-  * A Kafka cluster consisting of two brokers named `broker1` and `broker2`,
-    both listening on port 9092.
-
-  * A Network Load Balancer that forwards port 9092 to `broker1:9092` and port
-    9093 to `broker2:9092`.
-
-  * A PrivateLink endpoint service attached to the load balancer.
-
-You can create a connection to this Kafka broker in Materialize like so:
-
-```mzsql
-CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
-    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
-);
-
-CREATE CONNECTION kafka_connection TO KAFKA (
-    BROKERS (
-        'broker1:9092' USING AWS PRIVATELINK privatelink_svc,
-        'broker2:9092' USING AWS PRIVATELINK privatelink_svc (PORT 9093)
-    )
-);
-```
-
-##### Default connections {#kafka-privatelink-default}
-
-[Redpanda Cloud](/ingest-data/redpanda/redpanda-cloud/)) does not require
-listing every broker individually. In this case, you should specify a
-PrivateLink connection and the port of the bootstrap server instead.
-
-##### Default connection syntax {#kafka-privatelink-default-syntax}
-
-{{< diagram "create-connection-kafka-default-aws-privatelink.svg" >}}
-
-##### Default connection options {#kafka-privatelink-default-options}
-
-Field                                   | Value            | Required | Description
-----------------------------------------|------------------|:--------:|-------------------------------
-`AWS PRIVATELINK`                       | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic for this broker should be routed.
-`PORT`                                  | `integer`        |          | The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
-
-##### Example {#kafka-privatelink-default-example}
-
-```mzsql
-CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
-    AVAILABILITY ZONES ('use1-az1')
-);
-
-CREATE CONNECTION kafka_connection TO KAFKA (
-    AWS PRIVATELINK (PORT 30292)
-    SECURITY PROTOCOL = 'SASL_PLAINTEXT',
-    SASL MECHANISMS = 'SCRAM-SHA-256',
-    SASL USERNAME = 'foo',
-    SASL PASSWORD = SECRET red_panda_password
-);
-```
-
-For step-by-step instructions on creating AWS PrivateLink connections and
-configuring an AWS PrivateLink service to accept connections from Materialize,
-check [this guide](/ops/network-security/privatelink/).
-
-{{< /tab >}}
-{{< tab "SSH tunnel">}}
+connection through an SSH bastion host.
 
 ##### Syntax {#kafka-ssh-syntax}
 
@@ -500,8 +392,6 @@ BROKERS (
 For step-by-step instructions on creating SSH tunnel connections and configuring
 an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 
-{{< /tab >}}
-{{< /tabs >}}
 
 ### Confluent Schema Registry
 
@@ -572,29 +462,7 @@ you can tunnel the connection through an AWS PrivateLink service or an SSH
 bastion host.
 
 {{< tabs >}}
-{{< tab "AWS PrivateLink">}}
 
-##### Connection options {#csr-privatelink-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:|-----------------------------
-`AWS PRIVATELINK`           | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic should be routed.
-
-##### Example {#csr-privatelink-example}
-
-```mzsql
-CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
-    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
-);
-
-CREATE CONNECTION csr_privatelink TO CONFLUENT SCHEMA REGISTRY (
-    URL 'http://my-confluent-schema-registry:8081',
-    AWS PRIVATELINK privatelink_svc
-);
-```
-
-{{< /tab >}}
 {{< tab "SSH tunnel">}}
 
 ##### Connection options {#csr-ssh-options}
@@ -665,40 +533,7 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 #### Network security {#mysql-network-security}
 
 If your MySQL server is not exposed to the public internet, you can tunnel
-the connection through an AWS PrivateLink service or an SSH bastion host.
-
-{{< tabs >}}
-{{< tab "AWS PrivateLink">}}
-
-##### Connection options {#mysql-privatelink-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:|-----------------------------
-`AWS PRIVATELINK`           | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic should be routed.
-
-##### Example {#mysql-privatelink-example}
-
-```mzsql
-CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-   SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
-   AVAILABILITY ZONES ('use1-az1', 'use1-az4')
-);
-
-CREATE CONNECTION mysql_connection TO MYSQL (
-    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
-    PORT 3306,
-    USER 'root',
-    PASSWORD SECRET mysqlpass,
-    AWS PRIVATELINK privatelink_svc
-);
-```
-
-For step-by-step instructions on creating AWS PrivateLink connections and
-configuring an AWS PrivateLink service to accept connections from Materialize,
-check [this guide](/ops/network-security/privatelink/).
-
-{{< /tab >}}
-{{< tab "SSH tunnel">}}
+the connection through an SSH bastion host.
 
 ##### Connection options {#mysql-ssh-options}
 
@@ -723,9 +558,6 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 
 For step-by-step instructions on creating SSH tunnel connections and configuring
 an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
-
-{{< /tab >}}
-{{< /tabs >}}
 
 ### PostgreSQL
 
@@ -774,41 +606,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 #### Network security {#postgres-network-security}
 
 If your PostgreSQL server is not exposed to the public internet, you can tunnel
-the connection through an AWS PrivateLink service or an SSH bastion host.
-
-{{< tabs >}}
-{{< tab "AWS PrivateLink">}}
-
-##### Connection options {#postgres-privatelink-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:|-----------------------------
-`AWS PRIVATELINK`           | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic should be routed.
-
-##### Example {#postgres-privatelink-example}
-
-```mzsql
-CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-   SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
-   AVAILABILITY ZONES ('use1-az1', 'use1-az4')
-);
-
-CREATE CONNECTION pg_connection TO POSTGRES (
-    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
-    PORT 5432,
-    DATABASE postgres,
-    USER postgres,
-    PASSWORD SECRET pgpass,
-    AWS PRIVATELINK privatelink_svc
-);
-```
-
-For step-by-step instructions on creating AWS PrivateLink connections and
-configuring an AWS PrivateLink service to accept connections from Materialize,
-check [this guide](/ops/network-security/privatelink/).
-
-{{< /tab >}}
-{{< tab "SSH tunnel">}}
+the connection through an SSH bastion host.
 
 ##### Connection options {#postgres-ssh-options}
 
@@ -836,78 +634,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 For step-by-step instructions on creating SSH tunnel connections and configuring
 an SSH bastion server to accept connections from Materialize, check [this guide](/ops/network-security/ssh-tunnel/).
 
-{{< /tab >}}
-{{< /tabs >}}
-
 ## Network security connections
-
-### AWS PrivateLink
-
-An AWS PrivateLink connection establishes a link to an [AWS PrivateLink] service.
-You can use AWS PrivateLink connections in [Confluent Schema Registry connections](#confluent-schema-registry),
-[Kafka connections](#kafka), and [Postgres connections](#postgresql).
-
-#### Syntax {#aws-privatelink-syntax}
-
-{{< diagram "create-connection-aws-privatelink.svg" >}}
-
-#### Connection options {#aws-privatelink-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:| ------------
-`SERVICE NAME`              | `text`           | ✓        | The name of the AWS PrivateLink service.
-`AVAILABILITY ZONES`        | `text[]`         | ✓        | The IDs of the AWS availability zones in which the service is accessible.
-
-#### Permissions {#aws-privatelink-permissions}
-
-Materialize assigns a unique principal to each AWS PrivateLink connection in
-your region using an Amazon Resource Name of the
-following form:
-
-```
-arn:aws:iam::664411391173:role/mz_<REGION-ID>_<CONNECTION-ID>
-```
-
-After creating the connection, you must configure the AWS PrivateLink service
-to accept connections from the AWS principal Materialize will connect as. The
-principals for AWS PrivateLink connections in your region are stored in
-the [`mz_aws_privatelink_connections`](/sql/system-catalog/mz_catalog/#mz_aws_privatelink_connections)
-system table.
-
-```mzsql
-SELECT * FROM mz_aws_privatelink_connections;
-```
-```
-   id   |                                 principal
---------+---------------------------------------------------------------------------
- u1     | arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
- u7     | arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u7
-```
-
-For more details on configuring a trusted principal for your AWS PrivateLink service,
-see the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#add-remove-permissions).
-
-{{< warning >}}
-Do **not** grant access to the root principal for the Materialize AWS account.
-Doing so will allow any Materialize customer to create a connection to your
-AWS PrivateLink service.
-{{< /warning >}}
-
-#### Accepting connection requests {#aws-privatelink-requests}
-
-If your AWS PrivateLink service is configured to require acceptance of
-connection requests, you must additionally approve the connection request from
-Materialize after creating the connection. For more details on manually
-accepting connection requests, see the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests).
-
-#### Example {#aws-privatelink-example}
-
-```mzsql
-CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
-    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
-);
-```
 
 ### SSH tunnel
 
@@ -1021,7 +748,7 @@ The privileges required to execute this statement are:
 - [`CREATE SOURCE`](/sql/create-source)
 - [`CREATE SINK`](/sql/create-sink)
 
-[AWS PrivateLink]: https://aws.amazon.com/privatelink/
+
 [Confluent Schema Registry]: https://docs.confluent.io/platform/current/schema-registry/index.html#sr-overview
 [Kafka]: https://kafka.apache.org
 [MySQL]: https://www.mysql.com/

@@ -332,37 +332,8 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 
 If your PostgreSQL server is not exposed to the public internet, you can
 [tunnel the connection](/sql/create-connection/#network-security-connections)
-through an AWS PrivateLink service or an SSH bastion host.
+through an SSH bastion host.
 
-{{< tabs tabID="1" >}}
-{{< tab "AWS PrivateLink">}}
-
-```mzsql
-CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
-    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
-);
-```
-
-```mzsql
-CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
-
-CREATE CONNECTION pg_connection TO POSTGRES (
-    HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
-    PORT 5432,
-    USER 'postgres',
-    PASSWORD SECRET pgpass,
-    AWS PRIVATELINK privatelink_svc,
-    DATABASE 'postgres'
-);
-```
-
-For step-by-step instructions on creating AWS PrivateLink connections and
-configuring an AWS PrivateLink service to accept connections from Materialize,
-check [this guide](/ops/network-security/privatelink/).
-
-{{< /tab >}}
-{{< tab "SSH tunnel">}}
 ```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST 'bastion-host',
@@ -384,8 +355,6 @@ For step-by-step instructions on creating SSH tunnel connections and configuring
 an SSH bastion server to accept connections from Materialize, check
 [this guide](/ops/network-security/ssh-tunnel/).
 
-{{< /tab >}}
-{{< /tabs >}}
 
 ### Creating a source {#create-source-example}
 

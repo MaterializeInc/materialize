@@ -35,9 +35,6 @@ Before you begin, you must have:
 There are various ways to configure your Kafka network to allow Materialize to
 connect:
 
-- **Use AWS PrivateLink**: If your Kafka cluster is running on AWS, you can use
-    AWS PrivateLink to connect Materialize to the cluster.
-
 - **Use an SSH tunnel**: If your Kafka cluster is running in a private network,
     you can use an SSH tunnel to connect Materialize to the cluster.
 
@@ -48,21 +45,6 @@ connect:
 Select the option that works best for you.
 
 {{< tabs tabID="1" >}}
-
-{{< tab "Privatelink">}}
-
-{{< note >}}
-Materialize provides Terraform modules for both [Amazon MSK clusters](https://github.com/MaterializeInc/terraform-aws-msk-privatelink)
-and [self-managed Kafka clusters](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink)
-which can be used to create the target groups for each Kafka broker (step 1),
-the network load balancer (step 2), the TCP listeners (step 3) and the VPC
-endpoint service (step 5).
-
-{{< /note >}}
-
-{{% network-security/privatelink-kafka %}}
-
-{{< /tab >}}
 
 {{< tab "SSH Tunnel">}}
 
@@ -84,16 +66,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](/console/), or your preferred SQL
-   client connected to Materialize, find the static egress IP addresses for the
-   Materialize region you are running in:
-
-    ```mzsql
-    SELECT * FROM mz_egress_ips;
-    ```
-
-1. Update your Kafka cluster firewall rules to allow traffic from each IP
-   address from the previous step.
+1. Update your Kafka cluster firewall rules to allow traffic from Materialize.
 
 1. Create a [Kafka connection](/sql/create-connection/#kafka) that references
    your Kafka cluster:

@@ -73,8 +73,7 @@ As a _superuser_ (`rds_superuser`):
    parameter to `1`.
 
 1. Add the egress IP addresses associated with your Materialize region to the
-   security group of the RDS instance. You can find these addresses by querying
-   the `mz_egress_ips` table in Materialize.
+   security group of the RDS instance.
 
 1. Restart the database so all changes can take effect.
 
@@ -109,8 +108,7 @@ As a _superuser_:
    and `max_worker_processes parameters`  based on your expected usage.
 
 1. Add the egress IP addresses associated with your Materialize region to the
-   security group of the DB instance. You can find these addresses by querying the
-   `mz_egress_ips` table in Materialize.
+   security group of the DB instance.
 
 1. Restart the database so all changes can take effect.
 
@@ -126,8 +124,7 @@ best practices.
    for the PostgreSQL instance.
 
 1. Add the egress IP addresses associated with your Materialize region to the
-   list of allowed IP addresses under the "Connections security" menu. You can
-   find these addresses by querying the `mz_egress_ips` table in Materialize.
+   list of allowed IP addresses under the "Connections security" menu.
 
 1. Restart the database so all changes can take effect.
 
@@ -145,8 +142,7 @@ As a _superuser_ (`cloudsqlsuperuser`):
 `cloudsql.logical_decoding` configuration parameter to `on`.
 
 1. Add the egress IP addresses associated with your Materialize region to the
-list of allowed IP addresses. You can find these addresses by querying the
-`mz_egress_ips` table in Materialize.
+list of allowed IP addresses.
 
 1. Restart the database so all changes can take effect.
 
