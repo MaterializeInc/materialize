@@ -207,7 +207,7 @@ steps:
           queue: mac
         coverage: skip
         sanitizer: skip
-        branches: "main v*.* lts-v*"
+        branches: "main v*.* self-managed/v*"
 
       - id: lint-deps
         label: Lint dependencies
@@ -741,6 +741,51 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
     skip: "Version upgrade skips are allowed for LTS releases now"
+
+  - group: E2E
+    key: e2e
+    steps:
+    - id: terraform-aws
+      label: "Terraform + Helm Chart E2E on AWS"
+      artifact_paths: [test/terraform/aws/terraform.tfstate]
+      depends_on: build-aarch64
+      timeout_in_minutes: 1200
+      concurrency: 1
+      concurrency_group: 'terraform-aws'
+      agents:
+        queue: linux-aarch64-small
+      plugins:
+        - ./ci/plugins/scratch-aws-access: ~
+        - ./ci/plugins/mzcompose:
+            composition: terraform
+            run: aws-temporary
+      # same test runs in nightly on main
+      inputs:
+        - misc/helm-charts/
+        - src/orchestratord/
+        - test/terraform/
+      branches: "!main !v*.* !self-managed/v*"
+
+    - id: terraform-gcp
+      label: "Terraform + Helm Chart E2E on GCP"
+      artifact_paths: [test/terraform/aws/terraform.tfstate]
+      depends_on: build-aarch64
+      timeout_in_minutes: 1200
+      concurrency: 1
+      concurrency_group: 'terraform-gcp'
+      agents:
+        queue: linux-aarch64-small
+      plugins:
+        - ./ci/plugins/scratch-aws-access: ~
+        - ./ci/plugins/mzcompose:
+            composition: terraform
+            run: gcp-temporary
+      # same test runs in nightly on main
+      inputs:
+        - misc/helm-charts/
+        - src/orchestratord/
+        - test/terraform/
+      branches: "!main !v*.* !self-managed/v*"
 
   - id: deploy-website
     label: Deploy website

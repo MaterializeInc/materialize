@@ -158,11 +158,21 @@ class AWS:
             )
             return
 
+        vars = [
+            "-var",
+            "operator_version=v25.2.0-beta.1",
+            "-var",
+            f"orchestratord_version={tag}",
+        ]
+
         print("--- Setup")
+        spawn.runv(
+            ["helm", "package", "../../../misc/helm-charts/operator/"], cwd=self.path
+        )
         spawn.runv(["terraform", "init"], cwd=self.path)
         spawn.runv(["terraform", "validate"], cwd=self.path)
-        spawn.runv(["terraform", "plan"], cwd=self.path)
-        spawn.runv(["terraform", "apply", "-auto-approve"], cwd=self.path)
+        spawn.runv(["terraform", "plan", *vars], cwd=self.path)
+        spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=self.path)
 
         metadata_backend_url = spawn.capture(
             ["terraform", "output", "-raw", "metadata_backend_url"], cwd=self.path
@@ -420,6 +430,14 @@ class AWS:
         )
         time.sleep(10)
 
+        with psycopg.connect(
+            "postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+            autocommit=True,
+        ) as conn:
+            with conn.cursor() as cur:
+                # Required for some testdrive tests
+                cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 1)")
+
         c.up("testdrive", persistent=True)
         c.testdrive(
             dedent(
@@ -573,11 +591,10 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                         MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
                     ) as f:
                         content = yaml.load(f, Loader=yaml.Loader)
-                        content["version"]
-                    # TODO: Reenable when we can pass the helm-chart path in directly
-                    # assert version.endswith(
-                    #     f", helm chart: {helm_chart_version})"
-                    # ), f"Actual version: {version}, expected to contain {helm_chart_version}"
+                        helm_chart_version = content["version"]
+                    assert version.endswith(
+                        f", helm chart: {helm_chart_version})"
+                    ), f"Actual version: {version}, expected to contain {helm_chart_version}"
 
             c.run_testdrive_files(*args.files)
     finally:

@@ -16,22 +16,41 @@ resource "random_password" "db_password" {
   special = false
 }
 
+variable "operator_version" {
+  type    = string
+  default = "v25.2.0-beta.1"
+}
+
+variable "orchestratord_version" {
+  type    = string
+  default = "v0.130.3"
+}
+
 module "materialize_infrastructure" {
-  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.2.0"
+  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.2.5"
 
   # Basic settings
   namespace    = "aws-persistent"
   environment  = "dev"
   install_materialize_operator = true
+  use_local_chart = true
+  helm_chart = "materialize-operator-v25.2.0-beta.1.tgz"
+  operator_version = var.operator_version
+  orchestratord_version = var.orchestratord_version
 
-  helm_values = {
-      defaultReplicationFactor = {
-          system = 1
-          probe = 1
-          support = 1
-          analytics = 1
-      }
-  }
+  # TODO: Doesn't seem to work yet
+  # helm_values = {
+  #   operator = {
+  #     clusters = {
+  #       defaultReplicationFactor = {
+  #           system = 1
+  #           probe = 1
+  #           support = 1
+  #           analytics = 1
+  #       }
+  #     }
+  #   }
+  # }
 
   # VPC Configuration
   vpc_cidr             = "10.0.0.0/16"
@@ -42,7 +61,7 @@ module "materialize_infrastructure" {
 
   # EKS Configuration
   cluster_version           = "1.31"
-  node_group_instance_types = ["c7a.2xlarge"]
+  node_group_instance_types = ["r8g.2xlarge"]
   node_group_desired_size   = 2
   node_group_min_size       = 1
   node_group_max_size       = 3
