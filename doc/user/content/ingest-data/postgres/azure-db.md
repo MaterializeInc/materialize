@@ -91,18 +91,6 @@ to serve as your SSH bastion host.
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
-    1. In the [Materialize console's SQL
-       Shell](/console/), or your preferred SQL client
-       connected to Materialize, get the static egress IP addresses for the
-       Materialize region you are running in:
-
-       ```mzsql
-       SELECT * FROM mz_egress_ips;
-       ```
-
-    1. Update your SSH bastion host's [firewall rules](https://learn.microsoft.com/en-us/azure/virtual-network/tutorial-filter-network-traffic?toc=%2Fazure%2Fvirtual-machines%2Ftoc.json)
-    to allow traffic from each IP address from the previous step.
-
 1. Update your [Azure DB firewall rules](https://learn.microsoft.com/en-us/azure/azure-sql/database/firewall-configure?view=azuresql)
    to allow traffic from the SSH bastion host.
 
