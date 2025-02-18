@@ -10,7 +10,6 @@
 //! Implementation of the storage controller trait.
 
 use std::any::Any;
-use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Display};
 use std::num::NonZeroI64;
@@ -150,6 +149,16 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// This collection only grows, although individual collections may be rendered unusable.
     /// This is to prevent the re-binding of identifiers to other descriptions.
     pub(crate) collections: BTreeMap<GlobalId, CollectionState<T>>,
+
+    /// Map from IDs of objects that have been dropped to replicas we are still
+    /// expecting DroppedId messages from. This is cleared out once all replicas
+    /// have responded.
+    ///
+    /// We use this only to catch problems in the protocol between controller
+    /// and replicas, for example we can differentiate between late messages for
+    /// objects that have already been dropped and unexpected (read erroneous)
+    /// messages from the replica.
+    dropped_objects: BTreeMap<GlobalId, BTreeSet<ReplicaId>>,
 
     /// Write handle for table shards.
     pub(crate) persist_table_worker: persist_handles::PersistTableWriteWorker<T>,
@@ -477,10 +486,25 @@ where
             grpc_client: self.config.parameters.grpc_client.clone(),
         };
         for id in instance.active_ingestions() {
-            self.collections
-                .get_mut(id)
-                .expect("instance contains unknown ingestion")
-                .active_copies += 1;
+            let ingestion_state = self
+                .collections
+                .get(id)
+                .expect("instance contains unknown ingestion");
+
+            let ingestion_description = match &ingestion_state.data_source {
+                DataSource::Ingestion(ingestion_description) => ingestion_description.clone(),
+                _ => panic!(
+                    "unexpected data source for ingestion: {:?}",
+                    ingestion_state.data_source
+                ),
+            };
+
+            for id in ingestion_description.collection_ids() {
+                let collection = self.collections.get_mut(&id).expect("missing collection");
+
+                // Track which replicas this ingestion is running on.
+                collection.active_replicas.insert(replica_id);
+            }
         }
         instance.add_replica(replica_id, config);
     }
@@ -495,7 +519,15 @@ where
             self.collections
                 .get_mut(id)
                 .expect("instance contains unknown ingestion")
-                .active_copies -= 1;
+                .active_replicas
+                .remove(&replica_id);
+
+            if let Some(active_replicas) = self.dropped_objects.get_mut(id) {
+                active_replicas.remove(&replica_id);
+                if active_replicas.is_empty() {
+                    self.dropped_objects.remove(id);
+                }
+            }
         }
         instance.drop_replica(replica_id);
     }
@@ -989,9 +1021,10 @@ where
                 data_source,
                 collection_metadata: metadata,
                 extra_state,
-                // Default to 1, which is good for tables and webhooks. For
-                // ingestions, this will be updated in run_ingestion.
-                active_copies: 1,
+                // Default to empty as tables and webhooks don't run on
+                // replicas.  For ingestions, this will be updated in
+                // run_ingestion.
+                active_replicas: BTreeSet::new(),
                 wallclock_lag_max: Default::default(),
                 wallclock_lag_metrics,
             };
@@ -1267,7 +1300,7 @@ where
         expected_version: RelationVersion,
         register_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        let (data_shard, active_copies) = {
+        let (data_shard, active_replicas) = {
             let Controller {
                 collections,
                 storage_collections,
@@ -1292,9 +1325,9 @@ where
                 .await?;
 
             let data_shard = existing.collection_metadata.data_shard.clone();
-            let active_copies = existing.active_copies;
+            let active_replicas = existing.active_replicas.clone();
 
-            (data_shard, active_copies)
+            (data_shard, active_replicas)
         };
 
         let persist_client = self
@@ -1327,7 +1360,7 @@ where
             data_source: collection_desc.data_source.clone(),
             collection_metadata: collection_meta,
             extra_state: CollectionStateExtra::None,
-            active_copies,
+            active_replicas,
             wallclock_lag_max: Default::default(),
             wallclock_lag_metrics,
         };
@@ -1849,9 +1882,17 @@ where
         // Remove collection state
         for id in ingestions_to_drop.iter().chain(collections_to_drop.iter()) {
             tracing::info!(%id, "dropping collection state");
-            self.collections
+            let collection = self
+                .collections
                 .remove(id)
                 .expect("list populated after checking that self.collections contains it");
+
+            // Record which replicas were running a collection, so that we can
+            // match DroppedId messages against them and eventually remove state
+            // from self.dropped_objects
+            if !collection.active_replicas.is_empty() {
+                self.dropped_objects.insert(*id, collection.active_replicas);
+            }
         }
 
         // Also let StorageCollections know!
@@ -1925,9 +1966,14 @@ where
         // Remove collection/export state
         for id in sinks_to_drop.iter() {
             tracing::info!(%id, "dropping export state");
-            self.collections
+            let collection = self
+                .collections
                 .remove(id)
                 .expect("list populated after checking that self.collections contains it");
+            // Record how many replicas were running an export, so that we can
+            // match `DroppedId` messages against it and eventually remove state
+            // from `self.dropped_objects`.
+            self.dropped_objects.insert(*id, collection.active_replicas);
         }
 
         // Also let StorageCollections know!
@@ -2039,8 +2085,16 @@ where
                 self.update_write_frontiers(&updates);
                 updated_frontiers = Some(Response::FrontierUpdates(updates));
             }
-            Some((_replica_id, StorageResponse::DroppedId(id))) => {
-                tracing::debug!("DroppedId for {id}");
+            Some((replica_id, StorageResponse::DroppedId(id))) => {
+                let replica_id = replica_id.expect("DroppedId from unknown replica");
+                if let Some(remaining_replicas) = self.dropped_objects.get_mut(&id) {
+                    remaining_replicas.remove(&replica_id);
+                    if remaining_replicas.is_empty() {
+                        self.dropped_objects.remove(&id);
+                    }
+                } else {
+                    soft_panic_or_log!("unexpected DroppedId for {id}");
+                }
             }
             Some((_replica_id, StorageResponse::StatisticsUpdates(source_stats, sink_stats))) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
@@ -2426,6 +2480,7 @@ where
         Self {
             build_info,
             collections: BTreeMap::default(),
+            dropped_objects: Default::default(),
             persist_table_worker,
             txns_read,
             txns_metrics,
@@ -2551,13 +2606,11 @@ where
                 if !update.is_empty() {
                     read_capability_changes.insert(*id, update);
                 }
+            } else if self.dropped_objects.contains_key(id) {
+                // We dropped an object but might still get updates from cluster
+                // side, before it notices the drop. This is expected and fine.
             } else {
-                // TODO: This can happen because subsources report back an upper
-                // but we don't store them in our `ingestions` field, _nor_ do
-                // we acquire read holds for them. Also because we don't get
-                // `DroppedId` messages for them, so we wouldn't know when to
-                // clean up read holds.
-                debug!(?new_upper, "spurious upper update for {id}");
+                soft_panic_or_log!("spurious upper update for {id}: {new_upper:?}");
             }
         }
 
@@ -3022,7 +3075,7 @@ where
                 details,
                 data_config,
             },
-        ) in ingestion_description.source_exports
+        ) in ingestion_description.source_exports.clone()
         {
             let export_storage_metadata = self.collection(export_id)?.collection_metadata.clone();
             source_exports.insert(
@@ -3041,7 +3094,7 @@ where
             // the associated ingestion
             ingestion_metadata: collection.collection_metadata.clone(),
             // The rest of the fields are identical
-            desc: ingestion_description.desc,
+            desc: ingestion_description.desc.clone(),
             instance_id: ingestion_description.instance_id,
             remap_collection_id: ingestion_description.remap_collection_id,
         };
@@ -3056,12 +3109,15 @@ where
                 ingestion_id: id,
             })?;
 
-        let collection = self
-            .collections
-            .get_mut(&id)
-            .ok_or(StorageError::IdentifierMissing(id))?;
-        // This collection will run in as many copies as there are replicas
-        collection.active_copies = instance.replica_count();
+        for id in ingestion_description.collection_ids() {
+            let collection = self
+                .collections
+                .get_mut(&id)
+                .ok_or(StorageError::IdentifierMissing(id))?;
+
+            // Track which replicas this ingestion is running on.
+            collection.active_replicas = instance.replica_ids().collect();
+        }
 
         let augmented_ingestion = RunIngestionCommand { id, description };
         instance.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
@@ -3131,6 +3187,14 @@ where
                 storage_instance_id,
                 export_id: id,
             })?;
+
+        let collection = self
+            .collections
+            .get_mut(&id)
+            .ok_or(StorageError::IdentifierMissing(id))?;
+
+        // Track which replicas this export is running on.
+        collection.active_replicas = instance.replica_ids().collect();
 
         instance.send(StorageCommand::RunSinks(vec![cmd]));
 
@@ -3405,9 +3469,10 @@ struct CollectionState<T: TimelyTimestamp> {
 
     pub extra_state: CollectionStateExtra<T>,
 
-    /// A counter for the number of replicas this collection is running on. This is used to track
-    /// the number of DroppedIds responses we expect to receive before dropping the tracked state.
-    active_copies: usize,
+    /// Tracks the replicas this collection is running on. This is used to track
+    /// the DroppedIds responses we expect to receive before dropping the tracked
+    /// state.
+    active_replicas: BTreeSet<ReplicaId>,
 
     /// Maximum frontier wallclock lag since the last introspection update.
     wallclock_lag_max: Duration,
