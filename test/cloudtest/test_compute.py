@@ -135,7 +135,7 @@ def test_disk_label(mz: MaterializeApplication) -> None:
 
     for value in ("true", "false"):
         mz.environmentd.sql(
-            f"CREATE CLUSTER disk_{value} MANAGED, SIZE = '2-1', DISK = {value}"
+            f"CREATE CLUSTER disk_{value} MANAGED, SIZE = '2-no-disk', DISK = {value}"
         )
 
         (cluster_id, replica_id) = mz.environmentd.sql_query(
@@ -147,8 +147,7 @@ def test_disk_label(mz: MaterializeApplication) -> None:
         node_selectors = get_node_selector(mz, cluster_id, replica_id)
         if value == "true":
             assert (
-                node_selectors
-                == '\'{"materialize.cloud/disk":"true"} {"materialize.cloud/disk":"true"}\''
+                node_selectors == '\'{"materialize.cloud/disk":"true"}\''
             ), node_selectors
         else:
             assert node_selectors == "''"
