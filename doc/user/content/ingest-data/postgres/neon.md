@@ -183,9 +183,26 @@ curl 'https://console.neon.tech/api/v2/projects/<project_id>/branches/<branch_id
    avoids having to add privileges later if you add tables to your
    publication.
 
-## B. Configure network security
+## B. (Optional) Configure network security
 
-{{% self-managed/network-connection %}}
+{{< note >}}
+If you are prototyping and your Neon instance is publicly accessible, **you can
+skip this step**. For production scenarios, we recommend using [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
+to limit the IP addresses that can connect to your Neon instance.
+{{</ note >}}
+
+### Allow Materialize IPs
+
+If you use Neon's [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
+feature to limit the IP addresses that can connect to your Neon instance, you
+will need to allow inbound traffic from Materialize IP addresses.
+
+2. In your Neon project, add the IPs to your **IP Allow** list:
+
+   1. Select your project in the Neon Console.
+   2. On the Neon **Dashboard**, select **Settings**.
+   3. Select **IP Allow**.
+   4. Add Materialize IP addresses to the list.
 
 ## C. Ingest data in Materialize
 
