@@ -44,11 +44,13 @@ module "materialize" {
   install_materialize_operator = true
 
   helm_values = {
-      defaultReplicationFactor = {
-          system = 1
-          probe = 1
-          support = 1
-          analytics = 1
+      clusters = {
+        defaultReplicationFactor = {
+            system = 1
+            probe = 1
+            support = 1
+            analytics = 1
+        }
       }
   }
 }
