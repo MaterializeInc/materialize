@@ -38,7 +38,42 @@ documentation](https://cloud.google.com/sql/docs/postgres/replication/configure-
 
 ## B. Configure network security
 
-{{% self-managed/network-connection %}}
+{{% ingest-data/configure-network-security-intro %}}
+
+{{< tabs >}}
+
+{{< tab "Allow Materialize IPs">}}
+
+1. Update your Google Cloud SQL firewall rules to allow traffic from Materialize
+   IPs.
+
+{{< /tab >}}
+
+{{< tab "Use an SSH tunnel">}}
+
+To create an SSH tunnel from Materialize to your database, you launch an
+instance to serve as an SSH bastion host, configure the bastion host to allow
+traffic only from Materialize, and then configure your database's private
+network to allow traffic from the bastion host.
+
+1. [Launch a GCE instance](https://cloud.google.com/compute/docs/instances/create-start-instance) to serve as your SSH bastion host.
+
+    - Make sure the instance is publicly accessible and in the same VPC as your
+      database.
+    - Add a key pair and note the username. You'll use this username when
+      connecting Materialize to your bastion host.
+    - Make sure the VM has a [static public IP address](https://cloud.google.com/compute/docs/ip-addresses/reserve-static-external-ip-address).
+      You'll use this IP address when connecting Materialize to your bastion
+      host.
+
+1. Configure the SSH bastion host to allow traffic only from Materialize.
+
+1. Update your Google Cloud SQL firewall rules to allow traffic from the SSH
+bastion host.
+
+{{< /tab >}}
+
+{{< /tabs >}}
 
 ## C. Ingest data in Materialize
 
@@ -55,7 +90,22 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 ### 2. Start ingesting data
 
+Now that you've configured your database network and created an ingestion
+cluster, you can connect Materialize to your PostgreSQL database and start
+ingesting data. The exact steps depend on your networking configuration, so
+start by selecting the relevant option.
+
+{{< tabs >}}
+
+{{< tab "Allow Materialize IPs">}}
 {{% postgres-direct/ingesting-data/allow-materialize-ips %}}
+{{< /tab >}}
+
+{{< tab "Use an SSH tunnel">}}
+{{% postgres-direct/ingesting-data/use-ssh-tunnel %}}
+{{< /tab >}}
+
+{{< /tabs >}}
 
 ### 3. Monitor the ingestion status
 

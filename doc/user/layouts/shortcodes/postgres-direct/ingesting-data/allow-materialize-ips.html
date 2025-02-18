@@ -1,8 +1,3 @@
-The following provides general steps for creating a connection using user
-credentials. The exact steps depend on your networking configuration, such as
-whether you require SSL connections or are using an SSH tunnel, etc. For
-additional connection options, such as SSL options, see [`CREATE
-CONNECTION`](/sql/create-connection/).
 
 1. In a SQL client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
    command to securely store the password for the `materialize` PostgreSQL user you
@@ -16,23 +11,21 @@ CONNECTION`](/sql/create-connection/).
    connection object with access and authentication details for Materialize to
    use:
 
-   ```mzsql
-   CREATE CONNECTION pg_connection TO POSTGRES (
-     HOST '<host>',
-     PORT 5432,
-     USER 'materialize',
-     PASSWORD SECRET pgpass,
-     DATABASE '<database>',
-     SSL MODE 'require'
-     );
-   ```
+    ```mzsql
+    CREATE CONNECTION pg_connection TO POSTGRES (
+      HOST '<host>',
+      PORT 5432,
+      USER 'materialize',
+      PASSWORD SECRET pgpass,
+      SSL MODE 'require',
+      DATABASE '<database>'
+      );
+    ```
 
-   - Replace `<host>` with your PostgreSQL endpoint.
-   - Replace `<database>` with the name of the database containing the tables
-     you want to replicate to Materialize.
+    - Replace `<host>` with your PostgreSQL endpoint.
 
-   For additional connection options, such as SSL options, see [`CREATE
-   CONNECTION`](/sql/create-connection/).
+    - Replace `<database>` with the name of the database containing the tables
+      you want to replicate to Materialize.
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
 to your PostgreSQL instance and start ingesting data from the publication you

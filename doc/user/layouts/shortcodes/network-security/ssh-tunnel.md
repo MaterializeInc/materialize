@@ -110,17 +110,7 @@ created in the previous step.
     sudo systemctl restart sshd
     ```
 
-5. Retrieve the static egress IPs from Materialize and configure the firewall rules (e.g. AWS Security Groups) for your bastion host to allow SSH traffic for those IP addresses only.
-
-    ```mzsql
-    SELECT * FROM mz_catalog.mz_egress_ips;
-    ```
-
-    ```
-    XXX.140.90.33
-    XXX.198.159.213
-    XXX.100.27.23
-    ```
+5. Ensure materialize cluster pods have network access to your SSH bastion host.
 
 ## Validate the SSH tunnel connection
 

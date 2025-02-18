@@ -50,7 +50,42 @@ For guidance on enabling GTID-based binlog replication in Azure DB, see the
 
 ## B. Configure network security
 
-{{% self-managed/network-connection %}}
+{{% ingest-data/configure-network-security-intro %}}
+
+{{< tabs >}}
+
+{{< tab "Allow Materialize IPs">}}
+
+1. Update your [Azure DB firewall rules](https://learn.microsoft.com/en-us/azure/azure-sql/database/firewall-configure?view=azuresql)
+   to allow traffic from Materialize IPs.
+
+{{< /tab >}}
+
+{{< tab "Use an SSH tunnel">}}
+
+To create an SSH tunnel from Materialize to your database, you launch an
+instance to serve as an SSH bastion host, configure the bastion host to allow
+traffic only from Materialize, and then configure your database's private
+network to allow traffic from the bastion host.
+
+1. [Launch an Azure VM with a static public IP address](https://learn.microsoft.com/en-us/azure/virtual-network/ip-services/virtual-network-deploy-static-pip-arm-portal?toc=%2Fazure%2Fvirtual-machines%2Ftoc.json)
+to serve as your SSH bastion host.
+
+    - Make sure the VM is publicly accessible and in the same VPC as your
+      database.
+    - Add a key pair and note the username. You'll use this username when
+      connecting Materialize to your bastion host.
+    - Make sure the VM has a static public IP address. You'll use this IP
+      address when connecting Materialize to your bastion host.
+
+1. Configure the SSH bastion host to allow traffic only from Materialize.
+
+1. Update your [Azure DB firewall rules](https://learn.microsoft.com/en-us/azure/azure-sql/database/firewall-configure?view=azuresql)
+   to allow traffic from the SSH bastion host.
+
+{{< /tab >}}
+
+{{< /tabs >}}
 
 ## C. Ingest data in Materialize
 
@@ -70,7 +105,21 @@ scenarios, we recommend separating your workloads into multiple clusters for
 [//]: # "TODO(morsapaes) MySQL connections support multiple SSL modes. We should
 adapt to that, rather than just state SSL MODE REQUIRED."
 
+Now that you've configured your database network, you can connect Materialize to
+your MySQL database and start ingesting data. The exact steps depend on your
+networking configuration, so start by selecting the relevant option.
+
+{{< tabs >}}
+
+{{< tab "Allow Materialize IPs">}}
 {{% mysql-direct/ingesting-data/allow-materialize-ips %}}
+{{< /tab >}}
+
+{{< tab "Use an SSH tunnel">}}
+{{% mysql-direct/ingesting-data/use-ssh-tunnel %}}
+{{< /tab >}}
+
+{{< /tabs >}}
 
 [//]: # "TODO(morsapaes) Replace these Step 6. and 7. with guidance using the
 new progress metrics in mz_source_statistics + console monitoring, when

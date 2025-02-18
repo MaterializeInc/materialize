@@ -88,9 +88,8 @@ check the [Redpanda documentation](https://docs.redpanda.com/docs/reference/rpk-
 ## Step 6. Start ingesting data
 
 Now that you’ve configured your Redpanda cluster, you can start ingesting data
-into Materialize. The exact steps depend on your networking configuration.
-Below is an example of how to connect Materialize to a Redpanda Cloud
-cluster using credentials securely stored as secrets.
+into Materialize. The exact steps depend on your networking configuration, so
+start by selecting the relevant option.
 
 1. Open the [Redpanda Cloud console](https://cloud.redpanda.com/) and select your cluster.
 
@@ -138,14 +137,5 @@ Materialize to an external data source. We created a connection to Redpanda
 Cloud using SASL authentication and credentials securely stored as secrets in
 Materialize's secret management system. For input formats, we used `JSON`, but
 you can also ingest Kafka messages formatted in e.g. [Avro and Protobuf](/sql/create-source/kafka/#supported-formats).
-You can find more details about the various different supported formats and
-possible configurations in the [reference documentation](/sql/create-source/kafka/).
-
-
-This example walked through creating a source, which is a way of connecting
-Materialize to an external data source. We created a connection to Redpanda
-Cloud using credentials securely stored as secrets in
-Materialize's secret management system. For input formats, we used `JSON`, but
-you can also ingest Redpanda messages formatted in e.g. [Avro and Protobuf](/sql/create-source/kafka/#supported-formats).
 You can find more details about the various different supported formats and
 possible configurations in the [reference documentation](/sql/create-source/kafka/).
