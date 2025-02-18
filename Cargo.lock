@@ -7094,7 +7094,6 @@ dependencies = [
  "mz-postgres-util",
  "mz-repr",
  "mz-rocksdb",
- "mz-service",
  "mz-sql-parser",
  "mz-ssh-util",
  "mz-storage-client",

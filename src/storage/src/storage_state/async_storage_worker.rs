@@ -16,6 +16,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::sync::Arc;
+use std::thread::Thread;
 
 use differential_dataflow::lattice::Lattice;
 use mz_persist_client::cache::PersistClientCache;
@@ -24,7 +25,6 @@ use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
-use mz_service::local::Activatable;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
@@ -184,18 +184,15 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
 {
     /// Creates a new [`AsyncStorageWorker`].
     ///
-    /// IMPORTANT: The passed in `activatable` is activated when new responses
+    /// IMPORTANT: The passed in `thread` is unparked when new responses
     /// are added the response channel. It is important to not sleep the thread
     /// that is reading from this via [`try_recv`](Self::try_recv) when
     /// [`is_empty`](Self::is_empty) has returned `false`.
-    pub fn new<A: Activatable + Send + 'static>(
-        activatable: A,
-        persist_clients: Arc<PersistClientCache>,
-    ) -> Self {
+    pub fn new(thread: Thread, persist_clients: Arc<PersistClientCache>) -> Self {
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
 
-        let response_tx = ActivatingSender::new(response_tx, activatable);
+        let response_tx = ActivatingSender::new(response_tx, thread);
 
         mz_ore::task::spawn(|| "AsyncStorageWorker", async move {
             while let Some(command) = command_rx.recv().await {
@@ -431,21 +428,21 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
     }
 }
 
-/// Helper that makes sure that we always activate the target when we send a
+/// Helper that makes sure that we always unpark the target thread when we send a
 /// message.
-struct ActivatingSender<T, A: Activatable> {
+struct ActivatingSender<T> {
     tx: crossbeam_channel::Sender<T>,
-    activatable: A,
+    thread: Thread,
 }
 
-impl<T, A: Activatable> ActivatingSender<T, A> {
-    fn new(tx: crossbeam_channel::Sender<T>, activatable: A) -> Self {
-        Self { tx, activatable }
+impl<T> ActivatingSender<T> {
+    fn new(tx: crossbeam_channel::Sender<T>, thread: Thread) -> Self {
+        Self { tx, thread }
     }
 
     fn send(&self, message: T) -> Result<(), crossbeam_channel::SendError<T>> {
         let res = self.tx.send(message);
-        self.activatable.activate();
+        self.thread.unpark();
         res
     }
 }
