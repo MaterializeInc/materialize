@@ -286,6 +286,14 @@ impl From<deadpool_postgres::tokio_postgres::Error> for ExternalError {
     }
 }
 
+impl From<azure_core::Error> for ExternalError {
+    fn from(value: azure_core::Error) -> Self {
+        ExternalError::Indeterminate(Indeterminate {
+            inner: anyhow!(value),
+        })
+    }
+}
+
 impl From<deadpool_postgres::PoolError> for ExternalError {
     fn from(x: deadpool_postgres::PoolError) -> Self {
         match x {
