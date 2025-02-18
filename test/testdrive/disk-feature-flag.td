@@ -31,8 +31,8 @@ ALTER SYSTEM SET enable_disk_cluster_replicas = true
 > CREATE CLUSTER c REPLICAS (r1 (SIZE '1-no-disk', DISK), r2 (SIZE '1-no-disk'))
 
 > SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
-r1 1 true
-r2 1 false
+r1 1-no-disk true
+r2 1-no-disk false
 
 > DROP CLUSTER c;
 
@@ -40,8 +40,8 @@ r2 1 false
 > CREATE CLUSTER c SIZE '1-no-disk', REPLICATION FACTOR = 2, DISK;
 
 > SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
-r1 1 true
-r2 1 true
+r1 1-no-disk true
+r2 1-no-disk true
 
 > DROP CLUSTER c;
 
@@ -52,8 +52,8 @@ ALTER SYSTEM SET disk_cluster_replicas_default = true
 > CREATE CLUSTER c REPLICAS (r1 (SIZE '1-no-disk', DISK), r2 (SIZE '1-no-disk'))
 
 > SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
-r1 1 true
-r2 1 true
+r1 1-no-disk true
+r2 1-no-disk true
 
 > DROP CLUSTER c;
 
