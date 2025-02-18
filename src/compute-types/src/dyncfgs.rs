@@ -38,10 +38,13 @@ pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
      work, respectively, rather than falling back to some default.",
 );
 
+/// Enable lgalloc.
+pub const ENABLE_LGALLOC: Config<bool> = Config::new("enable_lgalloc", true, "Enable lgalloc.");
+
 /// Enable lgalloc for columnation.
 pub const ENABLE_COLUMNATION_LGALLOC: Config<bool> = Config::new(
     "enable_columnation_lgalloc",
-    false,
+    true,
     "Enable allocating regions from lgalloc.",
 );
 
@@ -164,6 +167,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_MATERIALIZED_VIEW_SINK_V2)
         .add(&LINEAR_JOIN_YIELDING)
+        .add(&ENABLE_LGALLOC)
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
         .add(&ENABLE_CHUNKED_STACK)
