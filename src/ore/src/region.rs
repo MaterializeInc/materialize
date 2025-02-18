@@ -170,6 +170,7 @@ impl<T> LgAllocRegion<T> {
 /// NOTE: We plan to deprecate this type soon. Users should switch to different types or the raw
 /// `lgalloc` API instead.
 #[derive(Debug)]
+#[must_use]
 pub enum Region<T> {
     /// A possibly empty heap-allocated region, represented as a vector.
     Heap(Vec<T>),
@@ -218,14 +219,12 @@ impl<T> Default for Region<T> {
 impl<T> Region<T> {
     /// Create a new empty region.
     #[inline]
-    #[must_use]
     pub fn new_empty() -> Region<T> {
         Region::Heap(Vec::new())
     }
 
     /// Create a new heap-allocated region of a specific capacity.
     #[inline]
-    #[must_use]
     pub fn new_heap(capacity: usize) -> Region<T> {
         Region::Heap(Vec::with_capacity(capacity))
     }
@@ -255,7 +254,6 @@ impl<T> Region<T> {
     /// but can be larger if the implementation requires it.
     ///
     /// Returns a [`Region::MMap`] if possible, and falls back to [`Region::Heap`] otherwise.
-    #[must_use]
     pub fn new_auto(capacity: usize) -> Region<T> {
         if ENABLE_LGALLOC_REGION.load(std::sync::atomic::Ordering::Relaxed) {
             match Region::new_mmap(capacity) {
@@ -340,12 +338,58 @@ impl<T> Region<T> {
     /// Otherwise, the vector representation could try to reallocate the underlying memory
     /// using the global allocator, which would cause problems because the memory might not
     /// have originated from it. This is undefined behavior.
+    ///
+    /// Private because it is too dangerous to expose to the public.
     #[inline]
     unsafe fn as_mut_vec(&mut self) -> &mut Vec<T> {
         match self {
             Region::Heap(vec) => vec,
             Region::MMap(inner) => &mut inner.inner,
         }
+    }
+}
+
+impl<T: bytemuck::AnyBitPattern> Region<T> {
+    /// Create a new file-based mapped region of a specific capacity, initialized to 0. The
+    /// capacity of the returned region can be larger than requested to accommodate page sizes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the memory allocation fails.
+    #[inline(always)]
+    pub fn new_mmap_zeroed(capacity: usize) -> Result<Self, lgalloc::AllocError> {
+        let (ptr, capacity, handle) = lgalloc::allocate::<T>(capacity)?;
+        // SAFETY: `allocate` returns a valid memory block, and `T` supports a null-bit pattern.
+        unsafe { ptr.as_ptr().write_bytes(0, capacity) }
+        // SAFETY: `ptr` points to suitable memory.
+        // It is UB to call `from_raw_parts` with a pointer not allocated from the global
+        // allocator, but we accept this here because we promise never to reallocate the vector.
+        let inner =
+            ManuallyDrop::new(unsafe { Vec::from_raw_parts(ptr.as_ptr(), capacity, capacity) });
+        let handle = Some(handle);
+        Ok(Self::MMap(MMapRegion { inner, handle }))
+    }
+
+    /// Allocate a zeroed region on the heap.
+    #[inline(always)]
+    pub fn new_heap_zeroed(capacity: usize) -> Self {
+        Self::Heap(vec![T::zeroed(); capacity])
+    }
+
+    /// Construct a new region with the specified capacity, initialized to 0.
+    pub fn new_auto_zeroed(capacity: usize) -> Self {
+        if ENABLE_LGALLOC_REGION.load(std::sync::atomic::Ordering::Relaxed) {
+            match Region::new_mmap_zeroed(capacity) {
+                Ok(r) => return r,
+                Err(lgalloc::AllocError::Disabled)
+                | Err(lgalloc::AllocError::InvalidSizeClass(_)) => {}
+                Err(e) => {
+                    eprintln!("lgalloc error: {e}, falling back to heap");
+                }
+            }
+        }
+        // Fall-through
+        Self::new_heap_zeroed(capacity)
     }
 }
 

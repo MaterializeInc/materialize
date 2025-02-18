@@ -303,6 +303,9 @@ impl ComputeState {
             std::sync::atomic::Ordering::Relaxed,
         );
 
+        let enable_columnar_lgalloc = ENABLE_COLUMNAR_LGALLOC.get(config);
+        mz_timely_util::containers::set_enable_columnar_lgalloc(enable_columnar_lgalloc);
+
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);

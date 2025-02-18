@@ -57,6 +57,13 @@ pub const ENABLE_COLUMNATION_LGALLOC: Config<bool> = Config::new(
     "Enable allocating regions from lgalloc.",
 );
 
+/// Enable lgalloc for columnar.
+pub const ENABLE_COLUMNAR_LGALLOC: Config<bool> = Config::new(
+    "enable_columnar_lgalloc",
+    true,
+    "Enable allocating aligned regions in columnar from lgalloc.",
+);
+
 /// Enable lgalloc's eager memory return/reclamation feature.
 pub const ENABLE_LGALLOC_EAGER_RECLAMATION: Config<bool> = Config::new(
     "enable_lgalloc_eager_reclamation",
@@ -188,6 +195,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_LGALLOC)
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
+        .add(&ENABLE_COLUMNAR_LGALLOC)
         .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
