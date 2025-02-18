@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name in ("CrossJoin", "AccumulateReductions"):
+        # PR#31501 (Remove ChunkedStack and related) increases latency for inserts
+        min_ancestor_mz_version_per_commit[
+            "e91f9d5e47f5dddf1d5d1a3afa3c27907bdbb0a7"
+        ] = MzVersion.parse_mz("v0.134.0")
+
     if scenario_class_name == "ManySmallInserts":
         # PR#31309 ([adapter] don't block on builtin table write in Session creation) increases latency for inserts
         min_ancestor_mz_version_per_commit[
