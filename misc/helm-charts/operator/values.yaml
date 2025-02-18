@@ -230,6 +230,14 @@ clusterd:
   # -- Node selector to use for clusterd pods spawned by the operator
   nodeSelector: {}
 
+balancerd:
+  # -- Node selector to use for balancerd pods spawned by the operator
+  nodeSelector: {}
+
+console:
+  # -- Node selector to use for console pods spawned by the operator
+  nodeSelector: {}
+
 # RBAC (Role-Based Access Control) settings
 rbac:
   # -- Whether to create necessary RBAC roles and bindings
