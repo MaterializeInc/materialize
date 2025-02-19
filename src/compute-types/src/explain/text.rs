@@ -458,7 +458,9 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for AvailableCollections {
                     "{}",
                     separated(
                         ", ",
-                        types.iter().map(|c| ctx.humanizer.humanize_column_type(c))
+                        types
+                            .iter()
+                            .map(|c| ctx.humanizer.humanize_column_type(c, false))
                     )
                 )?;
                 writeln!(f, "]")?;

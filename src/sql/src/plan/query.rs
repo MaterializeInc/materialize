@@ -391,8 +391,8 @@ pub fn plan_insert_query(
         sql_err!(
             "column {} is of type {} but expression is of type {}",
             desc.get_name(ordering[e.column]).as_str().quoted(),
-            qcx.humanize_scalar_type(&e.target_type),
-            qcx.humanize_scalar_type(&e.source_type),
+            qcx.humanize_scalar_type(&e.target_type, false),
+            qcx.humanize_scalar_type(&e.source_type, false),
         )
     })?;
 
@@ -1255,8 +1255,8 @@ pub fn plan_params<'a>(
         if st != *ty {
             sql_bail!(
                 "mismatched parameter type: expected {}, got {}",
-                ecx.humanize_scalar_type(ty),
-                ecx.humanize_scalar_type(&st),
+                ecx.humanize_scalar_type(ty, false),
+                ecx.humanize_scalar_type(&st, false),
             );
         }
         let ex = ex.lower_uncorrelated()?;
@@ -1602,12 +1602,12 @@ pub fn plan_ctes(
                     let proposed_typ = proposed_typ
                         .column_types
                         .iter()
-                        .map(|ty| qcx.humanize_scalar_type(&ty.scalar_type))
+                        .map(|ty| qcx.humanize_scalar_type(&ty.scalar_type, false))
                         .collect::<Vec<_>>();
                     let inferred_typ = derived_typ
                         .column_types
                         .iter()
-                        .map(|ty| qcx.humanize_scalar_type(&ty.scalar_type))
+                        .map(|ty| qcx.humanize_scalar_type(&ty.scalar_type, false))
                         .collect::<Vec<_>>();
                     Err(PlanError::RecursiveTypeMismatch(
                         cte_name,
@@ -1620,7 +1620,7 @@ pub fn plan_ctes(
                     return type_err(proposed_typ, derived_typ);
                 }
 
-                // Cast dervied types to proposed types or error.
+                // Cast derived types to proposed types or error.
                 let val = match cast_relation(
                     qcx,
                     // Choose `CastContext::Assignment`` because the user has
@@ -1753,8 +1753,8 @@ fn plan_set_expr(
                     Err(_) => sql_bail!(
                         "{} types {} and {} cannot be matched",
                         op,
-                        qcx.humanize_scalar_type(&left_type.scalar_type),
-                        qcx.humanize_scalar_type(&target),
+                        qcx.humanize_scalar_type(&left_type.scalar_type, false),
+                        qcx.humanize_scalar_type(&target, false),
                     ),
                 }
                 match typeconv::plan_cast(
@@ -1767,8 +1767,8 @@ fn plan_set_expr(
                     Err(_) => sql_bail!(
                         "{} types {} and {} cannot be matched",
                         op,
-                        qcx.humanize_scalar_type(&target),
-                        qcx.humanize_scalar_type(&right_type.scalar_type),
+                        qcx.humanize_scalar_type(&target, false),
+                        qcx.humanize_scalar_type(&right_type.scalar_type, false),
                     ),
                 }
             }
@@ -2034,8 +2034,8 @@ fn plan_values_insert(
                 Err(_) => sql_bail!(
                     "column {} is of type {} but expression is of type {}",
                     target_names[column].as_str().quoted(),
-                    qcx.humanize_scalar_type(target_type),
-                    qcx.humanize_scalar_type(source_type),
+                    qcx.humanize_scalar_type(target_type, false),
+                    qcx.humanize_scalar_type(source_type, false),
                 ),
             };
             if column >= types.len() {
@@ -3418,7 +3418,10 @@ fn expand_select_item<'a>(
             let expr = plan_expr(ecx, sql_expr)?.type_as_any(ecx)?;
             let fields = match ecx.scalar_type(&expr) {
                 ScalarType::Record { fields, .. } => fields,
-                ty => sql_bail!("type {} is not composite", ecx.humanize_scalar_type(&ty)),
+                ty => sql_bail!(
+                    "type {} is not composite",
+                    ecx.humanize_scalar_type(&ty, false)
+                ),
             };
             let mut skip_cols: BTreeSet<ColumnName> = BTreeSet::new();
             if let Expr::Identifier(ident) = sql_expr.as_ref() {
@@ -3998,14 +4001,14 @@ fn plan_field_access(
         ScalarType::Record { fields, .. } => fields.iter().position(|(name, _ty)| *name == field),
         ty => sql_bail!(
             "column notation applied to type {}, which is not a composite type",
-            ecx.humanize_scalar_type(ty)
+            ecx.humanize_scalar_type(ty, false)
         ),
     };
     match i {
         None => sql_bail!(
             "field {} not found in data type {}",
             field,
-            ecx.humanize_scalar_type(&ty)
+            ecx.humanize_scalar_type(&ty, false)
         ),
         Some(i) => Ok(expr
             .call_unary(UnaryFunc::RecordGet(expr_func::RecordGet(i)))
@@ -4038,11 +4041,15 @@ fn plan_subscript(
         ),
         ScalarType::Jsonb => plan_subscript_jsonb(ecx, expr, positions),
         ScalarType::List { element_type, .. } => {
-            let elem_type_name = ecx.humanize_scalar_type(element_type);
+            // `elem_type_name` is used only in error msgs, so we set `postgres_compat` to false.
+            let elem_type_name = ecx.humanize_scalar_type(element_type, false);
             let n_layers = ty.unwrap_list_n_layers();
             plan_subscript_list(ecx, expr, positions, n_layers, &elem_type_name)
         }
-        ty => sql_bail!("cannot subscript type {}", ecx.humanize_scalar_type(ty)),
+        ty => sql_bail!(
+            "cannot subscript type {}",
+            ecx.humanize_scalar_type(ty, false)
+        ),
     }
 }
 
@@ -4416,7 +4423,7 @@ where
     if is_unsupported_type(&elem_type) {
         bail_unsupported!(format!(
             "cannot build array from subquery because return type {}{}",
-            ecx.humanize_scalar_type(&elem_type),
+            ecx.humanize_scalar_type(&elem_type, false),
             vector_type_string
         ));
     }
@@ -4672,7 +4679,7 @@ fn plan_array(
         elem_type,
         ScalarType::Char { .. } | ScalarType::List { .. } | ScalarType::Map { .. }
     ) {
-        bail_unsupported!(format!("{}[]", ecx.humanize_scalar_type(&elem_type)));
+        bail_unsupported!(format!("{}[]", ecx.humanize_scalar_type(&elem_type, false)));
     }
 
     Ok(HirScalarExpr::CallVariadic {
@@ -4816,8 +4823,8 @@ pub fn coerce_homogeneous_exprs(
             Err(_) => sql_bail!(
                 "{} could not convert type {} to {}",
                 ecx.name,
-                ecx.humanize_scalar_type(&ecx.scalar_type(&arg)),
-                ecx.humanize_scalar_type(target),
+                ecx.humanize_scalar_type(&ecx.scalar_type(&arg), false),
+                ecx.humanize_scalar_type(target, false),
             ),
         }
     }
@@ -5334,7 +5341,7 @@ pub fn resolve_func(
     let arg_types: Vec<_> = cexprs
         .into_iter()
         .map(|ty| match ecx.scalar_type(&ty) {
-            CoercibleScalarType::Coerced(ty) => ecx.humanize_scalar_type(&ty),
+            CoercibleScalarType::Coerced(ty) => ecx.humanize_scalar_type(&ty, false),
             CoercibleScalarType::Record(_) => "record".to_string(),
             CoercibleScalarType::Uncoerced => "unknown".to_string(),
         })
@@ -5713,8 +5720,8 @@ pub fn scalar_type_from_sql(
                 ScalarType::String => {}
                 other => sql_bail!(
                     "map key type must be {}, got {}",
-                    scx.humanize_scalar_type(&ScalarType::String),
-                    scx.humanize_scalar_type(&other)
+                    scx.humanize_scalar_type(&ScalarType::String, false),
+                    scx.humanize_scalar_type(&other, false)
                 ),
             }
             Ok(ScalarType::Map {
@@ -6321,8 +6328,10 @@ impl<'a> QueryContext<'a> {
         }
     }
 
-    pub fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
-        self.scx.humanize_scalar_type(typ)
+    /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
+    /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
+    pub fn humanize_scalar_type(&self, typ: &ScalarType, postgres_compat: bool) -> String {
+        self.scx.humanize_scalar_type(typ, postgres_compat)
     }
 }
 
@@ -6397,7 +6406,9 @@ impl<'a> ExprContext<'a> {
         &self.qcx.scx.param_types
     }
 
-    pub fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
-        self.qcx.scx.humanize_scalar_type(typ)
+    /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
+    /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
+    pub fn humanize_scalar_type(&self, typ: &ScalarType, postgres_compat: bool) -> String {
+        self.qcx.scx.humanize_scalar_type(typ, postgres_compat)
     }
 }

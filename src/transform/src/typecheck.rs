@@ -1305,7 +1305,7 @@ where
 
     let mut it = cols.iter().peekable();
     while let Some(col) = it.next() {
-        s.push_str(&humanizer.humanize_column_type(col));
+        s.push_str(&humanizer.humanize_column_type(col, false));
 
         if it.peek().is_some() {
             s.push_str(", ");
@@ -1359,14 +1359,14 @@ impl ColumnTypeDifference {
 
         match self {
             NotSubtype { sub, sup } => {
-                let sub = h.humanize_scalar_type(sub);
-                let sup = h.humanize_scalar_type(sup);
+                let sub = h.humanize_scalar_type(sub, false);
+                let sup = h.humanize_scalar_type(sup, false);
 
                 writeln!(f, "{sub} is a not a subtype of {sup}")
             }
             Nullability { sub, sup } => {
-                let sub = h.humanize_column_type(sub);
-                let sup = h.humanize_column_type(sup);
+                let sub = h.humanize_column_type(sub, false);
+                let sup = h.humanize_column_type(sup, false);
 
                 writeln!(f, "{sub} is nullable but {sup} is not")
             }
@@ -1481,8 +1481,8 @@ impl<'a> TypeError<'a> {
                 diffs,
                 message,
             } => {
-                let got = humanizer.humanize_column_type(got);
-                let expected = humanizer.humanize_column_type(expected);
+                let got = humanizer.humanize_column_type(got, false);
+                let expected = humanizer.humanize_column_type(expected, false);
                 writeln!(
                     f,
                     "mismatched column types: {message}\n      got {got}\nexpected {expected}"

@@ -1070,8 +1070,8 @@ pub fn guess_best_common_type(
             sql_bail!(
                 "{} types {} and {} cannot be matched",
                 ecx.name,
-                ecx.humanize_scalar_type(candidate),
-                ecx.humanize_scalar_type(typ),
+                ecx.humanize_scalar_type(candidate, false),
+                ecx.humanize_scalar_type(typ, false),
             );
         };
 
@@ -1217,8 +1217,8 @@ pub fn plan_cast(
         None => Err(PlanError::InvalidCast {
             name: ecx.name.into(),
             ccx,
-            from: ecx.humanize_scalar_type(from),
-            to: ecx.humanize_scalar_type(to),
+            from: ecx.humanize_scalar_type(from, false),
+            to: ecx.humanize_scalar_type(to, false),
         }),
     };
 
