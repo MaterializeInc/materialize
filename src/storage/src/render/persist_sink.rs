@@ -110,7 +110,6 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{
@@ -894,13 +893,10 @@ where
     let shard_id = target.data_shard;
     let target_relation_desc = target.relation_desc.clone();
 
-    // We can only be lenient with concurrent modifications when we know that
-    // this source pipeline is using the feedback upsert operator, which works
-    // correctly when multiple instances of an ingestion pipeline produce
-    // different updates, because of concurrency/non-determinism.
-    let use_continual_feedback_upsert = dyncfgs::STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT
-        .get(storage_state.storage_configuration.config_set());
-    let bail_on_concurrent_modification = !use_continual_feedback_upsert;
+    // We are using the self-correcting continual feedback upsert operator for
+    // upsert, so we assume that computed updates for a timestamp across
+    // concurrent ingestions are the same.
+    let bail_on_concurrent_modification = false;
 
     let mut read_only_rx = storage_state.read_only_rx.clone();
 
