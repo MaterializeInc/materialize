@@ -156,7 +156,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// A shared TxnsCache running in a task and communicated with over a channel.
     txns_read: TxnsRead<T>,
     txns_metrics: Arc<TxnMetrics>,
-    stashed_response: Option<StorageResponse<T>>,
+    stashed_response: Option<(Option<ReplicaId>, StorageResponse<T>)>,
     /// Channel for sending table handle drops.
     #[derivative(Debug = "ignore")]
     pending_table_handle_drops_tx: mpsc::UnboundedSender<GlobalId>,
@@ -225,9 +225,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     maintenance_scheduled: bool,
 
     /// Shared transmit channel for replicas to send responses.
-    instance_response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
+    instance_response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
     /// Receive end for replica responses.
-    instance_response_rx: mpsc::UnboundedReceiver<StorageResponse<T>>,
+    instance_response_rx: mpsc::UnboundedReceiver<(Option<ReplicaId>, StorageResponse<T>)>,
 
     /// Background task run at startup to warm persist state.
     persist_warm_task: Option<AbortOnDropHandle<Box<dyn Debug + Send>>>,
@@ -2029,14 +2029,14 @@ where
         let mut updated_frontiers = None;
         match self.stashed_response.take() {
             None => (),
-            Some(StorageResponse::FrontierUppers(updates)) => {
+            Some((_replica_id, StorageResponse::FrontierUppers(updates))) => {
                 self.update_write_frontiers(&updates);
                 updated_frontiers = Some(Response::FrontierUpdates(updates));
             }
-            Some(StorageResponse::DroppedId(id)) => {
+            Some((_replica_id, StorageResponse::DroppedId(id))) => {
                 tracing::debug!("DroppedId for {id}");
             }
-            Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
+            Some((_replica_id, StorageResponse::StatisticsUpdates(source_stats, sink_stats))) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
                 //
                 // We just write the whole object, as the update from storage represents the
@@ -2065,7 +2065,7 @@ where
                     }
                 }
             }
-            Some(StorageResponse::StatusUpdates(updates)) => {
+            Some((_replica_id, StorageResponse::StatusUpdates(updates))) => {
                 for status_update in updates.iter() {
                     // NOTE(aljoscha): We sniff out the hydration status for
                     // ingestions from status updates. This is the easiest we
@@ -2114,7 +2114,7 @@ where
                 }
                 self.record_status_updates(updates);
             }
-            Some(StorageResponse::StagedBatches(batches)) => {
+            Some((_replica_id, StorageResponse::StagedBatches(batches))) => {
                 for (ingestion_id, batches) in batches {
                     match self.pending_oneshot_ingestions.remove(&ingestion_id) {
                         Some(pending) => {
