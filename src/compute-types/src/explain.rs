@@ -26,6 +26,8 @@ impl<'a> Explain<'a> for DataflowDescription<Plan> {
 
     type Text = ExplainMultiPlan<'a, Plan>;
 
+    type VerboseText = ExplainMultiPlan<'a, Plan>;
+
     type Json = ExplainMultiPlan<'a, Plan>;
 
     type Dot = UnsupportedFormat;
@@ -87,6 +89,8 @@ impl<'a> Explain<'a> for DataflowDescription<OptimizedMirRelationExpr> {
     type Context = ExplainContext<'a>;
 
     type Text = ExplainMultiPlan<'a, MirRelationExpr>;
+
+    type VerboseText = ExplainMultiPlan<'a, MirRelationExpr>;
 
     type Json = ExplainMultiPlan<'a, MirRelationExpr>;
 

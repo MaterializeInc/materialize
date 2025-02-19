@@ -557,6 +557,7 @@ pub fn plan_explain_plan(
 ) -> Result<Plan, PlanError> {
     let format = match explain.format() {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
+        mz_sql_parser::ast::ExplainFormat::VerboseText => ExplainFormat::VerboseText,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
     };
@@ -664,6 +665,7 @@ pub fn plan_explain_timestamp(
 ) -> Result<Plan, PlanError> {
     let format = match explain.format() {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
+        mz_sql_parser::ast::ExplainFormat::VerboseText => ExplainFormat::VerboseText,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
         mz_sql_parser::ast::ExplainFormat::Dot => ExplainFormat::Dot,
     };

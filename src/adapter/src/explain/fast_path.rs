@@ -22,6 +22,8 @@ impl<'a> Explain<'a> for Explainable<'a, FastPathPlan> {
 
     type Text = ExplainMultiPlan<'a, FastPathPlan>;
 
+    type VerboseText = ExplainMultiPlan<'a, FastPathPlan>;
+
     type Json = ExplainMultiPlan<'a, FastPathPlan>;
 
     type Dot = UnsupportedFormat;

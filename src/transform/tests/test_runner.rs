@@ -163,7 +163,7 @@ mod tests {
                 };
 
                 Explainable(&mut rel.clone())
-                    .explain(&ExplainFormat::Text, &context)
+                    .explain(&ExplainFormat::VerboseText, &context)
                     .unwrap()
             }
         }
@@ -563,16 +563,18 @@ mod explain {
     impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
         type Context = ExplainContext<'a>;
 
-        type Text = ExplainSinglePlan<'a, MirRelationExpr>;
+        type Text = UnsupportedFormat;
+
+        type VerboseText = ExplainSinglePlan<'a, MirRelationExpr>;
 
         type Json = UnsupportedFormat;
 
         type Dot = UnsupportedFormat;
 
-        fn explain_text(
+        fn explain_verbose_text(
             &'a mut self,
             context: &'a Self::Context,
-        ) -> Result<Self::Text, ExplainError> {
+        ) -> Result<Self::VerboseText, ExplainError> {
             self.as_explain_single_plan(context)
         }
     }

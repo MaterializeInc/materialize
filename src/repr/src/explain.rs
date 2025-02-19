@@ -60,6 +60,7 @@ pub use crate::explain::tracing::trace_plan;
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ExplainFormat {
     Text,
+    VerboseText,
     Json,
     Dot,
 }
@@ -68,6 +69,7 @@ impl fmt::Display for ExplainFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ExplainFormat::Text => f.write_str("TEXT"),
+            ExplainFormat::VerboseText => f.write_str("VERBOSE TEXT"),
             ExplainFormat::Json => f.write_str("JSON"),
             ExplainFormat::Dot => f.write_str("DOT"),
         }
@@ -274,6 +276,10 @@ pub trait Explain<'a>: 'a {
     type Text: DisplayText;
 
     /// The explanation type produced by a successful
+    /// [`Explain::explain_verbose_text`] call.
+    type VerboseText: DisplayText;
+
+    /// The explanation type produced by a successful
     /// [`Explain::explain_json`] call.
     type Json: DisplayJson;
 
@@ -302,6 +308,7 @@ pub trait Explain<'a>: 'a {
     ) -> Result<String, ExplainError> {
         match format {
             ExplainFormat::Text => self.explain_text(context).map(|e| text_string(&e)),
+            ExplainFormat::VerboseText => self.explain_verbose_text(context).map(|e| text_string(&e)),
             ExplainFormat::Json => self.explain_json(context).map(|e| json_string(&e)),
             ExplainFormat::Dot => self.explain_dot(context).map(|e| dot_string(&e)),
         }
@@ -323,12 +330,28 @@ pub trait Explain<'a>: 'a {
         Err(ExplainError::UnsupportedFormat(ExplainFormat::Text))
     }
 
+    /// Construct a [`Result::Ok`] of the [`Explain::VerboseText`] format
+    /// from the config and the context.
+    ///
+    /// # Errors
+    ///
+    /// If the [`ExplainFormat::VerboseText`] is not supported, the implementation
+    /// should return an [`ExplainError::UnsupportedFormat`].
+    ///
+    /// If an [`ExplainConfig`] parameter cannot be honored, the
+    /// implementation should silently ignore this parameter and
+    /// proceed without returning a [`Result::Err`].
+    #[allow(unused_variables)]
+    fn explain_verbose_text(&'a mut self, context: &'a Self::Context) -> Result<Self::VerboseText, ExplainError> {
+        Err(ExplainError::UnsupportedFormat(ExplainFormat::VerboseText))
+    }
+
     /// Construct a [`Result::Ok`] of the [`Explain::Json`] format
     /// from the config and the context.
     ///
     /// # Errors
     ///
-    /// If the [`ExplainFormat::Text`] is not supported, the implementation
+    /// If the [`ExplainFormat::Json`] is not supported, the implementation
     /// should return an [`ExplainError::UnsupportedFormat`].
     ///
     /// If an [`ExplainConfig`] parameter cannot be honored, the
@@ -915,18 +938,16 @@ mod tests {
 
     impl<'a> Explain<'a> for TestExpr {
         type Context = ExplainContext<'a>;
-        type Text = TestExplanation<'a>;
+        type Text = UnsupportedFormat;
+        type VerboseText = TestExplanation<'a>;
         type Json = UnsupportedFormat;
         type Dot = UnsupportedFormat;
 
-        fn explain_text(
+        fn explain_verbose_text(
             &'a mut self,
             context: &'a Self::Context,
-        ) -> Result<Self::Text, ExplainError> {
-            Ok(TestExplanation {
-                expr: self,
-                context,
-            })
+        ) -> Result<Self::VerboseText, ExplainError> {
+            Ok(TestExplanation { expr: self, context })
         }
     }
 
@@ -936,7 +957,7 @@ mod tests {
     ) -> Result<String, ExplainError> {
         let mut expr = TestExpr { lhs: 1, rhs: 2 };
 
-        let format = ExplainFormat::Text;
+        let format = ExplainFormat::VerboseText;
         let config = &ExplainConfig {
             redacted: false,
             arity: false,

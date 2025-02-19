@@ -4652,7 +4652,11 @@ impl_display_t!(Explainee);
 pub enum ExplainFormat {
     /// Human readable display format
     Text,
+    /// Human readable display format with full debug information
+    VerboseText,
+    /// Machine-consumable JSON format
     Json,
+    /// Machine-consumable DOT (graphviz) format
     Dot,
 }
 
@@ -4660,6 +4664,7 @@ impl AstDisplay for ExplainFormat {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::Text => f.write_str("TEXT"),
+            Self::VerboseText => f.write_str("VERBOSE TEXT"),
             Self::Json => f.write_str("JSON"),
             Self::Dot => f.write_str("DOT"),
         }

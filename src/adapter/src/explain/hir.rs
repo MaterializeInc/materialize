@@ -19,6 +19,8 @@ impl<'a> Explain<'a> for Explainable<'a, HirRelationExpr> {
 
     type Text = <HirRelationExpr as Explain<'a>>::Text;
 
+    type VerboseText = <HirRelationExpr as Explain<'a>>::VerboseText;
+
     type Json = <HirRelationExpr as Explain<'a>>::Json;
 
     type Dot = <HirRelationExpr as Explain<'a>>::Dot;
