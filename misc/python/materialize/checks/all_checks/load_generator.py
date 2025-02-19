@@ -10,6 +10,8 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.checks.executors import Executor
+from materialize.mz_version import MzVersion
 
 
 class LoadGeneratorAsOfUpTo(Check):
@@ -54,6 +56,62 @@ class LoadGeneratorAsOfUpTo(Check):
                 11200
                 > SELECT COUNT(*) FROM users;
                 4076
+            """
+            )
+        )
+
+
+class LoadGeneratorMultiReplica(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v0.134.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+            $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+            GRANT CREATECLUSTER ON SYSTEM TO materialize
+
+            > CREATE CLUSTER multi_cluster1 SIZE '2-2', REPLICATION FACTOR 2;
+            > CREATE SOURCE counter1 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
+        """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+            > CREATE CLUSTER multi_cluster2 SIZE '2-2', REPLICATION FACTOR 2;
+            > CREATE SOURCE counter2 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE counter3 IN CLUSTER multi_cluster2 FROM LOAD GENERATOR COUNTER (UP TO 10);
+                """,
+                """
+            > CREATE CLUSTER multi_cluster3 SIZE '2-2', REPLICATION FACTOR 2;
+            > CREATE SOURCE counter4 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE counter5 IN CLUSTER multi_cluster2 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE counter6 IN CLUSTER multi_cluster3 FROM LOAD GENERATOR COUNTER (UP TO 10);
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > SELECT COUNT(*) FROM counter1;
+                10
+                > SELECT COUNT(*) FROM counter2;
+                10
+                > SELECT COUNT(*) FROM counter3;
+                10
+                > SELECT COUNT(*) FROM counter4;
+                10
+                > SELECT COUNT(*) FROM counter5;
+                10
+                > SELECT COUNT(*) FROM counter6;
+                10
             """
             )
         )
