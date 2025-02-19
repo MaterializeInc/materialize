@@ -395,7 +395,7 @@ where
                 // `tokio::sync::mpsc::UnboundedReceiver::recv` is documented as cancel safe.
                 command = self.command_rx.recv() => {
                     let Some(mut command) = command else {
-                        // Controller is no longer interested in this replica. Shut down.
+                        tracing::debug!(%self.replica_id, "controller is no longer interested in this replica, shutting down message loop");
                         break;
                     };
 
@@ -410,7 +410,7 @@ where
                     };
 
                     if self.response_tx.send((Some(self.replica_id), response)).is_err() {
-                        // Controller is no longer interested in this replica. Shut down.
+                        tracing::debug!(%self.replica_id, "controller (receiver) is no longer interested in this replica, shutting down message loop");
                         break;
                     }
                 }
