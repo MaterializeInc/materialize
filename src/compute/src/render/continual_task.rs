@@ -431,6 +431,7 @@ where
         oks: Collection<G, Row, Diff>,
         errs: Collection<G, DataflowError, Diff>,
         append_times: Option<Collection<G, (), Diff>>,
+        output_probe: &ProbeHandle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         let name = sink_id.to_string();
 
@@ -465,7 +466,9 @@ where
 
         let collection = compute_state.expect_collection_mut(sink_id);
         let mut probe = ProbeHandle::default();
-        let to_append = to_append.probe_with(&mut probe);
+        let to_append = to_append
+            .probe_with(&mut probe)
+            .probe_with(&mut output_probe.clone());
         collection.compute_probe = Some(probe);
         let sink_write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
         collection.sink_write_frontier = Some(Rc::clone(&sink_write_frontier));
