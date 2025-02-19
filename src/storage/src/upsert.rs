@@ -39,15 +39,11 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::HealthStatusUpdate;
-use crate::metrics::upsert::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
 use crate::upsert_continual_feedback;
 use autospill::AutoSpillBackend;
 use memory::InMemoryHashMap;
-use types::{
-    consolidating_merge_function, upsert_bincode_opts, BincodeOpts, StateValue,
-    UpsertStateBackend,
-};
+use types::{consolidating_merge_function, upsert_bincode_opts, BincodeOpts, StateValue};
 
 mod autospill;
 mod memory;
@@ -324,7 +320,7 @@ where
         // three times here, but it's hard working around those impl Futures
         // that return an impl Trait. Oh well...
         if allow_auto_spill {
-            upsert_operator(
+            upsert_continual_feedback::upsert_inner(
                 &thin_input,
                 upsert_envelope.key_indices,
                 resume_upper,
@@ -336,12 +332,11 @@ where
                     AutoSpillBackend::new(rocksdb_init_fn, spill_threshold, rocksdb_in_use_metric)
                 },
                 upsert_config,
-                storage_configuration,
                 prevent_snapshot_buffering,
                 snapshot_buffering_max,
             )
         } else {
-            upsert_operator(
+            upsert_continual_feedback::upsert_inner(
                 &thin_input,
                 upsert_envelope.key_indices,
                 resume_upper,
@@ -351,7 +346,6 @@ where
                 source_config,
                 rocksdb_init_fn,
                 upsert_config,
-                storage_configuration,
                 prevent_snapshot_buffering,
                 snapshot_buffering_max,
             )
@@ -362,7 +356,7 @@ where
             source_id = %source_config.id,
             "rendering upsert source with memory-backed upsert state",
         );
-        upsert_operator(
+        upsert_continual_feedback::upsert_inner(
             &thin_input,
             upsert_envelope.key_indices,
             resume_upper,
@@ -372,56 +366,10 @@ where
             source_config,
             || async { InMemoryHashMap::default() },
             upsert_config,
-            storage_configuration,
             prevent_snapshot_buffering,
             snapshot_buffering_max,
         )
     }
-}
-
-// A shim so we can dispatch based on the dyncfg that tells us which upsert
-// operator to use.
-fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
-    input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
-    key_indices: Vec<usize>,
-    resume_upper: Antichain<G::Timestamp>,
-    persist_input: Collection<G, Result<Row, DataflowError>, Diff>,
-    persist_token: Option<Vec<PressOnDropButton>>,
-    upsert_metrics: UpsertMetrics,
-    source_config: crate::source::SourceExportCreationConfig,
-    state: F,
-    upsert_config: UpsertConfig,
-    _storage_configuration: &StorageConfiguration,
-    prevent_snapshot_buffering: bool,
-    snapshot_buffering_max: Option<usize>,
-) -> (
-    Collection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
-    Stream<G, Infallible>,
-    PressOnDropButton,
-)
-where
-    G::Timestamp: TotalOrder + Sync,
-    G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
-    F: FnOnce() -> Fut + 'static,
-    Fut: std::future::Future<Output = US>,
-    US: UpsertStateBackend<G::Timestamp, Option<FromTime>>,
-    FromTime: Debug + timely::ExchangeData + Ord + Sync,
-{
-    // Since we've removed the classic implementation, we can just directly call the continual feedback implementation
-    upsert_continual_feedback::upsert_inner(
-        input,
-        key_indices,
-        resume_upper,
-        persist_input,
-        persist_token,
-        upsert_metrics,
-        source_config,
-        state,
-        upsert_config,
-        prevent_snapshot_buffering,
-        snapshot_buffering_max,
-    )
 }
 
 /// Renders an operator that discards updates that are known to not affect the outcome of upsert in
