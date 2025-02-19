@@ -36,6 +36,13 @@ impl<'a> Explain<'a> for DataflowDescription<Plan> {
         self.as_explain_multi_plan(context)
     }
 
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
+        self.as_explain_multi_plan(context)
+    }
+
     fn explain_json(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.as_explain_multi_plan(context)
     }
@@ -97,6 +104,13 @@ impl<'a> Explain<'a> for DataflowDescription<OptimizedMirRelationExpr> {
     type Dot = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(context)
+    }
+
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
         self.as_explain_multi_plan(context)
     }
 

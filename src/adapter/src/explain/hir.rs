@@ -29,6 +29,13 @@ impl<'a> Explain<'a> for Explainable<'a, HirRelationExpr> {
         self.0.explain_text(context)
     }
 
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
+        self.0.explain_verbose_text(context)
+    }
+
     fn explain_json(&'a mut self, context: &'a Self::Context) -> Result<Self::Json, ExplainError> {
         self.0.explain_json(context)
     }
