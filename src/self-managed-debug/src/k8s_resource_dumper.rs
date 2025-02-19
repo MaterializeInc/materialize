@@ -21,12 +21,22 @@ use std::io::Write;
 use std::path::{PathBuf, MAIN_SEPARATOR};
 
 use chrono::{DateTime, Utc};
-use k8s_openapi::api::apps::v1::{Deployment, ReplicaSet, StatefulSet};
-use k8s_openapi::api::core::v1::{Event, Node, Pod, Service};
+use k8s_openapi::api::admissionregistration::v1::{
+    MutatingWebhookConfiguration, ValidatingWebhookConfiguration,
+};
+use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
+use k8s_openapi::api::core::v1::{
+    ConfigMap, Event, Node, PersistentVolume, PersistentVolumeClaim, Pod, Secret, Service,
+    ServiceAccount,
+};
 use k8s_openapi::api::networking::v1::NetworkPolicy;
-use k8s_openapi::{ListableResource, NamespaceResourceScope};
+use k8s_openapi::api::rbac::v1::{Role, RoleBinding};
+use k8s_openapi::api::storage::v1::StorageClass;
+use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
+use k8s_openapi::NamespaceResourceScope;
 use kube::api::{ListParams, LogParams};
 use kube::{Api, Client};
+use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_ore::task::JoinHandle;
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -41,7 +51,7 @@ pub struct K8sResourceDumper<'n, K> {
 impl<'n, K> K8sResourceDumper<'n, K>
 where
     K: kube::Resource<DynamicType = ()>
-        + ListableResource
+        + k8s_openapi::Resource
         + Clone
         + Debug
         + Serialize
@@ -91,7 +101,14 @@ where
                 &item.meta().name.clone().unwrap_or(format!("unknown_{}", i))
             ));
             let mut file = File::create(&file_name)?;
-            serde_yaml::to_writer(&mut file, &item)?;
+
+            // If the resource is a secret, we hide its values by default.
+            if K::URL_PATH_SEGMENT == "secrets" && !self.context.args.k8s_dump_secret_values {
+                serde_yaml::to_writer(&mut file, item.meta())?;
+            } else {
+                serde_yaml::to_writer(&mut file, &item)?;
+            }
+
             println!("Exporting {}", file_name.display());
         }
 
@@ -211,6 +228,34 @@ pub async fn dump_namespaced_resources(context: &Context, client: &Client, names
     K8sResourceDumper::<Event>::namespaced(context, client.clone(), namespace.clone())
         .dump()
         .await;
+    K8sResourceDumper::<Materialize>::namespaced(context, client.clone(), namespace.clone())
+        .dump()
+        .await;
+    K8sResourceDumper::<Role>::namespaced(context, client.clone(), namespace.clone())
+        .dump()
+        .await;
+    K8sResourceDumper::<RoleBinding>::namespaced(context, client.clone(), namespace.clone())
+        .dump()
+        .await;
+    K8sResourceDumper::<ConfigMap>::namespaced(context, client.clone(), namespace.clone())
+        .dump()
+        .await;
+    K8sResourceDumper::<Secret>::namespaced(context, client.clone(), namespace.clone())
+        .dump()
+        .await;
+    K8sResourceDumper::<DaemonSet>::namespaced(context, client.clone(), namespace.clone())
+        .dump()
+        .await;
+    K8sResourceDumper::<PersistentVolumeClaim>::namespaced(
+        context,
+        client.clone(),
+        namespace.clone(),
+    )
+    .dump()
+    .await;
+    K8sResourceDumper::<ServiceAccount>::namespaced(context, client.clone(), namespace.clone())
+        .dump()
+        .await;
 
     dump_k8s_pod_logs(context, client.clone(), &namespace).await;
 }
@@ -218,6 +263,26 @@ pub async fn dump_namespaced_resources(context: &Context, client: &Client, names
 /// Write cluster-level k8s resources to a yaml file per resource.
 pub async fn dump_cluster_resources(context: &Context, client: &Client) {
     K8sResourceDumper::<Node>::cluster(context, client.clone())
+        .dump()
+        .await;
+
+    K8sResourceDumper::<StorageClass>::cluster(context, client.clone())
+        .dump()
+        .await;
+
+    K8sResourceDumper::<PersistentVolume>::cluster(context, client.clone())
+        .dump()
+        .await;
+
+    K8sResourceDumper::<MutatingWebhookConfiguration>::cluster(context, client.clone())
+        .dump()
+        .await;
+
+    K8sResourceDumper::<ValidatingWebhookConfiguration>::cluster(context, client.clone())
+        .dump()
+        .await;
+
+    K8sResourceDumper::<CustomResourceDefinition>::cluster(context, client.clone())
         .dump()
         .await;
 }
@@ -228,7 +293,7 @@ async fn dump_kubectl_describe<K>(
     namespace: Option<&String>,
 ) -> Result<(), anyhow::Error>
 where
-    K: ListableResource,
+    K: k8s_openapi::Resource,
 {
     let resource_type = K::URL_PATH_SEGMENT;
     let mut args = vec!["describe", &resource_type];
@@ -279,7 +344,7 @@ pub fn spawn_dump_kubectl_describe_process<K>(
     namespace: Option<String>,
 ) -> JoinHandle<()>
 where
-    K: ListableResource,
+    K: k8s_openapi::Resource,
 {
     mz_ore::task::spawn(|| "dump-kubectl-describe", async move {
         if let Err(e) = dump_kubectl_describe::<K>(&context, namespace.as_ref()).await {

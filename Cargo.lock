@@ -6731,6 +6731,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "mz-build-info",
+ "mz-cloud-resources",
  "mz-ore",
  "serde",
  "serde_yaml",
