@@ -58,6 +58,8 @@ pub enum TryFromProtoError {
     /// Indicates that the serialized ShardId value failed to deserialize, according
     /// to its custom deserialization logic.
     InvalidShardId(String),
+    /// Indicates that the serialized Nonce value failed to deserialize.
+    InvalidNonce(Vec<u8>),
     /// Indicates that the serialized persist state declared a codec different
     /// than the one declared in the state.
     CodecMismatch(String),
@@ -162,6 +164,7 @@ impl std::fmt::Display for TryFromProtoError {
             MissingField(field) => write!(f, "Missing value for `{}`", field),
             UnknownEnumVariant(field) => write!(f, "Unknown enum value for `{}`", field),
             InvalidShardId(value) => write!(f, "Invalid value of ShardId found: `{}`", value),
+            InvalidNonce(value) => write!(f, "Invalid value of Nonce found: `{:?}`", value),
             CodecMismatch(error) => error.fmt(f),
             InvalidPersistState(error) => error.fmt(f),
             InvalidSemverVersion(error) => error.fmt(f),
@@ -201,6 +204,7 @@ impl std::error::Error for TryFromProtoError {
             MissingField(_) => None,
             UnknownEnumVariant(_) => None,
             InvalidShardId(_) => None,
+            InvalidNonce(_) => None,
             CodecMismatch(_) => None,
             InvalidPersistState(_) => None,
             InvalidSemverVersion(_) => None,

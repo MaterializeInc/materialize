@@ -9,40 +9,34 @@
 
 //! Code to spin up communication mesh for a cluster replica.
 //!
-//! The startup protocol is as follows:
-//! The controller in `environmentd`, after having connected to all the
-//! `clusterd` processes in a replica, sends each of them a `CreateTimely` command
-//! containing an epoch value (which is the same across all copies of the command).
-//! The meaning of this value is irrelevant,
-//! as long as it is totally ordered and
-//! increases monotonically (including across `environmentd` restarts)
+//! The startup protocol is as follows: The controller in `environmentd`, after having connected to
+//! all the `clusterd` processes in a replica, sends each of them a `CreateTimely` command
+//! containing a nonce value (which is the same across all copies of the command). The nonce is
+//! guaranteed to be different for each iteration of the compute protocol.
 //!
-//! In the past, we've seen issues caused by `environmentd`'s replica connections
-//! flapping repeatedly and causing several instances of the startup code to spin up
-//! in short succession (or even simultaneously) in response to different `CreateTimely`
-//! commands, causing mass confusion among the processes
-//! and possible crash loops. To avoid this, we do not allow processes to connect to each
-//! other unless they are responding to a `CreateTimely` command with the same epoch value.
-//! If a process discovers the existence of a peer with a lower epoch value, it ignores it,
-//! and if it discovers one with a higher epoch value, it aborts the connection.
-//! Such a process is guaranteed to eventually hear about the higher epoch value
-//! (and, thus, successfully connect to its peers), since
-//! `environmentd` sends `CreateTimely` commands to all processes in a replica.
+//! In the past, we've seen issues caused by the controller's replica connections flapping
+//! repeatedly and causing several instances of the startup code to spin up in short succession (or
+//! even simultaneously) in response to different `CreateTimely` commands, causing mass confusion
+//! among the processes and possible crash loops. To avoid this, we do not allow processes to
+//! connect to each other unless they are responding to a `CreateTimely` command with the same
+//! nonce value. If a process connects to a peer with a different nonce, it aborts the connection
+//! and retries. Eventually, processes still executing an old iteration of the cluster protocol
+//! learn about the controller reconnection and enter the current iteration of the cluster
+//! protocol, at which point all inter-process connections succeed.
 //!
-//! Concretely, each process awaits connections from its peers with higher indices,
-//! and initiates connections to those with lower indices. Having established
-//! a TCP connection, they exchange epochs, to enable the logic described above.
+//! Concretely, each process awaits connections from its peers with higher indices, and initiates
+//! connections to those with lower indices. Having established a TCP connection, they exchange
+//! nonces, to enable the logic described above.
 
 use std::any::Any;
 use std::cmp::Ordering;
-use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
-use mz_cluster_client::client::ClusterStartupEpoch;
+use mz_cluster_client::client::Nonce;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
@@ -55,11 +49,11 @@ pub async fn initialize_networking(
     workers: usize,
     my_index: usize,
     addresses: Vec<String>,
-    my_epoch: ClusterStartupEpoch,
+    my_nonce: Nonce,
 ) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error> {
-    info!(my_index, %my_epoch, ?addresses, "initializing network for timely instance");
+    info!(my_index, %my_nonce, ?addresses, "initializing network for timely instance");
 
-    let sockets = create_sockets(addresses, u64::cast_from(my_index), my_epoch)
+    let sockets = create_sockets(addresses, u64::cast_from(my_index), my_nonce)
         .await
         .context("failed to set up timely sockets")?;
 
@@ -129,7 +123,7 @@ where
 async fn create_sockets(
     addresses: Vec<String>,
     my_index: u64,
-    my_epoch: ClusterStartupEpoch,
+    my_nonce: Nonce,
 ) -> Result<Vec<Option<Stream>>, anyhow::Error> {
     let my_index_uz = usize::cast_from(my_index);
     assert!(my_index_uz < addresses.len());
@@ -162,7 +156,7 @@ async fn create_sockets(
         match Listener::bind(&bind_address).await {
             Ok(ok) => break ok,
             Err(e) => {
-                warn!(my_index, %my_epoch, "failed to listen on address {bind_address}: {e}");
+                warn!(my_index, %my_nonce, "failed to listen on address {bind_address}: {e}");
                 tries += 1;
                 if tries == 10 {
                     return Err(e.into());
@@ -182,12 +176,11 @@ async fn create_sockets(
         let address = addresses[usize::cast_from(i)].clone();
         futs.push(
             async move {
-                start_connection(address, my_index, my_epoch)
-                    .await
-                    .map(move |stream| ConnectionEstablished {
-                        peer_index: i,
-                        stream,
-                    })
+                let stream = start_connection(address, my_index, my_nonce).await;
+                ConnectionEstablished {
+                    peer_index: i,
+                    stream,
+                }
             }
             .boxed(),
         );
@@ -195,9 +188,8 @@ async fn create_sockets(
 
     futs.push({
         let f = async {
-            await_connection(&listener, my_index, my_epoch)
-                .await
-                .map(|(stream, peer_index)| ConnectionEstablished { peer_index, stream })
+            let (stream, peer_index) = await_connection(&listener, my_index, my_nonce).await;
+            ConnectionEstablished { peer_index, stream }
         }
         .boxed();
         f
@@ -207,7 +199,7 @@ async fn create_sockets(
         let ConnectionEstablished { peer_index, stream } = futs
             .next()
             .await
-            .expect("we should always at least have a listener task")?;
+            .expect("we should always at least have a listener task");
 
         let from_listener = match my_index.cmp(&peer_index) {
             Ordering::Less => true,
@@ -218,9 +210,9 @@ async fn create_sockets(
         if from_listener {
             futs.push({
                 let f = async {
-                    await_connection(&listener, my_index, my_epoch)
-                        .await
-                        .map(|(stream, peer_index)| ConnectionEstablished { peer_index, stream })
+                    let (stream, peer_index) =
+                        await_connection(&listener, my_index, my_nonce).await;
+                    ConnectionEstablished { peer_index, stream }
                 }
                 .boxed();
                 f
@@ -236,35 +228,12 @@ async fn create_sockets(
     Ok(results)
 }
 
-#[derive(Debug)]
-/// This task can never successfully boot, since
-/// a peer has seen a higher epoch from `environmentd`.
-pub struct EpochMismatch {
-    /// The epoch we know about
-    mine: ClusterStartupEpoch,
-    /// The higher epoch from our peer
-    peer: ClusterStartupEpoch,
-}
-
-impl Display for EpochMismatch {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let EpochMismatch { mine, peer } = self;
-        write!(f, "epoch mismatch: ours was {mine}; the peer's was {peer}")
-    }
-}
-
-impl std::error::Error for EpochMismatch {}
-
-async fn start_connection(
-    address: String,
-    my_index: u64,
-    my_epoch: ClusterStartupEpoch,
-) -> Result<Stream, EpochMismatch> {
+async fn start_connection(address: String, my_index: u64, my_nonce: Nonce) -> Stream {
     async fn try_connect(
         address: &str,
         my_index: u64,
-        my_epoch: ClusterStartupEpoch,
-    ) -> Result<(Stream, ClusterStartupEpoch), anyhow::Error> {
+        my_nonce: Nonce,
+    ) -> Result<(Stream, Nonce), anyhow::Error> {
         let mut s = Stream::connect(address).await?;
 
         if let Stream::Tcp(tcp) = &s {
@@ -272,41 +241,34 @@ async fn start_connection(
         }
 
         s.write_all(&my_index.to_be_bytes()).await?;
-        s.write_all(&my_epoch.to_bytes()).await?;
+        s.write_all(&my_nonce.to_bytes()).await?;
 
         let mut buffer = [0u8; 16];
         s.read_exact(&mut buffer).await?;
-        let peer_epoch = ClusterStartupEpoch::from_bytes(buffer);
+        let peer_nonce = Nonce::from_bytes(buffer);
 
-        Ok((s, peer_epoch))
+        Ok((s, peer_nonce))
     }
 
     loop {
-        info!(my_index, %my_epoch, "attempting to connect to process at {address}");
+        info!(my_index, %my_nonce, "attempting to connect to process at {address}");
 
-        match try_connect(&address, my_index, my_epoch).await {
-            Ok((stream, peer_epoch)) => {
-                debug!(my_index, %my_epoch, "start: received peer epoch {peer_epoch}");
+        match try_connect(&address, my_index, my_nonce).await {
+            Ok((stream, peer_nonce)) => {
+                debug!(my_index, %my_nonce, "start: received peer nonce {peer_nonce}");
 
-                match my_epoch.cmp(&peer_epoch) {
-                    Ordering::Less => {
-                        return Err(EpochMismatch {
-                            mine: my_epoch,
-                            peer: peer_epoch,
-                        })
-                    }
-                    Ordering::Greater => {
-                        warn!(
-                            my_index, %my_epoch,
-                            "peer at address {address} gave older epoch: {peer_epoch}",
-                        );
-                    }
-                    Ordering::Equal => return Ok(stream),
+                if peer_nonce == my_nonce {
+                    return stream;
+                } else {
+                    warn!(
+                        my_index, %my_nonce,
+                        "peer at address {address} gave mismatching nonce: {peer_nonce}",
+                    );
                 }
             }
             Err(err) => {
                 info!(
-                    my_index, %my_epoch,
+                    my_index, %my_nonce,
                     "error connecting to process at {address}: {err}; will retry"
                 );
             }
@@ -316,15 +278,11 @@ async fn start_connection(
     }
 }
 
-async fn await_connection(
-    listener: &Listener,
-    my_index: u64, // only for logging
-    my_epoch: ClusterStartupEpoch,
-) -> Result<(Stream, u64), EpochMismatch> {
+async fn await_connection(listener: &Listener, my_index: u64, my_nonce: Nonce) -> (Stream, u64) {
     async fn try_accept(
         listener: &Listener,
-        my_epoch: ClusterStartupEpoch,
-    ) -> Result<(Stream, u64, ClusterStartupEpoch), anyhow::Error> {
+        my_nonce: Nonce,
+    ) -> Result<(Stream, u64, Nonce), anyhow::Error> {
         let mut s = listener.accept().await?.0;
 
         if let Stream::Tcp(tcp) = &s {
@@ -336,41 +294,34 @@ async fn await_connection(
         let peer_index = u64::from_be_bytes((&buffer[0..8]).try_into().unwrap());
 
         s.read_exact(&mut buffer).await?;
-        let peer_epoch = ClusterStartupEpoch::from_bytes(buffer);
+        let peer_nonce = Nonce::from_bytes(buffer);
 
-        s.write_all(&my_epoch.to_bytes()[..]).await?;
+        s.write_all(&my_nonce.to_bytes()[..]).await?;
 
-        Ok((s, peer_index, peer_epoch))
+        Ok((s, peer_index, peer_nonce))
     }
 
     loop {
-        info!(my_index, %my_epoch, "awaiting connection from peer");
+        info!(my_index, %my_nonce, "awaiting connection from peer");
 
-        match try_accept(listener, my_epoch).await {
-            Ok((stream, peer_index, peer_epoch)) => {
+        match try_accept(listener, my_nonce).await {
+            Ok((stream, peer_index, peer_nonce)) => {
                 debug!(
-                    my_index, %my_epoch,
-                    "await: received peer (index, epoch): ({peer_index}, {peer_epoch})",
+                    my_index, %my_nonce,
+                    "await: received peer (index, nonce): ({peer_index}, {peer_nonce})",
                 );
 
-                match my_epoch.cmp(&peer_epoch) {
-                    Ordering::Less => {
-                        return Err(EpochMismatch {
-                            mine: my_epoch,
-                            peer: peer_epoch,
-                        });
-                    }
-                    Ordering::Greater => {
-                        warn!(
-                            my_index, %my_epoch,
-                            "peer {peer_index} gave older epoch: {peer_epoch}",
-                        );
-                    }
-                    Ordering::Equal => return Ok((stream, peer_index)),
+                if peer_nonce == my_nonce {
+                    return (stream, peer_index);
+                } else {
+                    warn!(
+                        my_index, %my_nonce,
+                        "peer {peer_index} gave mismatching nonce: {peer_nonce}",
+                    );
                 }
             }
             Err(err) => {
-                info!(my_index, %my_epoch, "error accepting connection: {err}; will retry");
+                info!(my_index, %my_nonce, "error accepting connection: {err}; will retry");
             }
         }
     }

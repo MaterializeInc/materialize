@@ -16,7 +16,7 @@ use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use differential_dataflow::trace::ExertionLogic;
 use futures::future;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
+use mz_cluster_client::client::{Nonce, TimelyConfig, TryIntoTimelyConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::halt;
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
@@ -93,11 +93,7 @@ where
         }
     }
 
-    async fn build(
-        &mut self,
-        config: TimelyConfig,
-        epoch: ClusterStartupEpoch,
-    ) -> Result<(), Error> {
+    async fn build(&mut self, config: TimelyConfig, nonce: Nonce) -> Result<(), Error> {
         let workers = config.workers;
 
         // Check if we can reuse the existing timely instance.
@@ -118,7 +114,7 @@ where
             None => {
                 let timely = self
                     .cluster_spec
-                    .build_cluster(config, epoch, self.tokio_handle.clone())
+                    .build_cluster(config, nonce, self.tokio_handle.clone())
                     .await
                     .inspect_err(|e| {
                         warn!("timely initialization failed: {}", e.display_with_causes())
@@ -235,7 +231,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     async fn build_cluster(
         &self,
         config: TimelyConfig,
-        epoch: ClusterStartupEpoch,
+        nonce: Nonce,
         tokio_executor: Handle,
     ) -> Result<TimelyContainer<Self>, Error> {
         info!("Building timely container with config {config:?}");
@@ -248,7 +244,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
             config.workers,
             config.process,
             config.addresses.clone(),
-            epoch,
+            nonce,
         )
         .await?;
 

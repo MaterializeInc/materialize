@@ -29,7 +29,6 @@
 //! recover each dataflow to its current state in case of failure or other reconfiguration.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -180,8 +179,6 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     arrangement_exert_proportionality: u32,
     /// A controller response to be returned on the next call to [`ComputeController::process`].
     stashed_response: Option<ComputeControllerResponse<T>>,
-    /// A number that increases on every `environmentd` restart.
-    envd_epoch: NonZeroI64,
     /// The compute controller metrics.
     metrics: ComputeControllerMetrics,
     /// A function that produces the current wallclock time.
@@ -214,7 +211,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     pub fn new(
         build_info: &'static BuildInfo,
         storage_collections: StorageCollections<T>,
-        envd_epoch: NonZeroI64,
         read_only: bool,
         metrics_registry: &MetricsRegistry,
         controller_metrics: ControllerMetrics,
@@ -281,7 +277,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             config: Default::default(),
             arrangement_exert_proportionality: 16,
             stashed_response: None,
-            envd_epoch,
             metrics,
             now,
             wallclock_lag,
@@ -463,7 +458,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             config: _,
             arrangement_exert_proportionality,
             stashed_response,
-            envd_epoch,
             metrics: _,
             now: _,
             wallclock_lag: _,
@@ -507,7 +501,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
                 arrangement_exert_proportionality,
             )?,
             field("stashed_response", format!("{stashed_response:?}"))?,
-            field("envd_epoch", envd_epoch)?,
             field("maintenance_scheduled", maintenance_scheduled)?,
         ]);
         Ok(serde_json::Value::Object(map))
@@ -544,7 +537,6 @@ where
             self.build_info,
             Arc::clone(&self.storage_collections),
             logs,
-            self.envd_epoch,
             self.metrics.for_instance(id),
             self.now.clone(),
             Arc::clone(&self.wallclock_lag),

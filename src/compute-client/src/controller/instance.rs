@@ -11,12 +11,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
-use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mz_build_info::BuildInfo;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{Nonce, TimelyConfig};
 use mz_cluster_client::WallclockLagFn;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_compute_types::plan::render_plan::RenderPlan;
@@ -160,7 +159,6 @@ where
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
         arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState<T>)>,
-        envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
         now: NowFn,
         wallclock_lag: WallclockLagFn<T>,
@@ -187,7 +185,6 @@ where
                 build_info,
                 storage,
                 arranged_logs,
-                envd_epoch,
                 metrics,
                 now,
                 wallclock_lag,
@@ -207,9 +204,9 @@ where
     }
 }
 
-/// A response from a replica, composed of a replica ID, the replica's current epoch, and the
+/// A response from a replica, composed of a replica ID, the replica's current nonce, and the
 /// compute response itself.
-pub(super) type ReplicaResponse<T> = (ReplicaId, u64, ComputeResponse<T>);
+pub(super) type ReplicaResponse<T> = (ReplicaId, Nonce, ComputeResponse<T>);
 
 /// The state we keep for a compute instance.
 pub(super) struct Instance<T: ComputeControllerTimestamp> {
@@ -276,10 +273,6 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
     /// Sender for introspection updates to be recorded.
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-    /// A number that increases with each restart of `environmentd`.
-    envd_epoch: NonZeroI64,
-    /// Numbers that increase with each restart of a replica.
-    replica_epochs: BTreeMap<ReplicaId, u64>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
     /// Dynamic system configuration.
@@ -413,7 +406,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         id: ReplicaId,
         client: ReplicaClient<T>,
         config: ReplicaConfig,
-        epoch: ClusterStartupEpoch,
+        nonce: Nonce,
     ) {
         let log_ids: BTreeSet<_> = config.logging.index_logs.values().copied().collect();
 
@@ -424,7 +417,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             config,
             metrics,
             self.introspection_tx.clone(),
-            epoch,
+            nonce,
         );
 
         // Add per-replica collection state.
@@ -799,8 +792,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             command_rx: _,
             response_tx: _,
             introspection_tx: _,
-            envd_epoch,
-            replica_epochs,
             metrics: _,
             dyncfg: _,
             now: _,
@@ -836,10 +827,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .map(|(id, subscribe)| (id.to_string(), format!("{subscribe:?}")))
             .collect();
         let copy_tos: Vec<_> = copy_tos.iter().map(|id| id.to_string()).collect();
-        let replica_epochs: BTreeMap<_, _> = replica_epochs
-            .iter()
-            .map(|(id, epoch)| (id.to_string(), epoch))
-            .collect();
         let wallclock_lag_last_refresh = format!("{wallclock_lag_last_refresh:?}");
 
         let map = serde_json::Map::from_iter([
@@ -850,8 +837,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             field("peeks", peeks)?,
             field("subscribes", subscribes)?,
             field("copy_tos", copy_tos)?,
-            field("envd_epoch", envd_epoch)?,
-            field("replica_epochs", replica_epochs)?,
             field("wallclock_lag_last_refresh", wallclock_lag_last_refresh)?,
         ]);
         Ok(serde_json::Value::Object(map))
@@ -867,7 +852,6 @@ where
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
         arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState<T>)>,
-        envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
         now: NowFn,
         wallclock_lag: WallclockLagFn<T>,
@@ -911,8 +895,6 @@ where
             command_rx,
             response_tx,
             introspection_tx,
-            envd_epoch,
-            replica_epochs: Default::default(),
             metrics,
             dyncfg,
             now,
@@ -927,7 +909,7 @@ where
     async fn run(mut self) {
         self.send(ComputeCommand::CreateTimely {
             config: TimelyConfig::default(),
-            epoch: ClusterStartupEpoch::new(self.envd_epoch, 0),
+            nonce: Nonce::new(),
         });
 
         // Send a placeholder instance configuration for the replica task to fill in.
@@ -1052,16 +1034,13 @@ where
 
         config.logging.index_logs = self.log_sources.clone();
 
-        let replica_epoch = self.replica_epochs.entry(id).or_default();
-        *replica_epoch += 1;
-        let metrics = self.metrics.for_replica(id);
-        let epoch = ClusterStartupEpoch::new(self.envd_epoch, *replica_epoch);
+        let nonce = Nonce::new();
         let client = ReplicaClient::spawn(
             id,
             self.build_info,
             config.clone(),
-            epoch,
-            metrics.clone(),
+            nonce,
+            self.metrics.for_replica(id),
             Arc::clone(&self.dyncfg),
             self.replica_tx.clone(),
         );
@@ -1080,7 +1059,7 @@ where
         }
 
         // Add replica to tracked state.
-        self.add_replica_state(id, client, config, epoch);
+        self.add_replica_state(id, client, config, nonce);
 
         Ok(())
     }
@@ -1755,18 +1734,18 @@ where
 
     /// Handles a response from a replica. Replica IDs are re-used across replica restarts, so we
     /// use the replica incarnation to drop stale responses.
-    fn handle_response(&mut self, (replica_id, incarnation, response): ReplicaResponse<T>) {
+    fn handle_response(&mut self, (replica_id, nonce, response): ReplicaResponse<T>) {
         // Filter responses from non-existing or stale replicas.
         if self
             .replicas
             .get(&replica_id)
-            .filter(|replica| replica.epoch.replica() == incarnation)
+            .filter(|replica| replica.nonce == nonce)
             .is_none()
         {
             return;
         }
 
-        // Invariant: the replica exists and has the expected incarnation.
+        // Invariant: the replica exists and has the expected nonce.
 
         match response {
             ComputeResponse::Frontiers(id, frontiers) => {
@@ -2623,10 +2602,10 @@ struct ReplicaState<T: ComputeControllerTimestamp> {
     metrics: ReplicaMetrics,
     /// A channel through which introspection updates are delivered.
     introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    /// The nonce identifying the current replica connection.
+    nonce: Nonce,
     /// Per-replica collection state.
     collections: BTreeMap<GlobalId, ReplicaCollectionState<T>>,
-    /// The epoch of the replica.
-    epoch: ClusterStartupEpoch,
 }
 
 impl<T: ComputeControllerTimestamp> ReplicaState<T> {
@@ -2636,7 +2615,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         config: ReplicaConfig,
         metrics: ReplicaMetrics,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        epoch: ClusterStartupEpoch,
+        nonce: Nonce,
     ) -> Self {
         Self {
             id,
@@ -2644,7 +2623,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
             config,
             metrics,
             introspection_tx,
-            epoch,
+            nonce,
             collections: Default::default(),
         }
     }
@@ -2729,7 +2708,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
             config: _,
             metrics: _,
             introspection_tx: _,
-            epoch,
+            nonce,
             collections,
         } = self;
 
@@ -2749,7 +2728,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
         let map = serde_json::Map::from_iter([
             field("id", id.to_string())?,
             field("collections", collections)?,
-            field("epoch", epoch)?,
+            field("nonce", nonce.to_string())?,
         ]);
         Ok(serde_json::Value::Object(map))
     }
