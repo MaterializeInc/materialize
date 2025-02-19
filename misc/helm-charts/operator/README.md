@@ -135,7 +135,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.defaultReplicationFactor.support` |  | ``0`` |
 | `operator.clusters.defaultReplicationFactor.system` |  | ``0`` |
 | `operator.clusters.defaultSizes.analytics` |  | ``"25cc"`` |
-| `operator.clusters.defaultSizes.catalogServer` |  | ``"50cc"`` |
+| `operator.clusters.defaultSizes.catalogServer` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.default` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.probe` |  | ``"mz_probe"`` |
 | `operator.clusters.defaultSizes.support` |  | ``"25cc"`` |
