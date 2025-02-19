@@ -8,15 +8,21 @@ menu:
     parent: "installation"
 ---
 
-The tutorial deploys Materialize to GCP Google Kubernetes Engine (GKE) cluster
-with a Cloud SQL PostgreSQL database as the metadata database and Cloud Storage
-bucket for blob storage. The tutorial uses Terraform both to set up the GCP
-Kubernetes environment and to deploy the Materialize Operator and Materialize
-instance(s) to that GKE cluster.
-
 Self-managed Materialize requires:
 
 {{% self-managed/materialize-components-list %}}
+
+This tutorial deploys Materialize to GCP Google Kubernetes Engine (GKE) cluster
+with a Cloud SQL PostgreSQL database as the metadata database and Cloud Storage
+bucket for blob storage. Specifically, the tutorial uses [Materialize on Google Cloud Terraform
+modules](https://github.com/MaterializeInc/terraform-google-materialize) to:
+
+- Set up the GCP environment.
+
+- Call
+   [terraform-helm-materialize](https://github.com/MaterializeInc/terraform-helm-materialize)
+   module to deploy Materialize Operator and Materialize instances to the GKE
+   cluster.
 
 {{< warning >}}
 

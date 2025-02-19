@@ -8,14 +8,29 @@ menu:
     parent: "installation"
 ---
 
-The tutorial deploys Materialize to AWS Elastic Kubernetes Service (EKS) with a
-PostgreSQL RDS database as the metadata database and AWS S3 for blob storage.
-The tutorial uses Terraform both to set up the AWS Kubernetes environment and to
-deploy Materialize Operator and Materialize instances to that EKS cluster.
-
 Self-managed Materialize requires:
 
 {{% self-managed/materialize-components-list %}}
+
+The tutorial deploys Materialize to AWS Elastic Kubernetes Service (EKS) with a
+PostgreSQL RDS database as the metadata database and AWS S3 for blob storage.
+The tutorial uses [Materialize on AWS Terraform
+modules](https://github.com/MaterializeInc/terraform-aws-materialize) to:
+
+- Set up the AWS Kubernetes environment.
+- Call
+   [terraform-helm-materialize](https://github.com/MaterializeInc/terraform-helm-materialize)
+   module to deploy Materialize Operator and Materialize instances to that EKS
+   cluster.
+
+{{< warning >}}
+
+The Terraform modules used in this tutorial are provided for
+demonstration/evaluation this tutorial are provided for demonstration/evaluation
+purposes only and not intended for production use. Materialize does not support
+nor recommend these modules for production use.
+
+{{< /warning >}}
 
 When operating in AWS, we recommend:
 
@@ -23,14 +38,6 @@ When operating in AWS, we recommend:
 
 - Using the `r7gd` and `r6gd` families of instances (and `r8gd` once available)
   when running with local disk (Recommended for production.  See [Operational guidelines](/installation/operational-guidelines/#locally-attached-nvme-storage-openebs) for more information.)
-
-{{< warning >}}
-
-The Terraform modules used in this tutorial are provided for
-demonstration/evaluation purposes only and not intended for production use.
-Materialize does not support nor recommend these modules for production use.
-
-{{< /warning >}}
 
 ## Prerequisites
 
@@ -68,7 +75,7 @@ documentation](https://helm.sh/docs/intro/install/).
 
 {{< /warning >}}
 
-Materialize provides [sample Terraform
+Materialize provides [Materialize on AWS Terraform
 modules](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
 for evaluation purposes only. The modules deploy a sample infrastructure on AWS
 (region `us-east-1`) with the following components:
