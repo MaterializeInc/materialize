@@ -29,7 +29,7 @@ CREATE TABLE v (
 
 # Union that does not propagate a null
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT AS VERBOSE TEXT FOR (SELECT * FROM v WHERE f) UNION ALL (SELECT * FROM v WHERE e IS NOT NULL)
+EXPLAIN OPTIMIZED PLAN WITH(types) AS VERBOSE TEXT FOR (SELECT * FROM v WHERE f) UNION ALL (SELECT * FROM v WHERE e IS NOT NULL)
 ----
 Explained Query:
   Union // { types: "(double precision?, boolean?)" }
@@ -46,7 +46,7 @@ EOF
 
 # Union that does propagate a null
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT AS VERBOSE TEXT FOR (SELECT * FROM v WHERE e = 1.25) UNION ALL (SELECT * FROM v WHERE e IS NOT NULL)
+EXPLAIN OPTIMIZED PLAN WITH(types) AS VERBOSE TEXT FOR (SELECT * FROM v WHERE e = 1.25) UNION ALL (SELECT * FROM v WHERE e IS NOT NULL)
 ----
 Explained Query:
   Union // { types: "(double precision, boolean?)" }
@@ -64,7 +64,7 @@ EOF
 # Constant + reduce
 # Nullability should be correctly inferred on the Constant
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(types) AS VERBOSE TEXT FOR
 (SELECT 1 as a, 'hello' as b, null::date as c)
 EXCEPT
 (SELECT sum(a) as a, max(b) as b, c FROM t GROUP BY c)
@@ -95,7 +95,7 @@ EOF
 #### Correct column scalar type ####
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(types) AS VERBOSE TEXT FOR
 SELECT t.* FROM u LEFT OUTER JOIN t on t.a = u.d
 ----
 Explained Query:
@@ -136,7 +136,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types) AS TEXT AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(types) AS VERBOSE TEXT FOR
 (SELECT null::boolean as f1, 10 as f2) EXCEPT (SELECT min(f), count(*) FROM v WHERE (select d::double FROM u) = v.e GROUP BY e LIMIT 1)
 ----
 Explained Query:
