@@ -389,6 +389,7 @@ where
                 command = self.command_rx.recv() => {
                     let Some(mut command) = command else {
                         // Controller is no longer interested in this replica. Shut down.
+                        tracing::debug!(%self.replica_id, "controller is no longer interested in this replica, shutting down message loop");
                         break;
                     };
 
