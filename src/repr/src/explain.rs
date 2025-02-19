@@ -308,7 +308,9 @@ pub trait Explain<'a>: 'a {
     ) -> Result<String, ExplainError> {
         match format {
             ExplainFormat::Text => self.explain_text(context).map(|e| text_string(&e)),
-            ExplainFormat::VerboseText => self.explain_verbose_text(context).map(|e| text_string(&e)),
+            ExplainFormat::VerboseText => {
+                self.explain_verbose_text(context).map(|e| text_string(&e))
+            }
             ExplainFormat::Json => self.explain_json(context).map(|e| json_string(&e)),
             ExplainFormat::Dot => self.explain_dot(context).map(|e| dot_string(&e)),
         }
@@ -342,7 +344,10 @@ pub trait Explain<'a>: 'a {
     /// implementation should silently ignore this parameter and
     /// proceed without returning a [`Result::Err`].
     #[allow(unused_variables)]
-    fn explain_verbose_text(&'a mut self, context: &'a Self::Context) -> Result<Self::VerboseText, ExplainError> {
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
         Err(ExplainError::UnsupportedFormat(ExplainFormat::VerboseText))
     }
 
@@ -947,7 +952,10 @@ mod tests {
             &'a mut self,
             context: &'a Self::Context,
         ) -> Result<Self::VerboseText, ExplainError> {
-            Ok(TestExplanation { expr: self, context })
+            Ok(TestExplanation {
+                expr: self,
+                context,
+            })
         }
     }
 
