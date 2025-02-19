@@ -15,9 +15,10 @@
 
 //! Dumps k8s resources to files.
 
+use std::fmt::Debug;
 use std::fs::{create_dir_all, File};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{PathBuf, MAIN_SEPARATOR};
 
 use chrono::{DateTime, Utc};
 use k8s_openapi::api::apps::v1::{Deployment, ReplicaSet, StatefulSet};
@@ -27,6 +28,7 @@ use k8s_openapi::{ListableResource, NamespaceResourceScope};
 use kube::api::{ListParams, LogParams};
 use kube::{Api, Client};
 use mz_ore::task::JoinHandle;
+use serde::{de::DeserializeOwned, Serialize};
 
 use crate::Context;
 
@@ -38,12 +40,12 @@ pub struct K8sResourceDumper<'n, K> {
 
 impl<'n, K> K8sResourceDumper<'n, K>
 where
-    K: kube::Resource<DynamicType = ()>,
-    K: ListableResource,
-    K: Clone,
-    K: std::fmt::Debug,
-    K: serde::Serialize,
-    K: serde::de::DeserializeOwned,
+    K: kube::Resource<DynamicType = ()>
+        + ListableResource
+        + Clone
+        + Debug
+        + Serialize
+        + DeserializeOwned,
 {
     fn cluster(context: &'n Context, client: Client) -> Self {
         Self {
@@ -70,7 +72,7 @@ where
 
         if object_list.items.is_empty() {
             let mut err_msg = format!("No {} found", resource_type);
-            if let Some(namespace) = self.namespace.clone() {
+            if let Some(namespace) = &self.namespace {
                 err_msg = format!("{} for namespace {}", err_msg, namespace);
             }
             println!("{}", err_msg);
@@ -83,10 +85,10 @@ where
         );
         create_dir_all(&file_path)?;
 
-        for item in &object_list.items {
+        for (i, item) in object_list.items.iter().enumerate() {
             let file_name = file_path.join(format!(
                 "{}.yaml",
-                &item.meta().name.clone().unwrap_or_default()
+                &item.meta().name.clone().unwrap_or(format!("unknown_{}", i))
             ));
             let mut file = File::create(&file_name)?;
             serde_yaml::to_writer(&mut file, &item)?;
@@ -115,8 +117,12 @@ async fn _dump_k8s_pod_logs(
     let pods: Api<Pod> = Api::<Pod>::namespaced(client.clone(), namespace);
     let pod_list = pods.list(&ListParams::default()).await?;
 
-    for pod in &pod_list.items {
-        let pod_name = pod.metadata.name.clone().unwrap_or_default();
+    for (i, pod) in pod_list.items.iter().enumerate() {
+        let pod_name = pod
+            .metadata
+            .name
+            .clone()
+            .unwrap_or(format!("unknown_{}", i));
         async fn export_pod_logs(
             pods: &Api<Pod>,
             pod_name: &str,
@@ -176,7 +182,7 @@ async fn _dump_k8s_pod_logs(
 }
 
 /// Write k8s pod logs to a yaml file per pod.
-async fn dump_k8s_pod_logs(context: &Context, client: Client, namespace: &String) -> () {
+async fn dump_k8s_pod_logs(context: &Context, client: Client, namespace: &String) {
     if let Err(e) = _dump_k8s_pod_logs(context, client, namespace).await {
         eprintln!("Failed to dump k8s pod logs: {}", e);
     }
@@ -292,8 +298,10 @@ fn format_resource_path(
     namespace: Option<&String>,
 ) -> PathBuf {
     let mut path = PathBuf::from(format!(
-        "mz-debug/{}/{}",
+        "mz-debug{}{}{}{}",
+        MAIN_SEPARATOR,
         date_time.format("%Y-%m-%dT%H:%MZ"),
+        MAIN_SEPARATOR,
         resource_type,
     ));
     if let Some(namespace) = namespace {
