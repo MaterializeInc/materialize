@@ -259,22 +259,33 @@ async fn start_connection(
     address: String,
     my_index: u64,
     my_epoch: ClusterStartupEpoch,
-) -> Result<Stream, anyhow::Error> {
+) -> Result<Stream, EpochMismatch> {
+    async fn try_connect(
+        address: &str,
+        my_index: u64,
+        my_epoch: ClusterStartupEpoch,
+    ) -> Result<(Stream, ClusterStartupEpoch), anyhow::Error> {
+        let mut s = Stream::connect(address).await?;
+
+        if let Stream::Tcp(tcp) = &s {
+            tcp.set_nodelay(true)?;
+        }
+
+        s.write_all(&my_index.to_be_bytes()).await?;
+        s.write_all(&my_epoch.to_bytes()).await?;
+
+        let mut buffer = [0u8; 16];
+        s.read_exact(&mut buffer).await?;
+        let peer_epoch = ClusterStartupEpoch::from_bytes(buffer);
+
+        Ok((s, peer_epoch))
+    }
+
     loop {
         info!(my_index, %my_epoch, "attempting to connect to process at {address}");
 
-        match Stream::connect(&address).await {
-            Ok(mut s) => {
-                if let Stream::Tcp(tcp) = &s {
-                    tcp.set_nodelay(true)?;
-                }
-
-                s.write_all(&my_index.to_be_bytes()).await?;
-                s.write_all(&my_epoch.to_bytes()).await?;
-
-                let mut buffer = [0u8; 16];
-                s.read_exact(&mut buffer).await?;
-                let peer_epoch = ClusterStartupEpoch::from_bytes(buffer);
+        match try_connect(&address, my_index, my_epoch).await {
+            Ok((stream, peer_epoch)) => {
                 debug!(my_index, %my_epoch, "start: received peer epoch {peer_epoch}");
 
                 match my_epoch.cmp(&peer_epoch) {
@@ -282,8 +293,7 @@ async fn start_connection(
                         return Err(EpochMismatch {
                             mine: my_epoch,
                             peer: peer_epoch,
-                        }
-                        .into());
+                        })
                     }
                     Ordering::Greater => {
                         warn!(
@@ -291,7 +301,7 @@ async fn start_connection(
                             "peer at address {address} gave older epoch: {peer_epoch}",
                         );
                     }
-                    Ordering::Equal => return Ok(s),
+                    Ordering::Equal => return Ok(stream),
                 }
             }
             Err(err) => {
@@ -300,7 +310,8 @@ async fn start_connection(
                     "error connecting to process at {address}: {err}; will retry"
                 );
             }
-        }
+        };
+
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
@@ -309,11 +320,12 @@ async fn await_connection(
     listener: &Listener,
     my_index: u64, // only for logging
     my_epoch: ClusterStartupEpoch,
-) -> Result<(Stream, u64), anyhow::Error> {
-    loop {
-        info!(my_index, %my_epoch, "awaiting connection from peer");
+) -> Result<(Stream, u64), EpochMismatch> {
+    async fn try_accept(
+        listener: &Listener,
+        my_epoch: ClusterStartupEpoch,
+    ) -> Result<(Stream, u64, ClusterStartupEpoch), anyhow::Error> {
         let mut s = listener.accept().await?.0;
-        info!(my_index, %my_epoch, "accepted connection from peer");
 
         if let Stream::Tcp(tcp) = &s {
             tcp.set_nodelay(true)?;
@@ -322,29 +334,44 @@ async fn await_connection(
         let mut buffer = [0u8; 16];
         s.read_exact(&mut buffer[0..8]).await?;
         let peer_index = u64::from_be_bytes((&buffer[0..8]).try_into().unwrap());
-        debug!(my_index, %my_epoch, "await: received peer index {peer_index}");
 
         s.read_exact(&mut buffer).await?;
         let peer_epoch = ClusterStartupEpoch::from_bytes(buffer);
-        debug!(my_index, %my_epoch, "await: received peer epoch {peer_epoch}");
 
         s.write_all(&my_epoch.to_bytes()[..]).await?;
 
-        match my_epoch.cmp(&peer_epoch) {
-            Ordering::Less => {
-                return Err(EpochMismatch {
-                    mine: my_epoch,
-                    peer: peer_epoch,
-                }
-                .into());
-            }
-            Ordering::Greater => {
-                warn!(
+        Ok((s, peer_index, peer_epoch))
+    }
+
+    loop {
+        info!(my_index, %my_epoch, "awaiting connection from peer");
+
+        match try_accept(listener, my_epoch).await {
+            Ok((stream, peer_index, peer_epoch)) => {
+                debug!(
                     my_index, %my_epoch,
-                    "peer {peer_index} gave older epoch: {peer_epoch}",
+                    "await: received peer (index, epoch): ({peer_index}, {peer_epoch})",
                 );
+
+                match my_epoch.cmp(&peer_epoch) {
+                    Ordering::Less => {
+                        return Err(EpochMismatch {
+                            mine: my_epoch,
+                            peer: peer_epoch,
+                        });
+                    }
+                    Ordering::Greater => {
+                        warn!(
+                            my_index, %my_epoch,
+                            "peer {peer_index} gave older epoch: {peer_epoch}",
+                        );
+                    }
+                    Ordering::Equal => return Ok((stream, peer_index)),
+                }
             }
-            Ordering::Equal => return Ok((s, peer_index)),
+            Err(err) => {
+                info!(my_index, %my_epoch, "error accepting connection: {err}; will retry");
+            }
         }
     }
 }
