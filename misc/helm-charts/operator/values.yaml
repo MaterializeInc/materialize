@@ -24,12 +24,6 @@ operator:
     enableInternalStatementLogging: true
 
   features:
-    # -- Flag to indicate whether to create balancerd pods for the environments
-    createBalancers: true
-    # -- Flag to indicate whether to create console pods for the environments
-    createConsole: true
-    # -- Override the mapping of environmentd versions to console versions
-    consoleImageTagMapOverride: {}
     # -- Whether to enable environmentd rbac checks
     # TODO: this is not yet supported in the helm chart
     authentication: false
@@ -204,6 +198,20 @@ environmentd:
 
 clusterd:
   # -- Node selector to use for clusterd pods spawned by the operator
+  nodeSelector: {}
+
+balancerd:
+  # -- Flag to indicate whether to create balancerd pods for the environments
+  enabled: true
+  # -- Node selector to use for balancerd pods spawned by the operator
+  nodeSelector: {}
+
+console:
+  # -- Flag to indicate whether to create console pods for the environments
+  enabled: true
+  # -- Override the mapping of environmentd versions to console versions
+  imageTagMapOverride: {}
+  # -- Node selector to use for console pods spawned by the operator
   nodeSelector: {}
 
 # RBAC (Role-Based Access Control) settings
