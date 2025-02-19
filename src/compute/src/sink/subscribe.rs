@@ -13,15 +13,15 @@ use std::ops::DerefMut;
 use std::rc::Rc;
 
 use differential_dataflow::consolidation::consolidate_updates;
-use differential_dataflow::Collection;
+use differential_dataflow::{AsCollection, Collection};
 use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
 use mz_compute_types::sinks::{ComputeSinkDesc, SubscribeSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::probe::{Handle, ProbeNotify};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::probe::Handle;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
@@ -57,7 +57,10 @@ where
             poison: None,
         })));
         let subscribe_protocol_weak = Rc::downgrade(&subscribe_protocol_handle);
-        let sinked_collection = sinked_collection.probe_with(&mut output_probe.clone());
+        let sinked_collection = sinked_collection
+            .inner
+            .probe_notify_with(vec![output_probe.clone()])
+            .as_collection();
         subscribe(
             sinked_collection,
             err_collection,

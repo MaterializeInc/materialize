@@ -22,9 +22,10 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::consolidate_pact;
+use mz_timely_util::probe::{Handle, ProbeNotify};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Operator, Probe};
-use timely::dataflow::{ProbeHandle, Scope};
+use timely::dataflow::operators::Operator;
+use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
 use crate::render::sinks::SinkRender;
@@ -45,7 +46,7 @@ where
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
         _ct_times: Option<Collection<G, (), Diff>>,
-        output_probe: &ProbeHandle<Timestamp>,
+        output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // Set up a callback to communicate the result of the copy-to operation to the controller.
         let mut response_protocol = ResponseProtocol {
@@ -70,7 +71,7 @@ where
             Exchange::new(move |((row, ()), _, _): &((Row, _), _, _)| row.hashed() % batch_count),
             "Consolidated COPY TO S3 input",
         )
-        .probe_with(output_probe);
+        .probe_notify_with(vec![output_probe.clone()]);
 
         // We need to consolidate the error collection to ensure we don't act on retracted errors.
         let error = consolidate_pact::<KeyBatcher<_, _, _>, _, _>(

@@ -133,13 +133,14 @@ use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::probe::{Handle, ProbeNotify};
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::{probe, BranchWhen, Capability, Operator, Probe};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{ProbeHandle, Scope, Stream, StreamCore};
+use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::order::Product;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, PathSummary, Timestamp};
@@ -223,7 +224,7 @@ pub fn build_compute_dataflow<A: Allocate>(
         // alternate type signatures.
         let mut imported_sources = Vec::new();
         let mut tokens = BTreeMap::new();
-        let output_probe = ProbeHandle::new();
+        let output_probe = Handle::default();
 
         let slack = mz_repr::Timestamp::new(1);
 
@@ -527,7 +528,7 @@ where
         idx_id: GlobalId,
         idx: &IndexDesc,
         start_signal: StartSignal,
-        output_probe: &ProbeHandle<G::Timestamp>,
+        output_probe: &Handle<G::Timestamp>,
         slack: <G::Timestamp as Timestamp>::Summary,
     ) {
         if let Some(traces) = compute_state.traces.get_mut(&idx_id) {
@@ -600,7 +601,7 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
-        output_probe: &ProbeHandle<G::Timestamp>,
+        output_probe: &Handle<G::Timestamp>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -636,7 +637,7 @@ where
                     needed_tokens.push(token);
                 }
 
-                oks.stream = oks.stream.probe_with(output_probe);
+                oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
@@ -685,7 +686,7 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
-        output_probe: &ProbeHandle<mz_repr::Timestamp>,
+        output_probe: &Handle<G::Timestamp>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -735,7 +736,7 @@ where
                     needed_tokens.push(token);
                 }
 
-                oks.stream = oks.stream.probe_with(output_probe);
+                oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
@@ -1567,7 +1568,7 @@ where
 }
 
 trait LimitProgress<T: Timestamp> {
-    fn limit_progress(&self, handle: ProbeHandle<T>, slack: T::Summary, name: String) -> Self;
+    fn limit_progress(&self, handle: Handle<T>, slack: T::Summary, name: String) -> Self;
 }
 
 impl<G, C> LimitProgress<G::Timestamp> for StreamCore<G, C>
@@ -1578,14 +1579,17 @@ where
 {
     fn limit_progress(
         &self,
-        handle: ProbeHandle<G::Timestamp>,
+        handle: Handle<G::Timestamp>,
         slack: <G::Timestamp as Timestamp>::Summary,
         _name: String,
     ) -> Self {
-        self.unary_frontier(Pipeline, "LimitProgress", |_cap, _info| {
+        self.unary_frontier(Pipeline, "LimitProgress", |_cap, info| {
             // Times that we've observed on our input.
             let mut pending_caps: BTreeMap<G::Timestamp, Capability<G::Timestamp>> =
                 BTreeMap::default();
+
+            let activator = self.scope().activator_for(info.address);
+            handle.activate(activator);
 
             move |input, output| {
                 input.for_each(|time, data| {
@@ -1601,14 +1605,6 @@ where
                         }
                     }
                 });
-
-                // println!(
-                //     "[{}] {name} pending caps: {:?} input: {:?} probe: {:?}",
-                //     _info.global_id,
-                //     pending_caps.keys(),
-                //     input.frontier.frontier().get(0),
-                //     handle.with_frontier(|f| f.get(0).cloned())
-                // );
 
                 // If the input frontier is non-empty, and the handle is non-empty, we're in steady-state.
                 // N.b., the handle is empty before the dataflow was scheduled once.
@@ -1631,6 +1627,14 @@ where
                 if input.frontier.is_empty() {
                     pending_caps.clear();
                 }
+
+                // println!(
+                //     "[{}] {_name} pending caps: {:?} input: {:?} probe: {:?}",
+                //     info.global_id,
+                //     pending_caps.keys(),
+                //     input.frontier.frontier().get(0),
+                //     handle.with_frontier(|f| f.get(0).cloned())
+                // );
             }
         })
     }

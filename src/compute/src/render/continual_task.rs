@@ -171,6 +171,7 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Button, Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::probe::{Handle, ProbeNotify};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, FrontierNotificator, Map, Operator};
@@ -431,7 +432,7 @@ where
         oks: Collection<G, Row, Diff>,
         errs: Collection<G, DataflowError, Diff>,
         append_times: Option<Collection<G, (), Diff>>,
-        output_probe: &ProbeHandle<Timestamp>,
+        output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         let name = sink_id.to_string();
 
@@ -468,7 +469,9 @@ where
         let mut probe = ProbeHandle::default();
         let to_append = to_append
             .probe_with(&mut probe)
-            .probe_with(&mut output_probe.clone());
+            .inner
+            .probe_notify_with(vec![output_probe.clone()])
+            .as_collection();
         collection.compute_probe = Some(probe);
         let sink_write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
         collection.sink_write_frontier = Some(Rc::clone(&sink_write_frontier));
