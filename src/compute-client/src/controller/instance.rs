@@ -1069,6 +1069,9 @@ where
         // Take this opportunity to clean up the history we should present.
         self.history.reduce();
 
+        // Advance the uppers of source imports
+        self.history.update_source_uppers(&self.storage_collections);
+
         // Replay the commands at the client, creating new dataflow identifiers.
         for command in self.history.iter() {
             if client.send(command.clone()).is_err() {
@@ -1271,7 +1274,12 @@ where
         // Here we augment all imported sources and all exported sinks with the appropriate
         // storage metadata needed by the compute instance.
         let mut source_imports = BTreeMap::new();
-        for (id, (si, monotonic)) in dataflow.source_imports {
+        for (id, (si, monotonic, _upper)) in dataflow.source_imports {
+            let frontiers = self
+                .storage_collections
+                .collection_frontiers(id)
+                .expect("collection exists");
+
             let collection_metadata = self
                 .storage_collections
                 .collection_metadata(id)
@@ -1282,7 +1290,7 @@ where
                 arguments: si.arguments,
                 typ: si.typ.clone(),
             };
-            source_imports.insert(id, (desc, monotonic));
+            source_imports.insert(id, (desc, monotonic, frontiers.write_frontier));
         }
 
         let mut sink_exports = BTreeMap::new();

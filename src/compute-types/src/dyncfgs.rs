@@ -190,6 +190,38 @@ pub const ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION: Config<bool> = Co
     "When enabled, renders `as_specific_collection` using a fueled flat-map operator.",
 );
 
+/// Whether to apply logical backpressure in compute dataflows.
+pub const ENABLE_COMPUTE_LOGICAL_BACKPRESSURE: Config<bool> = Config::new(
+    "enable_compute_logical_backpressure",
+    false,
+    "When enabled, compute dataflows will apply logical backpressure.",
+);
+
+/// Maximal number of capabilities retained by the logical backpressure operator.
+///
+/// Selecting this value is subtle. If it's too small, it'll diminish the effectiveness of the
+/// logical backpressure operators. If it's too big, we can slow down hydration and cause state
+/// in the operator's implementation to build up.
+///
+/// The default value represents a compromise between these two extremes. We retain some metrics
+/// for 30 days, and the metrics update every minute. The default is exactly this number.
+pub const COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES: Config<Option<usize>> =
+    Config::new(
+        "compute_logical_backpressure_max_retained_capabilities",
+        Some(30 * 24 * 60),
+        "The maximum number of capabilities retained by the logical backpressure operator.",
+    );
+
+/// The slack to round observed timestamps up to.
+///
+/// The default corresponds to Mz's default tick interval, but does not need to do so. Ideally,
+/// it is not smaller than the tick interval, but it can be larger.
+pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config::new(
+    "compute_logical_backpressure_inflight_slack",
+    Duration::from_secs(1),
+    "Round observed timestamps to slack.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -216,4 +248,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_APPLY_COLUMN_DEMANDS)
         .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
         .add(&ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION)
+        .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
+        .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
+        .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
 }

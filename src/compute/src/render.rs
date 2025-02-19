@@ -114,14 +114,17 @@ use columnar::Columnar;
 use differential_dataflow::containers::Columnation;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::arrange::{Arranged, ShutdownButton};
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::IntoOwned;
 use differential_dataflow::{AsCollection, Collection, Data};
 use futures::channel::oneshot;
 use futures::FutureExt;
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
-use mz_compute_types::dyncfgs::COMPUTE_APPLY_COLUMN_DEMANDS;
+use mz_compute_types::dyncfgs::{
+    COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
+    COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
+};
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
@@ -134,12 +137,13 @@ use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::{probe, BranchWhen, Operator, Probe};
+use timely::dataflow::operators::{probe, BranchWhen, Capability, Operator, Probe};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::order::Product;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -224,10 +228,12 @@ pub fn build_compute_dataflow<A: Allocate>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         let mut imported_sources = Vec::new();
-        let mut tokens = BTreeMap::new();
+        let mut tokens: BTreeMap<_, Rc<dyn Any>> = BTreeMap::new();
+        let output_probe = MzProbeHandle::default();
+
         scope.clone().region_named(&input_name, |region| {
             // Import declared sources into the rendering context.
-            for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
+            for (source_id, (source, _monotonic, upper)) in dataflow.source_imports.iter() {
                 region.region_named(&format!("Source({:?})", source_id), |inner| {
                     let mut read_schema = None;
                     let mut mfp = source.arguments.operators.clone().map(|mut ops| {
@@ -279,6 +285,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                         |error| panic!("compute_import: {error}"),
                     );
 
+                    let mut source_tokens: Vec<Rc<dyn Any>> = vec![Rc::new(token)];
+
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
                     assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
@@ -288,6 +296,27 @@ pub fn build_compute_dataflow<A: Allocate>(
                     // `as_of`.
                     if let Some(as_of) = suppress_early_progress_as_of {
                         ok_stream = suppress_early_progress(ok_stream, as_of);
+                    }
+
+                    if ENABLE_COMPUTE_LOGICAL_BACKPRESSURE.get(&compute_state.worker_config) {
+                        // Apply logical backpressure to the source.
+                        let limit = COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES
+                            .get(&compute_state.worker_config);
+                        let slack = COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK
+                            .get(&compute_state.worker_config)
+                            .as_millis()
+                            .try_into()
+                            .expect("must fit");
+
+                        let (token, stream) = ok_stream.limit_progress(
+                            output_probe.clone(),
+                            slack,
+                            limit,
+                            upper.clone(),
+                            name.clone(),
+                        );
+                        ok_stream = stream;
+                        source_tokens.push(token);
                     }
 
                     // Attach a probe reporting the input frontier.
@@ -318,8 +347,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
 
                     // Associate returned tokens with the source identifier.
-                    let token: Rc<dyn Any> = Rc::new(token);
-                    tokens.insert(*source_id, token);
+                    tokens.insert(*source_id, Rc::new(source_tokens));
                 });
             }
         });
@@ -395,6 +423,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         dependencies,
                         idx_id,
                         &idx,
+                        &output_probe,
                     );
                 }
 
@@ -408,6 +437,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         &sink,
                         start_signal.clone(),
                         ct_ctx.input_times(&context.scope.parent),
+                        &output_probe,
                     );
                 }
             });
@@ -473,7 +503,14 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Export declared indexes.
                 for (idx_id, dependencies, idx) in indexes {
-                    context.export_index(compute_state, &tokens, dependencies, idx_id, &idx);
+                    context.export_index(
+                        compute_state,
+                        &tokens,
+                        dependencies,
+                        idx_id,
+                        &idx,
+                        &output_probe,
+                    );
                 }
 
                 // Export declared sinks.
@@ -486,6 +523,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         &sink,
                         start_signal.clone(),
                         ct_ctx.input_times(&context.scope.parent),
+                        &output_probe,
                     );
                 }
             });
@@ -518,16 +556,14 @@ where
 
             let token = traces.to_drop().clone();
 
-            let (oks, ok_button) = traces.oks_mut().import_frontier_core(
+            let (mut oks, ok_button) = traces.oks_mut().import_frontier_core(
                 &self.scope.parent,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
             );
-            let oks = Arranged {
-                stream: oks.stream.probe_with(&input_probe),
-                trace: oks.trace,
-            };
+
+            oks.stream = oks.stream.probe_with(&input_probe);
 
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                 &self.scope.parent,
@@ -576,6 +612,7 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        output_probe: &MzProbeHandle<G::Timestamp>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -610,6 +647,8 @@ where
                     );
                     needed_tokens.push(token);
                 }
+
+                oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
@@ -658,6 +697,7 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        output_probe: &MzProbeHandle<G::Timestamp>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -706,6 +746,8 @@ where
                     );
                     needed_tokens.push(token);
                 }
+
+                oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
@@ -1534,6 +1576,175 @@ where
             }
         }
     })
+}
+
+/// Extension trait for [`StreamCore`] to selectively limit progress.
+trait LimitProgress<T: Timestamp> {
+    /// Limit the progress of the stream until its frontier reaches the given `upper` bound. Expects
+    /// the implementation to observe times in data, and release capabilities based on the probe's
+    /// frontier, after applying `slack` to round up timestamps.
+    ///
+    /// The implementation of this operator is subtle to avoid regressions in the rest of the
+    /// system. Specifically joins hold back compaction on the other side of the join, so we need to
+    /// make sure we release capabilities as soon as possible. This is why we only limit progress
+    /// for times before the `upper`, which is the time until which the source can distinguish
+    /// updates at the time of rendering. Once we make progress to the `upper`, we need to release
+    /// our capability.
+    ///
+    /// This isn't perfect, and can result in regressions if on of the inputs lags behind. We could
+    /// consider using the join of the uppers, i.e, use lower bound upper of all available inputs.
+    ///
+    /// Once the input frontier reaches `[]`, the implementation must release any capability to
+    /// allow downstream operators to release resources.
+    ///
+    /// The implementation should limit the number of pending times to `limit` if it is `Some` to
+    /// avoid unbounded memory usage.
+    ///
+    /// * `handle` is a probe installed on the dataflow's outputs as late as possible, but before
+    ///   any timestamp rounding happens (c.f., `REFRESH EVERY` materialized views).
+    /// * `slack_ms` is the number of milliseconds to round up timestamps to.
+    /// * `name` is a human-readable name for the operator.
+    /// * `limit` is the maximum number of pending times to keep around.
+    /// * `upper` is the upper bound of the stream's frontier until which the implementation can
+    ///   retain a capability.
+    ///
+    /// Returns a shutdown button and the stream with the progress limiting applied.
+    fn limit_progress(
+        &self,
+        handle: MzProbeHandle<T>,
+        slack_ms: u64,
+        limit: Option<usize>,
+        upper: Antichain<T>,
+        name: String,
+    ) -> (Rc<dyn Any>, Self);
+}
+
+// TODO: We could make this generic over a `T` that can be converted to and from a u64 millisecond
+// number.
+impl<G, D, R> LimitProgress<mz_repr::Timestamp> for StreamCore<G, Vec<(D, mz_repr::Timestamp, R)>>
+where
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+    D: timely::Data,
+    R: timely::Data,
+{
+    fn limit_progress(
+        &self,
+        handle: MzProbeHandle<mz_repr::Timestamp>,
+        slack_ms: u64,
+        limit: Option<usize>,
+        upper: Antichain<mz_repr::Timestamp>,
+        name: String,
+    ) -> (Rc<dyn Any>, Self) {
+        let mut button = None;
+
+        let stream =
+            self.unary_frontier(Pipeline, &format!("LimitProgress({name})"), |_cap, info| {
+                // Times that we've observed on our input.
+                let mut pending_times: BTreeSet<G::Timestamp> = BTreeSet::new();
+                // Capability for the lower bound of `pending_times`, if any.
+                let mut retained_cap: Option<Capability<G::Timestamp>> = None;
+
+                let activator = self.scope().activator_for(info.address);
+                handle.activate(activator.clone());
+
+                let shutdown = Rc::new(());
+                button = Some(ShutdownButton::new(
+                    Rc::new(RefCell::new(Some(Rc::clone(&shutdown)))),
+                    activator,
+                ));
+                let shutdown = Rc::downgrade(&shutdown);
+
+                move |input, output| {
+                    // We've been shut down, release all resources and consume inputs.
+                    if shutdown.strong_count() == 0 {
+                        retained_cap = None;
+                        pending_times.clear();
+                        while let Some(_) = input.next() {}
+                        return;
+                    }
+
+                    while let Some((cap, data)) = input.next() {
+                        for time in data
+                            .iter()
+                            .flat_map(|(_, time, _)| u64::from(time).checked_add(slack_ms))
+                        {
+                            let rounded_time =
+                                (time / slack_ms).saturating_add(1).saturating_mul(slack_ms);
+                            if !upper.less_than(&rounded_time.into()) {
+                                pending_times.insert(rounded_time.into());
+                            }
+                        }
+                        output.session(&cap).give_container(data);
+                        if retained_cap.as_ref().is_none_or(|c| {
+                            !c.time().less_than(cap.time()) && !upper.less_than(cap.time())
+                        }) {
+                            retained_cap = Some(cap.retain());
+                        }
+                    }
+
+                    handle.with_frontier(|f| {
+                        while pending_times
+                            .first()
+                            .map_or(false, |retained_time| !f.less_than(&retained_time))
+                        {
+                            let _ = pending_times.pop_first();
+                        }
+                    });
+
+                    while limit.map_or(false, |limit| pending_times.len() > limit) {
+                        let _ = pending_times.pop_first();
+                    }
+
+                    match (retained_cap.as_mut(), pending_times.first()) {
+                        (Some(cap), Some(first)) => cap.downgrade(first),
+                        (_, None) => retained_cap = None,
+                        _ => {}
+                    }
+
+                    if input.frontier.is_empty() {
+                        retained_cap = None;
+                        pending_times.clear();
+                    }
+
+                    if !pending_times.is_empty() {
+                        tracing::debug!(
+                            name,
+                            info.global_id,
+                            pending_times = %PendingTimesDisplay(pending_times.iter().cloned()),
+                            frontier = ?input.frontier.frontier().get(0),
+                            probe = ?handle.with_frontier(|f| f.get(0).cloned()),
+                            ?upper,
+                            "pending times",
+                        );
+                    }
+                }
+            });
+        (Rc::new(button.unwrap().press_on_drop()), stream)
+    }
+}
+
+/// A formatter for an iterator of timestamps that displays the first element, and subsequently
+/// the difference between timestamps.
+struct PendingTimesDisplay<T>(T);
+
+impl<T> std::fmt::Display for PendingTimesDisplay<T>
+where
+    T: IntoIterator<Item = mz_repr::Timestamp> + Clone,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut iter = self.0.clone().into_iter();
+        write!(f, "[")?;
+        if let Some(first) = iter.next() {
+            write!(f, "{}", first)?;
+            let mut last = u64::from(first);
+            for time in iter {
+                write!(f, ", +{}", u64::from(time) - last)?;
+                last = u64::from(time);
+            }
+        }
+        write!(f, "]")?;
+        Ok(())
+    }
 }
 
 /// Helper to merge pairs of datum iterators into a row or split a datum iterator
