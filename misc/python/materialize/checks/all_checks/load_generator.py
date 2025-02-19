@@ -73,7 +73,7 @@ class LoadGeneratorMultiReplica(Check):
             GRANT CREATECLUSTER ON SYSTEM TO materialize
 
             > CREATE CLUSTER multi_cluster1 SIZE '2-2', REPLICATION FACTOR 2;
-            > CREATE SOURCE counter1 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE multi_counter1 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
         """
             )
         )
@@ -84,14 +84,14 @@ class LoadGeneratorMultiReplica(Check):
             for s in [
                 """
             > CREATE CLUSTER multi_cluster2 SIZE '2-2', REPLICATION FACTOR 2;
-            > CREATE SOURCE counter2 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
-            > CREATE SOURCE counter3 IN CLUSTER multi_cluster2 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE multi_counter2 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE multi_counter3 IN CLUSTER multi_cluster2 FROM LOAD GENERATOR COUNTER (UP TO 10);
                 """,
                 """
             > CREATE CLUSTER multi_cluster3 SIZE '2-2', REPLICATION FACTOR 2;
-            > CREATE SOURCE counter4 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
-            > CREATE SOURCE counter5 IN CLUSTER multi_cluster2 FROM LOAD GENERATOR COUNTER (UP TO 10);
-            > CREATE SOURCE counter6 IN CLUSTER multi_cluster3 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE multi_counter4 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE multi_counter5 IN CLUSTER multi_cluster2 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE multi_counter6 IN CLUSTER multi_cluster3 FROM LOAD GENERATOR COUNTER (UP TO 10);
                 """,
             ]
         ]
@@ -100,17 +100,17 @@ class LoadGeneratorMultiReplica(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT COUNT(*) FROM counter1;
+                > SELECT COUNT(*) FROM multi_counter1;
                 10
-                > SELECT COUNT(*) FROM counter2;
+                > SELECT COUNT(*) FROM multi_counter2;
                 10
-                > SELECT COUNT(*) FROM counter3;
+                > SELECT COUNT(*) FROM multi_counter3;
                 10
-                > SELECT COUNT(*) FROM counter4;
+                > SELECT COUNT(*) FROM multi_counter4;
                 10
-                > SELECT COUNT(*) FROM counter5;
+                > SELECT COUNT(*) FROM multi_counter5;
                 10
-                > SELECT COUNT(*) FROM counter6;
+                > SELECT COUNT(*) FROM multi_counter6;
                 10
             """
             )

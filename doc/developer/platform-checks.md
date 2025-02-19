@@ -17,11 +17,11 @@ In the context of this framework:
 bin/mzcompose --find platform-checks run default --scenario=SCENARIO [--check=CHECK] [--execution-mode= [--execution-mode={alltogether,oneatatime}]
 ```
 
-The list of Checks available can be found [here](https://dev.materialize.com/api/python/materialize/checks/checks.html#materialize.checks.checks.Check)
+The list of Checks available can be found [here](https://dev.materialize.com/api/python/misc/python/materialize/checks/all_checks.html)
 
-The list of Scenarios is [here](https://dev.materialize.com/api/python/materialize/checks/scenarios.html#materialize.checks.scenarios.Scenario)
+The list of Scenarios is [here](https://dev.materialize.com/api/python/misc/python/materialize/checks.html)
 
-The list of available Actions for use in Scenarios is [here](https://dev.materialize.com/api/python/materialize/checks/actions.html#materialize.checks.actions.Action)
+The list of available Actions for use in Scenarios is [here](https://dev.materialize.com/api/python/misc/python/materialize/checks.html)
 
 In execution mode `altogether` (the default), all Checks are run against a single Mz instance. This means more "stuff" happens
 against that single instance, which has the potential for exposing various bugs that do not happen in isolation. At the same time,
@@ -145,7 +145,7 @@ To ignore a `Check`, annotate it with `@disabled(ignore_reason="due to #...")`.
 ## Externally-idempotent Checks
 
 If a check performs non-idempotent actions against third-party services, such as ingesting non-UPSERT data into a
-Kafka or Postgres source, it needs to be annotated with `@external_idempotence(False)`. This Check will not be run
+Kafka or Postgres source, it needs to be annotated with `@externally_idempotent(False)`. This Check will not be run
 in Scenarios, such as some Backup+Restore scenarios, that may need to run a `manipulate()` phase twice.
 
 
@@ -174,7 +174,7 @@ manipulation (twice) and validation of all participating Checks. Any Actions tha
 are then interspersed between those steps. Two `Manipulate` sections are run so that more complex, drawn-out
 upgrade scenarios can be tested while ensuring that database activity happens during every stage of the upgrade.
 
-The list of available Actions is [here](https://dev.materialize.com/api/python/materialize/checks/actions.html#materialize.checks.actions.Action).
+The list of available Actions is [here](https://dev.materialize.com/api/python/misc/python/materialize/checks.html).
 
 # Writing an Action
 
@@ -192,7 +192,7 @@ class DropCreateDefaultReplica(Action):
 ```
 
 The Action's `execute()` method gets passed a `Composition` object, so that the Action can perform any operation
-against the mzcompose composition. The methods of the `Composition` class are listed [here](https://dev.materialize.com/api/python/materialize/mzcompose/index.html#materialize.mzcompose.Composition).
+against the mzcompose composition. The methods of the `Composition` class are listed [here](https://dev.materialize.com/api/python/misc/python/materialize/mzcompose/composition.html#Composition).
 
 # Tips for creating a comprehensive `Check`
 
