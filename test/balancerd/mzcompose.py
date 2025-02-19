@@ -462,7 +462,9 @@ def workflow_long_query(c: Composition) -> None:
     except OperationalError as e:
         msg = str(e)
         assert (
-            "server closed the connection unexpectedly" in msg or "EOF detected" in msg
+            "server closed the connection unexpectedly" in msg
+            or "EOF detected" in msg
+            or "frame size too big" in msg
         )
     except:
         raise RuntimeError("execute() threw an unexpected exception")
