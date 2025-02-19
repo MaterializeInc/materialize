@@ -214,7 +214,7 @@ node instance type, etc.), see the
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   Apply complete! Resources: 19 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 21 added, 0 changed, 0 destroyed.
 
    Outputs:
 
@@ -442,6 +442,11 @@ terraform destroy
 ```
 
 When prompted to proceed, type `yes` to confirm the deletion.
+
+{{< tip>}}
+If the `terraform destroy` command is unable to delete the subnet because it is
+in use, you can try rerunning the `terraform destroy` command.
+{{</ tip >}}
 
 ## See also
 
