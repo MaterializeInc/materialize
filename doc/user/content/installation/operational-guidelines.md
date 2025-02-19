@@ -27,7 +27,6 @@ It is strongly recommended to enable the Kubernetes `static` [CPU management pol
 This ensures that each worker thread of Materialize is given exclusively access to a vCPU. Our benchmarks have shown this
 to substantially improve the performance of compute-bound workloads.
 
-
 ## Locally-attached NVMe storage (OpenEBS)
 
 For optimal performance, Materialize requires fast, *locally-attached* NVMe
@@ -131,10 +130,6 @@ For locally-attached NVMe storage,
    ```
    {{< /tab >}}
    {{< /tabs >}}
-
-## Network policies
-
-Enabling network policies ...
 
 ## See also
 
