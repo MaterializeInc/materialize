@@ -109,17 +109,6 @@ mod statistics;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-struct PendingCompactionCommand<T> {
-    /// [`GlobalId`] of the collection we want to compact.
-    id: GlobalId,
-    /// [`Antichain`] representing the requested read frontier.
-    read_frontier: Antichain<T>,
-    /// Cluster associated with this collection, if any.
-    cluster_id: Option<StorageInstanceId>,
-}
-
-#[derive(Derivative)]
-#[derivative(Debug)]
 struct PendingOneshotIngestion {
     /// Callback used to provide results of the ingestion.
     #[derivative(Debug = "ignore")]
@@ -168,9 +157,6 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     txns_read: TxnsRead<T>,
     txns_metrics: Arc<TxnMetrics>,
     stashed_response: Option<StorageResponse<T>>,
-    /// Compaction commands to send during the next call to
-    /// `StorageController::process`.
-    pending_compaction_commands: Vec<PendingCompactionCommand<T>>,
     /// Channel for sending table handle drops.
     #[derivative(Debug = "ignore")]
     pending_table_handle_drops_tx: mpsc::UnboundedSender<GlobalId>,
@@ -1999,9 +1985,6 @@ where
     }
 
     async fn ready(&mut self) {
-        if self.pending_compaction_commands.len() > 0 {
-            return;
-        }
         if self.maintenance_scheduled {
             return;
         }
@@ -2160,31 +2143,6 @@ where
         }
         if !dropped_table_ids.is_empty() {
             self.drop_sources(storage_metadata, dropped_table_ids)?;
-        }
-
-        // TODO(aljoscha): We could consolidate these before sending to
-        // instances, but this seems fine for now.
-        for compaction_command in self.pending_compaction_commands.drain(..) {
-            let PendingCompactionCommand {
-                id,
-                read_frontier,
-                cluster_id,
-            } = compaction_command;
-
-            // TODO(petrosagg): make this a strict check
-            // TODO(aljoscha): What's up with this TODO?
-            // Note that while collections are dropped, the `client` may already
-            // be cleared out, before we do this post-processing!
-            let instance = cluster_id.and_then(|cluster_id| self.instances.get_mut(&cluster_id));
-
-            // Note that while collections are dropped, the `client` may already
-            // be cleared out, before we do this post-processing!
-            if let Some(client) = instance {
-                client.send(StorageCommand::AllowCompaction(vec![(
-                    id,
-                    read_frontier.clone(),
-                )]));
-            }
         }
 
         Ok(updated_frontiers)
@@ -2466,7 +2424,6 @@ where
             txns_read,
             txns_metrics,
             stashed_response: None,
-            pending_compaction_commands: vec![],
             pending_table_handle_drops_tx,
             pending_table_handle_drops_rx,
             pending_oneshot_ingestions: BTreeMap::default(),
@@ -2668,10 +2625,7 @@ where
         }
 
         // Translate our net compute actions into `AllowCompaction` commands and
-        // downgrade persist sinces. The actual downgrades are performed by a Tokio
-        // task asynchronously.
-        let mut worker_compaction_commands = BTreeMap::default();
-
+        // downgrade persist sinces.
         for (key, (mut changes, frontier, cluster_id)) in collections_net {
             if !changes.is_empty() {
                 if key.is_user() {
@@ -2703,19 +2657,17 @@ where
                         .expect("we only advance the frontier");
                 }
 
-                worker_compaction_commands.insert(key, (frontier.clone(), cluster_id));
+                // Send AllowCompaction command directly to the instance
+                if let Some(instance) = self.instances.get_mut(&cluster_id) {
+                    instance.send(StorageCommand::AllowCompaction(vec![(
+                        key,
+                        frontier.clone(),
+                    )]));
+                } else {
+                    soft_panic_or_log!(
+                        "missing instance client for cluster {cluster_id} while we still have outstanding AllowCompaction command {frontier:?} for {key}");
+                }
             }
-        }
-
-        for (id, (read_frontier, cluster_id)) in worker_compaction_commands {
-            // Acquiring a client for a storage instance requires await, so we
-            // instead stash these for later and process when we can.
-            self.pending_compaction_commands
-                .push(PendingCompactionCommand {
-                    id,
-                    read_frontier,
-                    cluster_id: Some(cluster_id),
-                });
         }
     }
 
