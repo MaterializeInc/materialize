@@ -530,19 +530,17 @@ impl Transactor {
                 .await;
             match res {
                 Some(Ok(latest_since)) => {
-                    // Success! If we weren't the last one to update since, but
-                    // only then, it might have advanced past our read_ts, so
+                    // Success! Another process might have advanced past our read_ts, so
                     // forward read_ts to since_ts.
-                    if expected_token != self.cads_token {
-                        let since_ts = Self::extract_ts(&latest_since)?;
-                        if since_ts > self.read_ts {
-                            info!(
-                                "since was last updated by {}, forwarding our read_ts from {} to {}",
-                                expected_token, self.read_ts, since_ts
-                            );
-                            self.read_ts = since_ts;
-                        }
+                    let since_ts = Self::extract_ts(&latest_since)?;
+                    if since_ts > self.read_ts {
+                        info!(
+                            "since was last updated by {}, forwarding our read_ts from {} to {}",
+                            expected_token, self.read_ts, since_ts
+                        );
+                        self.read_ts = since_ts;
                     }
+
                     return Ok(());
                 }
                 Some(Err(actual_token)) => {
