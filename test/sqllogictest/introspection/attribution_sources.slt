@@ -206,3 +206,39 @@ u7  2  NULL  TopK::Basic␠1  8  7  3584  15.000
 u7  1  2  ␠␠Get::PassArrangements␠u6  NULL  NULL  NULL  NULL
 u8  4  NULL  Arrange␠3  NULL  NULL  NULL  NULL
 u8  3  4  ␠␠Get::PassArrangements␠u7  NULL  NULL  NULL  NULL
+
+# rebuild everything other stuff, make sure it all shows up as mappable objects
+
+statement ok
+CREATE VIEW v AS
+  SELECT t1.x AS x, t1.z AS z1, t2.z AS z2
+  FROM t AS t1, t AS t2
+  WHERE t1.x = t2.y;
+
+statement ok
+CREATE INDEX v_idx_x ON v(x);
+
+statement ok
+CREATE TABLE u(x INT NOT NULL, y INT, z TEXT);
+
+statement ok
+CREATE MATERIALIZED VIEW w AS
+  SELECT t1.x AS x, t1.z AS z1, t2.z AS z2
+  FROM u AS t1, u AS t2
+  WHERE t1.x = t2.y;
+
+statement ok
+SELECT mz_unsafe.mz_sleep(8)
+
+query TTI multiline
+SELECT name, global_id, COUNT(lir_id)
+FROM mz_introspection.mz_mappable_objects LEFT JOIN mz_introspection.mz_lir_mapping
+USING (global_id)
+GROUP BY name, global_id;
+----
+materialize.public.w  t90  5
+materialize.public.v_idx_x  u9  5
+materialize.public.v_idx_x  u10  2
+materialize.public.v2_idx_x  u7  2
+materialize.public.v2_idx_x  u8  2
+EOF
