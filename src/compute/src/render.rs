@@ -208,6 +208,8 @@ pub fn build_compute_dataflow<A: Allocate>(
     let worker_logging = timely_worker.log_register().get("timely").map(Into::into);
     let apply_demands = COMPUTE_APPLY_COLUMN_DEMANDS.get(&compute_state.worker_config);
 
+    // If you change the format here to something other than "Dataflow: {name}",
+    // you should also update MZ_MAPPABLE_OBJECTS in `src/catalog/src/builtin.rs`
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let input_name = format!("InputRegion: {}", &dataflow.debug_name);
     let build_name = format!("BuildRegion: {}", &dataflow.debug_name);

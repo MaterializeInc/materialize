@@ -307,7 +307,7 @@ through a hierarchical scheme for either aggregation or Top K computations.
 
 ## `mz_mappable_objects`
 
-The `mz_mappable_objects` identifies objects which can be debugged using the [`mz_lir_mapping`](#mz_lir_mapping) view. These are indexes (and their underlying views) and materialized views.
+The `mz_mappable_objects` identifies indexes (and their underlying views) and materialized views which can be debugged using the [`mz_lir_mapping`](#mz_lir_mapping) view.
 
 <!-- RELATION_SPEC mz_introspection.mz_mappable_objects -->
 | Field        | Type      | Meaning
@@ -315,10 +315,12 @@ The `mz_mappable_objects` identifies objects which can be debugged using the [`m
 | `name`       | [`text`]  | The name of the object.
 | `global_id`  | [`text`]  | The global ID of the object.
 
+See [Which part of my query runs slowly or uses a lot of memory?](/transform-data/troubleshooting/#which-part-of-my-query-runs-slowly-or-uses-a-lot-of-memory) for examples of debugging with `mz_mappable_objects` and `mz_lir_mapping`.
 
 ## `mz_lir_mapping`
 
-The `mz_lir_mapping` view describes the low-level internal representation (LIR) plan that corresponds to global ids.
+The `mz_lir_mapping` view describes the low-level internal representation (LIR) plan that corresponds to global ids of indexes (and their underlying views) and materialized views.
+You can find a list of all debuggable objects in [`mz_mappable_objects`](#mz_mappable_objects).
 LIR is a higher-level representation than dataflows; this view is used for profiling and debugging indices and materialized views.
 Note that LIR is not a stable interface and may change at any time.
 In particular, you should not attempt to parse `operator` descriptions.

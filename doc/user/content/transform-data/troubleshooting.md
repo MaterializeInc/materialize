@@ -356,7 +356,7 @@ SELECT mo.name AS name, global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 
          LEFT JOIN mz_introspection.mz_compute_operator_durations_histogram mcodh
                 ON (mlm.operator_id_start <= mcodh.id AND mcodh.id < mlm.operator_id_end)
               JOIN mz_introspection.mz_mappable_objects mo
-                ON (mlm.global_id = mo.id)
+                ON (mlm.global_id = mo.global_id)
    WHERE mo.name IN ('wins_by_item', 'winning_bids')
 GROUP BY mo.name, global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
@@ -423,7 +423,7 @@ with
          LEFT JOIN mz_introspection.mz_arrangement_sizes mas
                 ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
               JOIN mz_introspection.mz_mappable_objects mo
-                ON (mlm.global_id = mo.id)
+                ON (mlm.global_id = mo.global_id)
    WHERE mo.name IN ('wins_by_item', 'winning_bids')
 GROUP BY mo.name, global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
@@ -467,7 +467,7 @@ can attribute this to particular parts of our query using
                 ON (megsa.dataflow_id = mdgi.id AND
                     mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)
               JOIN mz_introspection.mz_mappable_objects mo
-                ON (mlm.global_id = mo.id)
+                ON (mlm.global_id = mo.global_id)
    WHERE mo.name IN ('wins_by_item', 'winning_bids')
 ORDER BY mlm.global_id, lir_id DESC;
 ```
@@ -539,7 +539,7 @@ overall time spent across all workers:
                                WHERE mlm.operator_id_start <= id AND id < mlm.operator_id_end
                             GROUP BY worker_id) epw
                       JOIN mz_introspection.mz_mappable_objects mo
-                        ON (mlm.global_id = mo.id)
+                        ON (mlm.global_id = mo.global_id)
    WHERE mo.name IN ('wins_by_item', 'winning_bids')
 GROUP BY mo.name, global_id, lir_id, nesting, operator, worker_id
 ORDER BY global_id, lir_id DESC;
@@ -586,7 +586,7 @@ starting point, you can build your own attribution queries. When building your o
   other, that LIR operator does not correspond to any dataflow operators.
 
 - To only see output for views, materialized views, and indexes you're
-  interested in, join with `mz_introspection.mz_mappable_objects` and restrict based on
+  interested in, join with `mz_introspection.mz_mappable_objects` on `global_id` and restrict based on
   `mz_mappable_objects.name`. Otherwise, you will see information on every mappable object installed
   in your current cluster.
 
