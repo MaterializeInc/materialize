@@ -772,7 +772,7 @@ COMPLETE 0
 
 # EXPLAIN a SELECT with the feature turned in the EXPLAIN config.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, humanized expressions, arity) FOR
+EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, humanized expressions, arity) AS VERBOSE TEXT FOR
 SELECT
   facts.facts_k01,
   facts.facts_d01,
@@ -845,7 +845,7 @@ FROM
 
 # EXPLAIN a SELECT * FROM <view> with the feature turned in the EXPLAIN config.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, reoptimize imported views, humanized expressions, arity) FOR
+EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, reoptimize imported views, humanized expressions, arity) AS VERBOSE TEXT FOR
 SELECT * FROM v;
 ----
 Explained Query:
@@ -889,7 +889,7 @@ EOF
 
 # EXPLAIN a CREATE INDEX with the feature turned in the EXPLAIN config.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, reoptimize imported views, humanized expressions, arity) FOR
+EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, reoptimize imported views, humanized expressions, arity) AS VERBOSE TEXT FOR
 CREATE INDEX ON v(facts_k01);
 ----
 materialize.public.v_facts_k01_idx:
@@ -937,7 +937,7 @@ EOF
 
 # EXPLAIN a CREATE MATERIALIZED VIEW with the feature turned in the EXPLAIN config.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, humanized expressions, arity) FOR
+EXPLAIN OPTIMIZED PLAN WITH(enable new outer join lowering, humanized expressions, arity) AS VERBOSE TEXT FOR
 CREATE MATERIALIZED VIEW mv AS
 SELECT
   facts.facts_k01,

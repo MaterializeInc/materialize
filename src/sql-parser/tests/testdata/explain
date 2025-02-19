@@ -40,9 +40,9 @@ EXPLAIN DECORRELATED PLAN FOR SELECT 665
 ExplainPlan(ExplainPlanStatement { stage: Some(DecorrelatedPlan), with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
 
 parse-statement
-EXPLAIN OPTIMIZED PLAN FOR SELECT 665
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT 665
 ----
-EXPLAIN OPTIMIZED PLAN FOR SELECT 665
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT 665
 =>
 ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
 
@@ -61,30 +61,30 @@ EXPLAIN SELECT 665
 ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
 
 parse-statement
-EXPLAIN OPTIMIZED PLAN FOR VIEW foo
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR VIEW foo
 ----
-EXPLAIN OPTIMIZED PLAN FOR VIEW foo
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR VIEW foo
 =>
 ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: View(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
-EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW foo
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW foo
 ----
-EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW foo
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW foo
 =>
 ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: MaterializedView(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
-EXPLAIN OPTIMIZED PLAN FOR INDEX foo
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR INDEX foo
 ----
-EXPLAIN OPTIMIZED PLAN FOR INDEX foo
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR INDEX foo
 =>
 ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: Index(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
-EXPLAIN OPTIMIZED PLAN FOR REPLAN VIEW foo
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR REPLAN VIEW foo
 ----
-EXPLAIN OPTIMIZED PLAN FOR REPLAN VIEW foo
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR REPLAN VIEW foo
 =>
 ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: ReplanView(Name(UnresolvedItemName([Ident("foo")]))) })
 
@@ -103,16 +103,16 @@ EXPLAIN PLAN FOR REPLAN VIEW foo
         ^
 
 parse-statement
-EXPLAIN OPTIMIZED PLAN FOR REPLAN MATERIALIZED VIEW foo
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR REPLAN MATERIALIZED VIEW foo
 ----
-EXPLAIN OPTIMIZED PLAN FOR REPLAN MATERIALIZED VIEW foo
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR REPLAN MATERIALIZED VIEW foo
 =>
 ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: ReplanMaterializedView(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
-EXPLAIN OPTIMIZED PLAN FOR REPLAN INDEX foo
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR REPLAN INDEX foo
 ----
-EXPLAIN OPTIMIZED PLAN FOR REPLAN INDEX foo
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR REPLAN INDEX foo
 =>
 ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: ReplanIndex(Name(UnresolvedItemName([Ident("foo")]))) })
 
@@ -131,16 +131,16 @@ EXPLAIN PLAN FOR VIEW foo
         ^
 
 parse-statement
-EXPLAIN OPTIMIZED PLAN WITH(types) FOR VIEW foo
+EXPLAIN OPTIMIZED PLAN WITH(types) AS VERBOSE TEXT FOR VIEW foo
 ----
-EXPLAIN OPTIMIZED PLAN WITH (TYPES) FOR VIEW foo
+EXPLAIN OPTIMIZED PLAN WITH (TYPES) AS VERBOSE TEXT FOR VIEW foo
 =>
 ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [ExplainPlanOption { name: Types, value: None }], format: None, explainee: View(Name(UnresolvedItemName([Ident("foo")]))) })
 
 parse-statement
-EXPLAIN OPTIMIZED PLAN WITH(arity, types) FOR VIEW foo
+EXPLAIN OPTIMIZED PLAN WITH(arity, types) AS VERBOSE TEXT FOR VIEW foo
 ----
-EXPLAIN OPTIMIZED PLAN WITH (ARITY, TYPES) FOR VIEW foo
+EXPLAIN OPTIMIZED PLAN WITH (ARITY, TYPES) AS VERBOSE TEXT FOR VIEW foo
 =>
 ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [ExplainPlanOption { name: Arity, value: None }, ExplainPlanOption { name: Types, value: None }], format: None, explainee: View(Name(UnresolvedItemName([Ident("foo")]))) })
 
@@ -244,9 +244,9 @@ EXPLAIN BROKEN CREATE DEFAULT INDEX ON q1
 ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("q1")])), key_parts: None, with_options: [], if_not_exists: false }, true) })
 
 parse-statement
-EXPLAIN OPTIMIZED PLAN FOR CREATE INDEX ON v(auction_id)
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR CREATE INDEX ON v(auction_id)
 ----
-EXPLAIN OPTIMIZED PLAN FOR CREATE INDEX ON v (auction_id)
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR CREATE INDEX ON v (auction_id)
 =>
 ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: CreateIndex(CreateIndexStatement { name: None, in_cluster: None, on_name: Name(UnresolvedItemName([Ident("v")])), key_parts: Some([Identifier([Ident("auction_id")])]), with_options: [], if_not_exists: false }, false) })
 

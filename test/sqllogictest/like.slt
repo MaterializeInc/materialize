@@ -26,7 +26,7 @@ statement ok
 INSERT INTO t VALUES ('abc', 'a%', 'a.*'), ('ABC', 'a%', 'a.*'), ('ccc', 'a%', 'a.*');
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s LIKE 'a%';
 ----
 Explained Query:
@@ -47,7 +47,7 @@ SELECT s FROM t WHERE s LIKE 'a%';
 abc
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s ILIKE 'a%';
 ----
 Explained Query:
@@ -69,7 +69,7 @@ ABC
 abc
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s NOT ILIKE 'a%';
 ----
 Explained Query:
@@ -91,7 +91,7 @@ ccc
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE NOT (s ILIKE 'a%');
 ----
 Explained Query:
@@ -109,7 +109,7 @@ EOF
 # Binary versions (MirScalarExpr::reduce changes them into unary when the pattern is a constant, which we prevent here.)
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s LIKE like_pat;
 ----
 Explained Query:
@@ -130,7 +130,7 @@ SELECT s FROM t WHERE s LIKE like_pat;
 abc
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT s FROM t WHERE s ILIKE like_pat;
 ----
 Explained Query:
