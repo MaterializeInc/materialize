@@ -350,7 +350,7 @@ intelligible LIR operators.
 For example, to find out how much time is spent in each operator for the `wins_by_item` index (and the underlying `winning_bids` view), run the following query:
 
 ```sql
-SELECT mo.name AS name, global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
+SELECT mo.name AS name, mo.global_id AS global_id, mlm.lir_id, mlm.parent_lir_id, REPEAT(' ', mlm.nesting * 2) || mlm.operator AS operator,
        SUM(duration_ns)/1000 * '1 microsecond'::INTERVAL AS duration, SUM(count) AS count
     FROM           mz_introspection.mz_lir_mapping mlm
          LEFT JOIN mz_introspection.mz_compute_operator_durations_histogram mcodh
@@ -358,8 +358,8 @@ SELECT mo.name AS name, global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 
               JOIN mz_introspection.mz_mappable_objects mo
                 ON (mlm.global_id = mo.global_id)
    WHERE mo.name IN ('wins_by_item', 'winning_bids')
-GROUP BY mo.name, global_id, lir_id, operator, parent_lir_id, nesting
-ORDER BY global_id, lir_id DESC;
+GROUP BY mo.name, mo.global_id, lir_id, operator, parent_lir_id, nesting
+ORDER BY mo.global_id, lir_id DESC;
 ```
 
 The query produces results similar to the following (your specific numbers will
@@ -417,7 +417,7 @@ with
 [`mz_introspection.mz_arrangement_sizes`](/sql/system-catalog/mz_introspection/#mz_arrangement_sizes):
 
 ```sql
-  SELECT mo.name AS name, global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
+  SELECT mo.name AS name, mo.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
          pg_size_pretty(SUM(size)) AS size
     FROM           mz_introspection.mz_lir_mapping mlm
          LEFT JOIN mz_introspection.mz_arrangement_sizes mas
@@ -425,8 +425,8 @@ with
               JOIN mz_introspection.mz_mappable_objects mo
                 ON (mlm.global_id = mo.global_id)
    WHERE mo.name IN ('wins_by_item', 'winning_bids')
-GROUP BY mo.name, global_id, lir_id, operator, parent_lir_id, nesting
-ORDER BY global_id, lir_id DESC;
+GROUP BY mo.name, mo.global_id, lir_id, operator, parent_lir_id, nesting
+ORDER BY mo.global_id, lir_id DESC;
 ```
 
 The query produces results similar to the following (your specific numbers will
@@ -458,7 +458,7 @@ can attribute this to particular parts of our query using
 [`mz_introspection.mz_lir_mapping`](/sql/system-catalog/mz_introspection/#mz_lir_mapping):
 
 ```sql
-  SELECT mo.name AS name, mlm.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
+  SELECT mo.name AS name, mo.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS operator,
          levels, to_cut, hint, pg_size_pretty(savings) AS savings
     FROM           mz_introspection.mz_lir_mapping mlm
               JOIN mz_introspection.mz_dataflow_global_ids mdgi
@@ -469,7 +469,7 @@ can attribute this to particular parts of our query using
               JOIN mz_introspection.mz_mappable_objects mo
                 ON (mlm.global_id = mo.global_id)
    WHERE mo.name IN ('wins_by_item', 'winning_bids')
-ORDER BY mlm.global_id, lir_id DESC;
+ORDER BY mo.global_id, lir_id DESC;
 ```
 
 Each `TopK` operator will have an [associated `DISTINCT ON INPUT GROUP SIZE`
@@ -524,7 +524,7 @@ You can identify worker skew by comparing a worker's time spent to the
 overall time spent across all workers:
 
 ```sql
- SELECT mo.name AS name, global_id, lir_id, REPEAT(' ', 2 * nesting) || operator AS operator,
+ SELECT mo.name AS name, mo.global_id AS global_id, lir_id, REPEAT(' ', 2 * nesting) || operator AS operator,
         worker_id,
         ROUND(SUM(elapsed_ns) / SUM(aebi.total_ns), 2) AS ratio,
         SUM(epw.elapsed_ns) / 1000 * '1 microsecond'::INTERVAL AS elapsed_ns,
@@ -541,8 +541,8 @@ overall time spent across all workers:
                       JOIN mz_introspection.mz_mappable_objects mo
                         ON (mlm.global_id = mo.global_id)
    WHERE mo.name IN ('wins_by_item', 'winning_bids')
-GROUP BY mo.name, global_id, lir_id, nesting, operator, worker_id
-ORDER BY global_id, lir_id DESC;
+GROUP BY mo.name, mo.global_id, lir_id, nesting, operator, worker_id
+ORDER BY mo.global_id, lir_id DESC;
 ```
 
 {{< yaml-table data="query_attribution_worker_skew_output" >}}
