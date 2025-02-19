@@ -69,12 +69,9 @@ class LoadGeneratorMultiReplica(Check):
         return Testdrive(
             dedent(
                 """
-            $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-            GRANT CREATECLUSTER ON SYSTEM TO materialize
-
-            > CREATE CLUSTER multi_cluster1 SIZE '2-2', REPLICATION FACTOR 2;
-            > CREATE SOURCE multi_counter1 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
-        """
+            > CREATE CLUSTER multi_cluster1 SIZE '1', REPLICATION FACTOR 1;
+            > CREATE CLUSTER multi_cluster2 SIZE '1', REPLICATION FACTOR 1;
+                """
             )
         )
 
@@ -83,15 +80,15 @@ class LoadGeneratorMultiReplica(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-            > CREATE CLUSTER multi_cluster2 SIZE '2-2', REPLICATION FACTOR 2;
-            > CREATE SOURCE multi_counter2 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
-            > CREATE SOURCE multi_counter3 IN CLUSTER multi_cluster2 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE multi_counter1 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE multi_counter2 IN CLUSTER multi_cluster2 FROM LOAD GENERATOR COUNTER (UP TO 10);
+
+            > ALTER CLUSTER multi_cluster1 SET (REPLICATION FACTOR 2);
                 """,
                 """
-            > CREATE CLUSTER multi_cluster3 SIZE '2-2', REPLICATION FACTOR 2;
-            > CREATE SOURCE multi_counter4 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
-            > CREATE SOURCE multi_counter5 IN CLUSTER multi_cluster2 FROM LOAD GENERATOR COUNTER (UP TO 10);
-            > CREATE SOURCE multi_counter6 IN CLUSTER multi_cluster3 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE multi_counter3 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE SOURCE multi_counter4 IN CLUSTER multi_cluster2 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > ALTER CLUSTER multi_cluster2 SET (REPLICATION FACTOR 2);
                 """,
             ]
         ]
@@ -107,10 +104,6 @@ class LoadGeneratorMultiReplica(Check):
                 > SELECT COUNT(*) FROM multi_counter3;
                 10
                 > SELECT COUNT(*) FROM multi_counter4;
-                10
-                > SELECT COUNT(*) FROM multi_counter5;
-                10
-                > SELECT COUNT(*) FROM multi_counter6;
                 10
             """
             )
