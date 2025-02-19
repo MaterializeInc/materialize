@@ -588,7 +588,7 @@ impl fmt::Display for CastStringToChar {
                     self.fail_on_len
                 )
             }
-            None => f.write_str("text_to_char[len=None]"),
+            None => f.write_str("text_to_char[len=unbounded]"),
         }
     }
 }
@@ -726,7 +726,7 @@ impl fmt::Display for CastStringToVarChar {
                     self.fail_on_len
                 )
             }
-            None => f.write_str("text_to_varchar[len=None]"),
+            None => f.write_str("text_to_varchar[len=unbounded]"),
         }
     }
 }

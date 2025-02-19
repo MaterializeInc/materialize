@@ -1810,6 +1810,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 let elem_type = match elem_type.array_of_self_elem_type() {
                     Ok(elem_type) => elem_type,
                     Err(elem_type) => bail_unsupported!(
+                        // This will be used in error msgs, therefore we call with `postgres_compat` false.
                         format!("array_fill on {}", ecx.humanize_scalar_type(&elem_type, false))
                     ),
                 };

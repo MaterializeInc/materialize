@@ -304,7 +304,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT lower('a'::char);
 ----
-Map (lower(char_to_text(text_to_char[len=1, fail_on_len=false](text_to_char[len=None]("a")))))
+Map (lower(char_to_text(text_to_char[len=1, fail_on_len=false](text_to_char[len=unbounded]("a")))))
   Constant
     - ()
 
@@ -317,7 +317,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 'a'::"char" < 'a'::varchar;
 ----
-Map (("char"_to_text(text_to_"char"("a")) < varchar_to_text(text_to_varchar[len=None]("a"))))
+Map (("char"_to_text(text_to_"char"("a")) < varchar_to_text(text_to_varchar[len=unbounded]("a"))))
   Constant
     - ()
 
@@ -330,7 +330,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 'a'::"char" < 'a'::char;
 ----
-Map (("char"_to_text(text_to_"char"("a")) < char_to_text(text_to_char[len=1, fail_on_len=false](text_to_char[len=None]("a")))))
+Map (("char"_to_text(text_to_"char"("a")) < char_to_text(text_to_char[len=1, fail_on_len=false](text_to_char[len=unbounded]("a")))))
   Constant
     - ()
 
@@ -343,7 +343,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 'a'::char < 'a'::varchar;
 ----
-Map ((text_to_char[len=1, fail_on_len=false](text_to_char[len=None]("a")) < text_to_char[len=None](text_to_varchar[len=None]("a"))))
+Map ((text_to_char[len=1, fail_on_len=false](text_to_char[len=unbounded]("a")) < text_to_char[len=unbounded](text_to_varchar[len=unbounded]("a"))))
   Constant
     - ()
 
@@ -357,7 +357,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 'a'::char < 'a'::text;
 ----
-Map ((char_to_text(text_to_char[len=1, fail_on_len=false](text_to_char[len=None]("a"))) < "a"))
+Map ((char_to_text(text_to_char[len=1, fail_on_len=false](text_to_char[len=unbounded]("a"))) < "a"))
   Constant
     - ()
 
@@ -369,7 +369,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT 'a'::varchar < 'a'::text;
 ----
-Map ((varchar_to_text(text_to_varchar[len=None]("a")) < "a"))
+Map ((varchar_to_text(text_to_varchar[len=unbounded]("a")) < "a"))
   Constant
     - ()
 
@@ -382,7 +382,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT coalesce('a'::char, 'a'::varchar, 'a'::text);
 ----
-Map (coalesce(text_to_char[len=1, fail_on_len=false](text_to_char[len=None]("a")), text_to_char[len=None](text_to_varchar[len=None]("a")), text_to_char[len=None]("a")))
+Map (coalesce(text_to_char[len=1, fail_on_len=false](text_to_char[len=unbounded]("a")), text_to_char[len=unbounded](text_to_varchar[len=unbounded]("a")), text_to_char[len=unbounded]("a")))
   Constant
     - ()
 
@@ -394,7 +394,7 @@ query T multiline
 EXPLAIN RAW PLAN FOR
     SELECT coalesce('a'::char, 'a'::text, 'a'::varchar);
 ----
-Map (coalesce(text_to_char[len=1, fail_on_len=false](text_to_char[len=None]("a")), text_to_char[len=None]("a"), text_to_char[len=None](text_to_varchar[len=None]("a"))))
+Map (coalesce(text_to_char[len=1, fail_on_len=false](text_to_char[len=unbounded]("a")), text_to_char[len=unbounded]("a"), text_to_char[len=unbounded](text_to_varchar[len=unbounded]("a"))))
   Constant
     - ()
 
@@ -1729,7 +1729,7 @@ Explained Query:
   Union // { types: "(varchar?)" }
     ReadStorage materialize.public.t1 // { types: "(varchar(3)?)" }
     Project (#1) // { types: "(varchar?)" }
-      Map (text_to_varchar[len=None](#0)) // { types: "(char(2)?, varchar?)" }
+      Map (text_to_varchar[len=unbounded](#0)) // { types: "(char(2)?, varchar?)" }
         ReadStorage materialize.public.t3 // { types: "(char(2)?)" }
 
 Source materialize.public.t1
