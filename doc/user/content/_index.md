@@ -43,9 +43,8 @@ cloud provider](/installation/) as well as the [operational guidelines](/install
 For instructions on installing Materialize on your Kubernetes cluster, see:
 
 - [Install locally on kind](/installation/install-on-local-kind/)
-
 - [Install locally on
   minikube](/installation/install-on-local-minikube/)
-
 - [Install on AWS](/installation/install-on-aws/)
 - [Install on GCP](/installation/install-on-gcp/)
+- [Install on Azure](/installation/install-on-azure/)
