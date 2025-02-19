@@ -137,12 +137,12 @@ use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::{probe, BranchWhen, Operator, Probe};
+use timely::dataflow::operators::{probe, BranchWhen, Capability, Operator, Probe};
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{ProbeHandle, Scope, Stream, StreamCore};
 use timely::order::Product;
 use timely::progress::timestamp::Refines;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::{Antichain, PathSummary, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use timely::worker::Worker as TimelyWorker;
 use timely::PartialOrder;
@@ -223,6 +223,10 @@ pub fn build_compute_dataflow<A: Allocate>(
         // alternate type signatures.
         let mut imported_sources = Vec::new();
         let mut tokens = BTreeMap::new();
+        let output_probe = ProbeHandle::new();
+
+        let slack = mz_repr::Timestamp::new(1);
+
         scope.clone().region_named(&input_name, |region| {
             // Import declared sources into the rendering context.
             for (source_id, (source, _monotonic)) in dataflow.source_imports.iter() {
@@ -287,6 +291,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                     if let Some(as_of) = suppress_early_progress_as_of {
                         ok_stream = suppress_early_progress(ok_stream, as_of);
                     }
+
+                    ok_stream = ok_stream.limit_progress(output_probe.clone(), slack, name.clone());
 
                     // Attach a probe reporting the input frontier.
                     let input_probe =
@@ -353,6 +359,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                         *idx_id,
                         &idx.desc,
                         start_signal.clone(),
+                        &output_probe,
+                        slack,
                     );
                 }
 
@@ -393,6 +401,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         dependencies,
                         idx_id,
                         &idx,
+                        &output_probe,
                     );
                 }
 
@@ -406,6 +415,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         &sink,
                         start_signal.clone(),
                         ct_ctx.input_times(&context.scope.parent),
+                        &output_probe,
                     );
                 }
             });
@@ -438,6 +448,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                         *idx_id,
                         &idx.desc,
                         start_signal.clone(),
+                        &output_probe,
+                        slack,
                     );
                 }
 
@@ -471,7 +483,14 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Export declared indexes.
                 for (idx_id, dependencies, idx) in indexes {
-                    context.export_index(compute_state, &tokens, dependencies, idx_id, &idx);
+                    context.export_index(
+                        compute_state,
+                        &tokens,
+                        dependencies,
+                        idx_id,
+                        &idx,
+                        &output_probe,
+                    );
                 }
 
                 // Export declared sinks.
@@ -484,6 +503,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         &sink,
                         start_signal.clone(),
                         ct_ctx.input_times(&context.scope.parent),
+                        &output_probe,
                     );
                 }
             });
@@ -507,6 +527,8 @@ where
         idx_id: GlobalId,
         idx: &IndexDesc,
         start_signal: StartSignal,
+        output_probe: &ProbeHandle<G::Timestamp>,
+        slack: <G::Timestamp as Timestamp>::Summary,
     ) {
         if let Some(traces) = compute_state.traces.get_mut(&idx_id) {
             assert!(
@@ -523,7 +545,11 @@ where
                 self.until.clone(),
             );
             let oks = Arranged {
-                stream: oks.stream.probe_with(&input_probe),
+                stream: oks.stream.probe_with(&input_probe).limit_progress(
+                    output_probe.clone(),
+                    slack,
+                    format!("import index {idx_id}"),
+                ),
                 trace: oks.trace,
             };
 
@@ -574,6 +600,7 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        output_probe: &ProbeHandle<G::Timestamp>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -608,6 +635,8 @@ where
                     );
                     needed_tokens.push(token);
                 }
+
+                oks.stream = oks.stream.probe_with(output_probe);
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
@@ -656,6 +685,7 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        output_probe: &ProbeHandle<mz_repr::Timestamp>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -704,6 +734,8 @@ where
                     );
                     needed_tokens.push(token);
                 }
+
+                oks.stream = oks.stream.probe_with(output_probe);
 
                 // Attach logging of dataflow errors.
                 if let Some(logger) = compute_state.compute_logger.clone() {
@@ -1532,6 +1564,76 @@ where
             }
         }
     })
+}
+
+trait LimitProgress<T: Timestamp> {
+    fn limit_progress(&self, handle: ProbeHandle<T>, slack: T::Summary, name: String) -> Self;
+}
+
+impl<G, C> LimitProgress<G::Timestamp> for StreamCore<G, C>
+where
+    G: Scope,
+    C: timely::Container + timely::Data,
+    G::Timestamp: timely::order::TotalOrder + std::fmt::Debug + Clone,
+{
+    fn limit_progress(
+        &self,
+        handle: ProbeHandle<G::Timestamp>,
+        slack: <G::Timestamp as Timestamp>::Summary,
+        _name: String,
+    ) -> Self {
+        self.unary_frontier(Pipeline, "LimitProgress", |_cap, _info| {
+            // Times that we've observed on our input.
+            let mut pending_caps: BTreeMap<G::Timestamp, Capability<G::Timestamp>> =
+                BTreeMap::default();
+
+            move |input, output| {
+                input.for_each(|time, data| {
+                    output.session(&time).give_container(data);
+                    // Record the input time if new.
+                    if let Some(stepped) = slack.results_in(time.time()) {
+                        if pending_caps
+                            .last_key_value()
+                            .map_or(true, |(max, _)| max.less_than(&stepped))
+                        {
+                            let cap = time.delayed(&stepped);
+                            pending_caps.insert(stepped, cap);
+                        }
+                    }
+                });
+
+                // println!(
+                //     "[{}] {name} pending caps: {:?} input: {:?} probe: {:?}",
+                //     _info.global_id,
+                //     pending_caps.keys(),
+                //     input.frontier.frontier().get(0),
+                //     handle.with_frontier(|f| f.get(0).cloned())
+                // );
+
+                // If the input frontier is non-empty, and the handle is non-empty, we're in steady-state.
+                // N.b., the handle is empty before the dataflow was scheduled once.
+                if !input.frontier().is_empty() && handle.with_frontier(|f| !f.is_empty()) {
+                    // Get the current input time. Assumes a total order.
+                    let time = handle.with_frontier(|f| f.get(0).unwrap().clone());
+                    // if let Some(with_slack) = slack.results_in(&time) {
+                    // Pop caps while they're less than output frontier + slack.
+                    while pending_caps
+                        .first_key_value()
+                        .map_or(false, |(retained_time, _)| retained_time.less_equal(&time))
+                    {
+                        let _ = pending_caps.pop_first();
+                    }
+                    // } else {
+                    //     pending_caps.clear();
+                    // }
+                }
+
+                if input.frontier.is_empty() {
+                    pending_caps.clear();
+                }
+            }
+        })
+    }
 }
 
 /// Helper to merge pairs of datum iterators into a row or split a datum iterator

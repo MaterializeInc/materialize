@@ -21,6 +21,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::probe::Handle;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
@@ -43,6 +44,7 @@ where
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
         _ct_times: Option<Collection<G, (), Diff>>,
+        output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // An encapsulation of the Subscribe response protocol.
         // Used to send rows and progress messages,
@@ -55,7 +57,7 @@ where
             poison: None,
         })));
         let subscribe_protocol_weak = Rc::downgrade(&subscribe_protocol_handle);
-
+        let sinked_collection = sinked_collection.probe_with(&mut output_probe.clone());
         subscribe(
             sinked_collection,
             err_collection,
