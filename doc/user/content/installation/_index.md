@@ -15,23 +15,13 @@ or on a cloud provider. Self-managed Materialize requires:
 
 {{% self-managed/materialize-components-list %}}
 
-To install and manage self-managed Materialize, Materialize provides:
-
-{{% self-managed/self-managed-details %}}
-
-{{< callout >}}
-
-{{< self-managed/also-available >}}
-
-{{</ callout >}}
-
 ## Install locally
 
 {{< multilinkbox >}}
-{{< linkbox title="Using Docker/kind" >}}
+{{< linkbox title="Using Docker/kind" icon="materialize">}}
 [Install locally on kind](/installation/install-on-local-kind/)
 {{</ linkbox >}}
-{{< linkbox  title="Using Docker/minikube" >}}
+{{< linkbox  title="Using Docker/minikube" icon="materialize">}}
 [Install locally on minikube](/installation/install-on-local-minikube/)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
@@ -39,13 +29,29 @@ To install and manage self-managed Materialize, Materialize provides:
 ## Install on cloud provider
 
 {{< multilinkbox >}}
-{{< linkbox title="AWS" >}}
-[Install on AWS](/installation/install-on-aws/)
+
+{{< linkbox title="[Install on AWS](/installation/install-on-aws/)" icon="materialize">}}
+
+[Deploy Materialize to AWS Elastic Kubernetes Service (EKS)](/installation/install-on-aws/)
+
 {{</ linkbox >}}
-{{< linkbox title="GCP" >}}
-[Install on GCP](/installation/install-on-gcp/)
+
+{{< linkbox title="[Install on Azure](/installation/install-on-azure/)" icon="materialize">}}
+
+[Deploy Materialize to Azure Kubernetes Service (AKS)](/installation/install-on-azure/)
+
 {{</ linkbox >}}
+
+{{< linkbox icon="materialize" title="[Install on GCP](/installation/install-on-gcp/)" >}}
+
+[Deploy Materialize to Google Kubernetes Engine (GKE)](/installation/install-on-gcp/)
+{{</ linkbox >}}
+
 {{</ multilinkbox >}}
+
+{{< callout >}}
+{{< self-managed/also-available >}}
+{{</ callout >}}
 
 ## See also
 
