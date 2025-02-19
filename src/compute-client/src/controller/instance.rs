@@ -1271,7 +1271,16 @@ where
         // Here we augment all imported sources and all exported sinks with the appropriate
         // storage metadata needed by the compute instance.
         let mut source_imports = BTreeMap::new();
-        for (id, (si, monotonic)) in dataflow.source_imports {
+        for (id, (si, monotonic, _upper)) in dataflow.source_imports {
+            let frontiers = self
+                .storage_collections
+                .collection_frontiers(id)
+                .expect("collection exists");
+            println!(
+                "[{}] storage import {id} frontier: {:?}",
+                dataflow.debug_name, frontiers.write_frontier
+            );
+
             let collection_metadata = self
                 .storage_collections
                 .collection_metadata(id)
@@ -1282,7 +1291,7 @@ where
                 arguments: si.arguments,
                 typ: si.typ.clone(),
             };
-            source_imports.insert(id, (desc, monotonic));
+            source_imports.insert(id, (desc, monotonic, frontiers.write_frontier.clone()));
         }
 
         let mut sink_exports = BTreeMap::new();
