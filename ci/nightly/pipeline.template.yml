@@ -1697,8 +1697,7 @@ steps:
   - id: incident-70
     label: "Test for incident 70"
     depends_on: build-aarch64
-    timeout_in_minutes: 15
-    skip: "Affected by incidents-and-escalations#72"
+    timeout_in_minutes: 30
     agents:
       queue: hetzner-aarch64-8cpu-16gb
     plugins:

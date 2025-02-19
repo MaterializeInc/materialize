@@ -62,6 +62,7 @@ SERVICES = [
     Clusterd(name="clusterd3"),
     Clusterd(name="clusterd4"),
     Mz(app_password=""),
+    Minio(),
     Materialized(
         # We use mz_panic() in some test scenarios, so environmentd must stay up.
         propagate_crashes=False,
