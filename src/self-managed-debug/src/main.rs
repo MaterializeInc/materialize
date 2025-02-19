@@ -132,10 +132,6 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
                 context.clone(),
                 Some(namespace.clone()),
             ),
-            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<DaemonSet>(
-                context.clone(),
-                Some(namespace.clone()),
-            ),
             k8s_resource_dumper::spawn_dump_kubectl_describe_process::<PersistentVolumeClaim>(
                 context.clone(),
                 Some(namespace.clone()),
@@ -149,6 +145,10 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
 
     describe_handles.extend([
         k8s_resource_dumper::spawn_dump_kubectl_describe_process::<Node>(context.clone(), None),
+        k8s_resource_dumper::spawn_dump_kubectl_describe_process::<DaemonSet>(
+            context.clone(),
+            None,
+        ),
         k8s_resource_dumper::spawn_dump_kubectl_describe_process::<StorageClass>(
             context.clone(),
             None,

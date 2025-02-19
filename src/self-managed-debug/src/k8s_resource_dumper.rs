@@ -98,7 +98,11 @@ where
         for (i, item) in object_list.items.iter().enumerate() {
             let file_name = file_path.join(format!(
                 "{}.yaml",
-                &item.meta().name.clone().unwrap_or(format!("unknown_{}", i))
+                &item
+                    .meta()
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("unknown_{}", i))
             ));
             let mut file = File::create(&file_name)?;
 
@@ -109,7 +113,7 @@ where
                 serde_yaml::to_writer(&mut file, &item)?;
             }
 
-            println!("Exporting {}", file_name.display());
+            println!("Exported {}", file_name.display());
         }
 
         Ok(())
@@ -139,7 +143,7 @@ async fn _dump_k8s_pod_logs(
             .metadata
             .name
             .clone()
-            .unwrap_or(format!("unknown_{}", i));
+            .unwrap_or_else(|| format!("unknown_{}", i));
         async fn export_pod_logs(
             pods: &Api<Pod>,
             pod_name: &str,
@@ -173,21 +177,16 @@ async fn _dump_k8s_pod_logs(
         }
 
         if let Err(e) = export_pod_logs(&pods, &pod_name, &file_path, true).await {
-            let print_error = || {
-                eprintln!(
-                    "Failed to export previous logs for pod {}: {}",
-                    &pod_name, e
-                );
-            };
-
-            if let Some(kube::Error::Api(e)) = e.downcast_ref::<kube::Error>() {
-                if e.code == 400 {
+            match e.downcast_ref::<kube::Error>() {
+                Some(kube::Error::Api(e)) if e.code == 400 => {
                     eprintln!("No previous logs available for pod {}", pod_name);
-                } else {
-                    print_error();
                 }
-            } else {
-                print_error();
+                _ => {
+                    eprintln!(
+                        "Failed to export previous logs for pod {}: {}",
+                        &pod_name, e
+                    );
+                }
             }
         }
 
@@ -243,9 +242,6 @@ pub async fn dump_namespaced_resources(context: &Context, client: &Client, names
     K8sResourceDumper::<Secret>::namespaced(context, client.clone(), namespace.clone())
         .dump()
         .await;
-    K8sResourceDumper::<DaemonSet>::namespaced(context, client.clone(), namespace.clone())
-        .dump()
-        .await;
     K8sResourceDumper::<PersistentVolumeClaim>::namespaced(
         context,
         client.clone(),
@@ -281,7 +277,9 @@ pub async fn dump_cluster_resources(context: &Context, client: &Client) {
     K8sResourceDumper::<ValidatingWebhookConfiguration>::cluster(context, client.clone())
         .dump()
         .await;
-
+    K8sResourceDumper::<DaemonSet>::cluster(context, client.clone())
+        .dump()
+        .await;
     K8sResourceDumper::<CustomResourceDefinition>::cluster(context, client.clone())
         .dump()
         .await;
@@ -299,6 +297,8 @@ where
     let mut args = vec!["describe", &resource_type];
     if let Some(namespace) = namespace {
         args.extend(["-n", namespace]);
+    } else {
+        args.push("--all-namespaces");
     }
 
     if let Some(k8s_context) = &context.args.k8s_context {
