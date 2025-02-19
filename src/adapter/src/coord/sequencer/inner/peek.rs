@@ -128,6 +128,7 @@ impl Coordinator {
         plan: plan::SelectPlan,
         target_cluster: TargetCluster,
         max_query_result_size: Option<u64>,
+        max_query_heap_size: Option<u64>,
     ) {
         let explain_ctx = if ctx.session().vars().emit_plan_insights_notice() {
             let optimizer_trace = OptimizerTrace::new(ExplainStage::PlanInsights.paths());
@@ -143,7 +144,8 @@ impl Coordinator {
                 target_cluster,
                 None,
                 explain_ctx,
-                max_query_result_size
+                max_query_result_size,
+                max_query_heap_size,
             ),
             ctx
         );
@@ -209,6 +211,7 @@ impl Coordinator {
                 }),
                 ExplainContext::None,
                 Some(ctx.session().vars().max_query_result_size()),
+                ctx.session().vars().max_query_heap_size(),
             ),
             ctx
         );
@@ -258,6 +261,7 @@ impl Coordinator {
                     optimizer_trace,
                 }),
                 Some(ctx.session().vars().max_query_result_size()),
+                ctx.session().vars().max_query_heap_size(),
             ),
             ctx
         );
@@ -274,6 +278,7 @@ impl Coordinator {
         copy_to_ctx: Option<CopyToContext>,
         explain_ctx: ExplainContext,
         max_query_result_size: Option<u64>,
+        max_query_heap_size: Option<u64>,
     ) -> Result<PeekStage, AdapterError> {
         // Collect optimizer parameters.
         let catalog = self.owned_catalog();
@@ -391,6 +396,7 @@ impl Coordinator {
             validity,
             plan,
             max_query_result_size,
+            max_query_heap_size,
             source_ids,
             target_replica,
             timeline_context,
@@ -409,6 +415,7 @@ impl Coordinator {
             source_ids,
             plan,
             max_query_result_size,
+            max_query_heap_size,
             target_replica,
             timeline_context,
             optimizer,
@@ -424,6 +431,7 @@ impl Coordinator {
             validity,
             plan,
             max_query_result_size,
+            max_query_heap_size,
             source_ids,
             target_replica,
             timeline_context,
@@ -468,6 +476,7 @@ impl Coordinator {
             mut validity,
             plan,
             max_query_result_size,
+            max_query_heap_size,
             source_ids,
             target_replica,
             timeline_context,
@@ -508,6 +517,7 @@ impl Coordinator {
             validity,
             plan,
             max_query_result_size,
+            max_query_heap_size,
             source_ids,
             id_bundle,
             target_replica,
@@ -526,6 +536,7 @@ impl Coordinator {
             validity,
             plan,
             max_query_result_size,
+            max_query_heap_size,
             source_ids,
             id_bundle,
             target_replica,
@@ -640,6 +651,7 @@ impl Coordinator {
                                         validity,
                                         plan,
                                         max_query_result_size,
+                                        max_query_heap_size,
                                         id_bundle,
                                         target_replica,
                                         source_ids,
@@ -656,6 +668,7 @@ impl Coordinator {
                                     validity,
                                     plan,
                                     max_query_result_size,
+                                    max_query_heap_size,
                                     id_bundle,
                                     target_replica,
                                     source_ids,
@@ -745,6 +758,7 @@ impl Coordinator {
             validity,
             plan,
             max_query_result_size,
+            max_query_heap_size,
             source_ids,
             target_replica,
             timeline_context,
@@ -772,6 +786,7 @@ impl Coordinator {
                             validity,
                             plan,
                             max_query_result_size,
+                            max_query_heap_size,
                             target_replica,
                             timeline_context,
                             source_ids,
@@ -790,6 +805,7 @@ impl Coordinator {
                     validity,
                     plan,
                     max_query_result_size,
+                    max_query_heap_size,
                     target_replica,
                     timeline_context,
                     source_ids,
@@ -810,6 +826,7 @@ impl Coordinator {
             validity: _,
             plan,
             max_query_result_size,
+            max_query_heap_size,
             id_bundle,
             target_replica,
             source_ids,
@@ -833,8 +850,12 @@ impl Coordinator {
         let session = ctx.session_mut();
         let conn_id = session.conn_id().clone();
 
-        let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
+        let (mut peek_plan, df_meta, typ) = global_lir_plan.unapply();
         let source_arity = typ.arity();
+
+        if let peek::PeekPlan::SlowPath(PeekDataflowPlan { desc, .. }) = &mut peek_plan {
+            desc.memory_limit = max_query_heap_size;
+        }
 
         self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
 

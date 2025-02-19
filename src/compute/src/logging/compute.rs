@@ -23,11 +23,13 @@ use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Timestamp};
 use mz_timely_util::containers::{Column, ColumnBuilder, ProvidedBuilder};
+use mz_timely_util::operator::Bifurcate;
 use mz_timely_util::replay::MzReplay;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Concatenate, Enter, Operator};
+use timely::dataflow::operators::{Concatenate, Enter, Leave, Operator};
 use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::scheduling::Scheduler;
 use timely::{Container, Data};
@@ -286,9 +288,11 @@ impl LirMetadata {
 }
 
 /// The return type of the [`construct`] function.
-pub(super) struct Return {
+pub(super) struct Return<S: Scope> {
     /// Collections returned by [`construct`].
     pub collections: BTreeMap<LogVariant, LogCollection>,
+    /// The arrangement heap size stream for each operator.
+    pub arrangement_heap_size: Stream<S, Update<(usize, ())>>,
 }
 
 /// Constructs the logging dataflow fragment for compute logs.
@@ -307,7 +311,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     compute_event_streams: impl IntoIterator<Item = StreamCore<G, Column<(Duration, ComputeEvent)>>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
-) -> Return {
+) -> Return<G> {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
 
     scope.scoped("compute logging", move |scope| {
@@ -478,6 +482,17 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                 ])
             };
 
+        let (arrangement_heap_size, arrangement_heap_size_stripped) =
+            arrangement_heap_size.bifurcate::<CapacityContainerBuilder<Vec<_>>>(
+                "arrangement_heap_size",
+                |data, session| {
+                    session.give_iterator(
+                        IntoIterator::into_iter(&*data)
+                            .map(|(data, time, diff)| ((data.operator_id, ()), *time, *diff)),
+                    );
+                },
+            );
+
         let mut packer = PermutedRowPacker::new(ComputeLog::ArrangementHeapSize);
         let arrangement_heap_size = arrangement_heap_size
             .as_collection()
@@ -586,7 +601,10 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
             }
         }
 
-        Return { collections }
+        Return {
+            collections,
+            arrangement_heap_size: arrangement_heap_size_stripped.leave(),
+        }
     })
 }
 

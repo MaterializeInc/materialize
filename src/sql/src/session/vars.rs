@@ -841,6 +841,13 @@ impl SessionVars {
             .as_bytes()
     }
 
+    /// Returns the value of the `max_query_heap_size` configuration parameter.
+    pub fn max_query_heap_size(&self) -> Option<u64> {
+        self.expect_value::<Option<ByteSize>>(&MAX_QUERY_HEAP_SIZE)
+            .as_ref()
+            .map(ByteSize::as_bytes)
+    }
+
     /// Sets the external metadata associated with the user.
     pub fn set_external_user_metadata(&mut self, metadata: ExternalUserMetadata) {
         self.user.external_metadata = Some(metadata);
@@ -1095,6 +1102,7 @@ impl SystemVars {
                 &TIMEZONE,
                 &TRANSACTION_ISOLATION,
                 &MAX_QUERY_RESULT_SIZE,
+                &MAX_QUERY_HEAP_SIZE,
             ]
             .into_iter()
             .map(|var| (UncasedStr::new(var.name()), var))

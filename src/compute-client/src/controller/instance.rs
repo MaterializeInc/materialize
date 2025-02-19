@@ -65,8 +65,8 @@ use crate::protocol::command::{
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
-    StatusResponse, SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, DataflowLimitStatus, FrontiersResponse,
+    OperatorHydrationStatus, PeekResponse, StatusResponse, SubscribeBatch, SubscribeResponse,
 };
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -1360,6 +1360,7 @@ where
             refresh_schedule: dataflow.refresh_schedule,
             debug_name: dataflow.debug_name,
             time_dependence: dataflow.time_dependence,
+            memory_limit: dataflow.memory_limit,
         };
 
         if augmented_dataflow.is_transient() {
@@ -2014,6 +2015,43 @@ where
         match response {
             StatusResponse::OperatorHydration(status) => {
                 self.update_operator_hydration_status(replica_id, status)
+            }
+            StatusResponse::DataflowLimitExceeded(status) => {
+                self.update_dataflow_limit_status(replica_id, status)
+            }
+        }
+    }
+
+    /// Update the tracked hydration status for an operator according to a received status update.
+    fn update_dataflow_limit_status(&mut self, replica_id: ReplicaId, status: DataflowLimitStatus) {
+        tracing::warn!(
+            "Dataflow limit exceeded on replica {}: {:?}",
+            replica_id,
+            status
+        );
+        if let Some(subscribe) = self.subscribes.get(&status.collection_id) {
+            self.deliver_response(ComputeControllerResponse::SubscribeResponse(
+                status.collection_id,
+                SubscribeBatch {
+                    lower: subscribe.frontier.clone(),
+                    upper: subscribe.frontier.clone(),
+                    updates: Err("Dataflow limit exceeded".to_string()),
+                },
+            ))
+        } else {
+            // Look for a matching peek
+            let mut peek_uuid = None;
+            for (uuid, peek) in self.peeks.iter() {
+                if peek.read_hold.id() == status.collection_id {
+                    peek_uuid = Some(*uuid);
+                    break;
+                }
+            }
+            if let Some(uuid) = peek_uuid {
+                self.cancel_peek(
+                    uuid,
+                    PeekResponse::Error("Dataflow limit exceeded".to_string()),
+                );
             }
         }
     }

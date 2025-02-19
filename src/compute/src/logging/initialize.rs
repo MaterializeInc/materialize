@@ -6,7 +6,7 @@
 //! Initialization of logging dataflows.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -21,6 +21,7 @@ use mz_timely_util::containers::{Column, ColumnBuilder};
 use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::container::{ContainerBuilder, PushInto};
+use timely::dataflow::operators::Input;
 use timely::dataflow::Scope;
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
@@ -40,7 +41,8 @@ use crate::typedefs::{ErrBatcher, ErrBuilder};
 pub fn initialize<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-) -> LoggingTraces {
+    dataflows_exceeding_heap_size_limit: Rc<RefCell<BTreeSet<usize>>>,
+) -> super::LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
     // Track time relative to the Unix epoch, rather than when the server
@@ -62,25 +64,27 @@ pub fn initialize<A: Allocate + 'static>(
         d_event_queue: EventQueue::new("d"),
         c_event_queue: EventQueue::new("c"),
         shared_state: Default::default(),
+        dataflows_exceeding_heap_size_limit,
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
     // loggers with timely either before or after creating them.
     let dataflow_index = context.worker.next_dataflow_index();
-    let traces = if config.log_logging {
+    let (traces, handles) = if config.log_logging {
         context.register_loggers();
         context.construct_dataflow()
     } else {
-        let traces = context.construct_dataflow();
+        let traces_and_handles = context.construct_dataflow();
         context.register_loggers();
-        traces
+        traces_and_handles
     };
 
     let compute_logger = worker.log_register().get("materialize/compute").unwrap();
-    LoggingTraces {
+    super::LoggingTraces {
         traces,
         dataflow_index,
         compute_logger,
+        logging_handles: handles,
     }
 }
 
@@ -97,25 +101,18 @@ struct LoggingContext<'a, A: Allocate> {
     d_event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     c_event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
-}
-
-pub(crate) struct LoggingTraces {
-    /// Exported traces, by log variant.
-    pub traces: BTreeMap<LogVariant, TraceBundle>,
-    /// The index of the dataflow that exports the traces.
-    pub dataflow_index: usize,
-    /// The compute logger.
-    pub compute_logger: super::compute::Logger,
+    dataflows_exceeding_heap_size_limit: Rc<RefCell<BTreeSet<usize>>>,
 }
 
 impl<A: Allocate + 'static> LoggingContext<'_, A> {
-    fn construct_dataflow(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
+    fn construct_dataflow(&mut self) -> (BTreeMap<LogVariant, TraceBundle>, super::LoggingHandles) {
         self.worker.dataflow_named("Dataflow: logging", |scope| {
             let mut collections = BTreeMap::new();
 
             let super::timely::Return {
                 collections: timely_collections,
                 compute_events: compute_events_timely,
+                operator_to_dataflow,
             } = super::timely::construct(scope.clone(), self.config, self.t_event_queue.clone());
             collections.extend(timely_collections);
 
@@ -131,6 +128,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             let super::differential::Return {
                 collections: differential_collections,
                 compute_events: compute_events_differential,
+                batcher_heap_size,
             } = super::differential::construct(
                 scope.clone(),
                 self.config,
@@ -141,6 +139,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
 
             let super::compute::Return {
                 collections: compute_collections,
+                arrangement_heap_size,
             } = super::compute::construct(
                 scope.clone(),
                 scope.parent.clone(),
@@ -150,6 +149,19 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                 Rc::clone(&self.shared_state),
             );
             collections.extend(compute_collections);
+
+            let (heap_size_limits_handle, heap_size_limits) = scope.new_input();
+
+            let watchdog_streams = super::watchdog::Streams {
+                arrangement_heap_size,
+                batcher_heap_size,
+                operator_to_dataflow,
+                heap_size_limits,
+                dataflows_exceeding_heap_size_limit: Rc::clone(
+                    &self.dataflows_exceeding_heap_size_limit,
+                ),
+            };
+            super::watchdog::construct(scope.clone(), watchdog_streams);
 
             let errs = scope.scoped("logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowError, Diff> =
@@ -167,7 +179,11 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                     (log, bundle)
                 })
                 .collect();
-            traces
+
+            let handles = super::LoggingHandles {
+                heap_size_limits_handle,
+            };
+            (traces, handles)
         })
     }
 
