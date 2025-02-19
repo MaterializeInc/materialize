@@ -151,15 +151,6 @@ pub mod v1alpha1 {
         pub internal_certificate_spec: Option<MaterializeCertSpec>,
     }
 
-    impl k8s_openapi::Resource for Materialize {
-        const API_VERSION: &'static str = "v1";
-        const GROUP: &'static str = "materialize.cloud";
-        const KIND: &'static str = "Materialize";
-        const VERSION: &'static str = "v1alpha1";
-        const URL_PATH_SEGMENT: &'static str = "materializes";
-        type Scope = k8s_openapi::NamespaceResourceScope;
-    }
-
     impl Materialize {
         pub fn backend_secret_name(&self) -> String {
             self.spec.backend_secret_name.clone()

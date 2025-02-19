@@ -47,22 +47,19 @@ pub struct K8sResourceDumper<'n, K> {
     context: &'n Context,
     api: Api<K>,
     namespace: Option<String>,
+    resource_type: String,
 }
 
 impl<'n, K> K8sResourceDumper<'n, K>
 where
-    K: kube::Resource<DynamicType = ()>
-        + k8s_openapi::Resource
-        + Clone
-        + Debug
-        + Serialize
-        + DeserializeOwned,
+    K: kube::Resource<DynamicType = ()> + Clone + Debug + Serialize + DeserializeOwned,
 {
     fn cluster(context: &'n Context, client: Client) -> Self {
         Self {
             context,
             api: Api::<K>::all(client),
             namespace: None,
+            resource_type: K::plural(&()).into_owned(),
         }
     }
 
@@ -74,15 +71,15 @@ where
             context,
             api: Api::<K>::namespaced(client, namespace.as_str()),
             namespace: Some(namespace),
+            resource_type: K::plural(&()).into_owned(),
         }
     }
 
     async fn _dump(&self) -> Result<(), anyhow::Error> {
         let object_list = self.api.list(&ListParams::default()).await?;
-        let resource_type = K::URL_PATH_SEGMENT;
 
         if object_list.items.is_empty() {
-            let mut err_msg = format!("No {} found", resource_type);
+            let mut err_msg = format!("No {} found", self.resource_type);
             if let Some(namespace) = &self.namespace {
                 err_msg = format!("{} for namespace {}", err_msg, namespace);
             }
@@ -91,7 +88,7 @@ where
         }
         let file_path = format_resource_path(
             self.context.start_time,
-            resource_type,
+            self.resource_type.as_str(),
             self.namespace.as_ref(),
         );
         create_dir_all(&file_path)?;
@@ -108,7 +105,7 @@ where
             let mut file = File::create(&file_name)?;
 
             // If the resource is a secret, we hide its values by default.
-            if K::URL_PATH_SEGMENT == "secrets" && !self.context.args.k8s_dump_secret_values {
+            if self.resource_type == "secrets" && !self.context.args.k8s_dump_secret_values {
                 serde_yaml::to_writer(&mut file, item.meta())?;
             } else {
                 serde_yaml::to_writer(&mut file, &item)?;
@@ -122,7 +119,7 @@ where
 
     async fn dump(&self) {
         if let Err(e) = self._dump().await {
-            eprintln!("Failed to write k8s {}: {}", K::URL_PATH_SEGMENT, e);
+            eprintln!("Failed to write k8s {}: {}", self.resource_type, e);
         }
     }
 }
@@ -296,9 +293,9 @@ async fn dump_kubectl_describe<K>(
     namespace: Option<&String>,
 ) -> Result<(), anyhow::Error>
 where
-    K: k8s_openapi::Resource,
+    K: kube::Resource<DynamicType = ()>,
 {
-    let resource_type = K::URL_PATH_SEGMENT;
+    let resource_type = K::plural(&()).into_owned();
     let mut args = vec!["describe", &resource_type];
     if let Some(namespace) = namespace {
         args.extend(["-n", namespace]);
@@ -332,7 +329,7 @@ where
         return Ok(());
     }
 
-    let file_path = format_resource_path(context.start_time, resource_type, namespace);
+    let file_path = format_resource_path(context.start_time, resource_type.as_str(), namespace);
     let file_name = file_path.join("describe.txt");
     create_dir_all(&file_path)?;
     let mut file = File::create(&file_name)?;
@@ -349,13 +346,13 @@ pub fn spawn_dump_kubectl_describe_process<K>(
     namespace: Option<String>,
 ) -> JoinHandle<()>
 where
-    K: k8s_openapi::Resource,
+    K: kube::Resource<DynamicType = ()>,
 {
     mz_ore::task::spawn(|| "dump-kubectl-describe", async move {
         if let Err(e) = dump_kubectl_describe::<K>(&context, namespace.as_ref()).await {
             eprintln!(
                 "Failed to dump kubectl describe for {}: {}",
-                K::URL_PATH_SEGMENT,
+                K::plural(&()).into_owned(),
                 e
             );
         }
