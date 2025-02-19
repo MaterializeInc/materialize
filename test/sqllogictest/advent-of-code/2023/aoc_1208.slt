@@ -20,7 +20,7 @@ CREATE TABLE paths (state TEXT, left TEXT, right TEXT);
 # no data
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
     route(step TEXT, steps INT) AS (
         SELECT substring(input, steps, 1), steps

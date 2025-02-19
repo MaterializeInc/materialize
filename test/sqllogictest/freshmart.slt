@@ -101,7 +101,7 @@ statement ok
 CREATE INDEX idx_inventory_product_id ON inventory(product_id);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 WITH recent_prices AS (
 	SELECT grp.product_id, AVG(price) AS avg_price
 	FROM (SELECT DISTINCT product_id FROM sales) grp,
@@ -511,7 +511,7 @@ statement ok
 CREATE INDEX idx_product_id ON mv_dynamic_pricing(product_id);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT
   sc.product_id,
   sc.product_name,
@@ -620,7 +620,7 @@ statement ok
 CREATE DEFAULT INDEX IF NOT EXISTS dynamic_price_shopping_cart_idx ON dynamic_price_shopping_cart;
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   rollup(category_id int, total numeric(20,10), item_count int) AS (
     -- Base: calculate each category's direct total and item count
@@ -833,7 +833,7 @@ statement ok
 CREATE INDEX IF NOT EXISTS category_totals_parent_id_idx ON category_totals (parent_id);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR SELECT EXISTS( SELECT 1 FROM inventory WHERE product_id = 1 );
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT EXISTS( SELECT 1 FROM inventory WHERE product_id = 1 );
 ----
 Explained Query:
   With
@@ -860,7 +860,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR WITH selected_product AS (
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH selected_product AS (
                         SELECT product_id, product_name, category_id, base_price
                         FROM products
                         WHERE product_id != 1
@@ -882,7 +882,7 @@ Target cluster: quickstart
 
 EOF
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT product_id, adjusted_price, last_update_time
 FROM dynamic_pricing
 WHERE product_id = 5;
@@ -899,7 +899,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT product_id, adjusted_price, last_update_time
 FROM mv_dynamic_pricing
 WHERE product_id = 5;
@@ -916,7 +916,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT DISTINCT category_id, category_name
 FROM categories
 ORDER BY category_name;
@@ -934,7 +934,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT
     category_name,
     item_count,

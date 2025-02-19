@@ -109,7 +109,7 @@ SELECT * FROM part1, part2;
 2021  6155
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 10)
 
     strings(r INT, string TEXT) AS (
