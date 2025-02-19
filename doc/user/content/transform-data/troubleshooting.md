@@ -357,7 +357,7 @@ SELECT mo.name AS name, mo.global_id AS global_id, mlm.lir_id, mlm.parent_lir_id
                 ON (mlm.operator_id_start <= mcodh.id AND mcodh.id < mlm.operator_id_end)
               JOIN mz_introspection.mz_mappable_objects mo
                 ON (mlm.global_id = mo.global_id)
-   WHERE mo.name IN ('wins_by_item', 'winning_bids')
+   WHERE mo.name IN ('materialize.public.wins_by_item', 'materialize.public.winning_bids')
 GROUP BY mo.name, mo.global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY mo.global_id, lir_id DESC;
 ```
@@ -424,7 +424,7 @@ with
                 ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
               JOIN mz_introspection.mz_mappable_objects mo
                 ON (mlm.global_id = mo.global_id)
-   WHERE mo.name IN ('wins_by_item', 'winning_bids')
+   WHERE mo.name IN ('materialize.public.wins_by_item', 'materialize.public.winning_bids')
 GROUP BY mo.name, mo.global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY mo.global_id, lir_id DESC;
 ```
@@ -468,7 +468,7 @@ can attribute this to particular parts of our query using
                     mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)
               JOIN mz_introspection.mz_mappable_objects mo
                 ON (mlm.global_id = mo.global_id)
-   WHERE mo.name IN ('wins_by_item', 'winning_bids')
+   WHERE mo.name IN ('materialize.public.wins_by_item', 'materialize.public.winning_bids')
 ORDER BY mo.global_id, lir_id DESC;
 ```
 
@@ -540,7 +540,7 @@ overall time spent across all workers:
                             GROUP BY worker_id) epw
                       JOIN mz_introspection.mz_mappable_objects mo
                         ON (mlm.global_id = mo.global_id)
-   WHERE mo.name IN ('wins_by_item', 'winning_bids')
+   WHERE mo.name IN ('materialize.public.wins_by_item', 'materialize.public.winning_bids')
 GROUP BY mo.name, mo.global_id, lir_id, nesting, operator, worker_id
 ORDER BY mo.global_id, lir_id DESC;
 ```
