@@ -257,6 +257,15 @@ pub struct CertificateSpec {
     pub usages: Option<Vec<String>>,
 }
 
+impl k8s_openapi::Resource for Certificate {
+    const API_VERSION: &'static str = "v1";
+    const GROUP: &'static str = "cert-manager.io";
+    const KIND: &'static str = "Certificate";
+    const VERSION: &'static str = "v1";
+    const URL_PATH_SEGMENT: &'static str = "certificates";
+    type Scope = k8s_openapi::NamespaceResourceScope;
+}
+
 /// CertificateAdditionalOutputFormat defines an additional output format of a
 /// Certificate resource. These contain supplementary data formats of the signed
 /// certificate chain and paired private key.

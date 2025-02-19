@@ -36,6 +36,7 @@ use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomRe
 use k8s_openapi::NamespaceResourceScope;
 use kube::api::{ListParams, LogParams};
 use kube::{Api, Client};
+use mz_cloud_resources::crd::gen::cert_manager::certificates::Certificate;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_ore::task::JoinHandle;
 use serde::{de::DeserializeOwned, Serialize};
@@ -250,6 +251,10 @@ pub async fn dump_namespaced_resources(context: &Context, client: &Client, names
     .dump()
     .await;
     K8sResourceDumper::<ServiceAccount>::namespaced(context, client.clone(), namespace.clone())
+        .dump()
+        .await;
+
+    K8sResourceDumper::<Certificate>::namespaced(context, client.clone(), namespace.clone())
         .dump()
         .await;
 

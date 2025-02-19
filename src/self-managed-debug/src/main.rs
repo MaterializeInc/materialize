@@ -31,6 +31,7 @@ use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomRe
 use kube::config::KubeConfigOptions;
 use kube::{Client, Config};
 use mz_build_info::{build_info, BuildInfo};
+use mz_cloud_resources::crd::gen::cert_manager::certificates::Certificate;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
@@ -137,6 +138,10 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
                 Some(namespace.clone()),
             ),
             k8s_resource_dumper::spawn_dump_kubectl_describe_process::<ServiceAccount>(
+                context.clone(),
+                Some(namespace.clone()),
+            ),
+            k8s_resource_dumper::spawn_dump_kubectl_describe_process::<Certificate>(
                 context.clone(),
                 Some(namespace.clone()),
             ),
