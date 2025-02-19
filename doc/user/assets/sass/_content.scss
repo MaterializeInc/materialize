@@ -257,8 +257,14 @@ p+p {
         &.book,
         &.bulb,
         &.doc,
+        &.materialize,
         &.touch {
             padding-top: rem(8);
+        }
+
+        &.materialize::before {
+            background-image: url("../images/materialize_logo.svg");
+            margin-left: -10px;
         }
 
         &.book::before {
@@ -279,6 +285,7 @@ p+p {
 
         .title {
             text-transform: uppercase;
+            font-size: 12px;
             font-weight: 500;
             color: var(--important);
             margin-bottom: var(--nano);
