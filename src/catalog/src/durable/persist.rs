@@ -983,14 +983,23 @@ impl UnopenedPersistCatalogState {
         );
 
         // Check the catalog upgrade shard to see ensure that we don't fence anyone out of persist.
-        let upgrade_version =
+        let version_in_upgrade_shard =
             fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await;
         // If this is `None`, no version was found in the upgrade shard. This is a brand-new
         // environment, and we don't need to worry about fencing existing users.
-        if let Some(upgrade_version) = upgrade_version {
-            if mz_persist_client::cfg::check_data_version(&upgrade_version, &version).is_err() {
+        if let Some(version_in_upgrade_shard) = version_in_upgrade_shard {
+            // IMPORTANT: We swap the order of arguments here! Normally it's
+            // `code_version, data_version`, and we check whether a given code
+            // version, which is usually _older_, is allowed to touch a shard
+            // that has been touched by a _future_ version.
+            //
+            // By inverting argument order, we check if our version is too far
+            // ahead of the version in the shard.
+            if mz_persist_client::cfg::check_data_version(&version_in_upgrade_shard, &version)
+                .is_err()
+            {
                 return Err(DurableCatalogError::IncompatiblePersistVersion {
-                    found_version: upgrade_version,
+                    found_version: version_in_upgrade_shard,
                     catalog_version: version,
                 });
             }
