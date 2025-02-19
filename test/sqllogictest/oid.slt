@@ -1159,3 +1159,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17050  mz_cluster_deployment_lineage_ind
 17051  mz_cluster_replica_frontiers_ind
 17052  mz_compute_hydration_times_ind
+17053  mz_mappable_objects

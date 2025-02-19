@@ -985,6 +985,10 @@ mz_lir_mapping
 VIEW
 materialize
 mz_introspection
+mz_mappable_objects
+VIEW
+materialize
+mz_introspection
 mz_message_batch_counts_received_raw
 SOURCE
 materialize
