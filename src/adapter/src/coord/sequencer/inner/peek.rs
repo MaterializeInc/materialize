@@ -674,7 +674,7 @@ impl Coordinator {
                                             .desc
                                             .source_imports
                                             .into_iter()
-                                            .filter_map(|(id, (desc, _))| {
+                                            .filter_map(|(id, (desc, _, _upper))| {
                                                 desc.arguments.operators.map(|mfp| (id, mfp))
                                             })
                                             .collect(),
