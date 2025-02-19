@@ -9,6 +9,10 @@
 
 //! Logic related to the creation of dataflow sinks.
 
+use std::any::Any;
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::{Rc, Weak};
+
 use columnar::Columnar;
 use differential_dataflow::Collection;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
@@ -20,12 +24,10 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
-use std::any::Any;
-use std::collections::{BTreeMap, BTreeSet};
-use std::rc::{Rc, Weak};
+use mz_timely_util::probe::Handle;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::scopes::Child;
-use timely::dataflow::{ProbeHandle, Scope};
+use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
 use crate::compute_state::SinkToken;
@@ -50,7 +52,7 @@ where
         sink: &ComputeSinkDesc<CollectionMetadata>,
         start_signal: StartSignal,
         ct_times: Option<Collection<G, (), Diff>>,
-        output_probe: &ProbeHandle<Timestamp>,
+        output_probe: &Handle<Timestamp>,
     ) {
         soft_assert_or_log!(
             sink.non_null_assertions.is_strictly_sorted(),
@@ -203,7 +205,7 @@ where
         // TODO(ct2): Figure out a better way to smuggle this in, potentially by
         // removing the `SinkRender` trait entirely.
         ct_times: Option<Collection<G, (), Diff>>,
-        output_probe: &ProbeHandle<Timestamp>,
+        output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>>;
 }
 
