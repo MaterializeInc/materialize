@@ -20,6 +20,8 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<Plan>> {
 
     type Text = <DataflowDescription<Plan> as Explain<'a>>::Text;
 
+    type VerboseText = <DataflowDescription<Plan> as Explain<'a>>::VerboseText;
+
     type Json = <DataflowDescription<Plan> as Explain<'a>>::Json;
 
     type Dot = <DataflowDescription<Plan> as Explain<'a>>::Dot;

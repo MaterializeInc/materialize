@@ -33,6 +33,8 @@ impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
 
     type Text = ExplainSinglePlan<'a, MirRelationExpr>;
 
+    type VerboseText = ExplainSinglePlan<'a, MirRelationExpr>;
+
     type Json = ExplainSinglePlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
@@ -75,6 +77,8 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
     type Context = ExplainContext<'a>;
 
     type Text = ExplainMultiPlan<'a, MirRelationExpr>;
+
+    type VerboseText = ExplainMultiPlan<'a, MirRelationExpr>;
 
     type Json = ExplainMultiPlan<'a, MirRelationExpr>;
 

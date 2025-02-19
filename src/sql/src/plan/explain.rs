@@ -25,6 +25,8 @@ impl<'a> Explain<'a> for HirRelationExpr {
 
     type Text = ExplainSinglePlan<'a, HirRelationExpr>;
 
+    type VerboseText = ExplainSinglePlan<'a, HirRelationExpr>;
+
     type Json = ExplainSinglePlan<'a, HirRelationExpr>;
 
     type Dot = UnsupportedFormat;
