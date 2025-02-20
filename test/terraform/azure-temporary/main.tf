@@ -1,0 +1,113 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+provider "azurerm" {
+  subscription_id = "9bc1ad3f-3401-42a3-99cd-7faeeb51e059"
+
+  features {
+    resource_group {
+      prevent_deletion_if_contains_resources = false
+    }
+    key_vault {
+      purge_soft_delete_on_destroy    = true
+      recover_soft_deleted_key_vaults = false
+    }
+
+  }
+}
+
+resource "random_password" "pass" {
+  length  = 20
+  special = false
+}
+
+resource "azurerm_resource_group" "materialize" {
+  name     = "tf-test-rg"
+  location = "eastus2"
+  tags     = {}
+}
+
+module "materialize" {
+  # TODO: Use ref when v0.1.3 is released
+  # source = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=v0.1.3"
+  source = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=c751b1f1345c961156b9253622b27774dd1d8d93"
+  resource_group_name = azurerm_resource_group.materialize.name
+  location            = "eastus2"
+  prefix              = "tf-test"
+  install_materialize_operator = true
+
+  materialize_instances = var.materialize_instances
+
+  database_config = {
+    sku_name = "GP_Standard_D2s_v3"
+    version  = "15"
+    password = random_password.pass.result
+  }
+
+  tags = {
+    environment = "dev"
+    managed_by  = "terraform"
+  }
+
+  providers = {
+    azurerm = azurerm
+  }
+}
+
+variable "location" {
+  description = "Azure region"
+  type        = string
+  default     = "eastus2"
+}
+
+variable "tags" {
+  description = "Tags to apply to resources"
+  type        = map(string)
+  default     = {}
+}
+
+variable "materialize_instances" {
+  description = "Configuration for Materialize instances"
+  type = list(object({
+    name             = string
+    namespace        = optional(string)
+    database_name    = string
+    cpu_request      = optional(string, "1")
+    memory_request   = optional(string, "1Gi")
+    memory_limit     = optional(string, "1Gi")
+    create_database  = optional(bool, true)
+    in_place_rollout = optional(bool, false)
+    request_rollout  = optional(string)
+    force_rollout    = optional(string)
+  }))
+  default = []
+}
+
+# Output the Materialize instance details
+output "aks_cluster" {
+  description = "AKS cluster details"
+  value       = module.materialize.aks_cluster
+  sensitive   = true
+}
+
+output "connection_strings" {
+  description = "Connection strings for Materialize"
+  value       = module.materialize.connection_strings
+  sensitive   = true
+}
+
+output "kube_config" {
+  description = "The kube_config for the AKS cluster"
+  value       = module.materialize.kube_config
+  sensitive   = true
+}
+
+output "resource_group_name" {
+  value = azurerm_resource_group.materialize.name
+}
