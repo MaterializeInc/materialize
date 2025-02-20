@@ -239,7 +239,7 @@ impl MirScalarExprDeserializeContext {
         I: Iterator<Item = TokenTree>,
     {
         match &first_arg {
-            TokenTree::Ident(i) if i.to_string().to_ascii_lowercase() == "ok" => {
+            TokenTree::Ident(i) if i.to_string().eq_ignore_ascii_case("ok") => {
                 // literal definition is mandatory after OK token
                 let first_arg = if let Some(first_arg) = rest_of_stream.next() {
                     first_arg
@@ -251,7 +251,7 @@ impl MirScalarExprDeserializeContext {
                     _ => Err(format!("expected literal after Ident: `{}`", i)),
                 }
             }
-            TokenTree::Ident(i) if i.to_string().to_ascii_lowercase() == "err" => {
+            TokenTree::Ident(i) if i.to_string().eq_ignore_ascii_case("err") => {
                 let error = deserialize_generic(rest_of_stream, "EvalError")?;
                 let typ: Option<ScalarType> =
                     deserialize_optional_generic(rest_of_stream, "ScalarType")?;
