@@ -134,6 +134,10 @@ class Materialized(Service):
             f"MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
             f"MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
             f"MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            # Note(SangJunBak): mz_system and mz_probe have no replicas by default in materialized
+            # but we re-enable them here since many of our tests rely on them.
+            "MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR=1",
+            "MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR=1",
             *environment_extra,
             *DEFAULT_CRDB_ENVIRONMENT,
         ]
