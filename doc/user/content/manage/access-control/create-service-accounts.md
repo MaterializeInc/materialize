@@ -1,6 +1,10 @@
 ---
 title: "Create service accounts"
 description: "How to create a new service account (i.e., non-human user) to connect external applications and services to Materialize."
+menu:
+  main:
+    parent: access-control
+    weight: 16
 ---
 
 It's a best practice to use service accounts (i.e., non-human users) to connect
