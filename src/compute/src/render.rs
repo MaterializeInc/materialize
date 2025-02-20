@@ -113,14 +113,17 @@ use std::task::Poll;
 use columnar::Columnar;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::arrange::{Arranged, ShutdownButton};
 use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Collection, Data};
 use futures::channel::oneshot;
 use futures::FutureExt;
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
-use mz_compute_types::dyncfgs::COMPUTE_APPLY_COLUMN_DEMANDS;
+use mz_compute_types::dyncfgs::{
+    COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES,
+    ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
+};
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
@@ -225,7 +228,7 @@ pub fn build_compute_dataflow<A: Allocate>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         let mut imported_sources = Vec::new();
-        let mut tokens = BTreeMap::new();
+        let mut tokens: BTreeMap<_, Rc<dyn Any>> = BTreeMap::new();
         let output_probe = Handle::default();
 
         let slack = mz_repr::Timestamp::new(1);
@@ -284,6 +287,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                         |error| panic!("compute_import: {error}"),
                     );
 
+                    let mut object_tokens: Vec<Rc<dyn Any>> = vec![Rc::new(token)];
+
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
                     assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
@@ -295,7 +300,19 @@ pub fn build_compute_dataflow<A: Allocate>(
                         ok_stream = suppress_early_progress(ok_stream, as_of);
                     }
 
-                    ok_stream = ok_stream.limit_progress(output_probe.clone(), slack, name.clone());
+                    if ENABLE_COMPUTE_LOGICAL_BACKPRESSURE.get(&compute_state.worker_config) {
+                        // Apply logical backpressure to the source.
+                        let limit = COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES
+                            .get(&compute_state.worker_config);
+                        let (token, stream) = ok_stream.limit_progress(
+                            output_probe.clone(),
+                            slack,
+                            name.clone(),
+                            limit,
+                        );
+                        ok_stream = stream;
+                        object_tokens.push(token);
+                    }
 
                     // Attach a probe reporting the input frontier.
                     let input_probe =
@@ -325,8 +342,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
 
                     // Associate returned tokens with the source identifier.
-                    let token: Rc<dyn Any> = Rc::new(token);
-                    tokens.insert(*source_id, token);
+                    tokens.insert(*source_id, Rc::new(object_tokens));
                 });
             }
         });
@@ -541,20 +557,28 @@ where
 
             let token = traces.to_drop().clone();
 
-            let (oks, ok_button) = traces.oks_mut().import_frontier_core(
+            let (mut oks, ok_button) = traces.oks_mut().import_frontier_core(
                 &self.scope.parent,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
             );
-            let oks = Arranged {
-                stream: oks.stream.probe_with(&input_probe).limit_progress(
+
+            oks.stream = oks.stream.probe_with(&input_probe);
+
+            let mut backpressure_token = None;
+            if ENABLE_COMPUTE_LOGICAL_BACKPRESSURE.get(&self.config_set) {
+                let limit =
+                    COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES.get(&self.config_set);
+                let (token, stream) = oks.stream.limit_progress(
                     output_probe.clone(),
                     slack,
                     format!("import index {idx_id}"),
-                ),
-                trace: oks.trace,
-            };
+                    limit,
+                );
+                oks.stream = stream;
+                backpressure_token = Some(token);
+            }
 
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                 &self.scope.parent,
@@ -579,7 +603,12 @@ where
             );
             tokens.insert(
                 idx_id,
-                Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
+                Rc::new((
+                    ok_button.press_on_drop(),
+                    err_button.press_on_drop(),
+                    token,
+                    backpressure_token,
+                )),
             );
         } else {
             panic!(
@@ -1570,12 +1599,18 @@ where
 }
 
 trait LimitProgress<T: Timestamp> {
-    fn limit_progress(&self, handle: Handle<T>, slack: T::Summary, name: String) -> Self;
+    fn limit_progress(
+        &self,
+        handle: Handle<T>,
+        slack: T::Summary,
+        name: String,
+        limit: Option<usize>,
+    ) -> (Rc<dyn Any>, Self);
 }
 
 impl<G, C> LimitProgress<G::Timestamp> for StreamCore<G, C>
 where
-    G: Scope,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
     C: timely::Container + timely::Data,
     G::Timestamp: timely::order::TotalOrder + std::fmt::Debug + Clone,
 {
@@ -1584,20 +1619,30 @@ where
         handle: Handle<G::Timestamp>,
         slack: <G::Timestamp as Timestamp>::Summary,
         _name: String,
-    ) -> Self {
-        self.unary_frontier(Pipeline, "LimitProgress", |_cap, info| {
+        limit: Option<usize>,
+    ) -> (Rc<dyn Any>, Self) {
+        let mut button = None;
+
+        let stream = self.unary_frontier(Pipeline, "LimitProgress", |_cap, info| {
             // Times that we've observed on our input.
-            let mut pending_caps: BTreeMap<G::Timestamp, Capability<G::Timestamp>> =
-                BTreeMap::default();
+            let pending_caps: Rc<
+                RefCell<Option<BTreeMap<G::Timestamp, Capability<G::Timestamp>>>>,
+            > = Rc::new(RefCell::new(Some(BTreeMap::new())));
 
             let activator = self.scope().activator_for(info.address);
-            handle.activate(activator);
+            handle.activate(activator.clone());
+
+            button = Some(ShutdownButton::new(Rc::clone(&pending_caps), activator));
 
             move |input, output| {
-                input.for_each(|time, data| {
+                let mut pending_caps = pending_caps.borrow_mut();
+
+                while let Some((time, data)) = input.next() {
                     output.session(&time).give_container(data);
                     // Record the input time if new.
-                    if let Some(stepped) = slack.results_in(time.time()) {
+                    if let (Some(pending_caps), Some(stepped)) =
+                        (pending_caps.as_mut(), slack.results_in(time.time()))
+                    {
                         if pending_caps
                             .last_key_value()
                             .map_or(true, |(max, _)| max.less_than(&stepped))
@@ -1606,39 +1651,40 @@ where
                             pending_caps.insert(stepped, cap);
                         }
                     }
-                });
+                }
 
-                // If the input frontier is non-empty, and the handle is non-empty, we're in steady-state.
-                // N.b., the handle is empty before the dataflow was scheduled once.
-                if !input.frontier().is_empty() && handle.with_frontier(|f| !f.is_empty()) {
-                    // Get the current input time. Assumes a total order.
-                    let time = handle.with_frontier(|f| f.get(0).unwrap().clone());
-                    // if let Some(with_slack) = slack.results_in(&time) {
-                    // Pop caps while they're less than output frontier + slack.
-                    while pending_caps
-                        .first_key_value()
-                        .map_or(false, |(retained_time, _)| retained_time.less_equal(&time))
-                    {
-                        let _ = pending_caps.pop_first();
+                if let Some(pending_caps) = pending_caps.as_mut() {
+                    // If the input frontier is non-empty, and the handle is non-empty, we're in steady-state.
+                    // N.b., the handle is empty before the dataflow was scheduled once.
+                    if handle.with_frontier(|f| !f.is_empty()) {
+                        // Get the current input time. Assumes a total order.
+                        let time = handle.with_frontier(|f| f.get(0).unwrap().clone());
+                        // if let Some(with_slack) = slack.results_in(&time) {
+                        // Pop caps while they're less than output frontier + slack.
+                        while pending_caps
+                            .first_key_value()
+                            .map_or(false, |(retained_time, _)| retained_time.less_equal(&time))
+                        {
+                            let _ = pending_caps.pop_first();
+                        }
                     }
-                    // } else {
-                    //     pending_caps.clear();
-                    // }
-                }
+                    if let Some(limit) = limit {
+                        while pending_caps.len() > limit {
+                            let _ = pending_caps.pop_first();
+                        }
+                    }
 
-                if input.frontier.is_empty() {
-                    pending_caps.clear();
+                    println!(
+                        "[{}] {_name} pending caps: {:?} input: {:?} probe: {:?}",
+                        info.global_id,
+                        pending_caps.keys(),
+                        input.frontier.frontier().get(0),
+                        handle.with_frontier(|f| f.get(0).cloned())
+                    );
                 }
-
-                // println!(
-                //     "[{}] {_name} pending caps: {:?} input: {:?} probe: {:?}",
-                //     info.global_id,
-                //     pending_caps.keys(),
-                //     input.frontier.frontier().get(0),
-                //     handle.with_frontier(|f| f.get(0).cloned())
-                // );
             }
-        })
+        });
+        (Rc::new(button.unwrap().press_on_drop()), stream)
     }
 }
 

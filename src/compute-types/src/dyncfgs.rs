@@ -185,6 +185,21 @@ pub const ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION: Config<bool> = Co
     "When enabled, renders `as_specific_collection` using a fueled flat-map operator.",
 );
 
+/// Whether to apply logical backpressure in compute dataflows.
+pub const ENABLE_COMPUTE_LOGICAL_BACKPRESSURE: Config<bool> = Config::new(
+    "enable_compute_logical_backpressure",
+    true,
+    "When enabled, compute dataflows will apply logical backpressure.",
+);
+
+/// Maximal number of capabilities retained by the logical backpressure operator.
+pub const COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES: Config<Option<usize>> =
+    Config::new(
+        "compute_logical_backpressure_max_retained_capabilities",
+        None,
+        "The maximum number of capabilities retained by the logical backpressure operator.",
+    );
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -210,4 +225,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_APPLY_COLUMN_DEMANDS)
         .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
         .add(&ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION)
+        .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
+        .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
 }
