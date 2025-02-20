@@ -320,6 +320,16 @@ impl Resources {
         )
         .await?;
 
+        // These three had their names changed right before GA, and some prospects were already
+        // testing Materialize self-hosted. So, we have to clean up the un-prefixed names.
+        let role_api: Api<Role> = Api::namespaced(client.clone(), &mz.namespace());
+        let rolebinding_api: Api<RoleBinding> = Api::namespaced(client.clone(), &mz.namespace());
+        let serviceaccount_api: Api<ServiceAccount> =
+            Api::namespaced(client.clone(), &mz.namespace());
+        delete_resource(&role_api, &mz.name_unchecked()).await?;
+        delete_resource(&rolebinding_api, &mz.name_unchecked()).await?;
+        delete_resource(&serviceaccount_api, &mz.name_unchecked()).await?;
+
         Ok(())
     }
 
