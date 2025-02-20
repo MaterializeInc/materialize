@@ -11,6 +11,8 @@ from textwrap import dedent
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.executors import Executor
+from materialize.mz_version import MzVersion
 
 
 def schemas() -> str:
@@ -971,6 +973,80 @@ class AlterSink(Check):
                 true 102 ccc
 
                 > DROP SOURCE sink_alter_source_src CASCADE;
+            """
+            )
+        )
+
+
+@externally_idempotent(False)
+class AlterSinkMv(Check):
+    """Check ALTER SINK with materialized views"""
+
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version > MzVersion.parse_mz("v0.134.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            schemas()
+            + dedent(
+                """
+                > CREATE TABLE table_alter_mv1 (a INT);
+                > INSERT INTO table_alter_mv1 VALUES (0)
+                > CREATE MATERIALIZED VIEW mv_alter1 AS SELECT * FROM table_alter_mv1
+                > CREATE SINK sink_alter_mv FROM mv_alter1
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-alter-mv')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > CREATE TABLE table_alter_mv2 (a INT);
+                > CREATE MATERIALIZED VIEW mv_alter2 AS SELECT * FROM table_alter_mv2
+                > ALTER SINK sink_alter_mv SET FROM mv_alter2;
+
+                # Wait for the actual restart to have occurred before inserting
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+
+                > INSERT INTO table_alter_mv1 VALUES (10)
+                > INSERT INTO table_alter_mv2 VALUES (11)
+                """,
+                """
+                > CREATE TABLE table_alter_mv3 (a INT);
+                > CREATE MATERIALIZED VIEW mv_alter3 AS SELECT * FROM table_alter_mv3
+                > ALTER SINK sink_alter_mv SET FROM mv_alter3;
+
+                # Wait for the actual restart to have occurred before inserting
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+
+                > INSERT INTO table_alter_mv1 VALUES (100)
+                > INSERT INTO table_alter_mv2 VALUES (101)
+                > INSERT INTO table_alter_mv3 VALUES (102)
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > CREATE SOURCE sink_alter_mv_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-alter-mv')
+                > CREATE TABLE sink_alter_mv_source FROM SOURCE sink_alter_mv_source_src (REFERENCE "sink-alter-mv")
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                > SELECT before IS NULL, (after).a FROM sink_alter_mv_source
+                true 0
+                true 11
+                true 102
+
+                > DROP SOURCE sink_alter_mv_source_src CASCADE;
             """
             )
         )
