@@ -9,6 +9,7 @@
 
 //! An abstraction for dealing with storage collections.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
@@ -1921,20 +1922,20 @@ where
             .await?;
 
         // Reorder in dependency order.
-        to_register.sort_by_key(|(id, ..)| *id);
-
-        // Register tables first, but register them in reverse order since earlier tables
-        // can depend on later tables.
-        //
-        // Note: We could do more complex sorting to avoid the allocations, but IMO it's
-        // easier to reason about it this way.
-        let (tables_to_register, collections_to_register): (Vec<_>, Vec<_>) = to_register
-            .into_iter()
-            .partition(|(_id, desc, ..)| matches!(desc.data_source, DataSource::Table { .. }));
-        let to_register = tables_to_register
-            .into_iter()
-            .rev()
-            .chain(collections_to_register.into_iter());
+        #[derive(Ord, PartialOrd, Eq, PartialEq)]
+        enum DependencyOrder {
+            /// Tables should always be registered first, and large ids before small ones.
+            Table(Reverse<GlobalId>),
+            /// For most collections the id order is the correct one.
+            Collection(GlobalId),
+            /// Sinks should always be registered last.
+            Sink(GlobalId),
+        }
+        to_register.sort_by_key(|(id, desc, ..)| match &desc.data_source {
+            DataSource::Table { .. } => DependencyOrder::Table(Reverse(*id)),
+            DataSource::Sink { .. } => DependencyOrder::Sink(*id),
+            _ => DependencyOrder::Collection(*id),
+        });
 
         // We hold this lock for a very short amount of time, just doing some
         // hashmap inserts and unbounded channel sends.
