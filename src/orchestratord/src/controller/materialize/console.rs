@@ -184,17 +184,29 @@ fn create_console_deployment_object(
     } else {
         "http"
     };
-    let mut env = vec![EnvVar {
-        name: "MZ_ENDPOINT".to_string(),
-        value: Some(format!(
-            "{}://{}.{}.svc.cluster.local:{}",
-            scheme,
-            mz.balancerd_service_name(),
-            mz.namespace(),
-            config.balancerd_http_port,
-        )),
-        ..Default::default()
-    }];
+    let mut env = vec![
+        EnvVar {
+            name: "MZ_ENDPOINT".to_string(),
+            value: Some(format!(
+                "{}://{}.{}.svc.cluster.local:{}",
+                scheme,
+                mz.balancerd_service_name(),
+                mz.namespace(),
+                config.balancerd_http_port,
+            )),
+            ..Default::default()
+        },
+        EnvVar {
+            name: "MZ_ENVIRONMENTD_IMAGE_REF".to_string(),
+            value: Some(mz.spec.environmentd_image_ref.clone()),
+            ..Default::default()
+        },
+        EnvVar {
+            name: "MZ_HELM_CHART_VERSION".to_string(),
+            value: config.helm_chart_version.clone(),
+            ..Default::default()
+        },
+    ];
 
     let (volumes, volume_mounts, scheme) = if issuer_ref_defined(
         &config.default_certificate_specs.console_external,
