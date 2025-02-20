@@ -311,6 +311,13 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
       ![Image of  self-managed Materialize Console running on local kind](/images/self-managed/self-managed-console-kind.png)
 
+
+   {{< tip >}}
+
+   {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
+
+   {{< /tip >}}
+
 ## See also
 
 - [Materialize Operator Configuration](/installation/configuration/)
