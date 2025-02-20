@@ -438,13 +438,19 @@ pub trait ExprHumanizer: fmt::Debug {
     fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>>;
 
     /// Returns a human-readable name for the specified scalar type.
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String;
+    /// Used in, e.g., EXPLAIN and error msgs, in which case exact Postgres compatibility is less
+    /// important than showing as much detail as possible. Also used in `pg_typeof`, where Postgres
+    /// compatibility is more important.
+    fn humanize_scalar_type(&self, ty: &ScalarType, postgres_compat: bool) -> String;
 
     /// Returns a human-readable name for the specified column type.
-    fn humanize_column_type(&self, typ: &ColumnType) -> String {
+    /// Used in, e.g., EXPLAIN and error msgs, in which case exact Postgres compatibility is less
+    /// important than showing as much detail as possible. Also used in `pg_typeof`, where Postgres
+    /// compatibility is more important.
+    fn humanize_column_type(&self, typ: &ColumnType, postgres_compat: bool) -> String {
         format!(
             "{}{}",
-            self.humanize_scalar_type(&typ.scalar_type),
+            self.humanize_scalar_type(&typ.scalar_type, postgres_compat),
             if typ.nullable { "?" } else { "" }
         )
     }
@@ -505,8 +511,8 @@ impl<'a> ExprHumanizer for ExprHumanizerExt<'a> {
         }
     }
 
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
-        self.inner.humanize_scalar_type(ty)
+    fn humanize_scalar_type(&self, ty: &ScalarType, postgres_compat: bool) -> String {
+        self.inner.humanize_scalar_type(ty, postgres_compat)
     }
 
     fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
@@ -572,7 +578,7 @@ impl ExprHumanizer for DummyHumanizer {
         None
     }
 
-    fn humanize_scalar_type(&self, ty: &ScalarType) -> String {
+    fn humanize_scalar_type(&self, ty: &ScalarType, _postgres_compat: bool) -> String {
         // The debug implementation is better than nothing.
         format!("{:?}", ty)
     }
@@ -683,7 +689,7 @@ impl<'a> Display for HumanizedAnalyses<'a> {
                 Some(types) => {
                     let types = types
                         .into_iter()
-                        .map(|c| self.humanizer.humanize_column_type(c))
+                        .map(|c| self.humanizer.humanize_column_type(c, false))
                         .collect::<Vec<_>>();
 
                     bracketed("(", ")", separated(", ", types)).to_string()

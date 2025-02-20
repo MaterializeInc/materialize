@@ -1633,11 +1633,11 @@ impl ExprHumanizer for ConnCatalog<'_> {
         Some(self.resolve_full_name(entry.name()).into_parts())
     }
 
-    fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
+    fn humanize_scalar_type(&self, typ: &ScalarType, postgres_compat: bool) -> String {
         use ScalarType::*;
 
         match typ {
-            Array(t) => format!("{}[]", self.humanize_scalar_type(t)),
+            Array(t) => format!("{}[]", self.humanize_scalar_type(t, postgres_compat)),
             List {
                 custom_id: Some(item_id),
                 ..
@@ -1650,12 +1650,15 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 self.minimal_qualification(item.name()).to_string()
             }
             List { element_type, .. } => {
-                format!("{} list", self.humanize_scalar_type(element_type))
+                format!(
+                    "{} list",
+                    self.humanize_scalar_type(element_type, postgres_compat)
+                )
             }
             Map { value_type, .. } => format!(
                 "map[{}=>{}]",
-                self.humanize_scalar_type(&ScalarType::String),
-                self.humanize_scalar_type(value_type)
+                self.humanize_scalar_type(&ScalarType::String, postgres_compat),
+                self.humanize_scalar_type(value_type, postgres_compat)
             ),
             Record {
                 custom_id: Some(item_id),
@@ -1668,10 +1671,22 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 "record({})",
                 fields
                     .iter()
-                    .map(|f| format!("{}: {}", f.0, self.humanize_column_type(&f.1)))
+                    .map(|f| format!(
+                        "{}: {}",
+                        f.0,
+                        self.humanize_column_type(&f.1, postgres_compat)
+                    ))
                     .join(",")
             ),
             PgLegacyChar => "\"char\"".into(),
+            Char { length } if !postgres_compat => match length {
+                None => "char".into(),
+                Some(length) => format!("char({})", length.into_u32()),
+            },
+            VarChar { max_length } if !postgres_compat => match max_length {
+                None => "varchar".into(),
+                Some(length) => format!("varchar({})", length.into_u32()),
+            },
             UInt16 => "uint2".into(),
             UInt32 => "uint4".into(),
             UInt64 => "uint8".into(),

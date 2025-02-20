@@ -647,7 +647,9 @@ impl Coordinator {
                 .try_into()?,
             _ => coord_bail!(
                 "can't use {} as a mz_timestamp for AS OF or UP TO",
-                catalog.for_session(session).humanize_column_type(&ty)
+                catalog
+                    .for_session(session)
+                    .humanize_column_type(&ty, false)
             ),
         })
     }

@@ -3033,8 +3033,8 @@ pub fn plan_create_continual_task(
                         "statement {}: column {} is of type {} but expression is of type {}",
                         idx,
                         desc.get_name(e.column).as_str().quoted(),
-                        qcx.humanize_scalar_type(&e.target_type),
-                        qcx.humanize_scalar_type(&e.source_type),
+                        qcx.humanize_scalar_type(&e.target_type, false),
+                        qcx.humanize_scalar_type(&e.source_type, false),
                     )
                 })?;
 

@@ -1009,7 +1009,8 @@ where
         let arg_types: Vec<_> = types
             .into_iter()
             .map(|ty| match ty {
-                CoercibleScalarType::Coerced(ty) => ecx.humanize_scalar_type(&ty),
+                // This will be used in error msgs, therefore we call with `postgres_compat` false.
+                CoercibleScalarType::Coerced(ty) => ecx.humanize_scalar_type(&ty, false),
                 CoercibleScalarType::Record(_) => "record".to_string(),
                 CoercibleScalarType::Uncoerced => "unknown".to_string(),
             })
@@ -1809,7 +1810,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 let elem_type = match elem_type.array_of_self_elem_type() {
                     Ok(elem_type) => elem_type,
                     Err(elem_type) => bail_unsupported!(
-                        format!("array_fill on {}", ecx.humanize_scalar_type(&elem_type))
+                        // This will be used in error msgs, therefore we call with `postgres_compat` false.
+                        format!("array_fill on {}", ecx.humanize_scalar_type(&elem_type, false))
                     ),
                 };
 
@@ -1825,7 +1827,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 let elem_type = match elem_type.array_of_self_elem_type() {
                     Ok(elem_type) => elem_type,
                     Err(elem_type) => bail_unsupported!(
-                        format!("array_fill on {}", ecx.humanize_scalar_type(&elem_type))
+                        format!("array_fill on {}", ecx.humanize_scalar_type(&elem_type, false))
                     ),
                 };
 
@@ -2520,7 +2522,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 let name = match ecx.scalar_type(&exprs[0]) {
                     CoercibleScalarType::Uncoerced => "unknown".to_string(),
                     CoercibleScalarType::Record(_) => "record".to_string(),
-                    CoercibleScalarType::Coerced(ty) => ecx.humanize_scalar_type(&ty),
+                    CoercibleScalarType::Coerced(ty) => ecx.humanize_scalar_type(&ty, true),
                 };
 
                 // For consistency with other functions, verify that
@@ -3023,7 +3025,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 let elem_type = match elem_type.array_of_self_elem_type() {
                     Ok(elem_type) => elem_type,
                     Err(elem_type) => bail_unsupported!(
-                        format!("array_agg on {}", ecx.humanize_scalar_type(&elem_type))
+                        format!("array_agg on {}", ecx.humanize_scalar_type(&elem_type, false))
                     ),
                 };
 
@@ -3759,7 +3761,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 let err = || {
                     Err(sql_err!(
                         "function map_build({}) does not exist",
-                        ecx.humanize_scalar_type(&ty.clone())
+                        ecx.humanize_scalar_type(&ty.clone(), false)
                     ))
                 };
 

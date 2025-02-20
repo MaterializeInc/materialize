@@ -844,12 +844,16 @@ impl<'a> StatementContext<'a> {
         Ok(out)
     }
 
-    pub fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
-        self.catalog.humanize_scalar_type(typ)
+    /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
+    /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
+    pub fn humanize_scalar_type(&self, typ: &ScalarType, postgres_compat: bool) -> String {
+        self.catalog.humanize_scalar_type(typ, postgres_compat)
     }
 
-    pub fn humanize_column_type(&self, typ: &ColumnType) -> String {
-        self.catalog.humanize_column_type(typ)
+    /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
+    /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
+    pub fn humanize_column_type(&self, typ: &ColumnType, postgres_compat: bool) -> String {
+        self.catalog.humanize_column_type(typ, postgres_compat)
     }
 
     pub(crate) fn build_tunnel_definition(
