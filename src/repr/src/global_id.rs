@@ -25,19 +25,9 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.global_id.rs"));
 
 /// The identifier for an item/object.
 ///
-/// WARNING: `GlobalId`'s `Ord` implementation has at various times expressed:
-/// - Dependency ordering (items with greater `GlobalId`s can depend on those
-/// lesser but never the other way around)
-/// - Nothing at all regarding dependencies
-///
-/// Currently, `GlobalId`s express a dependency ordering. We hope to keep it
-/// that way.
-///
-/// Before breaking this invariant, you should strongly consider alternative
-/// designs, i.e. it is an intense "smell" if you need to allow inverted
-/// `GlobalId` dependencies. Most likely, at some point in the future, you will
-/// need to invert the dependency structure again and will regret having broken
-/// it in the first place.
+/// WARNING: `GlobalId`'s `Ord` implementation does not express a dependency order.
+/// One should explicitly topologically sort objects by their dependencies, rather
+/// than rely on the order of identifiers.
 #[derive(
     Arbitrary,
     Clone,
