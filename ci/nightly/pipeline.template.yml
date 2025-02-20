@@ -1267,7 +1267,8 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: aws-temporary
-      branches: "main v*.* lts-v*"
+      # same test runs in test pipeline for changes that touch relevant files
+      branches: "main v*.* self-managed/v*"
 
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
@@ -1283,7 +1284,8 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: gcp-temporary
-      branches: "main v*.* lts-v*"
+      # same test runs in test pipeline for changes that touch relevant files
+      branches: "main v*.* self-managed/v*"
 
   - group: "Output consistency"
     key: output-consistency
