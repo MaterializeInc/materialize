@@ -317,6 +317,11 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
       ![Image of self-managed Materialize Console running on local minikube](/images/self-managed/self-managed-console-minkiube.png)
 
+   {{< tip >}}
+
+   {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
+
+   {{< /tip >}}
 
 ## See also
 
