@@ -277,7 +277,6 @@ impl Transactor {
             let mut updates = match updates_res {
                 Ok(x) => x,
                 Err(since) => {
-                    let recent_upper = self.write.fetch_recent_upper().await;
                     // Because we artificially share the same CriticalReaderId
                     // between nodes, it doesn't quite act like a capability.
                     // Prod doesn't have this issue, because a new one will
@@ -294,15 +293,10 @@ impl Transactor {
                         snap_ts,
                         since.0.as_option()
                     );
+                    self.advance_since().await?;
+
+                    let recent_upper = self.write.fetch_recent_upper().await;
                     self.read_ts = Self::extract_ts(recent_upper)? - 1;
-                    self.since = self
-                        .client
-                        .open_critical_since(
-                            self.shard_id,
-                            PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            Diagnostics::from_purpose("maelstrom since"),
-                        )
-                        .await?;
                     continue;
                 }
             };
@@ -311,7 +305,6 @@ impl Transactor {
             let listen = match listen_res {
                 Ok(x) => x,
                 Err(since) => {
-                    let recent_upper = self.write.fetch_recent_upper().await;
                     // Because we artificially share the same CriticalReaderId
                     // between nodes, it doesn't quite act like a capability.
                     // Prod doesn't have this issue, because a new one will
@@ -328,15 +321,15 @@ impl Transactor {
                         snap_ts,
                         since.0.as_option(),
                     );
+                    self.advance_since().await?;
+                    let recent_upper = self.write.fetch_recent_upper().await;
                     self.read_ts = Self::extract_ts(recent_upper)? - 1;
-                    self.since = self
-                        .client
-                        .open_critical_since(
-                            self.shard_id,
-                            PersistClient::CONTROLLER_CRITICAL_SINCE,
-                            Diagnostics::from_purpose("maelstrom since"),
-                        )
-                        .await?;
+                    assert!(
+                        PartialOrder::less_than(self.since.since(), recent_upper),
+                        "invariant: since {:?} should be held behind the recent upper {:?}",
+                        &**self.since.since(),
+                        &**recent_upper
+                    );
                     continue;
                 }
             };
@@ -537,19 +530,17 @@ impl Transactor {
                 .await;
             match res {
                 Some(Ok(latest_since)) => {
-                    // Success! If we weren't the last one to update since, but
-                    // only then, it might have advanced past our read_ts, so
+                    // Success! Another process might have advanced past our read_ts, so
                     // forward read_ts to since_ts.
-                    if expected_token != self.cads_token {
-                        let since_ts = Self::extract_ts(&latest_since)?;
-                        if since_ts > self.read_ts {
-                            info!(
-                                "since was last updated by {}, forwarding our read_ts from {} to {}",
-                                expected_token, self.read_ts, since_ts
-                            );
-                            self.read_ts = since_ts;
-                        }
+                    let since_ts = Self::extract_ts(&latest_since)?;
+                    if since_ts > self.read_ts {
+                        info!(
+                            "since was last updated by {}, forwarding our read_ts from {} to {}",
+                            expected_token, self.read_ts, since_ts
+                        );
+                        self.read_ts = since_ts;
                     }
+
                     return Ok(());
                 }
                 Some(Err(actual_token)) => {
