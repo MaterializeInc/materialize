@@ -385,6 +385,12 @@ node instance type, etc.), see the
    1. Open a browser and navigate to
       [http://localhost:8080](http://localhost:8080). From the Console, you can get started with the Quickstart.
 
+      {{< tip >}}
+
+      {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
+
+      {{< /tip >}}
+
 ## Troubleshooting
 
 If you encounter issues:
