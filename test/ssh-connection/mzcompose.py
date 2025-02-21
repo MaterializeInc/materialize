@@ -11,6 +11,8 @@
 Test sources with SSH connections using an SSH bastion host.
 """
 
+from prettytable import PrettyTable
+
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -426,6 +428,17 @@ def workflow_pg_restart_postgres(c: Composition) -> None:
         "-c",
         f"echo '{public_key}' > /etc/authorized_keys/mz",
     )
+    # debugging output for https://github.com/MaterializeInc/database-issues/issues/8905
+    # in some cases, materialize never sees the data ingested by pg-source-ingest-more
+    # this captures the replication stream, which will be printed out for debugging purposes
+    c.sql(
+        service="postgres",
+        user="postgres",
+        password="postgres",
+        database="postgres",
+        sql="select pg_create_logical_replication_slot('spy', 'test_decoding', false, true);",
+        print_statement=False,
+    )
 
     c.run_testdrive_files("--no-reset", "pg-source.td")
 
@@ -433,6 +446,107 @@ def workflow_pg_restart_postgres(c: Composition) -> None:
     c.up("postgres")
 
     c.run_testdrive_files("--no-reset", "pg-source-ingest-more.td")
+    c.sql(
+        service="postgres",
+        user="postgres",
+        password="postgres",
+        database="postgres",
+        sql="""
+            create function lsn_to_numeric(pg_lsn) returns numeric
+            as $$
+            select ('0x' || split_part($1::text, '/', 1))::numeric * '0x10000000'::numeric + ( '0x' || split_part($1::text, '/', 2))::numeric;
+            $$ language sql immutable strict;
+        """,
+        print_statement=False,
+    )
+    rows = c.sql_query(
+        service="postgres",
+        user="postgres",
+        password="postgres",
+        database="postgres",
+        # converting pgLsn to u64 for easier comparison to mz_source_postgres_lsn
+        sql="""
+            select lsn_to_numeric(lsn::pg_lsn) as lsn, xid, data
+            from pg_logical_slot_get_changes('spy', null, null);
+        """,
+    )
+    c.sql(
+        service="postgres",
+        user="postgres",
+        password="postgres",
+        database="postgres",
+        sql="select pg_drop_replication_slot('spy');",
+        print_statement=False,
+    )
+    table = PrettyTable()
+    table.field_names = ["lsn", "xid", "data"]
+    table.add_rows(rows)
+    print(f"== logical replication stream ==\n{table}")
+
+    rows = c.sql_query(
+        service="postgres",
+        user="postgres",
+        password="postgres",
+        database="postgres",
+        sql="""
+            select
+                lsn_to_numeric(pg_current_wal_lsn()) as pg_current_wal_lsn, slot_name,
+                active, active_pid, lsn_to_numeric(confirmed_flush_lsn) as confirmed_flush_lsn,
+                inactive_since
+            from pg_replication_slots;
+        """,
+    )
+    table = PrettyTable()
+    table.field_names = [
+        "pg_current_wal_lsn",
+        "slot_name",
+        "active",
+        "active_pid",
+        "confirmed_flush_lsn",
+        "inactive_since",
+    ]
+    table.add_rows(rows)
+    print(f"== pg_replication_slots ==\n{table}")
+
+    rows = c.sql_query(
+        user="mz_system",
+        port=6877,
+        sql="""
+            select coalesce(mzs.name, mzt.name) as name, read_frontier, write_frontier
+            from mz_internal.mz_frontiers mzf
+                left join mz_sources mzs on (mzf.object_id = mzs.id)
+                left join mz_tables mzt on (mzf.object_id = mzt.id)
+            where object_id ~ 'u.*';
+        """,
+    )
+    table = PrettyTable()
+    table.field_names = ["name", "read_frontier", "write_frontier"]
+    table.add_rows(rows)
+    print(f"== mz_frontiers ==\n{table}")
+
+    rows = c.sql_query(
+        user="mz_system",
+        port=6877,
+        sql="""
+        select id, name, last_status_change_at, status, error, details
+        from mz_internal.mz_source_statuses;
+        """,
+    )
+    table = PrettyTable()
+    table.field_names = [
+        "id",
+        "name",
+        "last_status_change_at",
+        "status",
+        "error",
+        "details",
+    ]
+    table.add_rows(rows)
+    print(f"== mz_source_statuses ==\n{table}")
+
+    # table name "mz_source_progress" is dependent on setup.td
+    mz_source_progress_lsn = c.sql_query("select lsn from mz_source_progress;")[0][0]
+    print(f"== mz_source_progress_lsn ==\n{mz_source_progress_lsn}")
 
 
 def workflow_pg_via_ssh_tunnel_with_ssl(c: Composition) -> None:
