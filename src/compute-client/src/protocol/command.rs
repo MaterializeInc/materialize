@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
+use mz_cluster_client::client::{Nonce, TimelyConfig, TryIntoTimelyConfig};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
@@ -56,16 +56,16 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// distribution requires the timely dataflow runtime to be initialized, which is why the
     /// `CreateTimely` command exists.
     ///
-    /// The `epoch` value imposes an ordering on iterations of the compute protocol. When the
-    /// compute controller connects to a replica, it must send an `epoch` that is greater than all
-    /// epochs it sent to the same replica on previous connections. Multi-process replicas should
-    /// use the `epoch` to ensure that their individual processes agree on which protocol iteration
-    /// they are in.
+    /// The `nonce` value provides a way to distinguish iterations of the compute protocol. When
+    /// the compute controller connects to a replica, it must send an `nonce` that is different
+    /// from all nonces it sent to the same replica on previous connections. Multi-process replicas
+    /// should use the `nonce` to ensure that their individual processes agree on which protocol
+    /// iteration they are in.
     CreateTimely {
-        /// TODO(database-issues#7533): Add documentation.
+        /// Configuration of the Timely cluster to be created.
         config: TimelyConfig,
-        /// TODO(database-issues#7533): Add documentation.
-        epoch: ClusterStartupEpoch,
+        /// A nonce identifying the protocol iteration.
+        nonce: Nonce,
     },
 
     /// `CreateInstance` must be sent after `CreateTimely` to complete the [Creation Stage] of the
@@ -277,9 +277,9 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         use proto_compute_command::*;
         ProtoComputeCommand {
             kind: Some(match self {
-                ComputeCommand::CreateTimely { config, epoch } => CreateTimely(ProtoCreateTimely {
+                ComputeCommand::CreateTimely { config, nonce } => CreateTimely(ProtoCreateTimely {
                     config: Some(config.into_proto()),
-                    epoch: Some(epoch.into_proto()),
+                    nonce: nonce.into_proto(),
                 }),
                 ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
                 ComputeCommand::InitializationComplete => InitializationComplete(()),
@@ -305,10 +305,10 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         use proto_compute_command::Kind::*;
         use proto_compute_command::*;
         match proto.kind {
-            Some(CreateTimely(ProtoCreateTimely { config, epoch })) => {
+            Some(CreateTimely(ProtoCreateTimely { config, nonce })) => {
                 Ok(ComputeCommand::CreateTimely {
                     config: config.into_rust_if_some("ProtoCreateTimely::config")?,
-                    epoch: epoch.into_rust_if_some("ProtoCreateTimely::epoch")?,
+                    nonce: nonce.into_rust()?,
                 })
             }
             Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
@@ -664,9 +664,9 @@ fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
 }
 
 impl TryIntoTimelyConfig for ComputeCommand {
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
+    fn try_into_timely_config(self) -> Result<(TimelyConfig, Nonce), Self> {
         match self {
-            ComputeCommand::CreateTimely { config, epoch } => Ok((config, epoch)),
+            ComputeCommand::CreateTimely { config, nonce } => Ok((config, nonce)),
             cmd => Err(cmd),
         }
     }

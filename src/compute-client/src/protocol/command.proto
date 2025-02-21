@@ -31,7 +31,7 @@ import "tracing/src/params.proto";
 message ProtoComputeCommand {
   message ProtoCreateTimely {
     mz_cluster_client.client.ProtoTimelyConfig config = 1;
-    mz_cluster_client.client.ProtoClusterStartupEpoch epoch = 2;
+    bytes nonce = 2;
   }
 
   oneof kind {

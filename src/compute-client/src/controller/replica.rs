@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use mz_build_info::BuildInfo;
-use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterReplicaLocation, Nonce, TimelyConfig};
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_REPLICA_EXPIRATION;
 use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
@@ -72,7 +72,7 @@ where
         id: ReplicaId,
         build_info: &'static BuildInfo,
         config: ReplicaConfig,
-        epoch: ClusterStartupEpoch,
+        nonce: Nonce,
         metrics: ReplicaMetrics,
         dyncfg: Arc<ConfigSet>,
         response_tx: InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
@@ -90,7 +90,7 @@ where
                 config: config.clone(),
                 command_rx,
                 response_tx,
-                epoch,
+                nonce,
                 metrics: metrics.clone(),
                 dyncfg,
             }
@@ -135,9 +135,8 @@ struct ReplicaTask<T> {
     command_rx: UnboundedReceiver<ComputeCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
     response_tx: InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
-    /// A number (technically, pair of numbers) identifying this incarnation of the replica.
-    /// The semantics of this don't matter, except that it must strictly increase.
-    epoch: ClusterStartupEpoch,
+    /// A nonce identifying this incarnation of the replica.
+    nonce: Nonce,
     /// Replica metrics.
     metrics: ReplicaMetrics,
     /// Dynamic system configuration.
@@ -219,8 +218,6 @@ where
         T: ComputeControllerTimestamp,
         ComputeGrpcClient: ComputeClient<T>,
     {
-        let id = self.replica_id;
-        let incarnation = self.epoch.replica();
         loop {
             select! {
                 // Command from controller to forward to replica.
@@ -242,7 +239,7 @@ where
 
                     self.observe_response(&response);
 
-                    if self.response_tx.send((id, incarnation, response)).is_err() {
+                    if self.response_tx.send((self.replica_id, self.nonce, response)).is_err() {
                         // Controller is no longer interested in this replica. Shut down.
                         break;
                     }
@@ -259,7 +256,7 @@ where
     /// contain replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut ComputeCommand<T>) {
         match command {
-            ComputeCommand::CreateTimely { config, epoch } => {
+            ComputeCommand::CreateTimely { config, nonce } => {
                 *config = TimelyConfig {
                     workers: self.config.location.workers,
                     process: 0,
@@ -268,7 +265,7 @@ where
                         .config
                         .arrangement_exert_proportionality,
                 };
-                *epoch = self.epoch;
+                *nonce = self.nonce;
             }
             ComputeCommand::CreateInstance(InstanceConfig {
                 logging,
