@@ -90,7 +90,7 @@ rdkafka-sys = { version = "4.3.0", features = [
 ] }
 rand = "0.8.5"
 regex = { version = "1.7.0", optional = true }
-reqwest = { version = "0.11.13", features = ["json"] }
+reqwest = { version = "0.12.4", features = ["json"] }
 rlimit = "0.8.3"
 semver = "1.0.16"
 sentry = { version = "0.29.1", optional = true }
@@ -141,7 +141,7 @@ rdkafka = { version = "0.29.0", features = [
     "libz-static",
     "zstd",
 ] }
-reqwest = { version = "0.11.13", features = ["blocking"] }
+reqwest = { version = "0.12.4", features = ["blocking"] }
 serde_json = "1.0.125"
 serde_urlencoded = "0.7.1"
 similar-asserts = "1.4"
