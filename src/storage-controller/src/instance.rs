@@ -140,49 +140,39 @@ where
 
         self.replicas.insert(id, replica);
 
-        self.schedule_ingestions();
+        self.update_ingestion_scheduling();
 
         self.replay_commands(id);
     }
 
     /// Replays commands to the specified replica.
-    pub fn replay_commands(&mut self, id: ReplicaId) {
-        let replica = self.replicas.get_mut(&id).expect("replica must exist");
+    pub fn replay_commands(&mut self, replica_id: ReplicaId) {
+        let commands = self.history.iter().cloned().collect::<Vec<_>>();
+
+        let filtered_commands = commands
+            .into_iter()
+            .map(|command| match command.clone() {
+                StorageCommand::RunIngestions(mut cmds) => {
+                    cmds.retain(|cmd| self.is_active_replica(&cmd.id, &replica_id));
+                    StorageCommand::RunIngestions(cmds)
+                }
+                StorageCommand::AllowCompaction(mut cmds) => {
+                    cmds.retain(|cmd| self.is_active_replica(&cmd.0, &replica_id));
+                    StorageCommand::AllowCompaction(cmds)
+                }
+                command => command,
+            })
+            .collect::<Vec<_>>();
+
+        let replica = self
+            .replicas
+            .get_mut(&replica_id)
+            .expect("replica must exist");
 
         // Replay the commands at the new replica.
-        for command in self.history.iter() {
-            // replica.send(command.clone());
-            match command.clone() {
-                StorageCommand::RunIngestions(cmds) => {
-                    for cmd in cmds {
-                        let active_replicas = self.active_ingestions.get(&cmd.id).expect("ingestion must exist").active_replicas.clone();
-                        if active_replicas.contains(&id) {
-                            replica.send(StorageCommand::RunIngestions(vec![cmd.clone()]));
-                        }
-                    }
-                }
-                StorageCommand::AllowCompaction(_) => {
-                    // Compactions are handled by send_compactions below.
-                }
-                command => {
-                    replica.send(command.clone());
-                }
-            }
+        for command in filtered_commands {
+            replica.send(command.clone());
         }
-
-        let compactions = self
-            .history
-            .iter()
-            .flat_map(|cmd| {
-                if let StorageCommand::AllowCompaction(cmds) = cmd {
-                    cmds.clone()
-                } else {
-                    Vec::new()
-                }
-            })
-            .collect();
-
-        self.send_compactions(&compactions);
     }
 
     /// Removes the identified replica from this storage instance.
@@ -203,7 +193,7 @@ where
         }
 
         if needs_rescheduling {
-            self.schedule_ingestions();
+            self.update_ingestion_scheduling();
         }
 
         if replica.is_some() && self.replicas.is_empty() {
@@ -273,9 +263,29 @@ where
 
         match command.clone() {
             StorageCommand::RunIngestions(ingestions) => {
-                self.absorb_ingestions(ingestions);
+                // First absorb into our state, because this might change
+                // scheduling decisions, which need to be respected just below
+                // when sending commands.
+                self.absorb_ingestions(ingestions.clone());
+
+                for cmd in ingestions.iter() {
+                    for replica in self.active_replicas(&cmd.id) {
+                        replica.send(StorageCommand::RunIngestions(vec![cmd.clone()]));
+                    }
+                }
             }
             StorageCommand::AllowCompaction(cmds) => {
+                // First send out commands and then absorb into our state since
+                // absorbing them might remove entries from active_ingestions.
+                for (id, frontier) in cmds.iter() {
+                    for replica in self.active_replicas(id) {
+                        replica.send(StorageCommand::AllowCompaction(vec![(
+                            id.clone(),
+                            frontier.clone(),
+                        )]));
+                    }
+                }
+
                 self.absorb_compactions(cmds);
             }
             command => {
@@ -295,7 +305,7 @@ where
     /// If a command updates an existing ingestion, it is sent out to the same
     /// replicas that are already running that ingestion. Otherwise, we only
     /// record the ingestion and leave scheduling up to
-    /// [`schedule_ingestions`](Self::schedule_ingestions).
+    /// [`update_ingestion_scheduling`](Self::update_ingestion_scheduling).
     fn absorb_ingestions(&mut self, ingestions: Vec<RunIngestionCommand>) {
         for ingestion in ingestions {
             let prefers_single_replica = ingestion
@@ -306,7 +316,16 @@ where
 
             let existing_ingestion_state = self.active_ingestions.get_mut(&ingestion.id);
 
+            // Always update our mapping from export to their ingestion.
+            for id in ingestion.description.source_exports.keys() {
+                self.ingestion_exports.insert(id.clone(), ingestion.id);
+            }
+
             if let Some(ingestion_state) = existing_ingestion_state {
+                // It's an update for an existing ingestion. We don't need to
+                // change anything about our scheduling decisions, no need to
+                // update active_ingestions.
+
                 assert!(
                     ingestion_state.prefers_single_replica == prefers_single_replica,
                     "single-replica preference changed"
@@ -316,35 +335,16 @@ where
                     active_replicas = %ingestion_state.active_replicas.iter().map(|id| id.to_string()).join(", "),
                     "updating ingestion"
                 );
-                for id in ingestion.description.source_exports.keys() {
-                    self.ingestion_exports.insert(id.clone(), ingestion.id);
-                }
-
-                // It's an update for an existing ingestion. So we need to send
-                // it out to the same replicas that are already running that
-                // ingestion. We don't need to change anything about our
-                // scheduling decisions, no need to update active_ingestions.
-                for active_replica_id in ingestion_state.active_replicas.iter() {
-                    let active_replica = self
-                        .replicas
-                        .get_mut(active_replica_id)
-                        .expect("missing replica");
-                    active_replica.send(StorageCommand::RunIngestions(vec![ingestion.clone()]));
-                }
             } else {
-                // We create a new ingestion state for this ingestion and then defer to schedule_ingestions.
+                // We create a new ingestion state for this ingestion.
                 let ingestion_state = ActiveIngestion {
                     prefers_single_replica,
                     active_replicas: BTreeSet::new(),
                 };
                 self.active_ingestions.insert(ingestion.id, ingestion_state);
 
-                for id in ingestion.description.source_exports.keys() {
-                    self.ingestion_exports.insert(id.clone(), ingestion.id);
-                }
-
                 // Maybe update scheduling decisions.
-                self.schedule_ingestions();
+                self.update_ingestion_scheduling();
             }
         }
     }
@@ -362,7 +362,7 @@ where
     ///
     /// For multi-replica ingestions, we ensure that each active ingestion is
     /// scheduled on all replicas.
-    fn schedule_ingestions(&mut self) {
+    fn update_ingestion_scheduling(&mut self) {
         // Ensure the command history is reduced before scheduling.
         self.history.reduce();
 
@@ -395,7 +395,7 @@ where
                     if let Some(last_replica_id) = self.replicas.keys().cloned().last() {
                         ingestion_state.active_replicas.insert(last_replica_id);
                         if let Some(replica) = self.replicas.get_mut(&last_replica_id) {
-                            tracing::debug!(
+                            tracing::info!(
                                 ingestion_id = %ingestion_id,
                                 replica_id = %last_replica_id,
                                 "scheduling single-replica ingestion");
@@ -405,7 +405,7 @@ where
                         }
                     }
                 } else {
-                    tracing::debug!(
+                    tracing::info!(
                         %ingestion_id,
                         active_replicas = %ingestion_state.active_replicas.iter().map(|id| id.to_string()).join(", "),
                         "single-replica ingestion already running, not scheduling again",
@@ -419,17 +419,12 @@ where
                     .copied()
                     .collect();
                 for replica_id in unscheduled_replicas {
-                    if let Some(replica) = self.replicas.get_mut(&replica_id) {
-                        tracing::debug!(
-                            %ingestion_id,
-                            %replica_id,
-                            "scheduling multi-replica ingestion"
-                        );
-                        replica.send(StorageCommand::RunIngestions(vec![
-                            run_ingestion_cmd.clone()
-                        ]));
-                        ingestion_state.active_replicas.insert(replica_id);
-                    }
+                    tracing::info!(
+                        %ingestion_id,
+                        %replica_id,
+                        "scheduling multi-replica ingestion"
+                    );
+                    ingestion_state.active_replicas.insert(replica_id);
                 }
             }
         }
@@ -440,8 +435,6 @@ where
     fn absorb_compactions(&mut self, cmds: Vec<(GlobalId, Antichain<T>)>) {
         tracing::debug!(?self.active_ingestions, ?cmds, "allow_compaction");
 
-        self.send_compactions(&cmds);
-
         for (id, frontier) in cmds.iter() {
             if frontier.is_empty() {
                 self.active_ingestions.remove(id);
@@ -450,42 +443,44 @@ where
         }
     }
 
-    fn send_compactions(&mut self, cmds: &Vec<(GlobalId, Antichain<T>)>) {
-        for (id, frontier) in cmds.iter() {
-            let ingestion_id = self.ingestion_exports.get(id);
-
-            if let Some(ingestion_id) = ingestion_id {
-                // For ingestions, we send the compaction command only to
-                // replicas that are actively running the ingestion. This is
-                // relevant for single-replica ingestions.
-                let active_replicas =
-                    if let Some(ingestion) = self.active_ingestions.get(ingestion_id) {
-                        ingestion.active_replicas.iter()
-                    } else {
-                        // The ingestion has already been compacted away (aka.
-                        // stopped), so we don't need to send compaction
-                        // commands to its exports anymore.
-                        continue;
-                    };
-
-                for active_replica_id in active_replicas {
-                    let active_replica = self
-                        .replicas
-                        .get_mut(active_replica_id)
-                        .expect("missing replica");
-                    active_replica.send(StorageCommand::AllowCompaction(vec![(
-                        id.clone(),
-                        frontier.clone(),
-                    )]));
-                }
-            } else {
-                for (_id, replica) in self.replicas.iter_mut() {
-                    replica.send(StorageCommand::AllowCompaction(vec![(
-                        id.clone(),
-                        frontier.clone(),
-                    )]));
-                }
+    /// Returns the replicas that are actively running the given object (ingestion or export).
+    fn active_replicas(&mut self, id: &GlobalId) -> Box<dyn Iterator<Item = &mut Replica<T>> + '_> {
+        if let Some(ingestion_id) = self.ingestion_exports.get(id) {
+            // For ingestions, we send commands only to replicas that are
+            // actively running the ingestion. This is relevant for
+            // single-replica ingestions.
+            if let Some(ingestion) = self.active_ingestions.get(ingestion_id) {
+                let active_replicas = ingestion.active_replicas.clone();
+                return Box::new(self.replicas.iter_mut().filter_map(
+                    move |(replica_id, replica)| {
+                        if active_replicas.contains(replica_id) {
+                            Some(replica)
+                        } else {
+                            None
+                        }
+                    },
+                ));
             }
+            // The ingestion has already been compacted away (aka. stopped).
+            Box::new(std::iter::empty())
+        } else {
+            Box::new(self.replicas.values_mut())
+        }
+    }
+
+    /// Returns whether the given replica is actively running the given object (ingestion or export).
+    fn is_active_replica(&self, id: &GlobalId, replica_id: &ReplicaId) -> bool {
+        if let Some(ingestion_id) = self.ingestion_exports.get(id) {
+            // For ingestions, we check if the replica is actively running the ingestion.
+            // This is relevant for single-replica ingestions.
+            if let Some(ingestion) = self.active_ingestions.get(ingestion_id) {
+                return ingestion.active_replicas.contains(replica_id);
+            }
+            // The ingestion has already been compacted away (aka. stopped).
+            false
+        } else {
+            // For non-ingestion objects, all replicas are active
+            true
         }
     }
 }
