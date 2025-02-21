@@ -990,7 +990,7 @@ pub fn describe_copy_from_table(
     table_name: <Aug as AstInfo>::ItemName,
     columns: Vec<Ident>,
 ) -> Result<StatementDesc, PlanError> {
-    let (_, desc, _) = query::plan_copy_from(scx, table_name, columns)?;
+    let (_, desc, _, _) = query::plan_copy_from(scx, table_name, columns)?;
     Ok(StatementDesc::new(Some(desc)))
 }
 
@@ -999,7 +999,7 @@ pub fn describe_copy_item(
     object_name: <Aug as AstInfo>::ItemName,
     columns: Vec<Ident>,
 ) -> Result<StatementDesc, PlanError> {
-    let (_, desc, _) = query::plan_copy_item(scx, object_name, columns)?;
+    let (_, desc, _, _) = query::plan_copy_item(scx, object_name, columns)?;
     Ok(StatementDesc::new(Some(desc)))
 }
 
@@ -1210,11 +1210,13 @@ fn plan_copy_from(
         bail_unsupported!("COPY FROM ... WITH (FILES ...) only supported from a URL")
     }
 
-    let (id, _, columns) = query::plan_copy_from(scx, table_name, columns)?;
+    let (id, source_desc, columns, mfp) = query::plan_copy_from(scx, table_name, columns)?;
     Ok(Plan::CopyFrom(CopyFromPlan {
         id,
         source,
         columns,
+        source_desc,
+        mfp,
         params,
         filter,
     }))
