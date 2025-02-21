@@ -44,7 +44,7 @@ use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_ore::cast::CastFrom;
-use mz_ore::netio::{Listener, Stream};
+use mz_ore::netio::{Listener, SocketAddr, Stream};
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
 use tracing::{debug, info, warn};
@@ -146,20 +146,18 @@ async fn create_sockets(
     // get the port from here, but otherwise just bind to `0.0.0.0`.
     // Previously we bound to `my_address`, which caused
     // https://github.com/MaterializeInc/cloud/issues/5070 .
-    let bind_address = match regex::Regex::new(r":(\d{1,5})$")
-        .unwrap()
-        .captures(my_address)
-    {
-        Some(cap) => {
-            let p: u16 = cap[1].parse().context("Port out of range")?;
-            format!("0.0.0.0:{p}")
+    let bind_address = match my_address.parse()? {
+        SocketAddr::Inet(mut addr) => {
+            addr.set_ip("0.0.0.0".parse().unwrap());
+            SocketAddr::Inet(addr)
         }
-        None => {
-            // Address is not of the form `hostname:port`; it's
-            // probably a path to a Unix-domain socket.
-            my_address.to_string()
+        SocketAddr::Turmoil(mut addr) => {
+            addr.set_ip("0.0.0.0".parse().unwrap());
+            SocketAddr::Turmoil(addr)
         }
+        addr => addr,
     };
+
     let listener = loop {
         let mut tries = 0;
         match Listener::bind(&bind_address).await {
@@ -357,5 +355,264 @@ async fn await_connection(
             }
             Ordering::Equal => return Ok((s, peer_index)),
         }
+    }
+}
+
+#[cfg(test)]
+mod turmoil_tests {
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+    use std::num::NonZeroI64;
+    use std::rc::Rc;
+    use std::sync::Once;
+
+    use rand::rngs::SmallRng;
+    use rand::seq::SliceRandom;
+    use rand::{Rng, SeedableRng};
+    use tokio::sync::mpsc;
+
+    use super::*;
+
+    #[derive(Clone, Debug)]
+    struct Process {
+        name: String,
+        command_tx: mpsc::UnboundedSender<Command>,
+    }
+
+    impl Process {
+        async fn connect(&self, addresses: Vec<String>, epoch: ClusterStartupEpoch) {
+            info!("connecting to process {} at epoch {}", self.name, epoch);
+            self.command_tx.send(Command { addresses, epoch }).unwrap();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[derive(Clone)]
+    struct Command {
+        addresses: Vec<String>,
+        epoch: ClusterStartupEpoch,
+    }
+
+    struct Response {
+        process: u64,
+        result: Result<Vec<Option<Stream>>, anyhow::Error>,
+        epoch: ClusterStartupEpoch,
+    }
+
+    /// Run a chaos test for `create_sockets`.
+    ///
+    /// This test spawns a number of processes and makes them attempt to create connections among
+    /// each other, simulates multiple client reconnects in the process.
+    #[test]
+    fn create_sockets_chaos() {
+        const NUM_PROCESSES: u64 = 3;
+        const NUM_RECONNECTS: u64 = 3;
+
+        configure_tracing();
+
+        let seed = std::env::var("SEED")
+            .ok()
+            .and_then(|x| x.parse().ok())
+            .unwrap_or_else(|| rand::random());
+
+        info!("initializing rng with seed {seed}");
+        let mut rng = SmallRng::seed_from_u64(seed);
+
+        let mut sim = turmoil::Builder::new()
+            .enable_random_order()
+            .build_with_rng(Box::new(rng.clone()));
+
+        let (response_tx, mut response_rx) = mpsc::unbounded_channel();
+
+        let mut processes = Vec::new();
+        for index in 0..NUM_PROCESSES {
+            let name = format!("process-{index}");
+            let (command_tx, command_rx) = mpsc::unbounded_channel();
+            let command_rx = Rc::new(RefCell::new(command_rx));
+            let response_tx = response_tx.clone();
+
+            processes.push(Process {
+                name: name.clone(),
+                command_tx,
+            });
+
+            sim.host(&name[..], move || {
+                let command_rx = Rc::clone(&command_rx);
+                let response_tx = response_tx.clone();
+
+                async move {
+                    let mut command_rx = command_rx.borrow_mut();
+
+                    let Some(mut command) = command_rx.recv().await else {
+                        return Err("no initial command received".to_string().into());
+                    };
+
+                    loop {
+                        let Command { addresses, epoch } = command;
+                        info!("creating sockets with epoch: {}", epoch);
+
+                        // Run `create_sockets` with the given arguments until it returns or gets
+                        // canceled by a new client connection.
+                        let result = tokio::select! {
+                            result = create_sockets(addresses, index, epoch) => result,
+                            new_command = command_rx.recv() => match new_command {
+                                Some(cmd) => {
+                                    command = cmd;
+                                    continue;
+                                }
+                                None => break,
+                            }
+                        };
+
+                        match &result {
+                            Ok(_) => info!("sockets successfully created"),
+                            Err(e) => info!("socket creation failed: {e}"),
+                        };
+
+                        let _ = response_tx.send(Response {
+                            process: index,
+                            result,
+                            epoch: command.epoch,
+                        });
+
+                        match command_rx.recv().await {
+                            Some(cmd) => command = cmd,
+                            None => break,
+                        }
+                    }
+
+                    info!("client disconnected; shutting down");
+                    Ok(())
+                }
+            });
+        }
+
+        let addresses: Vec<_> = processes
+            .iter()
+            .map(|p| {
+                let ip = sim.lookup(&p.name[..]);
+                format!("turmoil://{ip}:7777")
+            })
+            .collect();
+
+        sim.client("client", async move {
+            let mut processes2 = processes.clone();
+            processes2.shuffle(&mut rng);
+
+            let mut epoch = ClusterStartupEpoch::new(NonZeroI64::new(1).unwrap(), 1);
+            let target_epoch =
+                ClusterStartupEpoch::new(NonZeroI64::new(1).unwrap(), NUM_RECONNECTS);
+
+            // Bump one process to the target epoch immediately, to ensure socket creation will
+            // only succeed at that epoch.
+            let proc = processes2.pop().unwrap();
+            proc.connect(addresses.clone(), target_epoch).await;
+
+            while epoch < target_epoch {
+                // Reconnect to a random subset of processes, in random order.
+                let amount = rng.gen_range(0..processes2.len());
+                let mut chosen: Vec<_> = processes2.choose_multiple(&mut rng, amount).collect();
+                chosen.shuffle(&mut rng);
+
+                for proc in &chosen {
+                    proc.connect(addresses.clone(), epoch).await;
+                }
+
+                epoch.bump_replica();
+            }
+
+            // Send the target epoch to all processes.
+            for proc in &processes2 {
+                proc.connect(addresses.clone(), epoch).await;
+            }
+
+            // Processes should either end up connected at the target epoch or produce an error. If
+            // any process produces an error, we retry. Eventually we expect to end up with all
+            // processes connected.
+            let mut epoch = target_epoch;
+            loop {
+                // Keep the sockets around while waiting for processes, to ensure dropping the
+                // doesn't cause connection failures.
+                let mut sockets = BTreeMap::new();
+                while sockets.len() < usize::cast_from(NUM_PROCESSES) {
+                    let resp = response_rx.recv().await.unwrap();
+
+                    if resp.epoch != epoch {
+                        assert!(resp.epoch < epoch);
+                        continue;
+                    }
+
+                    if let Ok(s) = resp.result {
+                        sockets.insert(resp.process, s);
+                    } else {
+                        break;
+                    }
+                }
+
+                if sockets.len() == usize::cast_from(NUM_PROCESSES) {
+                    break;
+                }
+
+                epoch.bump_replica();
+                info!("some processes returned errors; retrying at epoch {epoch}");
+
+                for proc in &processes {
+                    proc.connect(addresses.clone(), epoch).await;
+                }
+            }
+
+            Ok(())
+        });
+
+        sim.run().unwrap();
+    }
+
+    /// Fuzz test for `create_sockets`.
+    ///
+    /// Ignored by default because the test never terminates unless it fails.
+    #[test]
+    #[ignore]
+    fn fuzz_create_sockets() {
+        loop {
+            create_sockets_chaos();
+        }
+    }
+
+    /// Configure tracing for the turmoil tests.
+    ///
+    /// Log events are written to stdout and include the logical time of the simulation.
+    fn configure_tracing() {
+        use tracing::level_filters::LevelFilter;
+        use tracing_subscriber::fmt::time::FormatTime;
+
+        #[derive(Clone)]
+        struct SimElapsedTime;
+
+        impl FormatTime for SimElapsedTime {
+            fn format_time(
+                &self,
+                w: &mut tracing_subscriber::fmt::format::Writer<'_>,
+            ) -> std::fmt::Result {
+                tracing_subscriber::fmt::time().format_time(w)?;
+                if let Some(sim_elapsed) = turmoil::sim_elapsed() {
+                    write!(w, " [{:?}]", sim_elapsed)?;
+                }
+                Ok(())
+            }
+        }
+
+        static INIT_TRACING: Once = Once::new();
+        INIT_TRACING.call_once(|| {
+            let env_filter = tracing_subscriber::EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy();
+            let subscriber = tracing_subscriber::fmt()
+                .with_test_writer()
+                .with_env_filter(env_filter)
+                .with_timer(SimElapsedTime)
+                .finish();
+
+            tracing::subscriber::set_global_default(subscriber).unwrap();
+        });
     }
 }

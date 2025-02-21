@@ -123,6 +123,7 @@ where
                     }))
                     .await?
             }
+            SocketAddrType::Turmoil => unimplemented!(),
         };
         let service = InterceptedService::new(channel, VersionAttachInterceptor::new(version));
         let mut client = BidiProtoClient::new(service, G::URL, metrics);

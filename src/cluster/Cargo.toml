@@ -24,6 +24,12 @@ tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "net"] }
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
+[dev-dependencies]
+mz-ore = { path = "../ore", features = ["turmoil"] }
+rand = { version = "0.8.5", features = ["small_rng"] }
+tracing-subscriber = "0.3.19"
+turmoil = "0.6.5"
+
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
 normal = ["inotify", "workspace-hack", "rocksdb"]
