@@ -355,7 +355,9 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
-        let (df_desc, df_meta) = global_lir_plan.unapply();
+        let (mut df_desc, df_meta) = global_lir_plan.unapply();
+
+        df_desc.memory_limit = ctx.session().vars().max_query_heap_size();
 
         // Emit notices.
         self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);

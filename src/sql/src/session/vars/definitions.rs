@@ -577,6 +577,13 @@ pub static MAX_QUERY_RESULT_SIZE: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static MAX_QUERY_HEAP_SIZE: VarDefinition = VarDefinition::new(
+    "max_query_heap_size",
+    value!(Option<ByteSize>; None),
+    "The maximum size in bytes for a single query's dataflow (Materialize).",
+    true,
+);
+
 pub static MAX_COPY_FROM_SIZE: VarDefinition = VarDefinition::new(
     "max_copy_from_size",
     // 1 GiB, this limit is noted in the docs, if you change it make sure to update our docs.

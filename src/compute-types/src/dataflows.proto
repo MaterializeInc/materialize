@@ -61,6 +61,8 @@ message ProtoDataflowDescription {
   optional mz_storage_types.time_dependence.ProtoTimeDependence time_dependence = 11;
 
   string debug_name = 8;
+
+  optional uint64 memory_limit = 12;
 }
 
 message ProtoIndexDesc {
