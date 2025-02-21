@@ -30,7 +30,7 @@ rust_library(
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.134.0-dev.0",
+    version = "0.135.0-dev.0",
     deps = [
         ":mz_testdrive_build_script",
         "//src/adapter:mz_adapter",
@@ -76,7 +76,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.134.0-dev.0",
+    version = "0.135.0-dev.0",
     deps = [
         "//src/adapter:mz_adapter",
         "//src/avro:mz_avro",
@@ -160,7 +160,7 @@ rust_binary(
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.134.0-dev.0",
+    version = "0.135.0-dev.0",
     deps = [
         ":mz_testdrive",
         "//src/adapter:mz_adapter",
