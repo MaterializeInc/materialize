@@ -141,6 +141,10 @@ impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
     fn supports_read_only(&self) -> bool {
         false
     }
+
+    fn prefers_single_replica(&self) -> bool {
+        true
+    }
 }
 
 impl<C: ConnectionAccess> AlterCompatible for MySqlSourceConnection<C> {
