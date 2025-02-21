@@ -267,19 +267,12 @@ where
         let work = source.list().await.context("list");
         match work {
             Ok(objects) => {
-                let names = objects.iter().map(|(o, _check)| o.name());
-                let found: String = itertools::intersperse(names, ", ").collect();
-                tracing::info!(%worker_id, %found, "listed objects");
-
-                let filtered: Vec<_> = objects
+                let (include, exclude): (Vec<_>, Vec<_>) = objects
                     .into_iter()
-                    .filter(|(o, _check)| filter.filter::<S>(o))
-                    .collect();
-                let names = filtered.iter().map(|(o, _check)| o.name());
-                let returning: String = itertools::intersperse(names, ", ").collect();
-                tracing::info!(%worker_id, %returning, "filtered objects");
+                    .partition(|(o, _checksum)| filter.filter::<S>(o));
+                tracing::info!(%worker_id, ?include, ?exclude, "listed objects");
 
-                filtered
+                include
                     .into_iter()
                     .for_each(|object| start_handle.give(&start_cap, Ok(object)))
             }
@@ -664,6 +657,9 @@ pub trait OneshotObject {
     /// Name of the object, including any extensions.
     fn name(&self) -> &str;
 
+    /// Path of the object within the remote source.
+    fn path(&self) -> &str;
+
     /// Size of this object in bytes.
     fn size(&self) -> usize;
 
@@ -788,6 +784,13 @@ impl OneshotObject for ObjectKind {
         match self {
             ObjectKind::Http(object) => object.name(),
             ObjectKind::AwsS3(object) => object.name(),
+        }
+    }
+
+    fn path(&self) -> &str {
+        match self {
+            ObjectKind::Http(object) => object.path(),
+            ObjectKind::AwsS3(object) => object.path(),
         }
     }
 
@@ -978,8 +981,8 @@ impl ObjectFilter {
     pub fn filter<S: OneshotSource>(&self, object: &S::Object) -> bool {
         match self {
             ObjectFilter::None => true,
-            ObjectFilter::Files(files) => files.contains(object.name()),
-            ObjectFilter::Pattern(pattern) => pattern.matches(object.name()),
+            ObjectFilter::Files(files) => files.contains(object.path()),
+            ObjectFilter::Pattern(pattern) => pattern.matches(object.path()),
         }
     }
 }

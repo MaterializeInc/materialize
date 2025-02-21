@@ -7,7 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::time::Duration;
+
 use aws_sdk_s3::config::Builder;
+use aws_sdk_s3::presigning::PresigningConfig;
 use aws_types::sdk_config::SdkConfig;
 use bytes::Bytes;
 
@@ -24,6 +27,12 @@ pub fn new_client(sdk_config: &SdkConfig) -> Client {
         .force_path_style(sdk_config.endpoint_url().is_some())
         .build();
     Client::from_conf(conf)
+}
+
+/// Returns a default [`PresigningConfig`] for tests.
+pub fn new_presigned_config() -> PresigningConfig {
+    // Expire the URL in 5 minutes.
+    PresigningConfig::expires_in(Duration::from_secs(5 * 60)).expect("known valid")
 }
 
 pub async fn list_bucket_path(
