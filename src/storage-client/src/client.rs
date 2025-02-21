@@ -21,7 +21,7 @@ use std::iter;
 use async_trait::async_trait;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryAsTimelyConfig};
 use mz_ore::assert_none;
 use mz_persist_client::batch::{BatchBuilder, ProtoBatch};
 use mz_persist_client::write::WriteHandle;
@@ -1129,11 +1129,12 @@ impl RustType<ProtoCompaction> for (GlobalId, Antichain<mz_repr::Timestamp>) {
     }
 }
 
-impl TryIntoTimelyConfig for StorageCommand {
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
-        match self {
-            StorageCommand::CreateTimely { config, epoch } => Ok((config, epoch)),
-            cmd => Err(cmd),
+impl TryAsTimelyConfig for StorageCommand {
+    fn try_as_timely_config(&self) -> Option<(TimelyConfig, ClusterStartupEpoch)> {
+        if let StorageCommand::CreateTimely { config, epoch } = self {
+            Some((config.clone(), *epoch))
+        } else {
+            None
         }
     }
 }
