@@ -29,7 +29,7 @@ CREATE TABLE numbers (
 );
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM numbers where value > 10;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM numbers where value > 10;
 ----
 Explained Query:
   Filter (#0 > 10)

@@ -225,7 +225,7 @@ SELECT a, sum(b) from agg_pk group by a order by a
 3 4
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT a, sum(b) from agg_pk group by a
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT a, sum(b) from agg_pk group by a
 ----
 Explained Query:
   Project (#0, #3) // { arity: 2 }
@@ -246,7 +246,7 @@ SELECT a, sum(c) from agg_pk group by a order by a
 3 5
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT a, sum(c) from agg_pk group by a
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT a, sum(c) from agg_pk group by a
 ----
 Explained Query:
   Project (#0, #3) // { arity: 2 }
@@ -719,7 +719,7 @@ EOF
 
 # Should include only one sum(*) aggregate.
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR SELECT stddev(x), sum(x) FROM t_variance;
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT stddev(x), sum(x) FROM t_variance;
 ----
 Explained Query:
   With

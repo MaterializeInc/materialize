@@ -489,6 +489,7 @@ Values
 Varchar
 Variadic
 Varying
+Verbose
 Version
 View
 Views

@@ -33,11 +33,20 @@ impl<'a> Explain<'a> for Explainable<'a, MirRelationExpr> {
 
     type Text = ExplainSinglePlan<'a, MirRelationExpr>;
 
+    type VerboseText = ExplainSinglePlan<'a, MirRelationExpr>;
+
     type Json = ExplainSinglePlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_single_plan(context)
+    }
+
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
         self.as_explain_single_plan(context)
     }
 
@@ -76,11 +85,20 @@ impl<'a> Explain<'a> for Explainable<'a, DataflowDescription<OptimizedMirRelatio
 
     type Text = ExplainMultiPlan<'a, MirRelationExpr>;
 
+    type VerboseText = ExplainMultiPlan<'a, MirRelationExpr>;
+
     type Json = ExplainMultiPlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(context)
+    }
+
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
         self.as_explain_multi_plan(context)
     }
 
