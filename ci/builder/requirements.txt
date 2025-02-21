@@ -4,6 +4,10 @@
 # dependencies tend to be troublesome unless they ship binary
 # wheels for a wide variety of platforms, including M1 Macs.
 
+azure-identity==1.20.0
+azure-keyvault-secrets==4.9.0
+azure-mgmt-storage==22.1.0
+azure-storage-blob==12.24.1
 black==24.4.2
 boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.36.21
 boto3==1.36.21

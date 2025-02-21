@@ -35,7 +35,7 @@ known-first-party = ["materialize"]
 extraPaths = ["misc/python"]
 venvPath = "./misc/python"
 venv = "venv"
-exclude = ["./misc/python/venv"]
+exclude = ["**/venv", "**/.terraform"]
 stubPath = "./misc/python/stubs"
 
 reportMissingImports = "warning"

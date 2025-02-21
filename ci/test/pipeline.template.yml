@@ -747,7 +747,7 @@ steps:
     steps:
     - id: terraform-aws
       label: "Terraform + Helm Chart E2E on AWS"
-      artifact_paths: [test/terraform/aws/terraform.tfstate]
+      artifact_paths: [test/terraform/aws-temporary/terraform.tfstate]
       depends_on: build-aarch64
       timeout_in_minutes: 1200
       concurrency: 1
@@ -768,7 +768,7 @@ steps:
 
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
-      artifact_paths: [test/terraform/aws/terraform.tfstate]
+      artifact_paths: [test/terraform/gcp-temporary/terraform.tfstate]
       depends_on: build-aarch64
       timeout_in_minutes: 1200
       concurrency: 1
@@ -776,10 +776,29 @@ steps:
       agents:
         queue: linux-aarch64-small
       plugins:
-        - ./ci/plugins/scratch-aws-access: ~
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: gcp-temporary
+      # same test runs in nightly on main
+      inputs:
+        - misc/helm-charts/
+        - src/orchestratord/
+        - test/terraform/
+      branches: "!main !v*.* !self-managed/v*"
+
+    - id: terraform-azure
+      label: "Terraform + Helm Chart E2E on Azure"
+      artifact_paths: [test/terraform/azure-temporary/terraform.tfstate]
+      depends_on: build-aarch64
+      timeout_in_minutes: 1200
+      concurrency: 1
+      concurrency_group: 'terraform-azure'
+      agents:
+        queue: linux-aarch64-small
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: terraform
+            run: azure-temporary
       # same test runs in nightly on main
       inputs:
         - misc/helm-charts/
