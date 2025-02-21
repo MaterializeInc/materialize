@@ -258,6 +258,7 @@ impl fmt::Display for Consolidating {
 impl<T, O> StateValue<T, O> {
     /// A finalized, that is (assumed) persistent, value occurring at some order
     /// key.
+    #[allow(unused)]
     pub fn finalized_value(value: UpsertValue, order: O) -> Self {
         Self::Value(Value::FinalizedValue(value, order))
     }
@@ -277,6 +278,7 @@ impl<T, O> StateValue<T, O> {
     }
 
     /// Pull out the order for the given `Value`, assuming `ensure_decoded` has been called.
+    #[allow(unused)]
     pub fn order(&self) -> &O {
         match self {
             Self::Value(Value::FinalizedValue(_, order)) => order,
