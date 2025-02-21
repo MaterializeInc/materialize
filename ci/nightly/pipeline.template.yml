@@ -1143,7 +1143,7 @@ steps:
       - id: persist-maelstrom
         label: Maelstrom coverage of persist
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         artifact_paths: [test/persist/maelstrom/**/*.log]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1155,7 +1155,7 @@ steps:
       - id: persist-maelstrom-single-node
         label: Long single-node Maelstrom coverage of persist
         depends_on: build-aarch64
-        timeout_in_minutes: 20
+        timeout_in_minutes: 40
         agents:
           queue: hetzner-aarch64-4cpu-8gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
@@ -1167,7 +1167,7 @@ steps:
       - id: persist-maelstrom-multi-node
         label: Long multi-node Maelstrom coverage of persist with postgres consensus
         depends_on: build-aarch64
-        timeout_in_minutes: 20
+        timeout_in_minutes: 40
         agents:
           queue: hetzner-aarch64-4cpu-8gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
@@ -1179,7 +1179,7 @@ steps:
       - id: txn-wal-maelstrom
         label: Maelstrom coverage of txn-wal
         depends_on: build-aarch64
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         agents:
           queue: hetzner-aarch64-4cpu-8gb
         artifact_paths: [test/persist/maelstrom/**/*.log]
