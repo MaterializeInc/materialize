@@ -55,6 +55,10 @@ impl OneshotObject for HttpObject {
         &self.filename
     }
 
+    fn path(&self) -> &str {
+        &self.filename
+    }
+
     fn size(&self) -> usize {
         self.size
     }
