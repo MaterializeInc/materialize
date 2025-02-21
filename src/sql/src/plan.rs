@@ -37,7 +37,9 @@ use ipnet::IpNet;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{CollectionPlan, ColumnOrder, MirRelationExpr, MirScalarExpr, RowSetFinishing};
+use mz_expr::{
+    CollectionPlan, ColumnOrder, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
+};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
@@ -47,8 +49,8 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnName, ColumnType, Diff, GlobalId, RelationDesc, Row, ScalarType,
-    Timestamp, VersionedRelationDesc,
+    CatalogItemId, ColumnIndex, ColumnName, ColumnType, Diff, GlobalId, RelationDesc, Row,
+    ScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
@@ -930,10 +932,21 @@ pub struct ShowColumnsPlan {
 
 #[derive(Debug)]
 pub struct CopyFromPlan {
+    /// Table we're copying into.
     pub id: CatalogItemId,
+    /// Source we're copying data from.
     pub source: CopyFromSource,
-    pub columns: Vec<usize>,
+    /// How input columns map to those on the destination table.
+    ///
+    /// TODO(cf2): Remove this field in favor of the mfp.
+    pub columns: Vec<ColumnIndex>,
+    /// [`RelationDesc`] describing the input data.
+    pub source_desc: RelationDesc,
+    /// Changes the shape of the input data to match the destination table.
+    pub mfp: MapFilterProject,
+    /// Format specific params for copying the input data.
     pub params: CopyFormatParams<'static>,
+    /// Filter for the source files we're copying from, e.g. an S3 prefix.
     pub filter: Option<CopyFromFilter>,
 }
 
