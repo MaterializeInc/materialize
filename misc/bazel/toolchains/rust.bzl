@@ -68,7 +68,7 @@ def rust_toolchains(versions, targets):
 
             rust_repository_set(
                 name = DEFAULT_TOOLCHAIN_TRIPLES[target],
-                edition = "2021",
+                edition = "2024",
                 exec_triple = target,
                 extra_target_triples = extra_targets,
                 versions = [version],

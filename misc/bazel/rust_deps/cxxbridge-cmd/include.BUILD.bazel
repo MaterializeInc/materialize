@@ -23,7 +23,7 @@ rust_binary(
     data = [
         "src/gen/include/cxx.h",
     ],
-    edition = "2021",
+    edition = "2024",
     visibility = ["//visibility:public"],
     deps = all_crate_deps(
         normal = True,

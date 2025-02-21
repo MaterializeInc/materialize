@@ -87,7 +87,7 @@ pub struct FlamegraphTemplate<'a> {
 }
 
 #[allow(dropping_copy_types)]
-async fn time_prof<'a>(
+async fn time_prof(
     merge_threads: bool,
     build_info: &BuildInfo,
     // the time in seconds to run the profiler for
