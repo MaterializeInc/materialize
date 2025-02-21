@@ -163,6 +163,23 @@ message ProtoAggregateFunc {
   }
 }
 
+message ProtoMutationKind {
+  message Assignment {
+    uint64 column = 1;
+    mz_expr.scalar.ProtoMirScalarExpr expr = 2;
+  }
+
+  message Update {
+    repeated Assignment assignments = 1;
+  }
+
+  oneof kind {
+    google.protobuf.Empty insert = 1;
+    Update update = 2;
+    google.protobuf.Empty delete = 3;
+  }
+}
+
 message ProtoRowSetFinishing {
   reserved 2;
   repeated ProtoColumnOrder order_by = 1;
