@@ -36,7 +36,8 @@ use mz_pgwire_common::{
     ConnectionCounter, ErrorResponse, Format, FrontendMessage, Severity, VERSIONS, VERSION_3,
 };
 use mz_repr::{
-    CatalogItemId, Datum, RelationDesc, RelationType, RowArena, RowIterator, RowRef, ScalarType,
+    CatalogItemId, ColumnIndex, Datum, RelationDesc, RelationType, RowArena, RowIterator, RowRef,
+    ScalarType,
 };
 use mz_server_core::TlsMode;
 use mz_sql::ast::display::AstDisplay;
@@ -2114,7 +2115,7 @@ where
     async fn copy_from(
         &mut self,
         id: CatalogItemId,
-        columns: Vec<usize>,
+        columns: Vec<ColumnIndex>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
         mut ctx_extra: ExecuteContextExtra,
@@ -2150,7 +2151,7 @@ where
     async fn copy_from_inner(
         &mut self,
         id: CatalogItemId,
-        columns: Vec<usize>,
+        columns: Vec<ColumnIndex>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
         ctx_extra: &mut ExecuteContextExtra,
