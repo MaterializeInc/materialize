@@ -45,17 +45,24 @@ use futures::{FutureExt, StreamExt};
 use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
+use timely::communication::allocator::zero_copy::allocator::TcpBuilder;
+use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
-use timely::communication::allocator::GenericBuilder;
+use timely::communication::allocator::{GenericBuilder, PeerBuilder};
 use tracing::{debug, info, warn};
 
 /// Creates communication mesh from cluster config
-pub async fn initialize_networking(
+pub async fn initialize_networking<P>(
     workers: usize,
     process: usize,
     addresses: Vec<String>,
     epoch: ClusterStartupEpoch,
-) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error> {
+    refill: BytesRefill,
+    builder_fn: impl Fn(TcpBuilder<P::Peer>) -> GenericBuilder,
+) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error>
+where
+    P: PeerBuilder,
+{
     info!(
         process = process,
         ?addresses,
@@ -77,7 +84,7 @@ pub async fn initialize_networking(
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::from)
             .context("failed to get standard sockets from tokio sockets")?;
-        initialize_networking_inner(sockets, process, workers)
+        initialize_networking_inner::<_, P, _>(sockets, process, workers, refill, builder_fn)
     } else if sockets
         .iter()
         .filter_map(|s| s.as_ref())
@@ -89,19 +96,23 @@ pub async fn initialize_networking(
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::from)
             .context("failed to get standard sockets from tokio sockets")?;
-        initialize_networking_inner(sockets, process, workers)
+        initialize_networking_inner::<_, P, _>(sockets, process, workers, refill, builder_fn)
     } else {
         anyhow::bail!("cannot mix TCP and Unix streams");
     }
 }
 
-fn initialize_networking_inner<S>(
+fn initialize_networking_inner<S, P, PF>(
     sockets: Vec<Option<S>>,
     process: usize,
     workers: usize,
+    refill: BytesRefill,
+    builder_fn: PF,
 ) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error>
 where
     S: timely::communication::allocator::zero_copy::stream::Stream + 'static,
+    P: PeerBuilder,
+    PF: Fn(TcpBuilder<P::Peer>) -> GenericBuilder,
 {
     for s in &sockets {
         if let Some(s) = s {
@@ -110,13 +121,16 @@ where
         }
     }
 
-    match initialize_networking_from_sockets(sockets, process, workers, Arc::new(|_| None)) {
+    match initialize_networking_from_sockets::<_, P>(
+        sockets,
+        process,
+        workers,
+        refill,
+        Arc::new(|_| None),
+    ) {
         Ok((stuff, guard)) => {
             info!(process = process, "successfully initialized network");
-            Ok((
-                stuff.into_iter().map(GenericBuilder::ZeroCopy).collect(),
-                Box::new(guard),
-            ))
+            Ok((stuff.into_iter().map(builder_fn).collect(), Box::new(guard)))
         }
         Err(err) => {
             warn!(process, "failed to initialize network: {err}");
