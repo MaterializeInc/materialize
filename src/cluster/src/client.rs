@@ -16,7 +16,7 @@ use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use differential_dataflow::trace::ExertionLogic;
 use futures::future;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryAsTimelyConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::halt;
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
@@ -188,10 +188,12 @@ where
     async fn send(&mut self, cmd: C::Command) -> Result<(), Error> {
         // Changing this debug statement requires changing the replica-isolation test
         tracing::debug!("ClusterClient send={:?}", &cmd);
-        match cmd.try_into_timely_config() {
-            Ok((config, epoch)) => self.build(config, epoch).await,
-            Err(cmd) => self.inner.as_mut().expect("initialized").send(cmd).await,
+
+        if let Some((config, epoch)) = cmd.try_as_timely_config() {
+            self.build(config, epoch).await?;
         }
+
+        self.inner.as_mut().expect("initialized").send(cmd).await
     }
 
     /// # Cancel safety
@@ -216,7 +218,7 @@ where
 #[async_trait]
 pub trait ClusterSpec: Clone + Send + Sync + 'static {
     /// The cluster command type.
-    type Command: fmt::Debug + Send + TryIntoTimelyConfig;
+    type Command: fmt::Debug + Send + TryAsTimelyConfig;
     /// The cluster response type.
     type Response: fmt::Debug + Send;
 

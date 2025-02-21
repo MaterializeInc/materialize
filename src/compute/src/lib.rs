@@ -11,13 +11,15 @@
 
 //! Materialize's compute layer.
 
-pub(crate) mod arrangement;
-pub mod compute_state;
-pub(crate) mod extensions;
-pub(crate) mod logging;
-pub(crate) mod metrics;
-pub(crate) mod render;
-pub(crate) mod row_spine;
 pub mod server;
-pub(crate) mod sink;
+
+mod arrangement;
+mod command_channel;
+mod compute_state;
+mod extensions;
+mod logging;
+mod metrics;
+mod render;
+mod row_spine;
+mod sink;
 mod typedefs;
