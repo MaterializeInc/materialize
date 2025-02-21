@@ -161,15 +161,15 @@ pub mod v1alpha1 {
         }
 
         pub fn service_account_name(&self) -> String {
-            self.name_unchecked()
+            self.name_prefixed(&self.name_unchecked())
         }
 
         pub fn role_name(&self) -> String {
-            self.name_unchecked()
+            self.name_prefixed(&self.name_unchecked())
         }
 
         pub fn role_binding_name(&self) -> String {
-            self.name_unchecked()
+            self.name_prefixed(&self.name_unchecked())
         }
 
         pub fn environmentd_statefulset_name(&self, generation: u64) -> String {
