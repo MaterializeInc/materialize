@@ -47,22 +47,19 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info, warn};
 
 /// Creates communication mesh from cluster config
 pub async fn initialize_networking(
     workers: usize,
-    process: usize,
+    my_index: usize,
     addresses: Vec<String>,
-    epoch: ClusterStartupEpoch,
+    my_epoch: ClusterStartupEpoch,
 ) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error> {
-    info!(
-        process = process,
-        ?addresses,
-        "initializing network for timely instance, with {} processes for epoch number {epoch}",
-        addresses.len()
-    );
-    let sockets = create_sockets(addresses, u64::cast_from(process), epoch)
+    info!(my_index, %my_epoch, ?addresses, "initializing network for timely instance");
+
+    let sockets = create_sockets(addresses, u64::cast_from(my_index), my_epoch)
         .await
         .context("failed to set up timely sockets")?;
 
@@ -77,7 +74,7 @@ pub async fn initialize_networking(
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::from)
             .context("failed to get standard sockets from tokio sockets")?;
-        initialize_networking_inner(sockets, process, workers)
+        initialize_networking_inner(sockets, my_index, workers)
     } else if sockets
         .iter()
         .filter_map(|s| s.as_ref())
@@ -89,7 +86,7 @@ pub async fn initialize_networking(
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::from)
             .context("failed to get standard sockets from tokio sockets")?;
-        initialize_networking_inner(sockets, process, workers)
+        initialize_networking_inner(sockets, my_index, workers)
     } else {
         anyhow::bail!("cannot mix TCP and Unix streams");
     }
@@ -97,7 +94,7 @@ pub async fn initialize_networking(
 
 fn initialize_networking_inner<S>(
     sockets: Vec<Option<S>>,
-    process: usize,
+    my_index: usize,
     workers: usize,
 ) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error>
 where
@@ -110,16 +107,16 @@ where
         }
     }
 
-    match initialize_networking_from_sockets(sockets, process, workers, Arc::new(|_| None)) {
+    match initialize_networking_from_sockets(sockets, my_index, workers, Arc::new(|_| None)) {
         Ok((stuff, guard)) => {
-            info!(process = process, "successfully initialized network");
+            info!(my_index, "successfully initialized network");
             Ok((
                 stuff.into_iter().map(GenericBuilder::ZeroCopy).collect(),
                 Box::new(guard),
             ))
         }
         Err(err) => {
-            warn!(process, "failed to initialize network: {err}");
+            warn!(my_index, "failed to initialize network: {err}");
             Err(anyhow::Error::from(err).context("failed to initialize networking from sockets"))
         }
     }
@@ -165,7 +162,7 @@ async fn create_sockets(
         match Listener::bind(&bind_address).await {
             Ok(ok) => break ok,
             Err(e) => {
-                warn!("failed to listen on address {bind_address}: {e}");
+                warn!(my_index, %my_epoch, "failed to listen on address {bind_address}: {e}");
                 tries += 1;
                 if tries == 10 {
                     return Err(e.into());
@@ -262,54 +259,59 @@ async fn start_connection(
     address: String,
     my_index: u64,
     my_epoch: ClusterStartupEpoch,
-) -> Result<Stream, anyhow::Error> {
+) -> Result<Stream, EpochMismatch> {
+    async fn try_connect(
+        address: &str,
+        my_index: u64,
+        my_epoch: ClusterStartupEpoch,
+    ) -> Result<(Stream, ClusterStartupEpoch), anyhow::Error> {
+        let mut s = Stream::connect(address).await?;
+
+        if let Stream::Tcp(tcp) = &s {
+            tcp.set_nodelay(true)?;
+        }
+
+        s.write_all(&my_index.to_be_bytes()).await?;
+        s.write_all(&my_epoch.to_bytes()).await?;
+
+        let mut buffer = [0u8; 16];
+        s.read_exact(&mut buffer).await?;
+        let peer_epoch = ClusterStartupEpoch::from_bytes(buffer);
+
+        Ok((s, peer_epoch))
+    }
+
     loop {
-        info!(
-            process = my_index,
-            "Attempting to connect to process at {address}"
-        );
+        info!(my_index, %my_epoch, "attempting to connect to process at {address}");
 
-        match Stream::connect(&address).await {
-            Ok(mut s) => {
-                if let Stream::Tcp(tcp) = &s {
-                    tcp.set_nodelay(true)?;
-                }
-                use tokio::io::AsyncWriteExt;
-
-                s.write_all(&my_index.to_be_bytes()).await?;
-
-                s.write_all(&my_epoch.to_bytes()).await?;
-
-                let mut buffer = [0u8; 16];
-                use tokio::io::AsyncReadExt;
-                s.read_exact(&mut buffer).await?;
-                let peer_epoch = ClusterStartupEpoch::from_bytes(buffer);
-                debug!("start: received peer epoch {peer_epoch}");
+        match try_connect(&address, my_index, my_epoch).await {
+            Ok((stream, peer_epoch)) => {
+                debug!(my_index, %my_epoch, "start: received peer epoch {peer_epoch}");
 
                 match my_epoch.cmp(&peer_epoch) {
                     Ordering::Less => {
                         return Err(EpochMismatch {
                             mine: my_epoch,
                             peer: peer_epoch,
-                        }
-                        .into());
+                        })
                     }
                     Ordering::Greater => {
                         warn!(
-                            process = my_index,
-                            "peer at address {address} gave older epoch ({peer_epoch}) than ours ({my_epoch})"
+                            my_index, %my_epoch,
+                            "peer at address {address} gave older epoch: {peer_epoch}",
                         );
                     }
-                    Ordering::Equal => return Ok(s),
+                    Ordering::Equal => return Ok(stream),
                 }
             }
             Err(err) => {
                 info!(
-                    process = my_index,
+                    my_index, %my_epoch,
                     "error connecting to process at {address}: {err}; will retry"
                 );
             }
-        }
+        };
+
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
@@ -318,44 +320,58 @@ async fn await_connection(
     listener: &Listener,
     my_index: u64, // only for logging
     my_epoch: ClusterStartupEpoch,
-) -> Result<(Stream, u64), anyhow::Error> {
-    loop {
-        info!(process = my_index, "awaiting connection from peer");
+) -> Result<(Stream, u64), EpochMismatch> {
+    async fn try_accept(
+        listener: &Listener,
+        my_epoch: ClusterStartupEpoch,
+    ) -> Result<(Stream, u64, ClusterStartupEpoch), anyhow::Error> {
         let mut s = listener.accept().await?.0;
-        info!(process = my_index, "accepted connection from peer");
+
         if let Stream::Tcp(tcp) = &s {
             tcp.set_nodelay(true)?;
         }
 
         let mut buffer = [0u8; 16];
-        use tokio::io::AsyncReadExt;
-
         s.read_exact(&mut buffer[0..8]).await?;
         let peer_index = u64::from_be_bytes((&buffer[0..8]).try_into().unwrap());
-        debug!("await: received peer index {peer_index}");
 
         s.read_exact(&mut buffer).await?;
         let peer_epoch = ClusterStartupEpoch::from_bytes(buffer);
-        debug!("await: received peer epoch {peer_epoch}");
 
-        use tokio::io::AsyncWriteExt;
         s.write_all(&my_epoch.to_bytes()[..]).await?;
 
-        match my_epoch.cmp(&peer_epoch) {
-            Ordering::Less => {
-                return Err(EpochMismatch {
-                    mine: my_epoch,
-                    peer: peer_epoch,
-                }
-                .into());
-            }
-            Ordering::Greater => {
-                warn!(
-                    process = my_index,
-                    "peer {peer_index} gave older epoch ({peer_epoch}) than ours ({my_epoch})"
+        Ok((s, peer_index, peer_epoch))
+    }
+
+    loop {
+        info!(my_index, %my_epoch, "awaiting connection from peer");
+
+        match try_accept(listener, my_epoch).await {
+            Ok((stream, peer_index, peer_epoch)) => {
+                debug!(
+                    my_index, %my_epoch,
+                    "await: received peer (index, epoch): ({peer_index}, {peer_epoch})",
                 );
+
+                match my_epoch.cmp(&peer_epoch) {
+                    Ordering::Less => {
+                        return Err(EpochMismatch {
+                            mine: my_epoch,
+                            peer: peer_epoch,
+                        });
+                    }
+                    Ordering::Greater => {
+                        warn!(
+                            my_index, %my_epoch,
+                            "peer {peer_index} gave older epoch: {peer_epoch}",
+                        );
+                    }
+                    Ordering::Equal => return Ok((stream, peer_index)),
+                }
             }
-            Ordering::Equal => return Ok((s, peer_index)),
+            Err(err) => {
+                info!(my_index, %my_epoch, "error accepting connection: {err}; will retry");
+            }
         }
     }
 }
