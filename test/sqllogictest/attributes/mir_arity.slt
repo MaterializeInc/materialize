@@ -40,7 +40,7 @@ CREATE VIEW test1 AS
 ORDER BY t.b LIMIT 10 OFFSET 1);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR SELECT * FROM test1
+EXPLAIN OPTIMIZED PLAN WITH(arity) AS VERBOSE TEXT FOR SELECT * FROM test1
 ----
 Explained Query:
   With
@@ -92,7 +92,7 @@ EOF
 # a reduce with an aggregation.
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity) AS VERBOSE TEXT FOR
 SELECT sum(e * f), max(f) FROM v GROUP BY mod(e, 5)
 ----
 Explained Query:
@@ -114,7 +114,7 @@ EOF
 # A let where the value has a different arity from the body
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity) AS VERBOSE TEXT FOR
 WITH u AS (select u.c + 1 as g from u)
 SELECT u.g as g, w.g as h FROM u, u as w WHERE u.g = w.g
 ----
@@ -142,7 +142,7 @@ EOF
 # a constant error
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity) AS VERBOSE TEXT FOR
 SELECT * FROM u WHERE (SELECT f FROM v WHERE v.e = u.d) = 1
 ----
 Explained Query:

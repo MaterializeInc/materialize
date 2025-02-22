@@ -138,7 +138,7 @@ SELECT * FROM part1, part2;
 129655908  129655908
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
 
     lines(line TEXT, r INT) AS (

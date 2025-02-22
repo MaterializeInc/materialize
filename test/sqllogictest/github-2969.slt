@@ -16,7 +16,7 @@ statement ok
 CREATE TAble table_f4 (f4 INTEGER);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
 ----
 Explained Query (fast path):
   Constant <empty>
@@ -26,7 +26,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
 ----
 Explained Query (fast path):
   Constant <empty>
@@ -36,7 +36,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
 ----
 Explained Query (fast path):
   Constant <empty>
@@ -46,7 +46,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
 ----
 Explained Query (fast path):
   Constant <empty>
@@ -56,7 +56,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM table_f1 , LATERAL ( SELECT * FROM (  table_f4 AS a1 LEFT JOIN table_f4 AS a2 ON a1.f4 = a2.f4 ) WHERE a1.f4 <= f1  ) WHERE  f1 IS  NULL;
 ----
 Explained Query (fast path):
   Constant <empty>
@@ -72,7 +72,7 @@ statement ok
 CREATE TAble table_f5_f6 (f5 INTEGER, f6 INTEGER);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT *  FROM table_f1 , ( table_f4_f5_f6 AS a2 LEFT JOIN table_f5_f6 AS a3 USING ( f5 , f6  ) ) WHERE f5 = f6 AND  f4 = f6;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT *  FROM table_f1 , ( table_f4_f5_f6 AS a2 LEFT JOIN table_f5_f6 AS a3 USING ( f5 , f6  ) ) WHERE f5 = f6 AND  f4 = f6;
 ----
 Explained Query:
   With

@@ -17,7 +17,7 @@ CREATE TABLE input (input TEXT);
 # no input data
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
 
     lines(line TEXT) AS ( SELECT regexp_split_to_table(input, '\n') FROM input ),
