@@ -10,13 +10,12 @@
 //! A controller for a storage instance.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroI64;
 use std::time::Duration;
 
 use anyhow::bail;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
-use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterReplicaLocation, Nonce, TimelyConfig};
 use mz_cluster_client::ReplicaId;
 use mz_ore::now::NowFn;
 use mz_ore::retry::{Retry, RetryState};
@@ -57,11 +56,6 @@ pub(crate) struct Instance<T> {
     /// The command history, used to replay past commands when introducing new replicas or
     /// reconnecting to existing replicas.
     history: CommandHistory<T>,
-    /// The current cluster startup epoch.
-    ///
-    /// The `replica` value of the epoch is increased every time a replica is (re)connected,
-    /// allowing the distinction of different replica incarnations.
-    epoch: ClusterStartupEpoch,
     /// Metrics tracked for this storage instance.
     metrics: InstanceMetrics,
     /// A function that returns the current time.
@@ -77,19 +71,16 @@ where
 {
     /// Creates a new [`Instance`].
     pub fn new(
-        envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
         now: NowFn,
         instance_response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
     ) -> Self {
         let history = CommandHistory::new(metrics.for_history());
-        let epoch = ClusterStartupEpoch::new(envd_epoch, 0);
 
         let mut instance = Self {
             replicas: Default::default(),
             active_ingestions: BTreeSet::new(),
             history,
-            epoch,
             metrics,
             now,
             response_tx: instance_response_tx,
@@ -97,7 +88,7 @@ where
 
         instance.send(StorageCommand::CreateTimely {
             config: TimelyConfig::default(),
-            epoch,
+            nonce: Nonce::new(),
         });
 
         instance
@@ -119,9 +110,13 @@ where
         // enable the `objects_installed` assert below.
         self.history.reduce();
 
-        self.epoch.bump_replica();
-        let metrics = self.metrics.for_replica(id);
-        let replica = Replica::new(id, config, self.epoch, metrics, self.response_tx.clone());
+        let replica = Replica::new(
+            id,
+            config,
+            Nonce::new(),
+            self.metrics.for_replica(id),
+            self.response_tx.clone(),
+        );
 
         // Replay the commands at the new replica.
         for command in self.history.iter() {
@@ -258,7 +253,7 @@ where
     fn new(
         id: ReplicaId,
         config: ReplicaConfig,
-        epoch: ClusterStartupEpoch,
+        nonce: Nonce,
         metrics: ReplicaMetrics,
         response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
     ) -> Self {
@@ -269,7 +264,7 @@ where
             ReplicaTask {
                 replica_id: id,
                 config: config.clone(),
-                epoch,
+                nonce,
                 metrics: metrics.clone(),
                 command_rx,
                 response_tx,
@@ -305,8 +300,8 @@ struct ReplicaTask<T> {
     replica_id: ReplicaId,
     /// Replica configuration.
     config: ReplicaConfig,
-    /// The epoch identifying this incarnation of the replica.
-    epoch: ClusterStartupEpoch,
+    /// The nonce identifying this incarnation of the replica.
+    nonce: Nonce,
     /// Replica metrics.
     metrics: ReplicaMetrics,
     /// A channel upon which commands intended for the replica are delivered.
@@ -415,7 +410,7 @@ where
     /// Most [`StorageCommand`]s are independent of the target replica, but some contain
     /// replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut StorageCommand<T>) {
-        if let StorageCommand::CreateTimely { config, epoch } = command {
+        if let StorageCommand::CreateTimely { config, nonce } = command {
             *config = TimelyConfig {
                 workers: self.config.location.workers,
                 // Overridden by the storage `PartitionedState` implementation.
@@ -425,7 +420,7 @@ where
                 // some identifiable value.
                 arrangement_exert_proportionality: 1337,
             };
-            *epoch = self.epoch;
+            *nonce = self.nonce;
         }
     }
 }
