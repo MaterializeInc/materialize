@@ -11,16 +11,17 @@
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
+use std::thread::Thread;
 
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use differential_dataflow::trace::ExertionLogic;
 use futures::future;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryAsTimelyConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::halt;
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
-use mz_service::local::{LocalActivator, LocalClient};
+use mz_service::local::LocalClient;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::execute::execute_from;
@@ -58,11 +59,20 @@ pub struct TimelyContainer<C: ClusterSpec> {
         crossbeam_channel::Sender<(
             crossbeam_channel::Receiver<C::Command>,
             mpsc::UnboundedSender<C::Response>,
-            mpsc::UnboundedSender<LocalActivator>,
         )>,
     >,
     /// Thread guards that keep worker threads alive
-    _worker_guards: WorkerGuards<()>,
+    worker_guards: WorkerGuards<()>,
+}
+
+impl<C: ClusterSpec> TimelyContainer<C> {
+    fn worker_threads(&self) -> Vec<Thread> {
+        self.worker_guards
+            .guards()
+            .iter()
+            .map(|h| h.thread().clone())
+            .collect()
+    }
 }
 
 impl<C: ClusterSpec> Drop for TimelyContainer<C> {
@@ -130,38 +140,24 @@ where
 
         let timely = timely_container.as_ref().expect("set above");
 
-        // Order is important here: If our future is canceled, we need to drop the `command_txs`
-        // before the `activators` so when the workers are unparked by the dropping of the
-        // activators they can observe that the senders have disconnected.
-        let mut activators = Vec::with_capacity(workers);
         let mut command_txs = Vec::with_capacity(workers);
         let mut response_rxs = Vec::with_capacity(workers);
-        let mut activator_rxs = Vec::with_capacity(workers);
         for client_tx in &timely.client_txs {
             let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
             let (resp_tx, resp_rx) = mpsc::unbounded_channel();
-            let (activator_tx, activator_rx) = mpsc::unbounded_channel();
 
             client_tx
-                .send((cmd_rx, resp_tx, activator_tx))
+                .send((cmd_rx, resp_tx))
                 .expect("worker not dropped");
 
             command_txs.push(cmd_tx);
             response_rxs.push(resp_rx);
-            activator_rxs.push(activator_rx);
-        }
-
-        // It's important that we wait for activators only after we have sent the channels to all
-        // workers. Otherwise we could end up in a stalled state. See database-issues#8957.
-        for mut activator_rx in activator_rxs {
-            let activator = activator_rx.recv().await.expect("worker not dropped");
-            activators.push(activator);
         }
 
         self.inner = Some(LocalClient::new_partitioned(
             response_rxs,
             command_txs,
-            activators,
+            timely.worker_threads(),
         ));
         Ok(())
     }
@@ -188,10 +184,12 @@ where
     async fn send(&mut self, cmd: C::Command) -> Result<(), Error> {
         // Changing this debug statement requires changing the replica-isolation test
         tracing::debug!("ClusterClient send={:?}", &cmd);
-        match cmd.try_into_timely_config() {
-            Ok((config, epoch)) => self.build(config, epoch).await,
-            Err(cmd) => self.inner.as_mut().expect("initialized").send(cmd).await,
+
+        if let Some((config, epoch)) = cmd.try_as_timely_config() {
+            self.build(config, epoch).await?;
         }
+
+        self.inner.as_mut().expect("initialized").send(cmd).await
     }
 
     /// # Cancel safety
@@ -216,7 +214,7 @@ where
 #[async_trait]
 pub trait ClusterSpec: Clone + Send + Sync + 'static {
     /// The cluster command type.
-    type Command: fmt::Debug + Send + TryIntoTimelyConfig;
+    type Command: fmt::Debug + Send + TryAsTimelyConfig;
     /// The cluster response type.
     type Response: fmt::Debug + Send;
 
@@ -227,7 +225,6 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
         client_rx: crossbeam_channel::Receiver<(
             crossbeam_channel::Receiver<Self::Command>,
             mpsc::UnboundedSender<Self::Response>,
-            mpsc::UnboundedSender<LocalActivator>,
         )>,
     );
 
@@ -311,7 +308,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
         Ok(TimelyContainer {
             config,
             client_txs,
-            _worker_guards: worker_guards,
+            worker_guards,
         })
     }
 }

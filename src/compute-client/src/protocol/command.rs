@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
+use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryAsTimelyConfig};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
@@ -663,11 +663,12 @@ fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
     (0..1).prop_map(|_| OpenTelemetryContext::empty())
 }
 
-impl TryIntoTimelyConfig for ComputeCommand {
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
-        match self {
-            ComputeCommand::CreateTimely { config, epoch } => Ok((config, epoch)),
-            cmd => Err(cmd),
+impl TryAsTimelyConfig for ComputeCommand {
+    fn try_as_timely_config(&self) -> Option<(TimelyConfig, ClusterStartupEpoch)> {
+        if let ComputeCommand::CreateTimely { config, epoch } = self {
+            Some((config.clone(), *epoch))
+        } else {
+            None
         }
     }
 }

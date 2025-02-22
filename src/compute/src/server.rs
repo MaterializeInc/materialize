@@ -10,40 +10,37 @@
 //! An interactive dataflow server.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Error;
-use crossbeam_channel::{RecvError, TryRecvError};
+use crossbeam_channel::SendError;
 use mz_cluster::client::{ClusterClient, ClusterSpec};
+use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
-use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
-use mz_ore::cast::CastFrom;
 use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
-use mz_service::local::LocalActivator;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use timely::communication::Allocate;
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::generic::source;
-use timely::dataflow::operators::Operator;
-use timely::progress::{Antichain, Timestamp};
-use timely::scheduling::Scheduler;
+use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::SendError;
 use tracing::{info, trace, warn};
 
+use crate::command_channel;
 use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
 
@@ -106,75 +103,82 @@ pub fn serve(
 }
 
 /// Endpoint used by workers to receive compute commands.
+///
+/// Observes epoch changes in the command stream and converts them into receive errors that inform
+/// the caller of a new client connection that needs to be reconciled.
 struct CommandReceiver {
-    inner: crossbeam_channel::Receiver<ComputeCommand>,
+    inner: command_channel::Receiver,
     worker_id: usize,
+    epoch: Option<ClusterStartupEpoch>,
+    stashed_command: Option<ComputeCommand>,
 }
 
 impl CommandReceiver {
-    fn new(inner: crossbeam_channel::Receiver<ComputeCommand>, worker_id: usize) -> Self {
-        Self { inner, worker_id }
+    fn new(inner: command_channel::Receiver, worker_id: usize) -> Self {
+        Self {
+            inner,
+            worker_id,
+            epoch: None,
+            stashed_command: None,
+        }
     }
 
-    fn try_recv(&self) -> Result<ComputeCommand, TryRecvError> {
-        self.inner.try_recv().map(|cmd| {
-            trace!(worker = ?self.worker_id, command = ?cmd, "received command");
-            cmd
-        })
+    /// Receive the next pending command, if any.
+    ///
+    /// If the next command is at a different epoch, this method instead returns an `Err`
+    /// containing the new epoch.
+    fn try_recv(&mut self) -> Result<Option<ComputeCommand>, ClusterStartupEpoch> {
+        if let Some(command) = self.stashed_command.take() {
+            return Ok(Some(command));
+        }
+        let Some((command, epoch)) = self.inner.try_recv() else {
+            return Ok(None);
+        };
+
+        trace!(worker = self.worker_id, %epoch, ?command, "received command");
+
+        let prev_epoch = self.epoch.replace(epoch);
+        match prev_epoch.cmp(&Some(epoch)) {
+            Ordering::Less => {
+                self.stashed_command = Some(command);
+                Err(epoch)
+            }
+            Ordering::Equal => Ok(Some(command)),
+            Ordering::Greater => panic!("epoch regression: {epoch} < {}", prev_epoch.unwrap()),
+        }
     }
 }
 
 /// Endpoint used by workers to send sending compute responses.
+///
+/// Tags responses with the current epoch, allowing receivers to filter out responses intended for
+/// previous client connections.
 pub(crate) struct ResponseSender {
-    inner: mpsc::UnboundedSender<ComputeResponse>,
+    inner: crossbeam_channel::Sender<(ComputeResponse, ClusterStartupEpoch)>,
     worker_id: usize,
+    epoch: Option<ClusterStartupEpoch>,
 }
 
 impl ResponseSender {
-    fn new(inner: mpsc::UnboundedSender<ComputeResponse>, worker_id: usize) -> Self {
-        Self { inner, worker_id }
+    fn new(
+        inner: crossbeam_channel::Sender<(ComputeResponse, ClusterStartupEpoch)>,
+        worker_id: usize,
+    ) -> Self {
+        Self {
+            inner,
+            worker_id,
+            epoch: None,
+        }
     }
 
+    /// Send a compute response.
     pub fn send(&self, response: ComputeResponse) -> Result<(), SendError<ComputeResponse>> {
-        trace!(worker = ?self.worker_id, response = ?response, "sending response");
-        self.inner.send(response)
-    }
-}
+        let epoch = self.epoch.expect("epoch must be initialized");
 
-struct CommandReceiverQueue {
-    queue: Rc<RefCell<VecDeque<Result<ComputeCommand, TryRecvError>>>>,
-}
-
-impl CommandReceiverQueue {
-    fn try_recv(&self) -> Result<ComputeCommand, TryRecvError> {
-        match self.queue.borrow_mut().pop_front() {
-            Some(Ok(cmd)) => Ok(cmd),
-            Some(Err(e)) => Err(e),
-            None => Err(TryRecvError::Empty),
-        }
-    }
-
-    /// Block until a command is available.
-    /// This method takes the worker as an argument such that it can step timely while no result
-    /// is available.
-    fn recv<A: Allocate>(&self, worker: &mut Worker<A>) -> Result<ComputeCommand, RecvError> {
-        while self.is_empty() {
-            let start = Instant::now();
-            worker.timely_worker.step_or_park(None);
-            worker
-                .metrics
-                .timely_step_duration_seconds
-                .observe(start.elapsed().as_secs_f64());
-        }
-        match self.try_recv() {
-            Ok(cmd) => Ok(cmd),
-            Err(TryRecvError::Disconnected) => Err(RecvError),
-            Err(TryRecvError::Empty) => unreachable!("checked above"),
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.queue.borrow().is_empty()
+        trace!(worker = self.worker_id, %epoch, ?response, "sending response");
+        self.inner
+            .send((response, epoch))
+            .map_err(|SendError((resp, _))| SendError(resp))
     }
 }
 
@@ -185,13 +189,10 @@ impl CommandReceiverQueue {
 struct Worker<'w, A: Allocate> {
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
-    /// The channel over which communication handles for newly connected clients
-    /// are delivered.
-    client_rx: crossbeam_channel::Receiver<(
-        crossbeam_channel::Receiver<ComputeCommand>,
-        mpsc::UnboundedSender<ComputeResponse>,
-        mpsc::UnboundedSender<LocalActivator>,
-    )>,
+    /// The channel over which commands are received.
+    command_rx: CommandReceiver,
+    /// The channel over which responses are sent.
+    response_tx: ResponseSender,
     compute_state: Option<ComputeState>,
     /// Compute metrics.
     metrics: WorkerMetrics,
@@ -215,7 +216,6 @@ impl ClusterSpec for Config {
         client_rx: crossbeam_channel::Receiver<(
             crossbeam_channel::Receiver<ComputeCommand>,
             mpsc::UnboundedSender<ComputeResponse>,
-            mpsc::UnboundedSender<LocalActivator>,
         )>,
     ) {
         if self.context.worker_core_affinity {
@@ -225,9 +225,19 @@ impl ClusterSpec for Config {
         let worker_id = timely_worker.index();
         let metrics = self.metrics.for_worker(worker_id);
 
+        // Create the command channel that broadcasts commands from worker 0 to other workers. We
+        // reuse this channel between client connections, to avoid bugs where different workers end
+        // up creating incompatible sides of the channel dataflow after reconnects.
+        // See database-issues#8964.
+        let (cmd_tx, cmd_rx) = command_channel::render(timely_worker);
+        let (resp_tx, resp_rx) = crossbeam_channel::unbounded();
+
+        spawn_channel_adapter(client_rx, cmd_tx, resp_rx, worker_id);
+
         Worker {
             timely_worker,
-            client_rx,
+            command_rx: CommandReceiver::new(cmd_rx, worker_id),
+            response_tx: ResponseSender::new(resp_tx, worker_id),
             metrics,
             context: self.context.clone(),
             persist_clients: Arc::clone(&self.persist_clients),
@@ -284,177 +294,34 @@ fn set_core_affinity(_worker_id: usize) {
 }
 
 impl<'w, A: Allocate + 'static> Worker<'w, A> {
-    /// Waits for client connections and runs them to completion.
+    /// Runs a compute worker.
     pub fn run(&mut self) {
-        let mut shutdown = false;
-        while !shutdown {
-            match self.client_rx.recv() {
-                Ok((rx, tx, activator_tx)) => {
-                    self.setup_channel_and_run_client(rx, tx, activator_tx)
-                }
-                Err(_) => shutdown = true,
-            }
+        // The command receiver is initialized without an epoch, so receiving the first command
+        // always triggers an epoch change.
+        let epoch = self.recv_command().expect_err("change to first epoch");
+        self.set_epoch(epoch);
+
+        loop {
+            let Err(epoch) = self.run_client();
+            self.set_epoch(epoch);
         }
     }
 
-    fn split_command<T: Timestamp>(
-        command: ComputeCommand<T>,
-        parts: usize,
-    ) -> Vec<ComputeCommand<T>> {
-        match command {
-            ComputeCommand::CreateDataflow(dataflow) => {
-                // A list of descriptions of objects for each part to build.
-                let mut builds_parts = vec![Vec::new(); parts];
-                // Partition each build description among `parts`.
-                for build_desc in dataflow.objects_to_build {
-                    let build_part = build_desc.plan.partition_among(parts);
-                    for (plan, objects_to_build) in
-                        build_part.into_iter().zip(builds_parts.iter_mut())
-                    {
-                        objects_to_build.push(BuildDesc {
-                            id: build_desc.id,
-                            plan,
-                        });
-                    }
-                }
-
-                // Each list of build descriptions results in a dataflow description.
-                builds_parts
-                    .into_iter()
-                    .map(|objects_to_build| DataflowDescription {
-                        source_imports: dataflow.source_imports.clone(),
-                        index_imports: dataflow.index_imports.clone(),
-                        objects_to_build,
-                        index_exports: dataflow.index_exports.clone(),
-                        sink_exports: dataflow.sink_exports.clone(),
-                        as_of: dataflow.as_of.clone(),
-                        until: dataflow.until.clone(),
-                        debug_name: dataflow.debug_name.clone(),
-                        initial_storage_as_of: dataflow.initial_storage_as_of.clone(),
-                        refresh_schedule: dataflow.refresh_schedule.clone(),
-                        time_dependence: dataflow.time_dependence.clone(),
-                    })
-                    .map(ComputeCommand::CreateDataflow)
-                    .collect()
-            }
-            command => vec![command; parts],
+    fn set_epoch(&mut self, epoch: ClusterStartupEpoch) {
+        if let Some(prev) = self.response_tx.epoch.replace(epoch) {
+            assert!(epoch > prev, "epoch regression: {epoch} <= {prev}");
         }
     }
 
-    fn setup_channel_and_run_client(
-        &mut self,
-        command_rx: crossbeam_channel::Receiver<ComputeCommand>,
-        response_tx: mpsc::UnboundedSender<ComputeResponse>,
-        activator_tx: mpsc::UnboundedSender<LocalActivator>,
-    ) {
-        let cmd_queue = Rc::new(RefCell::new(
-            VecDeque::<Result<ComputeCommand, TryRecvError>>::new(),
-        ));
-        let peers = self.timely_worker.peers();
-        let worker_id = self.timely_worker.index();
-
-        let command_rx = CommandReceiver::new(command_rx, worker_id);
-        let response_tx = ResponseSender::new(response_tx, worker_id);
-
-        self.timely_worker.dataflow::<u64, _, _>({
-            let cmd_queue = Rc::clone(&cmd_queue);
-
-            move |scope| {
-                source(scope, "CmdSource", |capability, info| {
-                    // Send activator for this operator back.
-                    let activator = scope.sync_activator_for(info.address.to_vec());
-                    let activator = LocalActivator::new(activator);
-                    // This might fail if the client has already shut down, which is fine. The rest
-                    // of the operator implementation knows how to handle a disconnected client.
-                    let _ = activator_tx.send(activator);
-
-                    //Hold onto capbility until we receive a disconnected error
-                    let mut cap_opt = Some(capability);
-                    // Drop capability if we are not the leader, as our queue will
-                    // be empty and we will never use nor importantly downgrade it.
-                    if worker_id != 0 {
-                        cap_opt = None;
-                    }
-
-                    move |output| {
-                        let mut disconnected = false;
-                        if let Some(cap) = cap_opt.as_mut() {
-                            let time = cap.time().clone();
-                            let mut session = output.session(&cap);
-
-                            loop {
-                                match command_rx.try_recv() {
-                                    Ok(cmd) => {
-                                        // Commands must never be accepted from another worker. This
-                                        // implementation does not guarantee an ordering of events
-                                        // sent to different workers.
-                                        assert_eq!(worker_id, 0);
-                                        session.give_iterator(
-                                            Self::split_command(cmd, peers).into_iter().enumerate(),
-                                        );
-                                    }
-                                    Err(TryRecvError::Disconnected) => {
-                                        disconnected = true;
-                                        break;
-                                    }
-                                    Err(TryRecvError::Empty) => {
-                                        break;
-                                    }
-                                };
-                            }
-                            cap.downgrade(&(time + 1));
-                        } else {
-                            // Non-leader workers will still receive `UpdateConfiguration` commands
-                            // and we must drain those to not leak memory.
-                            if let Ok(cmd) = command_rx.try_recv() {
-                                assert_ne!(worker_id, 0);
-                                assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
-                            }
-                        }
-
-                        if disconnected {
-                            cap_opt = None;
-                        }
-                    }
-                })
-                .sink(
-                    Exchange::new(|(idx, _)| u64::cast_from(*idx)),
-                    "CmdReceiver",
-                    move |input| {
-                        let mut queue = cmd_queue.borrow_mut();
-                        if input.frontier().is_empty() {
-                            queue.push_back(Err(TryRecvError::Disconnected))
-                        }
-                        while let Some((_, data)) = input.next() {
-                            for (_, cmd) in data.drain(..) {
-                                queue.push_back(Ok(cmd));
-                            }
-                        }
-                    },
-                );
-            }
-        });
-
-        self.run_client(
-            CommandReceiverQueue {
-                queue: Rc::clone(&cmd_queue),
-            },
-            response_tx,
-        )
-    }
-
-    /// Draws commands from a single client until disconnected.
-    fn run_client(&mut self, command_rx: CommandReceiverQueue, mut response_tx: ResponseSender) {
-        if let Err(_) = self.reconcile(&command_rx, &mut response_tx) {
-            return;
-        }
+    /// Handles commands for a client connection, returns when the epoch changes.
+    fn run_client(&mut self) -> Result<Infallible, ClusterStartupEpoch> {
+        self.reconcile()?;
 
         // The last time we did periodic maintenance.
         let mut last_maintenance = Instant::now();
 
         // Commence normal operation.
-        let mut shutdown = false;
-        while !shutdown {
+        loop {
             // Get the maintenance interval, default to zero if we don't have a compute state.
             let maintenance_interval = self
                 .compute_state
@@ -470,7 +337,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 sleep_duration = None;
 
                 // Report frontier information back the coordinator.
-                if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
+                if let Some(mut compute_state) = self.activate_compute() {
                     compute_state.compute_state.traces.maintenance();
                     // Report operator hydration before frontiers, as reporting frontiers may
                     // affect hydration reporting.
@@ -493,24 +360,9 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             self.timely_worker.step_or_park(sleep_duration);
             timer.observe_duration();
 
-            // Handle any received commands.
-            let mut cmds = vec![];
-            let mut empty = false;
-            while !empty {
-                match command_rx.try_recv() {
-                    Ok(cmd) => cmds.push(cmd),
-                    Err(TryRecvError::Empty) => empty = true,
-                    Err(TryRecvError::Disconnected) => {
-                        empty = true;
-                        shutdown = true;
-                    }
-                }
-            }
-            for cmd in cmds {
-                self.handle_command(&mut response_tx, cmd);
-            }
+            self.handle_pending_commands()?;
 
-            if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
+            if let Some(mut compute_state) = self.activate_compute() {
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
                 compute_state.process_copy_tos();
@@ -518,7 +370,14 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         }
     }
 
-    fn handle_command(&mut self, response_tx: &mut ResponseSender, cmd: ComputeCommand) {
+    fn handle_pending_commands(&mut self) -> Result<(), ClusterStartupEpoch> {
+        while let Some(cmd) = self.command_rx.try_recv()? {
+            self.handle_command(cmd);
+        }
+        Ok(())
+    }
+
+    fn handle_command(&mut self, cmd: ComputeCommand) {
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
                 self.compute_state = Some(ComputeState::new(
@@ -531,23 +390,36 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             }
             _ => (),
         }
-        self.activate_compute(response_tx)
-            .unwrap()
-            .handle_compute_command(cmd);
+        self.activate_compute().unwrap().handle_compute_command(cmd);
     }
 
-    fn activate_compute<'a>(
-        &'a mut self,
-        response_tx: &'a mut ResponseSender,
-    ) -> Option<ActiveComputeState<'a, A>> {
+    fn activate_compute(&mut self) -> Option<ActiveComputeState<'_, A>> {
         if let Some(compute_state) = &mut self.compute_state {
             Some(ActiveComputeState {
                 timely_worker: &mut *self.timely_worker,
                 compute_state,
-                response_tx,
+                response_tx: &mut self.response_tx,
             })
         } else {
             None
+        }
+    }
+
+    /// Receive the next compute command.
+    ///
+    /// This method blocks if no command is currently available, but takes care to step the Timely
+    /// worker while doing so.
+    fn recv_command(&mut self) -> Result<ComputeCommand, ClusterStartupEpoch> {
+        loop {
+            if let Some(cmd) = self.command_rx.try_recv()? {
+                return Ok(cmd);
+            }
+
+            let start = Instant::now();
+            self.timely_worker.step_or_park(None);
+            self.metrics
+                .timely_step_duration_seconds
+                .observe(start.elapsed().as_secs_f64());
         }
     }
 
@@ -569,16 +441,12 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     /// Some additional tidying happens, cleaning up pending peeks, reported frontiers, and creating a new
     /// subscribe response buffer. We will need to be vigilant with future modifications to `ComputeState` to
     /// line up changes there with clean resets here.
-    fn reconcile(
-        &mut self,
-        command_rx: &CommandReceiverQueue,
-        response_tx: &mut ResponseSender,
-    ) -> Result<(), RecvError> {
+    fn reconcile(&mut self) -> Result<(), ClusterStartupEpoch> {
         // To initialize the connection, we want to drain all commands until we receive a
         // `ComputeCommand::InitializationComplete` command to form a target command state.
         let mut new_commands = Vec::new();
         loop {
-            match command_rx.recv(self)? {
+            match self.recv_command()? {
                 ComputeCommand::InitializationComplete => break,
                 command => new_commands.push(command),
             }
@@ -823,7 +691,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
         // Execute the commands to bring us to `new_commands`.
         for command in todo_commands.into_iter() {
-            self.handle_command(response_tx, command);
+            self.handle_command(command);
         }
 
         // Overwrite `self.command_history` to reflect `new_commands`.
@@ -837,4 +705,62 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         }
         Ok(())
     }
+}
+
+/// Spawn a thread to bridge between [`ClusterClient`] and [`Worker`] channels.
+///
+/// The [`Worker`] expects a pair of persistent channels, with punctuation marking reconnects,
+/// while the [`ClusterClient`] provides a new pair of channels on each reconnect.
+fn spawn_channel_adapter(
+    client_rx: crossbeam_channel::Receiver<(
+        crossbeam_channel::Receiver<ComputeCommand>,
+        mpsc::UnboundedSender<ComputeResponse>,
+    )>,
+    command_tx: command_channel::Sender,
+    response_rx: crossbeam_channel::Receiver<(ComputeResponse, ClusterStartupEpoch)>,
+    worker_id: usize,
+) {
+    thread::Builder::new()
+        .name(format!("compute-channel-adapter-{worker_id}"))
+        .spawn(move || {
+            while let Ok((command_rx, response_tx)) = client_rx.recv() {
+                // Serve this connection until we see any of the channels disconnect.
+                //
+                // To make workers aware of the individual client connections, we extract the
+                // client's epoch from the command stream and tag forwarded commands with it.
+                // Additionally, we use the epoch to filter out responses with a different
+                // epoch, which were intended for previous clients.
+
+                // The compute protocol requires that the first command is a `CreateTimely` command
+                // announcing the epoch.
+                let client_epoch = match command_rx.recv() {
+                    Ok(ComputeCommand::CreateTimely { epoch, .. }) => epoch,
+                    Ok(cmd) => panic!("unexpected initial command: {cmd:?}"),
+                    Err(_) => continue,
+                };
+
+                loop {
+                    crossbeam_channel::select! {
+                        recv(command_rx) -> msg => match msg {
+                            Ok(cmd) => command_tx.send((cmd, client_epoch)),
+                            Err(_) => break,
+                        },
+                        recv(response_rx) -> msg => {
+                            let (resp, epoch) = msg.expect("worker connected");
+
+                            if epoch < client_epoch {
+                                continue; // response for a previous connection
+                            } else if epoch > client_epoch {
+                                panic!("epoch from the future: {epoch} > {client_epoch}");
+                            }
+
+                            if response_tx.send(resp).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .unwrap();
 }

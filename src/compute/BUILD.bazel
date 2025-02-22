@@ -32,6 +32,7 @@ rust_library(
     version = "0.0.0",
     deps = [
         "//src/cluster:mz_cluster",
+        "//src/cluster-client:mz_cluster_client",
         "//src/compute-client:mz_compute_client",
         "//src/compute-types:mz_compute_types",
         "//src/dyncfg:mz_dyncfg",
@@ -41,7 +42,6 @@ rust_library(
         "//src/persist-client:mz_persist_client",
         "//src/persist-types:mz_persist_types",
         "//src/repr:mz_repr",
-        "//src/service:mz_service",
         "//src/storage-operators:mz_storage_operators",
         "//src/storage-types:mz_storage_types",
         "//src/timely-util:mz_timely_util",
@@ -78,6 +78,7 @@ rust_test(
     version = "0.0.0",
     deps = [
         "//src/cluster:mz_cluster",
+        "//src/cluster-client:mz_cluster_client",
         "//src/compute-client:mz_compute_client",
         "//src/compute-types:mz_compute_types",
         "//src/dyncfg:mz_dyncfg",
@@ -87,7 +88,6 @@ rust_test(
         "//src/persist-client:mz_persist_client",
         "//src/persist-types:mz_persist_types",
         "//src/repr:mz_repr",
-        "//src/service:mz_service",
         "//src/storage-operators:mz_storage_operators",
         "//src/storage-types:mz_storage_types",
         "//src/timely-util:mz_timely_util",
@@ -103,6 +103,7 @@ rust_doc_test(
     crate = ":mz_compute",
     deps = [
         "//src/cluster:mz_cluster",
+        "//src/cluster-client:mz_cluster_client",
         "//src/compute-client:mz_compute_client",
         "//src/compute-types:mz_compute_types",
         "//src/dyncfg:mz_dyncfg",
@@ -112,7 +113,6 @@ rust_doc_test(
         "//src/persist-client:mz_persist_client",
         "//src/persist-types:mz_persist_types",
         "//src/repr:mz_repr",
-        "//src/service:mz_service",
         "//src/storage-operators:mz_storage_operators",
         "//src/storage-types:mz_storage_types",
         "//src/timely-util:mz_timely_util",
