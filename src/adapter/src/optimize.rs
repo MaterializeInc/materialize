@@ -124,7 +124,7 @@ where
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
         match mz_ore::panic::catch_unwind_str(AssertUnwindSafe(|| self.optimize(plan))) {
             Ok(result) => {
-                match result.map_err(Into::into) {
+                match result {
                     Err(OptimizerError::TransformError(TransformError::CallerShouldPanic(msg))) => {
                         // Promote a `CallerShouldPanic` error from the result
                         // to a proper panic. This is needed in order to ensure
