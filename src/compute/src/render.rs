@@ -135,6 +135,7 @@ use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::{probe, BranchWhen, Operator, Probe};
@@ -150,6 +151,7 @@ use timely::PartialOrder;
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::delay::DelayStream;
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors,
@@ -422,6 +424,10 @@ pub fn build_compute_dataflow<A: Allocate>(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
+                    let oks = oks
+                        .inner
+                        .delay::<CapacityContainerBuilder<_>>(&compute_state.worker_config)
+                        .as_collection();
                     let bundle = crate::render::CollectionBundle::from_collections(
                         oks.enter_region(region),
                         errs.enter_region(region),
