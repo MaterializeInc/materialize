@@ -6735,7 +6735,6 @@ dependencies = [
  "mz-ore",
  "serde",
  "serde_yaml",
- "tabled",
  "tokio",
  "tracing",
  "workspace-hack",
