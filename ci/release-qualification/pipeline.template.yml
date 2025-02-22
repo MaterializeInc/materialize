@@ -324,7 +324,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 180
         # Sometimes runs into query timeouts or entire test timeouts with parallelism 1, too much state, same in all other platform-checks
-        parallelism: 2
+        parallelism: 3
         agents:
           # A larger instance is needed due to frequent OOMs, same in all other platform-checks
           queue: hetzner-aarch64-16cpu-32gb
@@ -337,7 +337,7 @@ steps:
         label: "Checks backup + restore between the two manipulate()"
         depends_on: build-aarch64
         timeout_in_minutes: 180
-        parallelism: 2
+        parallelism: 3
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -349,7 +349,7 @@ steps:
         label: "Checks backup + restore after manipulate()"
         depends_on: build-aarch64
         timeout_in_minutes: 180
-        parallelism: 2
+        parallelism: 3
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -361,7 +361,7 @@ steps:
         label: "Checks + multiple backups/restores"
         depends_on: build-aarch64
         timeout_in_minutes: 180
-        parallelism: 2
+        parallelism: 3
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -373,7 +373,7 @@ steps:
         label: "Checks preflight-check and continue upgrade"
         depends_on: build-aarch64
         timeout_in_minutes: 180
-        parallelism: 2
+        parallelism: 3
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -385,7 +385,7 @@ steps:
         label: "Platform checks upgrade, restarting compute clusterd first"
         depends_on: build-aarch64
         timeout_in_minutes: 180
-        parallelism: 2
+        parallelism: 3
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -397,7 +397,7 @@ steps:
         label: "Platform checks upgrade, restarting compute clusterd last"
         depends_on: build-aarch64
         timeout_in_minutes: 180
-        parallelism: 2
+        parallelism: 3
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -409,7 +409,7 @@ steps:
         label: "Checks + kill storage clusterd"
         depends_on: build-aarch64
         timeout_in_minutes: 180
-        parallelism: 2
+        parallelism: 3
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -432,7 +432,7 @@ steps:
         label: "Checks + restart clusterd compute"
         depends_on: build-aarch64
         timeout_in_minutes: 180
-        parallelism: 2
+        parallelism: 3
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -444,7 +444,7 @@ steps:
         label: "Checks + DROP/CREATE replica"
         depends_on: build-aarch64
         timeout_in_minutes: 180
-        parallelism: 2
+        parallelism: 3
         agents:
           # Seems to require more memory on aarch64
           queue: hetzner-aarch64-16cpu-32gb
@@ -457,7 +457,7 @@ steps:
         label: "Checks 0dt restart of the entire Mz"
         depends_on: build-aarch64
         timeout_in_minutes: 120
-        parallelism: 2
+        parallelism: 3
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
