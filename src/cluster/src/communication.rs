@@ -286,22 +286,23 @@ async fn start_connection(
                 let peer_epoch = ClusterStartupEpoch::from_bytes(buffer);
                 debug!("start: received peer epoch {peer_epoch}");
 
-                match my_epoch.cmp(&peer_epoch) {
-                    Ordering::Less => {
-                        return Err(EpochMismatch {
-                            mine: my_epoch,
-                            peer: peer_epoch,
-                        }
-                        .into());
-                    }
-                    Ordering::Greater => {
-                        warn!(
-                            process = my_index,
-                            "peer at address {address} gave older epoch ({peer_epoch}) than ours ({my_epoch})"
-                        );
-                    }
-                    Ordering::Equal => return Ok(s),
-                }
+                return Ok(s);
+                //match my_epoch.cmp(&peer_epoch) {
+                //    Ordering::Less => {
+                //        return Err(EpochMismatch {
+                //            mine: my_epoch,
+                //            peer: peer_epoch,
+                //        }
+                //        .into());
+                //    }
+                //    Ordering::Greater => {
+                //        warn!(
+                //            process = my_index,
+                //            "peer at address {address} gave older epoch ({peer_epoch}) than ours ({my_epoch})"
+                //        );
+                //    }
+                //    Ordering::Equal => return Ok(s),
+                //}
             }
             Err(err) => {
                 info!(
@@ -341,21 +342,22 @@ async fn await_connection(
         use tokio::io::AsyncWriteExt;
         s.write_all(&my_epoch.to_bytes()[..]).await?;
 
-        match my_epoch.cmp(&peer_epoch) {
-            Ordering::Less => {
-                return Err(EpochMismatch {
-                    mine: my_epoch,
-                    peer: peer_epoch,
-                }
-                .into());
-            }
-            Ordering::Greater => {
-                warn!(
-                    process = my_index,
-                    "peer {peer_index} gave older epoch ({peer_epoch}) than ours ({my_epoch})"
-                );
-            }
-            Ordering::Equal => return Ok((s, peer_index)),
-        }
+        return Ok((s, peer_index));
+        //match my_epoch.cmp(&peer_epoch) {
+        //    Ordering::Less => {
+        //        return Err(EpochMismatch {
+        //            mine: my_epoch,
+        //            peer: peer_epoch,
+        //        }
+        //        .into());
+        //    }
+        //    Ordering::Greater => {
+        //        warn!(
+        //            process = my_index,
+        //            "peer {peer_index} gave older epoch ({peer_epoch}) than ours ({my_epoch})"
+        //        );
+        //    }
+        //    Ordering::Equal => return Ok((s, peer_index)),
+        //}
     }
 }
