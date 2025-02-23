@@ -224,7 +224,9 @@ fn optimize_dataflow_relations(
     for object in dataflow.objects_to_build.iter_mut() {
         // Re-run all optimizations on the composite views.
         ctx.set_global_id(object.id);
-        optimizer.transform(object.plan.as_inner_mut(), ctx)?;
+        // Optimization requires handing an owned plan, which is a small dance.
+        let plan = object.plan.as_inner_mut().take_dangerous();
+        *object.plan.as_inner_mut() = optimizer.optimize(plan, ctx)?.0;
         ctx.reset_global_id();
     }
 
