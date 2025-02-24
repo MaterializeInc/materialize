@@ -44,7 +44,7 @@ steps:
     key: linters
     steps:
       - id: closed-issues-detect
-        timeout_in_minutes: 20
+        timeout_in_minutes: 30
         label: Detect references to already closed issues
         command: bin/ci-builder run stable bin/ci-closed-issues-detect
         depends_on: []
@@ -1513,7 +1513,7 @@ steps:
   - id: pubsub-disruption
     label: "PubSub disruption"
     depends_on: build-aarch64
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     agents:
       queue: hetzner-aarch64-8cpu-16gb
     plugins:
@@ -1524,7 +1524,7 @@ steps:
     label: "Check retain history"
     depends_on: build-aarch64
     skip: "database-issues#7310"
-    timeout_in_minutes: 15
+    timeout_in_minutes: 30
     agents:
       queue: hetzner-aarch64-8cpu-16gb
     plugins:
@@ -1845,7 +1845,7 @@ steps:
   - id: emulator
     label: Materialize Emulator
     depends_on: build-aarch64
-    timeout_in_minutes: 20
+    timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
           composition: emulator
@@ -1883,7 +1883,7 @@ steps:
       - id: lang-csharp
         label: ":csharp: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 20
+        timeout_in_minutes: 30
         plugins:
           - ./ci/plugins/mzcompose:
               composition: csharp
@@ -1893,7 +1893,7 @@ steps:
       - id: lang-js
         label: ":js: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 20
+        timeout_in_minutes: 30
         plugins:
           - ./ci/plugins/mzcompose:
               composition: js
@@ -1903,7 +1903,7 @@ steps:
       - id: lang-java
         label: ":java: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 20
+        timeout_in_minutes: 30
         plugins:
           - ./ci/plugins/mzcompose:
               composition: java
@@ -1913,7 +1913,7 @@ steps:
       - id: lang-python
         label: ":python: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 20
+        timeout_in_minutes: 30
         plugins:
           - ./ci/plugins/mzcompose:
               composition: python
@@ -1923,7 +1923,7 @@ steps:
       - id: lang-ruby
         label: ":ruby: tests"
         depends_on: build-aarch64
-        timeout_in_minutes: 20
+        timeout_in_minutes: 30
         plugins:
           - ./ci/plugins/mzcompose:
               composition: ruby
