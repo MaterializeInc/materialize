@@ -35,5 +35,5 @@ def workflow_default(c: Composition) -> None:
         "--max-errors=1",
         f"--seed={seed}",
         f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-        "sql_server-cdc.td",
+        "sql-server-cdc.td",
     )

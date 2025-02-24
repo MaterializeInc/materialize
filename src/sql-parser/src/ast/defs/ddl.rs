@@ -1185,6 +1185,8 @@ impl_display_t!(MySqlConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SqlServerConfigOptionName {
+    /// The name for the "capture job" that will get spawn in SQL Server to
+    /// populate the change table that we read from.
     CaptureInstance,
 }
 
