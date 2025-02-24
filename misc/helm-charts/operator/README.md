@@ -139,6 +139,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.features.consoleImageTagMapOverride` | Override the mapping of environmentd versions to console versions | ``{}`` |
 | `operator.features.createBalancers` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
 | `operator.features.createConsole` | Flag to indicate whether to create console pods for the environments | ``true`` |
+| `operator.features.disable_database_network_policies` | Network policies don't yet work in self-managed | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
 | `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.134.0-dev.0"`` |

@@ -33,6 +33,9 @@ operator:
     # -- Whether to enable environmentd rbac checks
     # TODO: this is not yet supported in the helm chart
     authentication: false
+    # -- Whether to enable netowrk policies
+    # -- Network policies don't yet work in self-managed
+    disable_database_network_policies: true
 
   # Cloud provider configuration
   cloudProvider:
