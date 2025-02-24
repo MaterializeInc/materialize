@@ -78,6 +78,8 @@ impl Optimize<HirRelationExpr> for Optimizer {
         // MIR ⇒ MIR optimization (local)
         let expr = if expr.as_const().is_some() {
             // No need to optimize further, because we already have a constant.
+            // But trace this at "local", so that `EXPLAIN LOCALLY OPTIMIZED PLAN` can pick it up.
+            trace_plan!(at: "local", &expr);
             OptimizedMirRelationExpr(expr)
         } else {
             // Call the real optimization.
