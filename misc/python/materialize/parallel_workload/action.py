@@ -824,18 +824,19 @@ class AlterKafkaSinkFromAction(Action):
                     and o.columns[0].data_type == old_object.columns[0].data_type
                 ]
             else:
-                # multi column formats require at least as many columns as before
-                # columns also have to be of the same type, see database-issues#8385
-                objs = [
-                    o
-                    for o in exe.db.db_objects_without_views()
-                    # Webhook sources can include all headers, then we don't know the exact columns
-                    if not isinstance(old_object, WebhookSource)
-                    and not isinstance(o, WebhookSource)
-                    and len(o.columns) >= len(old_object.columns)
-                    and [c.data_type for c in o.columns[: len(old_object.columns)]]
-                    == [c.data_type for c in old_object.columns]
-                ]
+                # Avro schema migration checking can be quite strict, and we need to be not only
+                # compatible with the latest object's schema but all previous schemas.
+                # Only allow a conservative case for now: where all types and names match.
+                objs = []
+                old_cols = {c.name(True): c.data_type for c in old_object.columns}
+                for o in exe.db.db_objects_without_views():
+                    if isinstance(old_object, WebhookSource):
+                        continue
+                    if isinstance(o, WebhookSource):
+                        continue
+                    new_cols = {c.name(True): c.data_type for c in o.columns}
+                    if old_cols == new_cols:
+                        objs.append(o)
             if not objs:
                 return False
             sink.base_object = self.rng.choice(objs)
