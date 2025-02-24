@@ -661,3 +661,32 @@ Return
 Target cluster: mz_catalog_server
 
 EOF
+
+statement ok
+CREATE TABLE accounts(id int, balance int);
+
+statement ok
+CREATE TABLE account_details(id bigint, address string);
+
+statement ok
+CREATE OR REPLACE VIEW v AS
+SELECT
+  *
+FROM
+  accounts a
+  LEFT JOIN account_details ad USING(id)
+WHERE
+  balance = 100;
+
+# Must explain the "Raw Plan".
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+VIEW v;
+----
+Project (#0, #1, #3)
+  Filter (#1 = 100)
+    LeftOuterJoin (integer_to_bigint(#0) = #2)
+      Get materialize.public.accounts
+      Get materialize.public.account_details
+
+EOF
