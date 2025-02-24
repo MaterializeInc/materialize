@@ -374,6 +374,16 @@ impl<P, S, T> DataflowDescription<P, S, T> {
             })
     }
 
+    /// TODO
+    pub fn sink_peek_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.sink_exports
+            .iter()
+            .filter_map(|(id, desc)| match desc.connection {
+                ComputeSinkConnection::PersistBatches(_) => Some(*id),
+                _ => None,
+            })
+    }
+
     /// Produce a `Display`able value containing the import IDs of this dataflow.
     pub fn display_import_ids(&self) -> impl fmt::Display + '_ {
         use mz_ore::str::{bracketed, separated};

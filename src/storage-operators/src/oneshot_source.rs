@@ -92,6 +92,7 @@ use std::fmt::{Debug, Display};
 use std::future::Future;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::ResultStream;
 use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::Antichain;
 use tracing::info;
@@ -194,13 +195,14 @@ where
     // Parse chunks of records into Rows.
     let (rows_stream, decode_token) =
         render_decode_chunk(scope.clone(), format.clone(), &records_stream);
+    let diffs_stream = rows_stream.map_ok(|row| (row, 1));
     // Stage the Rows in Persist.
     let (batch_stream, batch_token) = render_stage_batches_operator(
         scope.clone(),
         collection_id,
         &collection_meta,
         persist_clients,
-        &rows_stream,
+        &diffs_stream,
     );
 
     // Collect all results together and notify the upstream of whether or not we succeeded.
@@ -486,7 +488,7 @@ pub fn render_stage_batches_operator<G>(
     collection_id: GlobalId,
     collection_meta: &CollectionMetadata,
     persist_clients: Arc<PersistClientCache>,
-    rows_stream: &TimelyStream<G, Result<Row, StorageErrorX>>,
+    rows_stream: &TimelyStream<G, Result<(Row, Diff), StorageErrorX>>,
 ) -> (
     TimelyStream<G, Result<ProtoBatch, StorageErrorX>>,
     PressOnDropButton,
@@ -544,10 +546,10 @@ where
             for maybe_row in row_batch {
                 match maybe_row {
                     // Happy path, add the Row to our batch!
-                    Ok(row) => {
+                    Ok((row, diff)) => {
                         let data = SourceData(Ok(row));
                         batch_builder
-                            .add(&data, &(), &lower, &1)
+                            .add(&data, &(), &lower, &diff)
                             .await
                             .expect("failed to add Row to batch");
                     }
