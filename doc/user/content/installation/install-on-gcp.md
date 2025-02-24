@@ -8,9 +8,7 @@ menu:
     parent: "installation"
 ---
 
-Self-managed Materialize requires:
-
-{{% self-managed/materialize-components-list %}}
+{{% self-managed/materialize-components-sentence %}}
 
 This tutorial deploys Materialize to GCP Google Kubernetes Engine (GKE) cluster
 with a Cloud SQL PostgreSQL database as the metadata database and Cloud Storage

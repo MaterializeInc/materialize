@@ -8,9 +8,7 @@ menu:
     parent: "installation"
 ---
 
-Self-managed Materialize requires:
-
-{{% self-managed/materialize-components-list %}}
+{{% self-managed/materialize-components-sentence %}}
 
 The tutorial deploys Materialize to Azure Kubernetes Service (AKS) with a
 PostgreSQL database as the metadata database and Azure Blob Storage for blob
@@ -133,7 +131,7 @@ node instance type, etc.), see the
 
 1. Clone the [Materialize's sample Terraform
    repo](https://github.com/MaterializeInc/terraform-azurerm-materialize) and
-   checkout the `v0.1.1` tag.
+   checkout the `v0.1.2` tag.
 
    {{< tabs >}}
    {{< tab "Clone via SSH" >}}
@@ -189,12 +187,13 @@ node instance type, etc.), see the
 1. Create a `terraform.tfvars` file (you can copy from the
    `terraform.tfvars.example` file) and specify:
 
-   -  The prefix for the resources.
+   - The prefix for the resources. Prefix must be between 3-17 characters,
+     containing only alphanumeric characters and dashes.
 
    -  The location for the AKS cluster.
 
    ```bash
-   prefix="enter-prefix"  // e.g. my-demo-dev
+   prefix="enter-prefix"  //  3-17 characters, containing only alphanumeric characters and dashes; e.g. my-demo-dev
    location="eastus2"
    ```
 
@@ -317,12 +316,10 @@ node instance type, etc.), see the
 
    Outputs:
 
+   aks_cluster = <sensitive>
    connection_strings = <sensitive>
-   gke_cluster = <sensitive>
-   service_accounts = {
-     "gke_sa" = "mz-simple-gke-sa@mz-scratch.iam.gserviceaccount.com"
-     "materialize_sa" = "mz-simple-materialize-sa@mz-scratch.iam.gserviceaccount.com"
-   }
+   kube_config = <sensitive>
+   resource_group_name = "my-demo-dev-rg"
    ```
 
 1. Verify the installation and check the status:

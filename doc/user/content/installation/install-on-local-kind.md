@@ -1,6 +1,6 @@
 ---
 title: "Install locally on kind"
-description: ""
+description: "Deploy Self-managed Materialize to a local kind cluster."
 aliases:
   - /self-hosted/install-on-local-kind/
 menu:
@@ -8,9 +8,7 @@ menu:
     parent: "installation"
 ---
 
-Self-managed Materialize requires:
-
-{{% self-managed/materialize-components-list %}}
+{{% self-managed/materialize-components-sentence %}}
 
 The following tutorial uses a local [`kind`](https://kind.sigs.k8s.io/) cluster
 and deploys the following components:
@@ -94,21 +92,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    some sample configuration files. Download the sample configuration files from
    the Materialize repo:
 
-   ```shell
-   curl -o sample-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/operator/values.yaml
-   curl -o sample-postgres.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/postgres.yaml
-   curl -o sample-minio.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/minio.yaml
-   curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/lts-v0.130/misc/helm-charts/testing/materialize.yaml
-   ```
-
-   - `sample-values.yaml`: Used to configure the Materialize Operator.
-   - `sample-postgres.yaml`: Used to configure PostgreSQL as the metadata
-     database.
-   - `sample-minio.yaml`: Used to configure minIO as the blob storage.
-   - `sample-materialize.yaml`: Used to configure Materialize instance.
-
-   These configuration files are for local evaluation/testing purposes only and
-   not intended for production use.
+   {{% self-managed/curl-sample-files-local-install %}}
 
 1. Install the Materialize Helm chart.
 

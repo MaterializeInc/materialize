@@ -8,9 +8,7 @@ menu:
     parent: "installation"
 ---
 
-Self-managed Materialize requires:
-
-{{% self-managed/materialize-components-list %}}
+{{% self-managed/materialize-components-sentence %}}
 
 The tutorial deploys Materialize to AWS Elastic Kubernetes Service (EKS) with a
 PostgreSQL RDS database as the metadata database and AWS S3 for blob storage.
@@ -105,17 +103,17 @@ node instance type, etc.), see the
 
 1. Clone the [Materialize's sample Terraform
    repo](https://github.com/MaterializeInc/terraform-google-materialize) and
-   checkout the `v0.2.2` tag.
+   checkout the `v0.2.5` tag.
 
    {{< tabs >}}
    {{< tab "Clone via SSH" >}}
    ```bash
-   git clone --depth 1 -b v0.2.2 git@github.com:MaterializeInc/terraform-aws-materialize.git
+   git clone --depth 1 -b v0.2.5 git@github.com:MaterializeInc/terraform-aws-materialize.git
    ```
    {{< /tab >}}
    {{< tab "Clone via HTTPS" >}}
    ```bash
-   git clone --depth 1 -b v0.2.2 https://github.com/MaterializeInc/terraform-aws-materialize.git
+   git clone --depth 1 -b v0.2.5 https://github.com/MaterializeInc/terraform-aws-materialize.git
    ```
    {{< /tab >}}
    {{< /tabs >}}
@@ -137,23 +135,21 @@ node instance type, etc.), see the
    {{< /tip >}}
 
 1. Create a `terraform.tfvars` file (you can copy from the
-   `terraform.tfvars.example` file) and specify:
+   `terraform.tfvars.example` file) and specify the following variables:
 
-   - A namespace (e.g., `my-demo`) that will be used to form part of the
-     prefix for your AWS resources. Namespace has a maximum of 18 characters and
-     must be lowercase alphanumeric and hyphens only.
+   | Variable          | Description |
+   |--------------------|-------------|
+   | `namespace`       | A namespace (e.g., `my-demo`) that will be used to form part of the prefix for your AWS resources. <br> **Requirements:** <br> - Maximum of 12 characters <br> - Must start with a lowercase letter <br> - Must be lowercase alphanumeric and hyphens only |
+   | `environment`     | An environment name (e.g., `dev`, `test`) that will be used to form part of the prefix for your AWS resources. <br> **Requirements:** <br> - Maximum of 8 characters <br> - Must be lowercase alphanumeric only |
+   | `database_password` | A secure password for the RDS PostgreSQL database (to be created). |
 
-   - An environment name (e.g., `dev`, `test`) that will be used to form part of
-     the prefix for your AWS resources.
-
-   - A secure password for the RDS PostgreSQL database (to be created).
 
    ```bash
    # The namespace and environment variables are used to construct the names of the resources
    # e.g. ${namespace}-${environment}-storage, ${namespace}-${environment}-db etc.
 
-   namespace = "enter-namespace"   // 18 characters, lowercase alphanumeric and hyphens only (e.g. my-demo)
-   environment = "enter-environment" // For example, dev, test
+   namespace = "enter-namespace"   // maximum 12 characters, start with a letter, contain lowercase alphanumeric and hyphens only (e.g. my-demo)
+   environment = "enter-environment" // maximum 8 characters, lowercase alphanumeric only (e.g., dev, test)
    database_password  = "enter-secure-password"
    ```
 
@@ -179,7 +175,7 @@ node instance type, etc.), see the
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   Apply complete! Resources: 78 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 76 added, 0 changed, 0 destroyed.
 
    Outputs:
 
@@ -200,11 +196,13 @@ node instance type, etc.), see the
 
 1. Configure `kubectl` to connect to your EKS cluster, replacing:
 
-   - `<your-eks-cluster-name>` with the name of your EKS cluster (specified in
-     [Terraform output](#terraform-output))
+   - `<your-eks-cluster-name>` with the name of your EKS cluster.
+
+     - Your cluster name has the form `{namespace}-{environment}-eks`; e.g.,
+       `my-demo-dev-eks`.
 
    - `<your-region>` with the region of your EKS cluster. By default, the
-     sample Terraform module uses `us-east-1`.
+     example Terraform module uses `us-east-1`.
 
    ```bash
    aws eks update-kubeconfig --name <your-eks-cluster-name> --region <your-region>

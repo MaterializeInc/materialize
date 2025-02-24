@@ -1,6 +1,6 @@
 ---
 title: "Materialize Operator Configuration"
-description: ""
+description: "Configuration reference for the Materialize Operator Helm chart"
 aliases:
   - /self-hosted/configuration/
 menu:
@@ -46,7 +46,7 @@ To configure the Materialize operator chart, you can:
 
   ```shell
   helm install my-materialize-operator \
-    --set operator.image.tag=v0.130.0 \
+    --set --set observability.podMetrics.enabled=true \
     /path/to/materialize/helm-charts/operator
   ```
 
