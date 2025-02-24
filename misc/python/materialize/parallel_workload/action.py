@@ -823,6 +823,10 @@ class AlterKafkaSinkFromAction(Action):
                     if len(o.columns) == 1
                     and o.columns[0].data_type == old_object.columns[0].data_type
                 ]
+            elif sink.format in ["FORMAT JSON"]:
+                # We should be able to format all data types as JSON, and they have no
+                # particular backwards-compatiblility requirements.
+                objs = [o for o in exe.db.db_objects_without_views()]
             else:
                 # Avro schema migration checking can be quite strict, and we need to be not only
                 # compatible with the latest object's schema but all previous schemas.
