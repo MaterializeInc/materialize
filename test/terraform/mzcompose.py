@@ -131,6 +131,23 @@ def get_tag(tag: str) -> str:
     return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
 
 
+def mz_self_managed_debug() -> None:
+    run_ignore_error(
+        [
+            "cargo",
+            "run",
+            "--bin",
+            "mz-self-managed-debug",
+            "--",
+            "--k8s-namespace",
+            "materialize-environment",
+            "--k8s-namespace",
+            "materialize",
+        ],
+        cwd=MZ_ROOT,
+    )
+
+
 class AWS:
     materialize_environment: dict | None
     path: Path
@@ -600,6 +617,8 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     finally:
         aws.cleanup()
 
+        mz_self_managed_debug()
+
         if args.cleanup:
             aws.destroy()
 
@@ -1066,6 +1085,8 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             os.killpg(os.getpgid(environmentd_port_forward_process.pid), signal.SIGTERM)
         if balancerd_port_forward_process:
             os.killpg(os.getpgid(balancerd_port_forward_process.pid), signal.SIGTERM)
+
+        mz_self_managed_debug()
 
         if args.cleanup:
             print("--- Cleaning up")
