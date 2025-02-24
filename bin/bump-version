@@ -65,6 +65,18 @@ cargo update --workspace
 bin/bazel gen
 
 bin/helm-chart-version-bump "v$version"
+
+helm_docs_version=1.14.3
+if ! helm-docs --help > /dev/null; then
+    echo "helm-docs is currently not installed"
+    echo "Install helm-docs $helm_docs_version from https://github.com/norwoodj/helm-docs/releases/tag/v$helm_docs_version"
+    exit 1
+fi
+if [ "$(helm-docs --version)" != "helm-docs version $helm_docs_version" ]; then
+    echo "helm-docs is installed, but has wrong version: $(helm-docs --version)"
+    echo "Install helm-docs $helm_docs_version from https://github.com/norwoodj/helm-docs/releases/tag/v$helm_docs_version"
+    exit 1
+fi
 helm-docs misc/helm-charts
 
 if $commit; then
