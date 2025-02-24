@@ -19,7 +19,6 @@ from kubernetes.client import (
     V1PersistentVolumeClaimSpec,
     V1PodSpec,
     V1PodTemplateSpec,
-    V1ResourceRequirements,
     V1Service,
     V1ServicePort,
     V1ServiceSpec,
@@ -27,6 +26,7 @@ from kubernetes.client import (
     V1StatefulSetSpec,
     V1Volume,
     V1VolumeMount,
+    V1VolumeResourceRequirements,
 )
 
 from materialize import MZ_ROOT
@@ -113,7 +113,7 @@ class CockroachStatefulSet(K8sStatefulSet):
                 metadata=V1ObjectMeta(name="data"),
                 spec=V1PersistentVolumeClaimSpec(
                     access_modes=["ReadWriteOnce"],
-                    resources=V1ResourceRequirements(requests={"storage": "1Gi"}),
+                    resources=V1VolumeResourceRequirements(requests={"storage": "1Gi"}),
                 ),
             )
         ]

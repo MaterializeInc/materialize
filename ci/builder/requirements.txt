@@ -21,7 +21,7 @@ junitparser==3.2.0
 jupyterlab==4.3.5
 jupyter-black==0.4.0
 kubernetes==32.0.1
-kubernetes-stubs==22.6.0.post1
+kubernetes-stubs-elephant-fork==32.0.1
 launchdarkly-api==17.1.0
 matplotlib==3.10.0
 matplotlib-stubs==0.2.0
