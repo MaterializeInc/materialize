@@ -385,9 +385,6 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
     type Error = PlanError;
 
     fn try_from(mut v: ExplainPlanOptionExtracted) -> Result<Self, Self::Error> {
-        use mz_ore::assert::SOFT_ASSERTIONS;
-        use std::sync::atomic::Ordering;
-
         // If `WITH(raw)` is specified, ensure that the config will be as
         // representative for the original plan as possible.
         if v.raw {
@@ -397,7 +394,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
 
         // Certain config should default to be enabled in release builds running on
         // staging or prod (where SOFT_ASSERTIONS are turned off).
-        let enable_on_prod = !SOFT_ASSERTIONS.load(Ordering::Relaxed);
+        let enable_on_prod = !mz_ore::assert::soft_assertions_enabled();
 
         Ok(ExplainConfig {
             arity: v.arity.unwrap_or(enable_on_prod),

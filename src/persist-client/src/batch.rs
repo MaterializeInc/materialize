@@ -14,7 +14,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -880,7 +879,7 @@ pub(crate) fn validate_schema<K: Codec, V: Codec>(
 ) {
     // Attempt to catch any bad schema usage in CI. This is probably too
     // expensive to run in prod.
-    if !mz_ore::assert::SOFT_ASSERTIONS.load(Ordering::Relaxed) {
+    if !mz_ore::assert::soft_assertions_enabled() {
         return;
     }
     let key_valid = K::validate(decoded_key, &stats_schemas.key);

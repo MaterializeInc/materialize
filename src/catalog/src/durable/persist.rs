@@ -14,7 +14,6 @@ use std::cmp::max;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::str::FromStr;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,7 +22,6 @@ use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_audit_log::VersionedEvent;
-use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::{
@@ -455,7 +453,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
         // This awkward code allows us to perform an expensive soft assert that requires cloning
         // `updates` twice, after `updates` has been consumed.
-        let contains_fence = if SOFT_ASSERTIONS.load(Ordering::Relaxed) {
+        let contains_fence = if mz_ore::assert::soft_assertions_enabled() {
             let updates: Vec<_> = updates.clone();
             let parsed_updates: Vec<_> = updates
                 .clone()
