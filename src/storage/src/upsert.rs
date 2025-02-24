@@ -397,7 +397,7 @@ fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
     source_config: crate::source::SourceExportCreationConfig,
     state: F,
     upsert_config: UpsertConfig,
-    storage_configuration: &StorageConfiguration,
+    _storage_configuration: &StorageConfiguration,
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
 ) -> (
@@ -414,8 +414,10 @@ where
     US: UpsertStateBackend<G::Timestamp, Option<FromTime>>,
     FromTime: Debug + timely::ExchangeData + Ord + Sync,
 {
-    let use_continual_feedback_upsert =
-        dyncfgs::STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT.get(storage_configuration.config_set());
+    // Hard-coded to true because classic UPSERT cannot be used safely with
+    // concurrent ingestions, which we need for both 0dt upgrades and
+    // multi-replica ingestions.
+    let use_continual_feedback_upsert = true;
 
     tracing::info!(id = %source_config.id, %use_continual_feedback_upsert, "upsert operator implementation");
 
