@@ -1224,7 +1224,7 @@ steps:
 
     - id: terraform-aws
       label: "Terraform + Helm Chart E2E on AWS"
-      artifact_paths: [test/terraform/aws/terraform.tfstate]
+      artifact_paths: [test/terraform/aws-temporary/terraform.tfstate, "mz-debug/**/*"]
       depends_on: build-aarch64
       timeout_in_minutes: 120
       concurrency: 1
@@ -1240,7 +1240,7 @@ steps:
 
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
-      artifact_paths: [test/terraform/aws/terraform.tfstate]
+      artifact_paths: [test/terraform/gcp-temporary/terraform.tfstate, "mz-debug/**/*"]
       depends_on: build-aarch64
       timeout_in_minutes: 120
       concurrency: 1
@@ -1248,7 +1248,6 @@ steps:
       agents:
         queue: linux-aarch64-small
       plugins:
-        - ./ci/plugins/scratch-aws-access: ~
         - ./ci/plugins/mzcompose:
             composition: terraform
             run: gcp-temporary
