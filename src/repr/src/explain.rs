@@ -37,9 +37,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::sync::atomic::Ordering;
 
-use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::{bracketed, separated, Indent};
 
@@ -208,7 +206,7 @@ impl Default for ExplainConfig {
     fn default() -> Self {
         Self {
             // Don't redact in debug builds and in CI.
-            redacted: !SOFT_ASSERTIONS.load(Ordering::Relaxed),
+            redacted: !mz_ore::assert::soft_assertions_enabled(),
             arity: false,
             cardinality: false,
             column_names: false,

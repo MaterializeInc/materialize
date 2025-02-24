@@ -11,9 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::atomic::Ordering;
 
-use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::soft_assert_eq_or_log;
 use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
 use mz_repr::explain::text::DisplayText;
@@ -1058,7 +1056,7 @@ pub trait HumanizerMode: Sized + Clone {
     /// This will produce a [`HumanizerMode`] instance that redacts output in
     /// production deployments, but not in debug builds and in CI.
     fn default() -> Self {
-        let redacted = !SOFT_ASSERTIONS.load(Ordering::Relaxed);
+        let redacted = !mz_ore::assert::soft_assertions_enabled();
         Self::new(redacted)
     }
 
