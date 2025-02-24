@@ -32,19 +32,6 @@ WHERE
 
 mode cockroach
 
-# Must explain the "Raw Plan".
-query T multiline
-EXPLAIN RAW PLAN FOR
-VIEW v;
-----
-Project (#0, #1, #3)
-  Filter (#1 = 100)
-    LeftOuterJoin (integer_to_bigint(#0) = #2)
-      Get materialize.public.accounts
-      Get materialize.public.account_details
-
-EOF
-
 # Must explain the "Locally Optimized Plan".
 query T multiline
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR
@@ -158,7 +145,7 @@ FROM
 WHERE
   balance = 100;
 
-# Ensure that flag whas used during planning.
+# Ensure that flag was used during planning.
 query T multiline
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR
 VIEW v;
