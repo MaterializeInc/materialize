@@ -1718,3 +1718,20 @@ Source materialize.public.t5
 Target cluster: no_replicas
 
 EOF
+
+# EXPLAIN statement without an explicit stage or format, so that we test the default
+# (Currently defaults to `EXPLAIN OPTIMIZED PLAN AS TEXT FOR`.)
+query T multiline
+EXPLAIN
+SELECT a+b FROM t4;
+----
+Explained Query:
+  Project (#3)
+    Map ((#0 + #1))
+      ReadStorage materialize.public.t4
+
+Source materialize.public.t4
+
+Target cluster: no_replicas
+
+EOF
