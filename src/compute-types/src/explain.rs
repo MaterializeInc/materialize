@@ -30,6 +30,8 @@ impl<'a> Explain<'a> for DataflowDescription<Plan> {
 
     type Dot = UnsupportedFormat;
 
+    type Sql = UnsupportedFormat;
+
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.as_explain_multi_plan(context)
     }
@@ -92,11 +94,17 @@ impl<'a> Explain<'a> for DataflowDescription<OptimizedMirRelationExpr> {
 
     type Dot = UnsupportedFormat;
 
+    type Sql = ExplainMultiPlan<'a, MirRelationExpr>;
+
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
         self.as_explain_multi_plan(context)
     }
 
     fn explain_json(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_multi_plan(context)
+    }
+
+    fn explain_sql(&'a mut self, context: &'a Self::Context) -> Result<Self::Sql, ExplainError> {
         self.as_explain_multi_plan(context)
     }
 }
