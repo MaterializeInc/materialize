@@ -20,7 +20,7 @@ use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 
 /// Enable allocations through `new_auto` to use lgalloc. `new_mmap` will always use lgalloc.
-pub const ENABLE_LGALLOC_REGION: std::sync::atomic::AtomicBool =
+pub static ENABLE_LGALLOC_REGION: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// A region allocator which holds items at stable memory locations.
