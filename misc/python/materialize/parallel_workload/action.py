@@ -800,7 +800,7 @@ class RenameSinkAction(Action):
 
 class AlterKafkaSinkFromAction(Action):
     def run(self, exe: Executor) -> bool:
-        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
+        if exe.db.scenario in (Scenario.ZeroDowntimeDeploy,):
             # Does not work reliably with kills, see database-issues#8421
             return False
         with exe.db.lock:
@@ -2293,7 +2293,7 @@ ddl_action_list = ActionList(
         # TODO: Reenable when database-issues#8813 is fixed.
         # (AlterTableAddColumnAction, 10),
         # TODO: Reenable when database-issues#8445 is fixed
-        # (AlterKafkaSinkFromAction, 8),
+        (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,
