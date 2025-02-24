@@ -2293,7 +2293,7 @@ ddl_action_list = ActionList(
         # TODO: Reenable when database-issues#8813 is fixed.
         # (AlterTableAddColumnAction, 10),
         # TODO: Reenable when database-issues#8445 is fixed
-        # (AlterKafkaSinkFromAction, 8),
+        (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,
