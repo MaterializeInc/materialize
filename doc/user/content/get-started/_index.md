@@ -23,8 +23,6 @@ scratch.
 With self-managed Materialize, you can deploy and operate Materialize in your
 Kubernetes environment.
 
-For self-managed Materialize, Materialize provides:
-
 {{% self-managed/self-managed-details %}}
 
 {{< callout >}}
