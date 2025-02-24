@@ -566,19 +566,19 @@ where
 
             oks.stream = oks.stream.probe_with(&input_probe);
 
-            let mut backpressure_token = None;
-            if ENABLE_COMPUTE_LOGICAL_BACKPRESSURE.get(&self.config_set) {
-                let limit =
-                    COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES.get(&self.config_set);
-                let (token, stream) = oks.stream.limit_progress(
-                    output_probe.clone(),
-                    slack,
-                    format!("import index {idx_id}"),
-                    limit,
-                );
-                oks.stream = stream;
-                backpressure_token = Some(token);
-            }
+            // let mut backpressure_token = None;
+            // if ENABLE_COMPUTE_LOGICAL_BACKPRESSURE.get(&self.config_set) {
+            //     let limit =
+            //         COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES.get(&self.config_set);
+            //     let (token, stream) = oks.stream.limit_progress(
+            //         output_probe.clone(),
+            //         slack,
+            //         format!("import index {idx_id}"),
+            //         limit,
+            //     );
+            //     oks.stream = stream;
+            //     backpressure_token = Some(token);
+            // }
 
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
                 &self.scope.parent,
@@ -607,7 +607,7 @@ where
                     ok_button.press_on_drop(),
                     err_button.press_on_drop(),
                     token,
-                    backpressure_token,
+                    // backpressure_token,
                 )),
             );
         } else {
@@ -1608,10 +1608,12 @@ trait LimitProgress<T: Timestamp> {
     ) -> (Rc<dyn Any>, Self);
 }
 
-impl<G, C> LimitProgress<G::Timestamp> for StreamCore<G, C>
+impl<G, D, R> LimitProgress<G::Timestamp> for StreamCore<G, Vec<(D, G::Timestamp, R)>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
-    C: timely::Container + timely::Data,
+    // C: timely::Container + timely::Data,
+    D: timely::Data,
+    R: timely::Data,
     G::Timestamp: timely::order::TotalOrder + std::fmt::Debug + Clone,
 {
     fn limit_progress(
@@ -1637,7 +1639,15 @@ where
             move |input, output| {
                 let mut pending_caps = pending_caps.borrow_mut();
 
+                let mut rounded_times = BTreeSet::new();
+
+                let round_to = 100;
+
                 while let Some((time, data)) = input.next() {
+                    for time in data.iter().flat_map(|(_, time, _)| slack.results_in(time)) {
+                        let rounded_time = (u64::from(time) / round_to + 1) * round_to;
+                        rounded_times.insert(mz_repr::Timestamp::from(rounded_time));
+                    }
                     output.session(&time).give_container(data);
                     // Record the input time if new.
                     if let (Some(pending_caps), Some(stepped)) =
@@ -1646,6 +1656,9 @@ where
                         if pending_caps
                             .last_key_value()
                             .map_or(true, |(max, _)| max.less_than(&stepped))
+                            || pending_caps
+                                .first_key_value()
+                                .map_or(true, |(min, _)| stepped.less_than(min))
                         {
                             let cap = time.delayed(&stepped);
                             pending_caps.insert(stepped, cap);
@@ -1654,6 +1667,12 @@ where
                 }
 
                 if let Some(pending_caps) = pending_caps.as_mut() {
+                    let lower = pending_caps.first_key_value().map(|(_, cap)| cap.clone());
+                    for time in rounded_times {
+                        let delayed = lower.as_ref().unwrap().delayed(&time);
+                        pending_caps.insert(time, delayed);
+                    }
+
                     // If the input frontier is non-empty, and the handle is non-empty, we're in steady-state.
                     // N.b., the handle is empty before the dataflow was scheduled once.
                     if handle.with_frontier(|f| !f.is_empty()) {
@@ -1674,13 +1693,15 @@ where
                         }
                     }
 
-                    println!(
-                        "[{}] {_name} pending caps: {:?} input: {:?} probe: {:?}",
-                        info.global_id,
-                        pending_caps.keys(),
-                        input.frontier.frontier().get(0),
-                        handle.with_frontier(|f| f.get(0).cloned())
-                    );
+                    if !pending_caps.is_empty() {
+                        println!(
+                            "[{}] {_name} pending caps: {:?} input: {:?} probe: {:?}",
+                            info.global_id,
+                            pending_caps.keys(),
+                            input.frontier.frontier().get(0),
+                            handle.with_frontier(|f| f.get(0).cloned())
+                        );
+                    }
                 }
             }
         });
