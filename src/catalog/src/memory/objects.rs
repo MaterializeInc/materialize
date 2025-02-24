@@ -1309,7 +1309,7 @@ pub struct View {
     pub global_id: GlobalId,
     /// Unoptimized high-level expression from parsing the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
-    /// Optimized mid-level expression from optimizing the `raw_expr`.
+    /// Optimized mid-level expression from (locally) optimizing the `raw_expr`.
     pub optimized_expr: Arc<OptimizedMirRelationExpr>,
     /// Columns of this view.
     pub desc: RelationDesc,
