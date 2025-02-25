@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check, externally_idempotent
+from materialize.checks.checks import Check, disabled, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
@@ -911,8 +911,7 @@ class AlterSink(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
-            + dedent(
+            dedent(
                 """
                 > CREATE TABLE table_alter1 (x int, y string)
                 > CREATE TABLE table_alter2 (x int, y string)
@@ -987,8 +986,7 @@ class AlterSinkMv(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
-            + dedent(
+            dedent(
                 """
                 > CREATE TABLE table_alter_mv1 (a INT);
                 > INSERT INTO table_alter_mv1 VALUES (0)
@@ -1053,13 +1051,253 @@ class AlterSinkMv(Check):
 
 
 @externally_idempotent(False)
+@disabled("due to database-issues#8982")
+class AlterSinkLGSource(Check):
+    """Check ALTER SINK with a load generator source"""
+
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version > MzVersion.parse_mz("v0.134.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > CREATE SOURCE lg1 FROM LOAD GENERATOR COUNTER (UP TO 2);
+                > CREATE SINK sink_alter_lg FROM lg1
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-alter-lg')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > CREATE SOURCE lg2 FROM LOAD GENERATOR COUNTER (UP TO 4, TICK INTERVAL '5s');
+                > ALTER SINK sink_alter_lg SET FROM lg2;
+
+                # Wait for the actual restart to have occurred before inserting
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+                """,
+                """
+                > CREATE SOURCE lg3 FROM LOAD GENERATOR COUNTER (UP TO 6, TICK INTERVAL '5s');
+                > ALTER SINK sink_alter_lg SET FROM lg3;
+
+                # Wait for the actual restart to have occurred before inserting
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > CREATE SOURCE sink_alter_lg_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-alter-lg')
+                > CREATE TABLE sink_alter_lg_source FROM SOURCE sink_alter_lg_source_src (REFERENCE "sink-alter-lg")
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                > SELECT before IS NULL, (after).counter FROM sink_alter_lg_source
+                true 1
+                true 2
+                true 3
+                true 4
+                true 5
+                true 6
+
+                > DROP SOURCE sink_alter_lg_source_src CASCADE;
+            """
+            )
+        )
+
+
+@externally_idempotent(False)
+class AlterSinkPgSource(Check):
+    """Check ALTER SINK with a postgres source"""
+
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version > MzVersion.parse_mz("v0.134.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                CREATE USER postgres3 WITH SUPERUSER PASSWORD 'postgres';
+                ALTER USER postgres3 WITH replication;
+                DROP PUBLICATION IF EXISTS pg;
+                CREATE PUBLICATION pg FOR ALL TABLES;
+                DROP TABLE IF EXISTS pg_table1;
+                CREATE TABLE pg_table1 (f1 INT);
+                ALTER TABLE pg_table1 REPLICA IDENTITY FULL;
+
+                > CREATE SECRET pgpass3 AS 'postgres'
+                > CREATE CONNECTION pg_conn1 FOR POSTGRES
+                  HOST 'postgres',
+                  DATABASE postgres,
+                  USER postgres3,
+                  PASSWORD SECRET pgpass3
+                > CREATE SOURCE pg_source1
+                  FROM POSTGRES CONNECTION pg_conn1
+                  (PUBLICATION 'pg')
+                > CREATE TABLE pg1 FROM SOURCE pg_source1 (REFERENCE pg_table1)
+                > CREATE SINK sink_alter_pg FROM pg1
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-alter-pg')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                INSERT INTO pg_table1 VALUES (1);
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                DROP TABLE IF EXISTS pg_table2;
+                CREATE TABLE pg_table2 (f1 INT);
+                ALTER TABLE pg_table2 REPLICA IDENTITY FULL;
+
+                > CREATE SOURCE pg_source2
+                  FROM POSTGRES CONNECTION pg_conn1
+                  (PUBLICATION 'pg')
+                > CREATE TABLE pg2 FROM SOURCE pg_source2 (REFERENCE pg_table2)
+                > ALTER SINK sink_alter_pg SET FROM pg2;
+
+                # Wait for the actual restart to have occurred before inserting
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=20s
+
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                INSERT INTO pg_table2 VALUES (2);
+                """,
+                """
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                DROP TABLE IF EXISTS pg_table3;
+                CREATE TABLE pg_table3 (f1 INT);
+                ALTER TABLE pg_table3 REPLICA IDENTITY FULL;
+
+                > CREATE SOURCE pg_source3
+                  FROM POSTGRES CONNECTION pg_conn1
+                  (PUBLICATION 'pg')
+                > CREATE TABLE pg3 FROM SOURCE pg_source3 (REFERENCE pg_table3)
+                > ALTER SINK sink_alter_pg SET FROM pg3;
+
+                # Wait for the actual restart to have occurred before inserting
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=20s
+
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                INSERT INTO pg_table3 VALUES (3);
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > CREATE SOURCE sink_alter_pg_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-alter-pg')
+                > CREATE TABLE sink_alter_pg_source FROM SOURCE sink_alter_pg_source_src (REFERENCE "sink-alter-pg")
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                > SELECT before IS NULL, (after).f1 FROM sink_alter_pg_source
+                true 1
+                true 2
+                true 3
+
+                > DROP SOURCE sink_alter_pg_source_src CASCADE;
+            """
+            )
+        )
+
+
+@externally_idempotent(False)
+class AlterSinkWebhook(Check):
+    """Check ALTER SINK with webhook sources"""
+
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version > MzVersion.parse_mz("v0.134.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > CREATE SOURCE webhook_alter1 FROM WEBHOOK BODY FORMAT TEXT;
+                > CREATE SINK sink_alter_wh FROM webhook_alter1
+                  INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-alter-wh')
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE DEBEZIUM
+                $ webhook-append database=materialize schema=public name=webhook_alter1
+                1
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > CREATE SOURCE webhook_alter2 FROM WEBHOOK BODY FORMAT TEXT;
+                > ALTER SINK sink_alter_wh SET FROM webhook_alter2;
+
+                # Wait for the actual restart to have occurred before inserting
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+
+                $ webhook-append database=materialize schema=public name=webhook_alter2
+                2
+                """,
+                """
+                > CREATE SOURCE webhook_alter3 FROM WEBHOOK BODY FORMAT TEXT;
+                > ALTER SINK sink_alter_wh SET FROM webhook_alter3;
+
+                # Wait for the actual restart to have occurred before inserting
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+
+                $ webhook-append database=materialize schema=public name=webhook_alter3
+                3
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > CREATE SOURCE sink_alter_wh_source_src
+                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-alter-wh')
+                > CREATE TABLE sink_alter_wh_source FROM SOURCE sink_alter_wh_source_src (REFERENCE "sink-alter-wh")
+                  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                  ENVELOPE NONE
+
+                > SELECT before IS NULL, (after).body FROM sink_alter_wh_source
+                true 1
+                true 2
+                true 3
+
+                > DROP SOURCE sink_alter_wh_source_src CASCADE;
+            """
+            )
+        )
+
+
+@externally_idempotent(False)
 class AlterSinkOrder(Check):
     """Check ALTER SINK with a table created after the sink, see incident 131"""
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
-            + dedent(
+            dedent(
                 """
                 > CREATE TABLE table_alter_order1 (x int, y string)
                 > CREATE SINK sink_alter_order FROM table_alter_order1
