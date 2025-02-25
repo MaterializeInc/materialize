@@ -1203,12 +1203,12 @@ mod explain {
 
     use std::collections::BTreeMap;
 
-    use mz_expr::explain::ExplainContext;
+    use mz_expr::explain::{ExplainContext, HumanizedExplain, HumanizerMode};
     use mz_expr::MirRelationExpr;
     use mz_ore::stack::RecursionLimitError;
     use mz_repr::explain::{Analyses, AnnotatedPlan};
 
-    use crate::analysis::equivalences::Equivalences;
+    use crate::analysis::equivalences::{Equivalences, HumanizedEquivalenceClasses};
 
     // Analyses should have shortened paths when exported.
     use super::DerivedBuilder;
@@ -1346,7 +1346,12 @@ mod explain {
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.equivalences = Some(match equivs.as_ref() {
-                        Some(equivs) => equivs.to_string(),
+                        Some(equivs) => HumanizedEquivalenceClasses {
+                            equivalence_classes: equivs,
+                            cols: analyses.column_names.as_ref(),
+                            mode: HumanizedExplain::new(config.redacted),
+                        }
+                        .to_string(),
                         None => "<empty collection>".to_string(),
                     });
                 }

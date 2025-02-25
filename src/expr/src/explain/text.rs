@@ -1297,7 +1297,7 @@ where
 /// Render a literal value represented as a single-element [`Row`] or an
 /// [`EvalError`].
 ///
-/// The default implemntation calls [`HumanizerMode::humanize_datum`] for
+/// The default implementation calls [`HumanizerMode::humanize_datum`] for
 /// the former and handles the error case (including redaction) directly for
 /// the latter.
 impl<'a, M> fmt::Display for HumanizedExpr<'a, Result<Row, EvalError>, M>
