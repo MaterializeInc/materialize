@@ -649,6 +649,9 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
 
     /// Whether the source type supports read only mode.
     fn supports_read_only(&self) -> bool;
+
+    /// Whether the source type prefers to run on only one replica of a multi-replica cluster.
+    fn prefers_single_replica(&self) -> bool;
 }
 
 #[derive(Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1027,8 +1030,16 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             GenericSourceConnection::LoadGenerator(conn) => conn.supports_read_only(),
         }
     }
-}
 
+    fn prefers_single_replica(&self) -> bool {
+        match self {
+            GenericSourceConnection::Kafka(conn) => conn.prefers_single_replica(),
+            GenericSourceConnection::Postgres(conn) => conn.prefers_single_replica(),
+            GenericSourceConnection::MySql(conn) => conn.prefers_single_replica(),
+            GenericSourceConnection::LoadGenerator(conn) => conn.prefers_single_replica(),
+        }
+    }
+}
 impl<C: ConnectionAccess> crate::AlterCompatible for GenericSourceConnection<C> {
     fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
