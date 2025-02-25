@@ -23,7 +23,7 @@ use mz_persist_client::read::ListenEvent;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_service::local::Activatable;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::{
@@ -179,7 +179,9 @@ where
     source_resume_uppers
 }
 
-impl<T: Timestamp + Lattice + Codec64 + Display + Sync> AsyncStorageWorker<T> {
+impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
+    AsyncStorageWorker<T>
+{
     /// Creates a new [`AsyncStorageWorker`].
     ///
     /// IMPORTANT: The passed in `activatable` is activated when new responses
@@ -199,73 +201,12 @@ impl<T: Timestamp + Lattice + Codec64 + Display + Sync> AsyncStorageWorker<T> {
             while let Some(command) = command_rx.recv().await {
                 match command {
                     AsyncStorageWorkerCommand::UpdateFrontiers(id, ingestion_description) => {
-                        // Here we update the as-of and upper(i.e resumption) frontiers of the
-                        // ingestion.
-                        //
-                        // A good enough value for the as-of is the `meet({e.since for e in
-                        // exports})` but this is not as tight as it could be because the since
-                        // might be held back for unrelated to the ingestion reasons (e.g a user
-                        // wanting to keep historical data). To make it tight we would need to find
-                        // the maximum frontier at which all inputs to the ingestion are readable
-                        // and start from there. We can find this by defining:
-                        //
-                        // max_readable(shard) = {(t - 1) for t in shard.upper}
-                        // advanced_max_readable(shard) = advance_by(max_readable(shard), shard.since)
-                        // as_of = meet({advanced_max_readable(e) for e in exports})
-                        //
-                        // We defer this optimization for when Materialize allows users to
-                        // arbitrarily hold back collections to perform historical queries and when
-                        // the storage command protocol is updated such that these calculations are
-                        // performed by the controller and not here.
                         let mut resume_uppers = BTreeMap::new();
 
-                        // TODO(petrosagg): The as_of of the ingestion should normally be based
-                        // on the since frontiers of its outputs. Even though the storage
-                        // controller makes sure to make downgrade decisions in an organized
-                        // and ordered fashion, it then proceeds to persist them in an
-                        // asynchronous and disorganized fashion to persist. The net effect is
-                        // that upon restart, or upon observing the persist state like this
-                        // function, one can see non-sensical results like the since of A be in
-                        // advance of B even when B depends on A! This can happen because the
-                        // downgrade of B gets reordered and lost. Here is our best attempt at
-                        // playing detective of what the controller meant to do by blindly
-                        // assuming that the since of the remap shard is a suitable since
-                        // frontier without consulting the since frontier of the outputs. One
-                        // day we will enforce order to chaos and this comment will be deleted.
-                        let remap_shard = ingestion_description
+                        let seen_remap_shard = ingestion_description
                             .ingestion_metadata
                             .remap_shard
                             .expect("ingestions must have a remap shard");
-                        let client = persist_clients
-                            .open(
-                                ingestion_description
-                                    .ingestion_metadata
-                                    .persist_location
-                                    .clone(),
-                            )
-                            .await
-                            .expect("error creating persist client");
-                        let read_handle = client
-                            .open_leased_reader::<SourceData, (), T, Diff>(
-                                remap_shard,
-                                Arc::new(ingestion_description.desc.connection.timestamp_desc()),
-                                Arc::new(UnitSchema),
-                                Diagnostics {
-                                    shard_name: ingestion_description
-                                        .remap_collection_id
-                                        .to_string(),
-                                    handle_purpose: format!("resumption data for {}", id),
-                                },
-                                false,
-                            )
-                            .await
-                            .unwrap();
-                        let as_of = read_handle.since().clone();
-                        mz_ore::task::spawn(move || "deferred_expire", async move {
-                            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-                            read_handle.expire().await;
-                        });
-                        let seen_remap_shard = remap_shard.clone();
 
                         for (id, export) in ingestion_description.source_exports.iter() {
                             // Explicit destructuring to force a compile error when the metadata change
@@ -314,6 +255,61 @@ impl<T: Timestamp + Lattice + Codec64 + Display + Sync> AsyncStorageWorker<T> {
                                     seen_remap_shard, *remap_shard,
                                     "ingestion with multiple remap shards"
                                 );
+                            }
+                        }
+
+                        // Here we update the as-of frontier of the ingestion.
+                        //
+                        // The as-of frontier controls the frontier with which all inputs of the
+                        // ingestion dataflow will be advanced by. It is in our interest to set the
+                        // as-of froniter to the largest possible value, which will result in the
+                        // maximum amount of consolidation, which in turn results in the minimum
+                        // amount of memory required to hydrate.
+                        //
+                        // For each output `o` and for each input `i` of the ingestion the
+                        // controller guarantees that i.since < o.upper except when o.upper is
+                        // [T::minimum()]. Therefore the largest as-of for a particular output `o`
+                        // is `{ (t - 1).advance_by(i.since) | t in o.upper }`.
+                        //
+                        // To calculate the global as_of frontier we take the minimum of all those
+                        // per-output as-of frontiers.
+                        let client = persist_clients
+                            .open(
+                                ingestion_description
+                                    .ingestion_metadata
+                                    .persist_location
+                                    .clone(),
+                            )
+                            .await
+                            .expect("error creating persist client");
+                        let read_handle = client
+                            .open_leased_reader::<SourceData, (), T, Diff>(
+                                seen_remap_shard,
+                                Arc::new(ingestion_description.desc.connection.timestamp_desc()),
+                                Arc::new(UnitSchema),
+                                Diagnostics {
+                                    shard_name: ingestion_description
+                                        .remap_collection_id
+                                        .to_string(),
+                                    handle_purpose: format!("resumption data for {}", id),
+                                },
+                                false,
+                            )
+                            .await
+                            .unwrap();
+                        let remap_since = read_handle.since().clone();
+                        mz_ore::task::spawn(move || "deferred_expire", async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                            read_handle.expire().await;
+                        });
+                        let mut as_of = Antichain::new();
+                        for upper in resume_uppers.values() {
+                            for t in upper.elements() {
+                                let mut t_prime = t.step_back().unwrap_or(T::minimum());
+                                if !remap_since.is_empty() {
+                                    t_prime.advance_by(remap_since.borrow());
+                                    as_of.insert(t_prime);
+                                }
                             }
                         }
 
