@@ -35,7 +35,7 @@ When operating in AWS, we recommend:
 - Using the `r8g`, `r7g`, and `r6g` families when running without local disk.
 
 - Using the `r7gd` and `r6gd` families of instances (and `r8gd` once available)
-  when running with local disk (Recommended for production.  See [Operational guidelines](/installation/operational-guidelines/#locally-attached-nvme-storage-openebs) for more information.)
+  when running with local disk (Recommended for production.  See [Operational guidelines](/installation/operational-guidelines/) for more information.)
 
 ## Prerequisites
 
