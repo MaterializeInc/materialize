@@ -60,7 +60,7 @@ use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMe
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{
     BatchPart, HollowBatch, HollowBatchPart, HollowRun, HollowRunRef, ProtoInlineBatchPart,
-    RunMeta, RunOrder, RunPart, WRITE_DIFFS_SUM,
+    RunMeta, RunOrder, RunPart,
 };
 use crate::stats::{untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED};
 use crate::{PersistConfig, ShardId};
@@ -350,11 +350,9 @@ pub struct BatchBuilderConfig {
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
     pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
-    pub(crate) write_diffs_sum: bool,
     pub(crate) encoding_config: EncodingConfig,
     pub(crate) preferred_order: RunOrder,
     pub(crate) structured_encoding: bool,
-    pub(crate) record_schema_id: bool,
     pub(crate) structured_key_lower_len: usize,
     pub(crate) run_length_limit: usize,
     /// The number of runs to cap the built batch at, or None if we should
@@ -386,12 +384,6 @@ pub(crate) const ENCODING_COMPRESSION_FORMAT: Config<&'static str> = Config::new
     "persist_encoding_compression_format",
     "none",
     "A feature flag to enable compression of Parquet data (Materialize).",
-);
-
-pub(crate) const RECORD_SCHEMA_ID: Config<bool> = Config::new(
-    "persist_record_schema_id",
-    false,
-    "If set, record the ID for the shard's schema in Part and Run metadata (Materialize).",
 );
 
 pub(crate) const STRUCTURED_ORDER: Config<bool> = Config::new(
@@ -472,7 +464,6 @@ impl BatchBuilderConfig {
         let batch_columnar_format =
             BatchColumnarFormat::from_str(&BATCH_COLUMNAR_FORMAT.get(value));
 
-        let record_schema_id = RECORD_SCHEMA_ID.get(value);
         let structured_order = STRUCTURED_ORDER.get(value) && {
             shard_id.to_string() < STRUCTURED_ORDER_UNTIL_SHARD.get(value)
         };
@@ -492,14 +483,12 @@ impl BatchBuilderConfig {
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
             stats_budget: STATS_BUDGET_BYTES.get(value),
             stats_untrimmable_columns: Arc::new(untrimmable_columns(value)),
-            write_diffs_sum: WRITE_DIFFS_SUM.get(value),
             encoding_config: EncodingConfig {
                 use_dictionary: ENCODING_ENABLE_DICTIONARY.get(value),
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
             },
             preferred_order,
             structured_encoding: BUILDER_STRUCTURED.get(value),
-            record_schema_id,
             structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
             run_length_limit: MAX_RUN_LEN.get(value).clamp(2, usize::MAX),
             max_runs: match MAX_RUNS.get(value) {
@@ -803,13 +792,6 @@ where
     ) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
         let batch_delete_enabled = self.parts.cfg.batch_delete_enabled;
         let shard_metrics = Arc::clone(&self.parts.shard_metrics);
-        // If we haven't switched over to the new schema_id field yet, keep writing the old one.
-        let (new_schema_id, deprecated_schema_id) = if self.parts.cfg.record_schema_id {
-            (self.write_schemas.id, None)
-        } else {
-            (None, self.write_schemas.id)
-        };
-
         let runs = self.parts.finish().await;
 
         let mut run_parts = vec![];
@@ -824,8 +806,9 @@ where
             }
             run_meta.push(RunMeta {
                 order: Some(order),
-                schema: new_schema_id,
-                deprecated_schema: deprecated_schema_id,
+                schema: self.write_schemas.id,
+                // Field has been deprecated but kept around to roundtrip state.
+                deprecated_schema: None,
             });
             run_parts.extend(parts);
         }
@@ -955,19 +938,15 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 let handle = mz_ore::task::spawn(
                     || "batch::compact_runs",
                     async move {
-                        // If we haven't switched over to the new schema_id field yet, keep writing the old one.
-                        let (new_schema_id, deprecated_schema_id) = if cfg.batch.record_schema_id {
-                            (schemas.id, None)
-                        } else {
-                            (None, schemas.id)
-                        };
                         let runs: Vec<_> = stream::iter(parts)
                             .then(|(order, parts)| async move {
                                 (
                                     RunMeta {
                                         order: Some(order),
-                                        schema: new_schema_id,
-                                        deprecated_schema: deprecated_schema_id,
+                                        schema: schemas.id,
+                                        // Field has been deprecated but kept around to
+                                        // roundtrip state.
+                                        deprecated_schema: None,
                                     },
                                     parts.into_result().await,
                                 )
@@ -1100,11 +1079,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         self.next_index += 1;
         let ts_rewrite = None;
         let schema_id = write_schemas.id;
-
-        // Decide this once per part and plumb it around as necessary so that we
-        // use a consistent answer for things like inline threshold.
-        let record_schema_id = self.cfg.record_schema_id;
-
         let batch_format = self.cfg.batch_columnar_format;
 
         // If we're going to encode structured data then halve our limit since we're storing
@@ -1142,18 +1116,13 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     batch_metrics
                         .step_inline
                         .inc_by(start.elapsed().as_secs_f64());
-                    // If we haven't switched over to the new schema_id field yet, keep writing the old one.
-                    let (new_schema_id, deprecated_schema_id) = if record_schema_id {
-                        (schema_id, None)
-                    } else {
-                        (None, schema_id)
-                    };
 
                     RunPart::Single(BatchPart::Inline {
                         updates,
                         ts_rewrite,
-                        schema_id: new_schema_id,
-                        deprecated_schema_id,
+                        schema_id,
+                        // Field has been deprecated but kept around to roundtrip state.
+                        deprecated_schema_id: None,
                     })
                 }
                 .instrument(span)
@@ -1388,12 +1357,6 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             }
             stats
         });
-        // If we haven't switched over to the new schema_id field yet, keep writing the old one.
-        let (new_schema_id, deprecated_schema_id) = if cfg.record_schema_id {
-            (schema_id, None)
-        } else {
-            (None, schema_id)
-        };
 
         BatchPart::Hollow(HollowBatchPart {
             key: partial_key,
@@ -1402,10 +1365,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             structured_key_lower,
             stats,
             ts_rewrite,
-            diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
+            diffs_sum: Some(diffs_sum),
             format: Some(cfg.batch_columnar_format),
-            schema_id: new_schema_id,
-            deprecated_schema_id,
+            schema_id,
+            // Field has been deprecated but kept around to roundtrip state.
+            deprecated_schema_id: None,
         })
     }
 

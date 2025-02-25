@@ -276,8 +276,7 @@ impl S3BlobConfig {
             Arc::new(
                 ConfigSet::default()
                     .add(&ENABLE_S3_LGALLOC_CC_SIZES)
-                    .add(&ENABLE_S3_LGALLOC_NONCC_SIZES)
-                    .add(&ENABLE_ONE_ALLOC_PER_REQUEST),
+                    .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
             ),
         )
         .await?;
@@ -343,12 +342,6 @@ pub(crate) const ENABLE_S3_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
     "persist_enable_s3_lgalloc_noncc_sizes",
     false,
     "A feature flag to enable copying fetched s3 data into lgalloc on non-cc sized clusters.",
-);
-
-pub(crate) const ENABLE_ONE_ALLOC_PER_REQUEST: Config<bool> = Config::new(
-    "persist_enable_one_alloc_per_request",
-    true,
-    "An incident flag to disable making only one lgalloc allocation per multi-part request.",
 );
 
 #[async_trait]
@@ -485,25 +478,18 @@ impl Blob for S3Blob {
                     ENABLE_S3_LGALLOC_NONCC_SIZES.get(&self.cfg)
                 };
 
-                // Ideally we write all of the copy all of the bytes into a
-                // single allocation, but we retain a CYA fallback case.
-                let enable_one_allocation =
-                    ENABLE_ONE_ALLOC_PER_REQUEST.get(&self.cfg) && enable_s3_lgalloc;
+                // Copy all of the bytes off the network and into a single allocation.
                 let mut buffer = match object.content_length() {
                     Some(len @ 1..) => {
-                        if enable_one_allocation {
-                            let len: u64 = len.try_into().expect("positive integer");
-                            // N.B. `lgalloc` cannot reallocate so we need to make sure the initial
-                            // allocation is large enough to fit then entire blob.
-                            let buf: MetricsRegion<u8> = self
-                                .metrics
-                                .lgbytes
-                                .persist_s3
-                                .new_region(usize::cast_from(len));
-                            Some(buf)
-                        } else {
-                            None
-                        }
+                        let len: u64 = len.try_into().expect("positive integer");
+                        // N.B. `lgalloc` cannot reallocate so we need to make sure the initial
+                        // allocation is large enough to fit then entire blob.
+                        let buf: MetricsRegion<u8> = self
+                            .metrics
+                            .lgbytes
+                            .persist_s3
+                            .new_region(usize::cast_from(len));
+                        Some(buf)
                     }
                     // content-length of 0 isn't necessarily invalid.
                     Some(len @ ..=-1) => {
@@ -1120,8 +1106,7 @@ mod tests {
                     cfg: Arc::new(
                         ConfigSet::default()
                             .add(&ENABLE_S3_LGALLOC_CC_SIZES)
-                            .add(&ENABLE_S3_LGALLOC_NONCC_SIZES)
-                            .add(&ENABLE_ONE_ALLOC_PER_REQUEST),
+                            .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
                     ),
                     is_cc_active: true,
                 };
