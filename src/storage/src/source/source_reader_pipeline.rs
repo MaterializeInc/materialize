@@ -26,6 +26,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
+use std::future;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -69,6 +70,7 @@ use tokio_stream::wrappers::WatchStream;
 use tracing::trace;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
+use crate::internal_control::InternalStorageCommand;
 use crate::metrics::source::SourceMetrics;
 use crate::metrics::StorageMetrics;
 use crate::source::reclock::ReclockOperator;
@@ -489,6 +491,7 @@ where
     } = config;
 
     let read_only_rx = storage_state.read_only_rx.clone();
+    let internal_cmd_tx = storage_state.internal_cmd_tx.clone();
 
     let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
     let active_worker = chosen_worker == worker_id;
@@ -520,14 +523,28 @@ where
             remap_relation_desc,
             remap_collection_id,
         )
-        .await
-        .unwrap_or_else(|e| {
-            panic!(
-                "Failed to create remap handle for source {}: {}",
-                name,
-                e.display_with_causes()
-            )
-        });
+        .await;
+
+        let remap_handle = match remap_handle {
+            Ok(handle) => handle,
+            Err(e) => {
+                let error = format!(
+                    "Failed to create remap handle for source {}: {}",
+                    name,
+                    e.display_with_causes()
+                );
+                tracing::info!("{}", error);
+                internal_cmd_tx
+                    .send(InternalStorageCommand::SuspendAndRestart { id, reason: error });
+
+                // We cannot continue, and we cannot shut down. Otherwise
+                // downstream operators might interpret our
+                // downgrading/releasing our capability as a statement of
+                // progress.
+                future::pending().await
+            }
+        };
+
         let (mut timestamper, mut initial_batch) = ReclockOperator::new(remap_handle).await;
 
         // Emit initial snapshot of the remap_shard, bootstrapping

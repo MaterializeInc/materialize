@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use futures::stream::LocalBoxStream;
@@ -83,9 +83,11 @@ where
         remap_relation_desc: RelationDesc,
         remap_collection_id: GlobalId,
     ) -> anyhow::Result<Self> {
-        let remap_shard = metadata.remap_shard.ok_or_else(|| {
-            anyhow!("cannot create remap PersistHandle for collection without remap shard")
-        })?;
+        let remap_shard = if let Some(remap_shard) = metadata.remap_shard {
+            remap_shard
+        } else {
+            panic!("cannot create remap PersistHandle for collection without remap shard: {id}, metadata: {:?}", metadata);
+        };
 
         let persist_client = persist_clients
             .open(metadata.persist_location.clone())
@@ -104,7 +106,7 @@ where
                 false,
             )
             .await
-            .context("error opening persist shard")?;
+            .expect("invalid usage");
 
         let upper = write_handle.upper();
         // We want a leased reader because elsewhere in the code the `as_of`
@@ -117,13 +119,14 @@ where
         // Allow manually simulating the scenario where the since of the remap
         // shard has advanced too far.
         fail_point!("invalid_remap_as_of");
-        assert!(
-            PartialOrder::less_equal(since, &as_of),
-            "invalid as_of: as_of({as_of:?}) < since({since:?}), \
-            source {id}, \
-            remap_shard: {:?}",
-            metadata.remap_shard
-        );
+        if !PartialOrder::less_equal(since, &as_of) {
+            anyhow::bail!(
+                "invalid as_of: as_of({as_of:?}) < since({since:?}), \
+                source {id}, \
+                remap_shard: {:?}",
+                metadata.remap_shard
+            );
+        }
 
         assert!(
             as_of.elements() == [IntoTime::minimum()] || PartialOrder::less_than(&as_of, upper),
