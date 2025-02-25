@@ -71,7 +71,7 @@ impl RelationPartStats<'_> {
                 Datum::String(strings.upper.as_str()),
             ),
             JsonStats::Numerics(numerics) => {
-                match mz_repr::stats2::decode_numeric(numerics, arena) {
+                match mz_repr::stats::decode_numeric(numerics, arena) {
                     Ok((lower, upper)) => ResultSpec::value_between(lower, upper),
                     Err(err) => {
                         tracing::error!(%err, "failed to decode Json Numeric stats!");
@@ -195,7 +195,7 @@ impl RelationPartStats<'_> {
         };
         let col_stats = ok_stats.cols.get(name.as_str())?;
 
-        let min_max = mz_repr::stats2::col_values(&typ.scalar_type, &col_stats.values, arena);
+        let min_max = mz_repr::stats::col_values(&typ.scalar_type, &col_stats.values, arena);
         let null_count = col_stats.nulls.as_ref().map_or(0, |nulls| nulls.count);
         let total_count = self.len();
 

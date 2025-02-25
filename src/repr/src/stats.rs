@@ -613,7 +613,7 @@ mod tests {
         let arena = RowArena::default();
         for (name, typ) in schema.iter() {
             let col_stats = actual.col(name.as_str()).unwrap();
-            crate::stats2::col_values(&typ.scalar_type, &col_stats.values, &arena);
+            crate::stats::col_values(&typ.scalar_type, &col_stats.values, &arena);
         }
     }
 

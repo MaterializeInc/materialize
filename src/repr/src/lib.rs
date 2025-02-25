@@ -41,7 +41,7 @@ pub mod network_policy_id;
 pub mod optimize;
 pub mod refresh_schedule;
 pub mod role_id;
-pub mod stats2;
+pub mod stats;
 pub mod strconv;
 pub mod timestamp;
 pub mod url;

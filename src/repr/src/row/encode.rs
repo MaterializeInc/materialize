@@ -60,7 +60,7 @@ use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
     ProtoNumeric, ProtoRange, ProtoRangeInner, ProtoRow,
 };
-use crate::stats2::{fixed_stats_from_column, numeric_stats_from_column, stats_for_json};
+use crate::stats::{fixed_stats_from_column, numeric_stats_from_column, stats_for_json};
 use crate::{Datum, ProtoRelationDesc, RelationDesc, Row, RowPacker, ScalarType, Timestamp};
 
 // TODO(parkmycar): Benchmark the difference between `FixedSizeBinaryArray` and `BinaryArray`.
@@ -2285,7 +2285,7 @@ mod tests {
             .map(|(name, ty)| {
                 let col_stats = stats.cols.get(name.as_str()).unwrap();
                 let lower_upper =
-                    crate::stats2::col_values(&ty.scalar_type, &col_stats.values, &arena);
+                    crate::stats::col_values(&ty.scalar_type, &col_stats.values, &arena);
                 let null_count = col_stats.nulls.map_or(0, |n| n.count);
 
                 (lower_upper, null_count)
