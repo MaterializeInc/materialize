@@ -231,7 +231,7 @@ pub fn build_compute_dataflow<A: Allocate>(
         let mut tokens: BTreeMap<_, Rc<dyn Any>> = BTreeMap::new();
         let output_probe = Handle::default();
 
-        let slack = mz_repr::Timestamp::new(1);
+        let slack = mz_repr::Timestamp::new(1000);
 
         scope.clone().region_named(&input_name, |region| {
             // Import declared sources into the rendering context.
@@ -1608,104 +1608,121 @@ trait LimitProgress<T: Timestamp> {
     ) -> (Rc<dyn Any>, Self);
 }
 
-impl<G, D, R> LimitProgress<G::Timestamp> for StreamCore<G, Vec<(D, G::Timestamp, R)>>
+impl<G, D, R> LimitProgress<mz_repr::Timestamp> for StreamCore<G, Vec<(D, mz_repr::Timestamp, R)>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
-    // C: timely::Container + timely::Data,
     D: timely::Data,
     R: timely::Data,
-    G::Timestamp: timely::order::TotalOrder + std::fmt::Debug + Clone,
 {
     fn limit_progress(
         &self,
-        handle: Handle<G::Timestamp>,
-        slack: <G::Timestamp as Timestamp>::Summary,
-        _name: String,
+        handle: Handle<mz_repr::Timestamp>,
+        slack: mz_repr::Timestamp,
+        name: String,
         limit: Option<usize>,
     ) -> (Rc<dyn Any>, Self) {
         let mut button = None;
 
-        let stream = self.unary_frontier(Pipeline, "LimitProgress", |_cap, info| {
-            // Times that we've observed on our input.
-            let pending_caps: Rc<
-                RefCell<Option<BTreeMap<G::Timestamp, Capability<G::Timestamp>>>>,
-            > = Rc::new(RefCell::new(Some(BTreeMap::new())));
+        let stream =
+            self.unary_frontier(Pipeline, &format!("LimitProgress({name})"), |_cap, info| {
+                // Times that we've observed on our input.
+                let mut pending_times: BTreeSet<G::Timestamp> = BTreeSet::new();
+                // Capability for the lower bound of `pending_times`, if any.
+                let mut retained_cap: Option<Capability<G::Timestamp>> = None;
 
-            let activator = self.scope().activator_for(info.address);
-            handle.activate(activator.clone());
+                let activator = self.scope().activator_for(info.address);
+                handle.activate(activator.clone());
 
-            button = Some(ShutdownButton::new(Rc::clone(&pending_caps), activator));
+                let shutdown = Rc::new(());
+                button = Some(ShutdownButton::new(
+                    Rc::new(RefCell::new(Some(Rc::clone(&shutdown)))),
+                    activator,
+                ));
+                let shutdown = Rc::downgrade(&shutdown);
 
-            move |input, output| {
-                let mut pending_caps = pending_caps.borrow_mut();
-
-                let mut rounded_times = BTreeSet::new();
-
-                let round_to = 100;
-
-                while let Some((time, data)) = input.next() {
-                    for time in data.iter().flat_map(|(_, time, _)| slack.results_in(time)) {
-                        let rounded_time = (u64::from(time) / round_to + 1) * round_to;
-                        rounded_times.insert(mz_repr::Timestamp::from(rounded_time));
+                move |input, output| {
+                    if shutdown.strong_count() == 0 {
+                        retained_cap = None;
+                        pending_times.clear();
+                        while let Some(_) = input.next() {}
+                        return;
                     }
-                    output.session(&time).give_container(data);
-                    // Record the input time if new.
-                    if let (Some(pending_caps), Some(stepped)) =
-                        (pending_caps.as_mut(), slack.results_in(time.time()))
-                    {
-                        if pending_caps
-                            .last_key_value()
-                            .map_or(true, |(max, _)| max.less_than(&stepped))
-                            || pending_caps
-                                .first_key_value()
-                                .map_or(true, |(min, _)| stepped.less_than(min))
+
+                    let round_to = 1_000;
+
+                    while let Some((cap, data)) = input.next() {
+                        for time in data.iter().flat_map(|(_, time, _)| slack.results_in(time)) {
+                            let rounded_time = (u64::from(time) / round_to)
+                                .saturating_add(1)
+                                .saturating_mul(round_to);
+                            pending_times.insert(rounded_time.into());
+                        }
+                        output.session(&cap).give_container(data);
+                        if retained_cap
+                            .as_ref()
+                            .map_or(true, |c| !c.time().less_than(&cap.time()))
                         {
-                            let cap = time.delayed(&stepped);
-                            pending_caps.insert(stepped, cap);
+                            retained_cap = Some(cap.retain());
                         }
                     }
-                }
 
-                if let Some(pending_caps) = pending_caps.as_mut() {
-                    let lower = pending_caps.first_key_value().map(|(_, cap)| cap.clone());
-                    for time in rounded_times {
-                        let delayed = lower.as_ref().unwrap().delayed(&time);
-                        pending_caps.insert(time, delayed);
-                    }
-
-                    // If the input frontier is non-empty, and the handle is non-empty, we're in steady-state.
-                    // N.b., the handle is empty before the dataflow was scheduled once.
-                    if handle.with_frontier(|f| !f.is_empty()) {
-                        // Get the current input time. Assumes a total order.
-                        let time = handle.with_frontier(|f| f.get(0).unwrap().clone());
-                        // if let Some(with_slack) = slack.results_in(&time) {
-                        // Pop caps while they're less than output frontier + slack.
-                        while pending_caps
-                            .first_key_value()
-                            .map_or(false, |(retained_time, _)| retained_time.less_equal(&time))
+                    handle.with_frontier(|f| {
+                        while pending_times
+                            .first()
+                            .map_or(false, |retained_time| !f.less_than(&retained_time))
                         {
-                            let _ = pending_caps.pop_first();
+                            let _ = pending_times.pop_first();
                         }
-                    }
+                    });
+
                     if let Some(limit) = limit {
-                        while pending_caps.len() > limit {
-                            let _ = pending_caps.pop_first();
+                        while pending_times.len() > limit {
+                            let _ = pending_times.pop_first();
                         }
                     }
 
-                    if !pending_caps.is_empty() {
-                        println!(
-                            "[{}] {_name} pending caps: {:?} input: {:?} probe: {:?}",
+                    match (retained_cap.as_mut(), pending_times.first()) {
+                        (Some(cap), Some(first)) => cap.downgrade(first),
+                        (_, None) => retained_cap = None,
+                        _ => {}
+                    }
+
+                    if !pending_times.is_empty() {
+                        tracing::debug!(
                             info.global_id,
-                            pending_caps.keys(),
-                            input.frontier.frontier().get(0),
-                            handle.with_frontier(|f| f.get(0).cloned())
+                            pending_times = %ptd::PendingTimesDisplay(&pending_times),
+                            frontier = ?input.frontier.frontier().get(0),
+                            probe = ?handle.with_frontier(|f| f.get(0).cloned()),
+                            "pending times",
                         );
                     }
                 }
-            }
-        });
+            });
         (Rc::new(button.unwrap().press_on_drop()), stream)
+    }
+}
+
+mod ptd {
+    use std::collections::BTreeSet;
+    use std::fmt::{Display, Formatter};
+
+    pub(crate) struct PendingTimesDisplay<'a, T>(pub(crate) &'a BTreeSet<T>);
+
+    impl Display for PendingTimesDisplay<'_, mz_repr::Timestamp> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            let mut iter = self.0.iter();
+            write!(f, "[")?;
+            if let Some(first) = iter.next() {
+                write!(f, "{}", first)?;
+                let mut last = u64::from(first);
+                for time in iter {
+                    write!(f, ", +{}", u64::from(time) - last)?;
+                    last = u64::from(time);
+                }
+            }
+            write!(f, "]")?;
+            Ok(())
+        }
     }
 }
 

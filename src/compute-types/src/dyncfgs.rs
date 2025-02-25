@@ -193,10 +193,12 @@ pub const ENABLE_COMPUTE_LOGICAL_BACKPRESSURE: Config<bool> = Config::new(
 );
 
 /// Maximal number of capabilities retained by the logical backpressure operator.
+///
+/// The default is sufficiently large that we should rarely hit it in practice.
 pub const COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES: Config<Option<usize>> =
     Config::new(
         "compute_logical_backpressure_max_retained_capabilities",
-        None,
+        Some(1024),
         "The maximum number of capabilities retained by the logical backpressure operator.",
     );
 
