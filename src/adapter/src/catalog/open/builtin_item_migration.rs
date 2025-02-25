@@ -496,7 +496,7 @@ mod persist_schema {
     use mz_persist_types::codec_impls::{
         SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder,
     };
-    use mz_persist_types::columnar::Schema2;
+    use mz_persist_types::columnar::Schema;
     use mz_persist_types::stats::NoneStats;
     use mz_persist_types::Codec;
 
@@ -597,11 +597,11 @@ mod persist_schema {
         }
     }
 
-    /// An implementation of [Schema2] for [TableKey].
+    /// An implementation of [Schema] for [TableKey].
     #[derive(Debug, PartialEq)]
     pub(super) struct TableKeySchema;
 
-    impl Schema2<TableKey> for TableKeySchema {
+    impl Schema<TableKey> for TableKeySchema {
         type ArrowColumn = StringArray;
         type Statistics = NoneStats;
 

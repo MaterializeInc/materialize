@@ -21,7 +21,7 @@ use bytes::{BufMut, Bytes};
 use timely::order::Product;
 
 use crate::arrow::ArrayOrd;
-use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
+use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema};
 use crate::stats::{ColumnStatKinds, ColumnarStats, NoneStats, StructStats};
 use crate::{Codec, Codec64, Opaque, ShardId};
 
@@ -30,7 +30,7 @@ use crate::{Codec, Codec64, Opaque, ShardId};
 /// reasons.
 const BYTES_CODEC_NAME: &str = "Vec<u8>";
 
-/// An implementation of [Schema2] for [()].
+/// An implementation of [Schema] for [()].
 #[derive(Debug, Default, PartialEq)]
 pub struct UnitSchema;
 
@@ -127,7 +127,7 @@ impl ColumnEncoder<()> for UnitColumnar {
     }
 }
 
-impl Schema2<()> for UnitSchema {
+impl Schema<()> for UnitSchema {
     type ArrowColumn = NullArray;
     type Statistics = NoneStats;
 
@@ -296,11 +296,11 @@ impl<T: SimpleColumnarData> ColumnDecoder<T> for SimpleColumnarDecoder<T> {
     }
 }
 
-/// An implementation of [Schema2] for [String].
+/// An implementation of [Schema] for [String].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StringSchema;
 
-impl Schema2<String> for StringSchema {
+impl Schema<String> for StringSchema {
     type ArrowColumn = StringArray;
     type Statistics = NoneStats;
 
@@ -345,11 +345,11 @@ impl Codec for String {
     }
 }
 
-/// An implementation of [Schema2] for [`Vec<u8>`].
+/// An implementation of [Schema] for [`Vec<u8>`].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct VecU8Schema;
 
-impl Schema2<Vec<u8>> for VecU8Schema {
+impl Schema<Vec<u8>> for VecU8Schema {
     type ArrowColumn = BinaryArray;
     type Statistics = NoneStats;
 
@@ -365,7 +365,7 @@ impl Schema2<Vec<u8>> for VecU8Schema {
     }
 }
 
-impl Schema2<Bytes> for VecU8Schema {
+impl Schema<Bytes> for VecU8Schema {
     type ArrowColumn = BinaryArray;
     type Statistics = NoneStats;
 
@@ -461,11 +461,11 @@ impl Codec for ShardId {
     }
 }
 
-/// An implementation of [Schema2] for [ShardId].
+/// An implementation of [Schema] for [ShardId].
 #[derive(Debug, PartialEq)]
 pub struct ShardIdSchema;
 
-impl Schema2<ShardId> for ShardIdSchema {
+impl Schema<ShardId> for ShardIdSchema {
     type ArrowColumn = StringArray;
     type Statistics = NoneStats;
 
@@ -541,7 +541,7 @@ impl Opaque for i64 {
     }
 }
 
-/// A placeholder for a [Codec] impl that hasn't yet gotten a real [Schema2].
+/// A placeholder for a [Codec] impl that hasn't yet gotten a real [Schema].
 #[derive(Debug)]
 pub struct TodoSchema<T>(PhantomData<T>);
 
@@ -557,7 +557,7 @@ impl<T> PartialEq for TodoSchema<T> {
     }
 }
 
-impl<T: Debug + Send + Sync> Schema2<T> for TodoSchema<T> {
+impl<T: Debug + Send + Sync> Schema<T> for TodoSchema<T> {
     type ArrowColumn = StructArray;
     type Statistics = NoneStats;
 

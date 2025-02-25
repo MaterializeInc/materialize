@@ -14,11 +14,11 @@ use std::sync::Arc;
 
 use arrow::array::{Array, Int64Array};
 
-use crate::columnar::{ColumnEncoder, Schema2};
+use crate::columnar::{ColumnEncoder, Schema};
 use crate::Codec64;
 
 /// A structured columnar representation of one blob's worth of data.
-pub struct Part2 {
+pub struct Part {
     /// The 'k' values from a Part, generally `SourceData`.
     pub key: Arc<dyn Array>,
     /// The 'v' values from a Part, generally `()`.
@@ -29,24 +29,24 @@ pub struct Part2 {
     pub diff: Int64Array,
 }
 
-/// A builder for [`Part2`].
+/// A builder for [`Part`].
 #[derive(Debug)]
-pub struct PartBuilder2<K, KS: Schema2<K>, V, VS: Schema2<V>> {
+pub struct PartBuilder<K, KS: Schema<K>, V, VS: Schema<V>> {
     key: KS::Encoder,
     val: VS::Encoder,
     time: Codec64Mut,
     diff: Codec64Mut,
 }
 
-impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
-    /// Returns a new [`PartBuilder2`].
+impl<K, KS: Schema<K>, V, VS: Schema<V>> PartBuilder<K, KS, V, VS> {
+    /// Returns a new [`PartBuilder`].
     pub fn new(key_schema: &KS, val_schema: &VS) -> Self {
         let key = key_schema.encoder().unwrap();
         let val = val_schema.encoder().unwrap();
         let time = Codec64Mut(Vec::new());
         let diff = Codec64Mut(Vec::new());
 
-        PartBuilder2 {
+        PartBuilder {
             key,
             val,
             time,
@@ -59,7 +59,7 @@ impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
         self.key.goodbytes() + self.val.goodbytes() + self.time.goodbytes() + self.diff.goodbytes()
     }
 
-    /// Push a new row onto this [`PartBuilder2`].
+    /// Push a new row onto this [`PartBuilder`].
     pub fn push<T: Codec64, D: Codec64>(&mut self, key: &K, val: &V, t: T, d: D) {
         self.key.append(key);
         self.val.append(val);
@@ -67,9 +67,9 @@ impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
         self.diff.push(d);
     }
 
-    /// Finishes the builder returning a [`Part2`].
-    pub fn finish(self) -> Part2 {
-        let PartBuilder2 {
+    /// Finishes the builder returning a [`Part`].
+    pub fn finish(self) -> Part {
+        let PartBuilder {
             key,
             val,
             time,
@@ -81,7 +81,7 @@ impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
         let time = Int64Array::from(time.0);
         let diff = Int64Array::from(diff.0);
 
-        Part2 {
+        Part {
             key: Arc::new(key_col),
             val: Arc::new(val_col),
             time,
@@ -90,8 +90,8 @@ impl<K, KS: Schema2<K>, V, VS: Schema2<V>> PartBuilder2<K, KS, V, VS> {
     }
 
     /// Finish the builder and replace it with an empty one.
-    pub fn finish_and_replace(&mut self, key_schema: &KS, val_schema: &VS) -> Part2 {
-        let builder = mem::replace(self, PartBuilder2::new(key_schema, val_schema));
+    pub fn finish_and_replace(&mut self, key_schema: &KS, val_schema: &VS) -> Part {
+        let builder = mem::replace(self, PartBuilder::new(key_schema, val_schema));
         builder.finish()
     }
 }
@@ -132,7 +132,9 @@ mod tests {
             true
         }
 
-        assert!(is_send_sync::<Part2>(PhantomData));
-        assert!(is_send_sync::<PartBuilder2<(), UnitSchema, (), UnitSchema>>(PhantomData));
+        assert!(is_send_sync::<Part>(PhantomData));
+        assert!(is_send_sync::<PartBuilder<(), UnitSchema, (), UnitSchema>>(
+            PhantomData
+        ));
     }
 }

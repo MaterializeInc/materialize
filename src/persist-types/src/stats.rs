@@ -23,8 +23,8 @@ use proptest::strategy::{Strategy, Union};
 use proptest_derive::Arbitrary;
 use prost::Message;
 
-use crate::columnar::{ColumnDecoder, Schema2};
-use crate::part::Part2;
+use crate::columnar::{ColumnDecoder, Schema};
+use crate::part::Part;
 use crate::stats::bytes::any_bytes_stats;
 use crate::stats::primitive::any_primitive_stats;
 
@@ -341,10 +341,10 @@ pub trait TrimStats: Message {
     fn trim(&mut self);
 }
 
-/// Aggregate statistics about data contained in a [Part2].
+/// Aggregate statistics about data contained in a [Part].
 #[derive(Arbitrary, Debug)]
 pub struct PartStats {
-    /// Aggregate statistics about key data contained in a [Part2].
+    /// Aggregate statistics about key data contained in a [Part].
     pub key: StructStats,
 }
 
@@ -356,10 +356,10 @@ impl serde::Serialize for PartStats {
 }
 
 impl PartStats {
-    /// Calculates and returns stats for the given [`Part2`].
-    pub fn new<T, K>(part: &Part2, desc: &K) -> Result<Self, anyhow::Error>
+    /// Calculates and returns stats for the given [`Part`].
+    pub fn new<T, K>(part: &Part, desc: &K) -> Result<Self, anyhow::Error>
     where
-        K: Schema2<T, Statistics = StructStats>,
+        K: Schema<T, Statistics = StructStats>,
     {
         let decoder = K::decoder_any(desc, &part.key).context("decoder_any")?;
         let stats = decoder.stats();

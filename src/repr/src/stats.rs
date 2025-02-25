@@ -11,8 +11,8 @@
 mod tests {
     use arrow::array::AsArray;
     use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::columnar::{ColumnDecoder, Schema2};
-    use mz_persist_types::part::PartBuilder2;
+    use mz_persist_types::columnar::{ColumnDecoder, Schema};
+    use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::{ProtoStructStats, StructStats, TrimStats};
     use mz_proto::RustType;
     use proptest::prelude::*;
@@ -23,7 +23,7 @@ mod tests {
         schema: &RelationDesc,
         datums: impl IntoIterator<Item = &'a Row>,
     ) {
-        let mut builder = PartBuilder2::new(schema, &UnitSchema);
+        let mut builder = PartBuilder::new(schema, &UnitSchema);
         for datum in datums {
             builder.push(datum, &(), 1u64, 1i64);
         }
@@ -31,7 +31,7 @@ mod tests {
 
         let key_col = part.key.as_struct();
         let decoder =
-            <RelationDesc as Schema2<Row>>::decoder(schema, key_col.clone()).expect("success");
+            <RelationDesc as Schema<Row>>::decoder(schema, key_col.clone()).expect("success");
         let mut actual: ProtoStructStats = RustType::into_proto(&decoder.stats());
 
         // It's not particularly easy to give StructStats a PartialEq impl, but

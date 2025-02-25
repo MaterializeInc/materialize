@@ -22,7 +22,7 @@ use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
-use mz_persist_types::columnar::{codec_to_schema2, data_type, schema2_to_codec};
+use mz_persist_types::columnar::{codec_to_schema, data_type, schema_to_codec};
 use mz_persist_types::parquet::EncodingConfig;
 use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::{Codec, Codec64};
@@ -297,9 +297,9 @@ impl BlobTraceUpdates {
                 timestamps,
                 diffs,
             } => {
-                let key = schema2_to_codec::<K>(key_schema, &*key_values.key).expect("valid keys");
+                let key = schema_to_codec::<K>(key_schema, &*key_values.key).expect("valid keys");
                 let val =
-                    schema2_to_codec::<V>(val_schema, &*key_values.val).expect("valid values");
+                    schema_to_codec::<V>(val_schema, &*key_values.val).expect("valid values");
                 let records = ColumnarRecords::new(key, val, timestamps.clone(), diffs.clone());
 
                 *self = BlobTraceUpdates::Both(records, key_values.clone());
@@ -319,8 +319,8 @@ impl BlobTraceUpdates {
     ) -> &ColumnarRecordsStructuredExt {
         let structured = match self {
             BlobTraceUpdates::Row(records) => {
-                let key = codec_to_schema2::<K>(key_schema, records.keys()).expect("valid keys");
-                let val = codec_to_schema2::<V>(val_schema, records.vals()).expect("valid values");
+                let key = codec_to_schema::<K>(key_schema, records.keys()).expect("valid keys");
+                let val = codec_to_schema::<V>(val_schema, records.vals()).expect("valid values");
 
                 *self = BlobTraceUpdates::Both(
                     records.clone(),

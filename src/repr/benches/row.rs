@@ -15,8 +15,8 @@ use criterion::{criterion_group, criterion_main, Bencher, Criterion, Throughput}
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::{ColumnDecoder, Schema2};
-use mz_persist_types::part::{Part2, PartBuilder2};
+use mz_persist_types::columnar::{ColumnDecoder, Schema};
+use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::Codec;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::Numeric;
@@ -271,8 +271,8 @@ fn decode_legacy(part: &ColumnarRecords, schema: &RelationDesc) -> Row {
     row
 }
 
-fn encode_structured2(schema: &RelationDesc, rows: &[Row]) -> Part2 {
-    let mut builder = PartBuilder2::new(schema, &UnitSchema);
+fn encode_structured2(schema: &RelationDesc, rows: &[Row]) -> Part {
+    let mut builder = PartBuilder::new(schema, &UnitSchema);
     for row in rows.iter() {
         builder.push(row, &(), 1u64, 1i64);
     }
@@ -331,7 +331,7 @@ fn bench_roundtrip(c: &mut Criterion) {
         b.iter(|| std::hint::black_box(encode_legacy(&rows)));
     });
     c.bench_function("roundtrip_encode_structured2", |b| {
-        let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
         b.iter(|| {
             for row in rows.iter() {
                 builder.push(row, &(), 1u64, 1i64);
@@ -352,7 +352,7 @@ fn bench_roundtrip(c: &mut Criterion) {
             .downcast_ref::<StructArray>()
             .expect("struct array");
         let decoder =
-            <RelationDesc as Schema2<Row>>::decoder(&schema, col.clone()).expect("success");
+            <RelationDesc as Schema<Row>>::decoder(&schema, col.clone()).expect("success");
         let mut row = Row::default();
 
         b.iter(|| {
@@ -427,7 +427,7 @@ fn bench_json(c: &mut Criterion) {
         let schema =
             RelationDesc::from_names_and_types(vec![("a", ScalarType::Jsonb.nullable(false))]);
         b.iter(|| {
-            let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+            let mut builder = PartBuilder::new(&schema, &UnitSchema);
             for _ in 0..NUM_ROWS {
                 std::hint::black_box(&mut builder).push(&row, &(), 1u64, 1i64);
             }
@@ -439,7 +439,7 @@ fn bench_json(c: &mut Criterion) {
     group.bench_function("decode/structured2", |b| {
         let schema =
             RelationDesc::from_names_and_types(vec![("a", ScalarType::Jsonb.nullable(false))]);
-        let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
         builder.push(&row, &(), 1u64, 1i64);
         let part = builder.finish();
 
@@ -449,7 +449,7 @@ fn bench_json(c: &mut Criterion) {
             .downcast_ref::<StructArray>()
             .expect("struct array");
         let decoder =
-            <RelationDesc as Schema2<Row>>::decoder(&schema, col.clone()).expect("success");
+            <RelationDesc as Schema<Row>>::decoder(&schema, col.clone()).expect("success");
         let mut row = Row::default();
 
         b.iter(|| {
@@ -475,7 +475,7 @@ fn bench_string(c: &mut Criterion) {
         let schema =
             RelationDesc::from_names_and_types(vec![("a", ScalarType::String.nullable(false))]);
         b.iter(|| {
-            let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+            let mut builder = PartBuilder::new(&schema, &UnitSchema);
             for _ in 0..NUM_ROWS {
                 std::hint::black_box(&mut builder).push(&row, &(), 1u64, 1i64);
             }
@@ -487,7 +487,7 @@ fn bench_string(c: &mut Criterion) {
     group.bench_function("decode/structured2", |b| {
         let schema =
             RelationDesc::from_names_and_types(vec![("a", ScalarType::String.nullable(false))]);
-        let mut builder = PartBuilder2::new(&schema, &UnitSchema);
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
         builder.push(&row, &(), 1u64, 1i64);
         let part = builder.finish();
 
@@ -497,7 +497,7 @@ fn bench_string(c: &mut Criterion) {
             .downcast_ref::<StructArray>()
             .expect("struct array");
         let decoder =
-            <RelationDesc as Schema2<Row>>::decoder(&schema, col.clone()).expect("success");
+            <RelationDesc as Schema<Row>>::decoder(&schema, col.clone()).expect("success");
         let mut row = Row::default();
 
         b.iter(|| {

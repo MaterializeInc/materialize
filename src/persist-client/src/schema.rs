@@ -413,7 +413,7 @@ mod tests {
     use mz_dyncfg::ConfigUpdates;
     use mz_persist_types::arrow::ArrayOrd;
     use mz_persist_types::codec_impls::UnitSchema;
-    use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
+    use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema};
     use mz_persist_types::stats::{NoneStats, StructStats};
     use mz_persist_types::ShardId;
     use timely::progress::Antichain;
@@ -485,7 +485,7 @@ mod tests {
     #[derive(Debug, Clone, Default, PartialEq)]
     struct StringsSchema(Vec<bool>);
 
-    impl Schema2<Strings> for StringsSchema {
+    impl Schema<Strings> for StringsSchema {
         type ArrowColumn = StructArray;
         type Statistics = NoneStats;
         type Decoder = StringsDecoder;

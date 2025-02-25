@@ -27,7 +27,7 @@ use kafka::KafkaSourceExportDetails;
 use load_generator::{LoadGeneratorOutput, LoadGeneratorSourceExportDetails};
 use mz_ore::assert_none;
 use mz_persist_types::arrow::ArrayOrd;
-use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema2};
+use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema};
 use mz_persist_types::stats::{
     ColumnNullStats, ColumnStatKinds, ColumnarStats, PrimitiveStats, StructStats,
 };
@@ -1903,7 +1903,7 @@ impl ColumnEncoder<SourceData> for SourceDataColumnarEncoder {
     }
 }
 
-impl Schema2<SourceData> for RelationDesc {
+impl Schema<SourceData> for RelationDesc {
     type ArrowColumn = StructArray;
     type Statistics = StructStats;
 
@@ -1963,7 +1963,7 @@ mod tests {
         config: &EncodingConfig,
     ) {
         let metrics = ColumnarMetrics::disconnected();
-        let mut encoder = <RelationDesc as Schema2<SourceData>>::encoder(desc).unwrap();
+        let mut encoder = <RelationDesc as Schema<SourceData>>::encoder(desc).unwrap();
         for data in &datas {
             encoder.append(data);
         }
@@ -2018,14 +2018,14 @@ mod tests {
             .clone();
 
         // Try generating stats for the data, just to make sure we don't panic.
-        let stats = <RelationDesc as Schema2<SourceData>>::decoder_any(desc, &rnd_col)
+        let stats = <RelationDesc as Schema<SourceData>>::decoder_any(desc, &rnd_col)
             .expect("valid decoder")
             .stats();
 
         // Read back all of our data and assert it roundtrips.
         let mut rnd_data = SourceData(Ok(Row::default()));
         let decoder =
-            <RelationDesc as Schema2<SourceData>>::decoder(desc, rnd_col.clone()).unwrap();
+            <RelationDesc as Schema<SourceData>>::decoder(desc, rnd_col.clone()).unwrap();
         for (idx, og_data) in datas.iter().enumerate() {
             decoder.decode(idx, &mut rnd_data);
             assert_eq!(og_data, &rnd_data);
@@ -2042,7 +2042,7 @@ mod tests {
         };
         let mut datum_vec = DatumVec::new();
         let arena = RowArena::default();
-        let decoder = <RelationDesc as Schema2<SourceData>>::decoder(read_desc, rnd_col).unwrap();
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(read_desc, rnd_col).unwrap();
 
         for (idx, og_data) in datas.iter().enumerate() {
             decoder.decode(idx, &mut rnd_data);
@@ -2151,9 +2151,9 @@ mod tests {
             .all(|(i, j)| cmp(i, j).is_le())
     }
 
-    fn get_data_type(schema: &impl Schema2<SourceData>) -> arrow::datatypes::DataType {
+    fn get_data_type(schema: &impl Schema<SourceData>) -> arrow::datatypes::DataType {
         use mz_persist_types::columnar::ColumnEncoder;
-        let array = Schema2::encoder(schema).expect("valid schema").finish();
+        let array = Schema::encoder(schema).expect("valid schema").finish();
         Array::data_type(&array).clone()
     }
 
@@ -2164,12 +2164,12 @@ mod tests {
         migration: Migration,
         datas: &[SourceData],
     ) {
-        let mut encoder = Schema2::<SourceData>::encoder(old).expect("valid schema");
+        let mut encoder = Schema::<SourceData>::encoder(old).expect("valid schema");
         for data in datas {
             encoder.append(data);
         }
         let old = encoder.finish();
-        let new = Schema2::<SourceData>::encoder(new)
+        let new = Schema::<SourceData>::encoder(new)
             .expect("valid schema")
             .finish();
         let old: Arc<dyn Array> = Arc::new(old);
@@ -2292,13 +2292,13 @@ mod tests {
         fn test_case(desc: RelationDesc, datas: Vec<SourceData>) {
             let half = datas.len() / 2;
 
-            let mut encoder_a = <RelationDesc as Schema2<SourceData>>::encoder(&desc).unwrap();
+            let mut encoder_a = <RelationDesc as Schema<SourceData>>::encoder(&desc).unwrap();
             for data in &datas[..half] {
                 encoder_a.append(data);
             }
             let col_a = encoder_a.finish();
 
-            let mut encoder_b = <RelationDesc as Schema2<SourceData>>::encoder(&desc).unwrap();
+            let mut encoder_b = <RelationDesc as Schema<SourceData>>::encoder(&desc).unwrap();
             for data in &datas[half..] {
                 encoder_b.append(data);
             }
