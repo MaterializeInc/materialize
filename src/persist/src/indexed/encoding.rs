@@ -298,8 +298,7 @@ impl BlobTraceUpdates {
                 diffs,
             } => {
                 let key = schema_to_codec::<K>(key_schema, &*key_values.key).expect("valid keys");
-                let val =
-                    schema_to_codec::<V>(val_schema, &*key_values.val).expect("valid values");
+                let val = schema_to_codec::<V>(val_schema, &*key_values.val).expect("valid values");
                 let records = ColumnarRecords::new(key, val, timestamps.clone(), diffs.clone());
 
                 *self = BlobTraceUpdates::Both(records, key_values.clone());
