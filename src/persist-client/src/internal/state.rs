@@ -89,12 +89,6 @@ pub(crate) const ROLLUP_THRESHOLD: Config<usize> = Config::new(
     "The number of seqnos between rollups.",
 );
 
-pub(crate) const WRITE_DIFFS_SUM: Config<bool> = Config::new(
-    "persist_write_diffs_sum",
-    true,
-    "CYA to skip writing the diffs_sum field on HollowBatchPart",
-);
-
 /// A token to disambiguate state commands that could not otherwise be
 /// idempotent.
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]

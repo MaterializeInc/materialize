@@ -1011,7 +1011,6 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_optimize_ignored_data_decode"] = (
             BOOLEAN_FLAG_VALUES
         )
-        self.flags_with_values["persist_write_diffs_sum"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_variadic_left_join_lowering"] = (
             BOOLEAN_FLAG_VALUES
         )
