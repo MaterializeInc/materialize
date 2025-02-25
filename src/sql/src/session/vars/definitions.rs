@@ -2193,6 +2193,12 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_sql_server_source,
+        desc: "Creating a SQL SERVER source",
+        default: false,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {

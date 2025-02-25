@@ -2322,7 +2322,7 @@ impl<'a> Parser<'a> {
             _ => unreachable!(),
         };
         let connection_type = match self
-            .expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH, MYSQL, YUGABYTE])?
+            .expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH, SQL, MYSQL, YUGABYTE])?
         {
             AWS => {
                 if self.parse_keyword(PRIVATELINK) {
@@ -2340,6 +2340,10 @@ impl<'a> Parser<'a> {
             SSH => {
                 self.expect_keyword(TUNNEL)?;
                 CreateConnectionType::Ssh
+            }
+            SQL => {
+                self.expect_keyword(SERVER)?;
+                CreateConnectionType::SqlServer
             }
             MYSQL => CreateConnectionType::MySql,
             YUGABYTE => CreateConnectionType::Yugabyte,
@@ -3215,7 +3219,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source_connection(
         &mut self,
     ) -> Result<CreateSourceConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, MYSQL, LOAD, YUGABYTE])? {
+        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, SQL, MYSQL, LOAD, YUGABYTE])? {
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
                 let connection = self.parse_raw_name()?;
@@ -3246,6 +3250,24 @@ impl<'a> Parser<'a> {
                 };
 
                 Ok(CreateSourceConnection::Yugabyte {
+                    connection,
+                    options,
+                })
+            }
+            SQL => {
+                self.expect_keywords(&[SERVER, CONNECTION])?;
+                let connection = self.parse_raw_name()?;
+
+                let options = if self.consume_token(&Token::LParen) {
+                    let options =
+                        self.parse_comma_separated(Parser::parse_sql_server_connection_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    options
+                } else {
+                    vec![]
+                };
+
+                Ok(CreateSourceConnection::SqlServer {
                     connection,
                     options,
                 })
@@ -3401,6 +3423,23 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn parse_sql_server_connection_option(
+        &mut self,
+    ) -> Result<SqlServerConfigOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[CAPTURE])? {
+            CAPTURE => {
+                self.expect_keyword(INSTANCE)?;
+                SqlServerConfigOptionName::CaptureInstance
+            }
+            _ => unreachable!(),
+        };
+
+        Ok(SqlServerConfigOption {
+            name,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {

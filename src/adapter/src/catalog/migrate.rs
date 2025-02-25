@@ -749,6 +749,13 @@ fn ast_rewrite_sources_to_tables(
                 changed_ids.insert(source_id, new_table_id);
             }
 
+            // TODO(sql_server1): Consider how to migrate SQL Server subsources
+            // to the source table world.
+            Statement::CreateSource(CreateSourceStatement {
+                connection: CreateSourceConnection::SqlServer { .. },
+                ..
+            }) => (),
+
             #[expect(unreachable_patterns)]
             Statement::CreateSource(_) => {}
             _ => (),
