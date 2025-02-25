@@ -629,10 +629,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
             InternalStorageCommand::CreateIngestionDataflow {
                 id: ingestion_id,
-                ingestion_description,
+                mut ingestion_description,
                 as_of,
-                resume_uppers,
-                source_resume_uppers,
+                mut resume_uppers,
+                mut source_resume_uppers,
             } => {
                 info!(
                     ?as_of,
@@ -642,6 +642,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.timely_worker.peers(),
                 );
 
+                // We initialize statistics before we prune finished exports. We
+                // still want to export statistics for these, plus the rendering
+                // machinery will get confused if there are not at least
+                // statistics for the "main" source.
                 for (export_id, export) in ingestion_description.source_exports.iter() {
                     let resume_upper = resume_uppers[export_id].clone();
                     self.storage_state.aggregated_statistics.initialize_source(
@@ -660,6 +664,18 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         },
                     );
                 }
+
+                let finished_exports: BTreeSet<GlobalId> = resume_uppers
+                    .iter()
+                    .filter(|(_, frontier)| frontier.is_empty())
+                    .map(|(id, _)| *id)
+                    .collect();
+
+                resume_uppers.retain(|id, _| !finished_exports.contains(id));
+                source_resume_uppers.retain(|id, _| !finished_exports.contains(id));
+                ingestion_description
+                    .source_exports
+                    .retain(|id, _| !finished_exports.contains(id));
 
                 for id in ingestion_description.collection_ids() {
                     // If there is already a shared upper, we re-use it, to make
