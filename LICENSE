@@ -16,16 +16,23 @@ Licensor:                  Materialize, Inc.
 Licensed Work:             Materialize Version 20250225
                            The Licensed Work is © 2025 Materialize, Inc.
 
-Additional Use Grant:      Within a single installation of Materialize, you
-                           may create one compute cluster with one
-                           single-process replica for any purpose and you may
-                           concurrently use multiple such installations,
-                           subject to each of the following conditions:
-                           (a) you may not create installations with multiple
-                           clusters, nor compute clusters with multiple
-                           replicas, nor compute cluster replicas with multiple
-                           processes; and (b) you may not use the Licensed Work
-                           for a Database Service. A “Database Service” is a
+Additional Use Grant:      Within a single installation of the Licensed Work,
+                           the sum of the memory limits across all clusters
+                           must remain below 24GiB, and the sum of the disk
+                           limits across all clusters must remain below 48GiB.
+                           You may operate multiple installations of the
+                           Licensed Work for distinct applications, provided
+                           each installation remains below the 24GiB memory
+                           limit and 48GiB disk limit. You may also run
+                           multiple applications on a single installation, so
+                           long as that installation does not exceed the 24GiB
+                           memory limit and 48GiB disk limit in total. However,
+                           you may not split or “shard” a single application
+                           across multiple installations in order to exceed
+                           these limits.
+
+                           Further, you may not use the Licensed Work for a
+                           Database Service. A "Database Service" is a
                            commercial offering that allows third parties (other
                            than your employees and contractors) to access the
                            functionality of the Licensed Work by creating views
