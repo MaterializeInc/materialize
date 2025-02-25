@@ -194,7 +194,7 @@ impl Client {
     pub async fn get_transaction_isolation(
         &mut self,
     ) -> Result<TransactionIsolationLevel, anyhow::Error> {
-        const QUERY: &'static str = "SELECT transaction_isolation_level FROM sys.dm_exec_sessions where session_id = @@SPID;";
+        const QUERY: &str = "SELECT transaction_isolation_level FROM sys.dm_exec_sessions where session_id = @@SPID;";
         let rows = self
             .simple_query(QUERY)
             .await
@@ -495,15 +495,15 @@ impl tiberius::ToSql for OwnedColumnData {
             OwnedColumnData::F64(inner) => tiberius::ColumnData::F64(*inner),
             OwnedColumnData::Bit(inner) => tiberius::ColumnData::Bit(*inner),
             OwnedColumnData::String(inner) => {
-                tiberius::ColumnData::String(inner.as_deref().map(|s| Cow::Borrowed(s)))
+                tiberius::ColumnData::String(inner.as_deref().map(Cow::Borrowed))
             }
             OwnedColumnData::Guid(inner) => tiberius::ColumnData::Guid(*inner),
             OwnedColumnData::Binary(inner) => {
-                tiberius::ColumnData::Binary(inner.as_deref().map(|b| Cow::Borrowed(b)))
+                tiberius::ColumnData::Binary(inner.as_deref().map(Cow::Borrowed))
             }
             OwnedColumnData::Numeric(inner) => tiberius::ColumnData::Numeric(*inner),
             OwnedColumnData::Xml(inner) => {
-                tiberius::ColumnData::Xml(inner.as_ref().map(|x| Cow::Borrowed(x)))
+                tiberius::ColumnData::Xml(inner.as_ref().map(Cow::Borrowed))
             }
             OwnedColumnData::DateTime(inner) => tiberius::ColumnData::DateTime(*inner),
             OwnedColumnData::SmallDateTime(inner) => tiberius::ColumnData::SmallDateTime(*inner),
