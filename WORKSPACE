@@ -667,6 +667,7 @@ crates_repository(
         "//:src/sql-lexer/Cargo.toml",
         "//:src/sql-parser/Cargo.toml",
         "//:src/sql-pretty/Cargo.toml",
+        "//:src/sql-server-util/Cargo.toml",
         "//:src/sql/Cargo.toml",
         "//:src/sqllogictest/Cargo.toml",
         "//:src/ssh-util/Cargo.toml",

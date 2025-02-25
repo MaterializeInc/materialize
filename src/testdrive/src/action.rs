@@ -241,8 +241,7 @@ pub struct State {
     // === Database driver state. ===
     mysql_clients: BTreeMap<String, mysql_async::Conn>,
     postgres_clients: BTreeMap<String, tokio_postgres::Client>,
-    sql_server_clients:
-        BTreeMap<String, tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>>,
+    sql_server_clients: BTreeMap<String, mz_sql_server_util::Client>,
 
     // === Fivetran state. ===
     fivetran_destination_url: String,

@@ -6932,6 +6932,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-sql-server-util"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "derivative",
+ "futures",
+ "smallvec",
+ "static_assertions",
+ "tiberius",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-sqllogictest"
 version = "0.0.1"
 dependencies = [
@@ -7357,6 +7374,7 @@ dependencies = [
  "mz-repr",
  "mz-sql",
  "mz-sql-parser",
+ "mz-sql-server-util",
  "mz-storage-types",
  "mz-tls-util",
  "parquet",
@@ -10466,19 +10484,17 @@ dependencies = [
 
 [[package]]
 name = "tiberius"
-version = "0.11.7"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66303a42b7c5daffb95c10cd8f3007a9c29b3e90128cf42b3738f58102aa2516"
+checksum = "a1446cb4198848d1562301a3340424b4f425ef79f35ef9ee034769a9dd92c10d"
 dependencies = [
  "async-trait",
  "asynchronous-codec",
  "byteorder",
  "bytes",
  "connection-string",
- "encoding",
+ "encoding_rs",
  "enumflags2",
- "futures",
- "futures-sink",
  "futures-util",
  "num-traits",
  "once_cell",
