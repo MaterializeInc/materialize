@@ -8,12 +8,13 @@ updates:
     time: "22:00"
   open-pull-requests-limit: 50
   labels: [A-dependencies]
-  groups:
-    simple:
-      applies-to: version-updates
-      update-types:
-        - minor
-        - patch
+  # TODO: Reenable groups when there is a solution for many upgrades causing timeouts, see for example https://github.com/MaterializeInc/materialize/actions/runs/13487319380/job/37680155878
+  # groups:
+  #   simple:
+  #     applies-to: version-updates
+  #     update-types:
+  #       - minor
+  #       - patch
 - package-ecosystem: cargo
   directory: /misc/wasm
   schedule:
