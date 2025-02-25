@@ -31,7 +31,7 @@ use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::arrow::ArrayOrd;
-use mz_persist_types::columnar::{ColumnDecoder, Schema2};
+use mz_persist_types::columnar::{ColumnDecoder, Schema};
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -728,8 +728,8 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     part: EitherOrBoth<
         ColumnarRecords,
         (
-            <K::Schema as Schema2<K>>::Decoder,
-            <V::Schema as Schema2<V>>::Decoder,
+            <K::Schema as Schema<K>>::Decoder,
+            <V::Schema as Schema<V>>::Decoder,
         ),
     >,
     timestamps: Int64Array,
@@ -1059,8 +1059,8 @@ where
     fn decode_structured(
         &self,
         idx: usize,
-        keys: &<K::Schema as Schema2<K>>::Decoder,
-        vals: &<V::Schema as Schema2<V>>::Decoder,
+        keys: &<K::Schema as Schema<K>>::Decoder,
+        vals: &<V::Schema as Schema<V>>::Decoder,
         key: &mut Option<K>,
         val: &mut Option<V>,
     ) -> (Result<K, String>, Result<V, String>) {
@@ -1399,9 +1399,9 @@ impl<T: Timestamp + Codec64> RustType<(ProtoLeasedBatchPart, Arc<Metrics>)> for 
     }
 }
 
-/// Format we'll use when decoding a [`Part2`].
+/// Format we'll use when decoding a [`Part`].
 ///
-/// [`Part2`]: mz_persist_types::part::Part2
+/// [`Part`]: mz_persist_types::part::Part
 #[derive(Debug, Copy, Clone)]
 pub enum PartDecodeFormat {
     /// Decode from opaque `Codec` data.

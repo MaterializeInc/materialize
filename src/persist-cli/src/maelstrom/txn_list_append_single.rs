@@ -713,7 +713,7 @@ mod codec_impls {
     use mz_persist_types::codec_impls::{
         SimpleColumnarData, SimpleColumnarDecoder, SimpleColumnarEncoder,
     };
-    use mz_persist_types::columnar::Schema2;
+    use mz_persist_types::columnar::Schema;
     use mz_persist_types::stats::NoneStats;
     use mz_persist_types::Codec;
 
@@ -774,7 +774,7 @@ mod codec_impls {
     #[derive(Debug, PartialEq)]
     pub struct MaelstromKeySchema;
 
-    impl Schema2<MaelstromKey> for MaelstromKeySchema {
+    impl Schema<MaelstromKey> for MaelstromKeySchema {
         type ArrowColumn = UInt64Array;
         type Statistics = NoneStats;
 
@@ -846,7 +846,7 @@ mod codec_impls {
     #[derive(Debug, PartialEq)]
     pub struct MaelstromValSchema;
 
-    impl Schema2<MaelstromVal> for MaelstromValSchema {
+    impl Schema<MaelstromVal> for MaelstromValSchema {
         type ArrowColumn = BinaryArray;
         type Statistics = NoneStats;
 

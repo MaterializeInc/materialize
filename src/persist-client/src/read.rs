@@ -29,7 +29,7 @@ use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
 use mz_persist::location::{Blob, SeqNo};
-use mz_persist_types::columnar::{ColumnDecoder, Schema2};
+use mz_persist_types::columnar::{ColumnDecoder, Schema};
 use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};

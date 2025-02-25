@@ -32,9 +32,9 @@ use mz_persist::indexed::columnar::{ColumnarRecordsBuilder, ColumnarRecordsStruc
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
 use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
-use mz_persist_types::columnar::{ColumnDecoder, Schema2};
+use mz_persist_types::columnar::{ColumnDecoder, Schema};
 use mz_persist_types::parquet::{CompressionFormat, EncodingConfig};
-use mz_persist_types::part::{Part2, PartBuilder2};
+use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::{
     trim_to_budget, truncate_bytes, PartStats, TruncateBound, TRUNCATE_LEN,
@@ -553,7 +553,7 @@ where
     pub(crate) key_buf: Vec<u8>,
     pub(crate) val_buf: Vec<u8>,
 
-    records_builder: Either<ColumnarRecordsBuilder, PartBuilder2<K, K::Schema, V, V::Schema>>,
+    records_builder: Either<ColumnarRecordsBuilder, PartBuilder<K, K::Schema, V, V::Schema>>,
     pub(crate) builder: BatchBuilderInternal<K, V, T, D>,
 }
 
@@ -570,7 +570,7 @@ where
         metrics: Arc<Metrics>,
     ) -> Self {
         let records_builder = if builder.parts.cfg.structured_encoding {
-            Either::Right(PartBuilder2::new(
+            Either::Right(PartBuilder::new(
                 builder.write_schemas.key.as_ref(),
                 builder.write_schemas.val.as_ref(),
             ))
@@ -621,7 +621,7 @@ where
         let updates = match self.records_builder {
             Either::Left(builder) => BlobTraceUpdates::Row(builder.finish(&self.metrics.columnar)),
             Either::Right(builder) => {
-                let Part2 {
+                let Part {
                     key,
                     val,
                     time,
@@ -698,7 +698,7 @@ where
             Either::Right(builder) => {
                 builder.push(key, val, ts.clone(), diff.clone());
                 if builder.goodbytes() >= self.builder.parts.cfg.blob_target_size {
-                    let Part2 {
+                    let Part {
                         key,
                         val,
                         time,

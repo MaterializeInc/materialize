@@ -35,7 +35,7 @@ use mz_ore::vec::PartialOrdVecExt;
 use mz_persist::indexed::encoding::BatchColumnarFormat;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::arrow::{ArrayBound, ProtoArrayData};
-use mz_persist_types::columnar::{ColumnEncoder, Schema2};
+use mz_persist_types::columnar::{ColumnEncoder, Schema};
 use mz_persist_types::schema::{backward_compatible, SchemaId};
 use mz_persist_types::{Codec, Codec64, Opaque};
 use mz_proto::ProtoType;
@@ -1379,11 +1379,11 @@ where
         key_schema: &K::Schema,
         val_schema: &V::Schema,
     ) -> ControlFlow<NoOpStateTransition<CaESchema<K, V>>, CaESchema<K, V>> {
-        fn data_type<T>(schema: &impl Schema2<T>) -> DataType {
+        fn data_type<T>(schema: &impl Schema<T>) -> DataType {
             // To be defensive, create an empty batch and inspect the resulting
-            // data type (as opposed to something like allowing the `Schema2` to
+            // data type (as opposed to something like allowing the `Schema` to
             // declare the DataType).
-            let array = Schema2::encoder(schema).expect("valid schema").finish();
+            let array = Schema::encoder(schema).expect("valid schema").finish();
             Array::data_type(&array).clone()
         }
 
