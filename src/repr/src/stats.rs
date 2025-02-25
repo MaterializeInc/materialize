@@ -9,7 +9,7 @@
 
 //! Persist Stats for non-primitive types.
 //!
-//! For primitive types please see [`mz_persist_types::stats2`].
+//! For primitive types please see [`mz_persist_types::stats`].
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;

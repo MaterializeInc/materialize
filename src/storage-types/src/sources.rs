@@ -29,9 +29,9 @@ use mz_ore::assert_none;
 use mz_persist_types::arrow::ArrayOrd;
 use mz_persist_types::columnar::{ColumnDecoder, ColumnEncoder, Schema};
 use mz_persist_types::stats::{
-    ColumnNullStats, ColumnStatKinds, ColumnarStats, PrimitiveStats, StructStats,
+    ColumnNullStats, ColumnStatKinds, ColumnarStats, ColumnarStatsBuilder, PrimitiveStats,
+    StructStats,
 };
-use mz_persist_types::stats2::ColumnarStatsBuilder;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
@@ -2024,8 +2024,7 @@ mod tests {
 
         // Read back all of our data and assert it roundtrips.
         let mut rnd_data = SourceData(Ok(Row::default()));
-        let decoder =
-            <RelationDesc as Schema<SourceData>>::decoder(desc, rnd_col.clone()).unwrap();
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(desc, rnd_col.clone()).unwrap();
         for (idx, og_data) in datas.iter().enumerate() {
             decoder.decode(idx, &mut rnd_data);
             assert_eq!(og_data, &rnd_data);

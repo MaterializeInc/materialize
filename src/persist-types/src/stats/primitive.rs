@@ -545,7 +545,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::stats2::ColumnarStatsBuilder;
+    use crate::stats::ColumnarStatsBuilder;
 
     #[mz_ore::test]
     fn test_truncate_bytes() {
