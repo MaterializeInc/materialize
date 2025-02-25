@@ -60,7 +60,7 @@ use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMe
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{
     BatchPart, HollowBatch, HollowBatchPart, HollowRun, HollowRunRef, ProtoInlineBatchPart,
-    RunMeta, RunOrder, RunPart, WRITE_DIFFS_SUM,
+    RunMeta, RunOrder, RunPart,
 };
 use crate::stats::{untrimmable_columns, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED};
 use crate::{PersistConfig, ShardId};
@@ -350,7 +350,6 @@ pub struct BatchBuilderConfig {
     pub(crate) stats_collection_enabled: bool,
     pub(crate) stats_budget: usize,
     pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
-    pub(crate) write_diffs_sum: bool,
     pub(crate) encoding_config: EncodingConfig,
     pub(crate) preferred_order: RunOrder,
     pub(crate) structured_encoding: bool,
@@ -484,7 +483,6 @@ impl BatchBuilderConfig {
             stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
             stats_budget: STATS_BUDGET_BYTES.get(value),
             stats_untrimmable_columns: Arc::new(untrimmable_columns(value)),
-            write_diffs_sum: WRITE_DIFFS_SUM.get(value),
             encoding_config: EncodingConfig {
                 use_dictionary: ENCODING_ENABLE_DICTIONARY.get(value),
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
@@ -1367,7 +1365,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             structured_key_lower,
             stats,
             ts_rewrite,
-            diffs_sum: cfg.write_diffs_sum.then_some(diffs_sum),
+            diffs_sum: Some(diffs_sum),
             format: Some(cfg.batch_columnar_format),
             schema_id,
             // Field has been deprecated but kept around to roundtrip state.
