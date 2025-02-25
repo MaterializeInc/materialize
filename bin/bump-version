@@ -66,7 +66,7 @@ bin/bazel gen
 
 bin/helm-chart-version-bump "v$version"
 
-helm_docs_version=1.14.3
+helm_docs_version=1.14.2
 if ! helm-docs --help > /dev/null; then
     echo "helm-docs is currently not installed"
     echo "Install helm-docs $helm_docs_version from https://github.com/norwoodj/helm-docs/releases/tag/v$helm_docs_version"
