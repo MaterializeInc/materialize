@@ -349,6 +349,57 @@ Target cluster: quickstart
 
 EOF
 
+# Test redaction with the equivalences analysis.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted, equivalences) AS TEXT FOR
+SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
+----
+Explained Query:
+  With
+    cte l0 =
+      Project (#0{a}, #1{b}) // { equivs: "[[█, (#0{a}) IS NULL]]" }
+        Join on=(#0{a} = #2{a}) type=differential // { equivs: "[[#0{a}, #2{a}], [█, (#0{a}) IS NULL]]" }
+          ArrangeBy keys=[[#0{a}]] // { equivs: "[]" }
+            ReadIndex on=t t_a_idx=[differential join] // { equivs: "[]" }
+          ArrangeBy keys=[[#0{a}]] // { equivs: "[[█, (#0{a}) IS NULL]]" }
+            Distinct project=[#0{a}] // { equivs: "[[█, (#0{a}) IS NULL]]" }
+              Project (#0{a}) // { equivs: "[[█, (#0{a}) IS NULL]]" }
+                Filter (#0{a} < #1{a}) // { equivs: "[[█, (#0{a}) IS NULL, (#1{a}) IS NULL], [█, (#0{a} < #1{a})]]" }
+                  CrossJoin type=differential // { equivs: "[[█, (#1{a}) IS NULL]]" }
+                    ArrangeBy keys=[[]] // { equivs: "[]" }
+                      Distinct project=[#0{a}] // { equivs: "[]" }
+                        Project (#0{a}) // { equivs: "[]" }
+                          ReadIndex on=t t_a_idx=[*** full scan ***] // { equivs: "[]" }
+                    ArrangeBy keys=[[]] // { equivs: "[[█, (#0{a}) IS NULL]]" }
+                      Project (#0{a}) // { equivs: "[[█, (#0{a}) IS NULL]]" }
+                        ReadStorage materialize.public.mv // { equivs: "[[█, (#0{a}) IS NULL]]" }
+  Return // { equivs: "[[█, (#0{a}) IS NULL, (#1{b}) IS NULL]]" }
+    Project (#0{a}, #1{b}) // { equivs: "[[█, (#0{a}) IS NULL, (#1{b}) IS NULL]]" }
+      Join on=(#1{b} = #2{b}) type=differential // { equivs: "[[#1{b}, #2{b}], [█, (#0{a}) IS NULL, (#1{b}) IS NULL]]" }
+        ArrangeBy keys=[[#1{b}]] // { equivs: "[[█, (#0{a}) IS NULL]]" }
+          Get l0 // { equivs: "[[█, (#0{a}) IS NULL]]" }
+        ArrangeBy keys=[[#0{b}]] // { equivs: "[[█, (#0{b}) IS NULL]]" }
+          Distinct project=[#0{b}] // { equivs: "[[█, (#0{b}) IS NULL]]" }
+            Project (#0{b}) // { equivs: "[[█, (#0{b}) IS NULL]]" }
+              Filter (#0{b} > #1{b}) // { equivs: "[[█, (#0{b}) IS NULL, (#1{b}) IS NULL], [█, (#0{b} > #1{b})]]" }
+                CrossJoin type=differential // { equivs: "[]" }
+                  ArrangeBy keys=[[]] // { equivs: "[]" }
+                    Distinct project=[#0{b}] // { equivs: "[]" }
+                      Project (#1{b}) // { equivs: "[]" }
+                        Get l0 // { equivs: "[[█, (#0{a}) IS NULL]]" }
+                  ArrangeBy keys=[[]] // { equivs: "[]" }
+                    Project (#1{b}) // { equivs: "[]" }
+                      ReadStorage materialize.public.mv // { equivs: "[[█, (#0{a}) IS NULL]]" }
+
+Source materialize.public.mv
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***, differential join)
+
+Target cluster: quickstart
+
+EOF
+
 # Test outer joins (ON syntax).
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS TEXT FOR

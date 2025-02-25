@@ -1626,6 +1626,31 @@ Target cluster: no_replicas
 
 EOF
 
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(EQUIVALENCES, HUMANIZED EXPRESSIONS) FOR
+SELECT *
+FROM t5, t6
+WHERE x = a AND b IN (8,9);
+----
+Explained Query:
+  Project (#0{x}..=#2{z}, #0{x}, #4{b}) // { equivs: "[[#0{x}, #3{x}], [false, (#0{x}) IS NULL, (#1{y}) IS NULL], [true, ((#4{b} = 8) OR (#4{b} = 9))]]" }
+    Join on=(#0{x} = #3{a}) type=differential // { equivs: "[[#0{x}, #3{a}], [false, (#0{x}) IS NULL, (#1{y}) IS NULL], [true, ((#4{b} = 8) OR (#4{b} = 9))]]" }
+      ArrangeBy keys=[[#0{x}]] // { equivs: "[[false, (#0{x}) IS NULL, (#1{y}) IS NULL]]" }
+        Filter (#0{x}) IS NOT NULL // { equivs: "[[false, (#0{x}) IS NULL, (#1{y}) IS NULL]]" }
+          ReadStorage materialize.public.t5 // { equivs: "[[false, (#1{y}) IS NULL]]" }
+      ArrangeBy keys=[[#0{a}]] // { equivs: "[[false, (#0{a}) IS NULL], [true, ((#1{b} = 8) OR (#1{b} = 9))]]" }
+        Filter ((#1{b} = 8) OR (#1{b} = 9)) // { equivs: "[[false, (#0{a}) IS NULL], [true, ((#1{b} = 8) OR (#1{b} = 9))]]" }
+          ReadStorage materialize.public.t6 // { equivs: "[[false, (#0{a}) IS NULL]]" }
+
+Source materialize.public.t5
+  filter=((#0{x}) IS NOT NULL)
+Source materialize.public.t6
+  filter=(((#1{b} = 8) OR (#1{b} = 9)))
+
+Target cluster: no_replicas
+
+EOF
+
 # `count(*)` is planned as `count(true)`. We take care in EXPLAIN to show `count(true)` as `count(*)` to avoid confusing
 # users.
 query T multiline
