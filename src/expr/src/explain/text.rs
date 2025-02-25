@@ -1095,6 +1095,15 @@ pub trait HumanizerMode: Sized + Clone {
             write!(f, "{}", datum)
         }
     }
+
+    /// Wrap the given `exprs` (with `cols`) into [`HumanizedExpr`] with the current `mode`.
+    fn seq<'i, T>(
+        &self,
+        exprs: &'i [T],
+        cols: Option<&'i Vec<String>>,
+    ) -> impl Iterator<Item = HumanizedExpr<'i, T, Self>> + Clone {
+        exprs.iter().map(move |expr| self.expr(expr, cols))
+    }
 }
 
 /// A [`HumanizerMode`] that is ambiguous but allows us to print valid SQL
@@ -1103,21 +1112,6 @@ pub trait HumanizerMode: Sized + Clone {
 /// The inner parameter is `true` iff literals should be redacted.
 #[derive(Debug, Clone)]
 pub struct HumanizedNotice(bool);
-
-impl HumanizedNotice {
-    // TODO: move to `HumanizerMode` once we start using a Rust version with the
-    // corresponding Rust stabilization issue:
-    //
-    // https://github.com/rust-lang/rust/pull/115822
-    pub fn seq<'i, T>(
-        &self,
-        exprs: &'i [T],
-        cols: Option<&'i Vec<String>>,
-    ) -> impl Iterator<Item = HumanizedExpr<'i, T, Self>> + Clone {
-        let mode = self.clone();
-        exprs.iter().map(move |expr| mode.expr(expr, cols))
-    }
-}
 
 impl HumanizerMode for HumanizedNotice {
     fn new(redacted: bool) -> Self {
@@ -1139,21 +1133,6 @@ impl HumanizerMode for HumanizedNotice {
 /// The inner parameter is `true` iff literals should be redacted.
 #[derive(Debug, Clone)]
 pub struct HumanizedExplain(bool);
-
-impl HumanizedExplain {
-    // TODO: move to `HumanizerMode` once we start using a Rust version with the
-    // corresponding Rust stabilization issue:
-    //
-    // https://github.com/rust-lang/rust/pull/115822
-    pub fn seq<'i, T>(
-        &self,
-        exprs: &'i [T],
-        cols: Option<&'i Vec<String>>,
-    ) -> impl Iterator<Item = HumanizedExpr<'i, T, Self>> + Clone {
-        let mode = self.clone();
-        exprs.iter().map(move |expr| mode.expr(expr, cols))
-    }
-}
 
 impl HumanizerMode for HumanizedExplain {
     fn new(redacted: bool) -> Self {
