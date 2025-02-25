@@ -71,7 +71,7 @@ impl Client {
         &mut self,
         query: impl Into<Cow<'a, str>>,
         params: &[&dyn ToSql],
-    ) -> Result<u64, anyhow::Error> {
+    ) -> Result<SmallVec<[u64; 1]>, anyhow::Error> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         let params = params
@@ -105,14 +105,11 @@ impl Client {
     /// to be sent.
     ///
     /// [`Future`]: std::future::Future
-    pub async fn query<'a, 'q>(
-        &'a mut self,
-        query: impl Into<Cow<'q, str>>,
-        params: &'q [&'q dyn tiberius::ToSql],
-    ) -> Result<SmallVec<[tiberius::Row; 1]>, anyhow::Error>
-    where
-        'a: 'q,
-    {
+    pub async fn query<'a>(
+        &mut self,
+        query: impl Into<Cow<'a, str>>,
+        params: &[&dyn tiberius::ToSql],
+    ) -> Result<SmallVec<[tiberius::Row; 1]>, anyhow::Error> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         let params = params
@@ -127,7 +124,7 @@ impl Client {
             .send(Request { tx, kind })
             .context("sending request")?;
 
-        let response = rx.await.context("channel")?.context("execute")?;
+        let response = rx.await.context("channel")?.context("query")?;
         match response {
             Response::Rows(rows) => Ok(rows),
             other @ Response::Execute { .. } => {
@@ -147,13 +144,10 @@ impl Client {
     /// to be sent.
     ///
     /// [`Future`]: std::future::Future
-    pub async fn simple_query<'a, 'q>(
-        &'a mut self,
-        query: impl Into<Cow<'q, str>>,
-    ) -> Result<SmallVec<[tiberius::Row; 1]>, anyhow::Error>
-    where
-        'a: 'q,
-    {
+    pub async fn simple_query<'a>(
+        &mut self,
+        query: impl Into<Cow<'a, str>>,
+    ) -> Result<SmallVec<[tiberius::Row; 1]>, anyhow::Error> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let kind = RequestKind::SimpleQuery {
             query: query.into().to_string(),
@@ -162,7 +156,7 @@ impl Client {
             .send(Request { tx, kind })
             .context("sending request")?;
 
-        let response = rx.await.context("channel")?.context("execute")?;
+        let response = rx.await.context("channel")?.context("simple_query")?;
         match response {
             Response::Rows(rows) => Ok(rows),
             other @ Response::Execute { .. } => {
@@ -174,6 +168,9 @@ impl Client {
     }
 
     /// Starts a transaction which is automatically rolled back on drop.
+    ///
+    /// To commit or rollback the transaction, see [`Transaction::commit`] and
+    /// [`Transaction::rollback`] respectively.
     pub async fn transaction(&mut self) -> Result<Transaction<'_>, anyhow::Error> {
         Transaction::new(self).await.context("new transaction")
     }
@@ -235,31 +232,45 @@ impl<'a> Transaction<'a> {
         &mut self,
         query: impl Into<Cow<'q, str>>,
         params: &[&dyn ToSql],
-    ) -> Result<u64, anyhow::Error> {
+    ) -> Result<SmallVec<[u64; 1]>, anyhow::Error> {
         self.client.execute(query, params).await
     }
 
     /// See [`Client::query`].
-    pub async fn query<'s, 'q>(
-        &'s mut self,
+    pub async fn query<'q>(
+        &mut self,
         query: impl Into<Cow<'q, str>>,
-        params: &'q [&'q dyn tiberius::ToSql],
-    ) -> Result<SmallVec<[tiberius::Row; 1]>, anyhow::Error>
-    where
-        's: 'q,
-    {
+        params: &[&dyn tiberius::ToSql],
+    ) -> Result<SmallVec<[tiberius::Row; 1]>, anyhow::Error> {
         self.client.query(query, params).await
     }
 
     /// See [`Client::simple_query`].
-    pub async fn simple_query<'s, 'q>(
-        &'s mut self,
+    pub async fn simple_query<'q>(
+        &mut self,
         query: impl Into<Cow<'q, str>>,
-    ) -> Result<SmallVec<[tiberius::Row; 1]>, anyhow::Error>
-    where
-        's: 'q,
-    {
+    ) -> Result<SmallVec<[tiberius::Row; 1]>, anyhow::Error> {
         self.client.simple_query(query).await
+    }
+
+    /// Rollback the [`Transaction`].
+    pub async fn rollback(self) -> Result<(), anyhow::Error> {
+        static ROLLBACK_QUERY: &str = "ROLLBACK TRANSACTION";
+        self.client
+            .execute(ROLLBACK_QUERY, &[])
+            .await
+            .context("rollback")?;
+        Ok(())
+    }
+
+    /// Commit the [`Transaction`].
+    pub async fn commit(self) -> Result<(), anyhow::Error> {
+        static COMMIT_QUERY: &str = "COMMIT TRANSACTION";
+        self.client
+            .execute(COMMIT_QUERY, &[])
+            .await
+            .context("commit")?;
+        Ok(())
     }
 }
 
@@ -311,7 +322,7 @@ impl TransactionIsolationLevel {
 
 #[derive(Debug)]
 enum Response {
-    Execute { rows_affected: u64 },
+    Execute { rows_affected: SmallVec<[u64; 1]> },
     Rows(SmallVec<[tiberius::Row; 1]>),
 }
 
@@ -377,12 +388,9 @@ impl Connection {
 
                 match result.rows_affected() {
                     [] => anyhow::bail!("got empty response"),
-                    [num_rows] => Ok(Response::Execute {
-                        rows_affected: *num_rows,
+                    rows_affected => Ok(Response::Execute {
+                        rows_affected: rows_affected.into(),
                     }),
-                    too_many => {
-                        anyhow::bail!("Execute only supports 1 statement, got {}", too_many.len())
-                    }
                 }
             }
             RequestKind::Query { query, params } => {
@@ -415,7 +423,10 @@ impl Connection {
                     let rows = results.pop().expect("checked len").into();
                     Ok(Response::Rows(rows))
                 } else {
-                    anyhow::bail!("Query only supports 1 statement, got {}", results.len())
+                    anyhow::bail!(
+                        "Simple query only supports 1 statement, got {}",
+                        results.len()
+                    )
                 }
             }
         }
