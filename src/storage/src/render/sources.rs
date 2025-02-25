@@ -42,6 +42,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
+use crate::internal_control::InternalStorageCommand;
 use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
 use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig};
 use crate::upsert::UpsertKey;
@@ -280,11 +281,11 @@ where
                                 (None, None, None)
                             };
 
-                        let grace_period = dyncfgs::CLUSTER_SHUTDOWN_GRACE_PERIOD
-                            .get(storage_state.storage_configuration.config_set());
                         let storage_metadata = description.source_exports[&export_id]
                             .storage_metadata
                             .clone();
+
+                        let command_tx = storage_state.internal_cmd_tx.clone();
 
                         let (stream, tok) = persist_source::persist_source_core(
                             scope,
@@ -300,9 +301,13 @@ where
                             false.then_some(|| unreachable!()),
                             async {},
                             move |error| {
+                                let error = format!("upsert_rehydration: {error}");
+                                tracing::info!("{error}");
                                 Box::pin(async move {
-                                    tokio::time::sleep(grace_period).await;
-                                    panic!("upsert_rehydration: {error}")
+                                    command_tx.send(InternalStorageCommand::SuspendAndRestart {
+                                        id: export_id,
+                                        reason: error,
+                                    });
                                 })
                             },
                         );
