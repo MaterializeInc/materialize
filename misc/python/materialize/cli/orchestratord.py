@@ -47,6 +47,7 @@ def main():
     parser_run = subparsers.add_parser("run")
     parser_run.add_argument("--dev", action="store_true")
     parser_run.add_argument("--namespace", default="materialize")
+    parser_run.add_argument("--values")
     parser_run.set_defaults(func=run)
 
     parser_reset = subparsers.add_parser("reset")
@@ -82,18 +83,19 @@ def run(args: argparse.Namespace):
         dev=args.dev,
         cluster=args.kind_cluster_name,
     )
-    subprocess.check_call(
-        [
-            "helm",
-            "install",
-            "orchestratord",
-            "misc/helm-charts/operator",
-            "--atomic",
-            f"--set=operator.image.tag={DEV_IMAGE_TAG}",
-            "--create-namespace",
-            f"--namespace={args.namespace}",
-        ]
-    )
+    helm_args = [
+        "helm",
+        "install",
+        "orchestratord",
+        "misc/helm-charts/operator",
+        "--atomic",
+        f"--set=operator.image.tag={DEV_IMAGE_TAG}",
+        "--create-namespace",
+        f"--namespace={args.namespace}",
+    ]
+    if args.values is not None:
+        helm_args.extend(["--values", args.values])
+    subprocess.check_call(helm_args)
 
 
 def reset(args: argparse.Namespace):
