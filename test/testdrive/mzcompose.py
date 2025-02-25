@@ -17,7 +17,6 @@ import glob
 from pathlib import Path
 
 from materialize import MZ_ROOT, buildkite, ci_util
-from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
@@ -123,15 +122,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
         additional_system_parameter_defaults[x[0]] = x[1]
 
-    leaves_tombstones = (
-        "true"
-        if additional_system_parameter_defaults.get(
-            "storage_use_continual_feedback_upsert",
-            get_default_system_parameters()["storage_use_continual_feedback_upsert"],
-        )
-        == "false"
-        else "false"
-    )
     materialized = Materialized(
         default_size=args.default_size,
         external_blob_store=True,
@@ -151,7 +141,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         fivetran_destination_files_path="/share/tmp",
         entrypoint_extra=[
             f"--var=uses-redpanda={args.redpanda}",
-            f"--var=leaves-tombstones={leaves_tombstones}",
         ],
     )
 
