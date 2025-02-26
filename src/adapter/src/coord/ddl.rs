@@ -1288,9 +1288,7 @@ impl Coordinator {
             .catalog()
             .system_config()
             .arrangement_exert_proportionality();
-        self.controller
-            .compute
-            .set_arrangement_exert_proportionality(prop);
+        self.controller.set_arrangement_exert_proportionality(prop);
     }
 
     fn update_http_config(&mut self) {

@@ -19,7 +19,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use futures::stream::{BoxStream, StreamExt};
-use mz_cluster_client::client::ClusterReplicaLocation;
+use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
 use mz_compute_client::controller::ComputeControllerTimestamp;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
@@ -625,27 +625,61 @@ where
         let aws_connection_role_arn = self.connection_context().aws_connection_role_arn.clone();
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let secrets_args = self.secrets_args.to_flags();
+        let arrangement_exert_proportionality = self.arrangement_exert_proportionality;
         let service = self.orchestrator.ensure_service(
             &service_name,
             ServiceConfig {
                 image: self.clusterd_image.clone(),
                 init_container_image: self.init_container_image.clone(),
                 args: Box::new(move |assigned| {
+                    let storage_timely_config = TimelyConfig {
+                        workers: location.allocation.workers,
+                        bind_address: assigned.bind_addresses["storage"].clone(),
+                        peer_addresses: assigned
+                            .peer_addresses
+                            .iter()
+                            .map(|p| p["storage"].clone())
+                            .collect(),
+                        arrangement_exert_proportionality,
+                    };
+                    let compute_timely_config = TimelyConfig {
+                        workers: location.allocation.workers,
+                        bind_address: assigned.bind_addresses["compute"].clone(),
+                        peer_addresses: assigned
+                            .peer_addresses
+                            .iter()
+                            .map(|p| p["compute"].clone())
+                            .collect(),
+                        arrangement_exert_proportionality,
+                    };
+
                     let mut args = vec![
                         format!(
                             "--storage-controller-listen-addr={}",
-                            assigned["storagectl"]
+                            assigned.bind_addresses["storagectl"],
                         ),
                         format!(
                             "--compute-controller-listen-addr={}",
-                            assigned["computectl"]
+                            assigned.bind_addresses["computectl"],
                         ),
-                        format!("--internal-http-listen-addr={}", assigned["internal-http"]),
+                        format!(
+                            "--internal-http-listen-addr={}",
+                            assigned.bind_addresses["internal-http"],
+                        ),
                         format!("--opentelemetry-resource=cluster_id={}", cluster_id),
                         format!("--opentelemetry-resource=replica_id={}", replica_id),
                         format!("--persist-pubsub-url={}", persist_pubsub_url),
                         format!("--environment-id={}", environment_id),
+                        format!(
+                            "--storage-timely-config={}",
+                            storage_timely_config.to_string(),
+                        ),
+                        format!(
+                            "--compute-timely-config={}",
+                            compute_timely_config.to_string(),
+                        ),
                     ];
+
                     if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
                         args.push(format!(
                             "--aws-external-id-prefix={}",

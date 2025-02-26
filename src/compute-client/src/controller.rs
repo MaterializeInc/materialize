@@ -176,8 +176,6 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     read_only: bool,
     /// Compute configuration to apply to new instances.
     config: ComputeParameters,
-    /// `arrangement_exert_proportionality` value passed to new replicas.
-    arrangement_exert_proportionality: u32,
     /// A controller response to be returned on the next call to [`ComputeController::process`].
     stashed_response: Option<ComputeControllerResponse<T>>,
     /// A number that increases on every `environmentd` restart.
@@ -279,7 +277,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             initialized: false,
             read_only,
             config: Default::default(),
-            arrangement_exert_proportionality: 16,
             stashed_response: None,
             envd_epoch,
             metrics,
@@ -355,11 +352,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         let ids = collections
             .filter_map(move |(cid, c)| c.compute_dependencies.contains(&id).then_some(*cid));
         Ok(ids)
-    }
-
-    /// Set the `arrangement_exert_proportionality` value to be passed to new replicas.
-    pub fn set_arrangement_exert_proportionality(&mut self, value: u32) {
-        self.arrangement_exert_proportionality = value;
     }
 
     /// Returns `true` if all non-transient, non-excluded collections on all clusters have been
@@ -461,7 +453,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             initialized,
             read_only,
             config: _,
-            arrangement_exert_proportionality,
             stashed_response,
             envd_epoch,
             metrics: _,
@@ -502,10 +493,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             field("instance_workload_classes", instance_workload_classes)?,
             field("initialized", initialized)?,
             field("read_only", read_only)?,
-            field(
-                "arrangement_exert_proportionality",
-                arrangement_exert_proportionality,
-            )?,
             field("stashed_response", format!("{stashed_response:?}"))?,
             field("envd_epoch", envd_epoch)?,
             field("maintenance_scheduled", maintenance_scheduled)?,
@@ -712,7 +699,6 @@ where
                 log_logging: config.logging.log_logging,
                 index_logs: Default::default(),
             },
-            arrangement_exert_proportionality: self.arrangement_exert_proportionality,
             grpc_client: self.config.grpc_client.clone(),
             expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
         };

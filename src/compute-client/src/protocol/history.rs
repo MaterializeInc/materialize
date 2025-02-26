@@ -91,7 +91,6 @@ where
         let mut live_peeks = BTreeMap::new();
 
         let mut create_inst_command = None;
-        let mut create_timely_command = None;
 
         // Collect only the final configuration.
         // Note that this is only correct as long as all config parameters apply globally. If we
@@ -104,10 +103,6 @@ where
 
         for command in self.commands.drain(..) {
             match command {
-                create_timely @ ComputeCommand::CreateTimely { .. } => {
-                    assert_none!(create_timely_command);
-                    create_timely_command = Some(create_timely);
-                }
                 // We should be able to handle the Create* commands, should this client need to be restartable.
                 create_inst @ ComputeCommand::CreateInstance(_) => {
                     assert_none!(create_inst_command);
@@ -188,12 +183,6 @@ where
         // counts, as they would be observable by other threads.
         let command_counts = &self.metrics.command_counts;
         let dataflow_count = &self.metrics.dataflow_count;
-
-        let count = u64::from(create_timely_command.is_some());
-        command_counts.create_timely.borrow().set(count);
-        if let Some(create_timely_command) = create_timely_command {
-            self.commands.push(create_timely_command);
-        }
 
         let count = u64::from(create_inst_command.is_some());
         command_counts.create_instance.borrow().set(count);

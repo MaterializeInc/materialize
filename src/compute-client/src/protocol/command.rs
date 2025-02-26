@@ -11,7 +11,6 @@
 
 use std::time::Duration;
 
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
@@ -46,28 +45,6 @@ include!(concat!(
 /// [Protocol Stages]: super#protocol-stages
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
-    /// `CreateTimely` is the first command sent to a replica after a connection was established.
-    /// It instructs the replica to initialize the timely dataflow runtime using the given
-    /// `config`.
-    ///
-    /// This command is special in that it is broadcast to all workers of a multi-worker replica.
-    /// All subsequent commands, except `UpdateConfiguration`, are only sent to the first worker,
-    /// which then distributes them to the other workers using a dataflow. This method of command
-    /// distribution requires the timely dataflow runtime to be initialized, which is why the
-    /// `CreateTimely` command exists.
-    ///
-    /// The `epoch` value imposes an ordering on iterations of the compute protocol. When the
-    /// compute controller connects to a replica, it must send an `epoch` that is greater than all
-    /// epochs it sent to the same replica on previous connections. Multi-process replicas should
-    /// use the `epoch` to ensure that their individual processes agree on which protocol iteration
-    /// they are in.
-    CreateTimely {
-        /// TODO(database-issues#7533): Add documentation.
-        config: TimelyConfig,
-        /// TODO(database-issues#7533): Add documentation.
-        epoch: ClusterStartupEpoch,
-    },
-
     /// `CreateInstance` must be sent after `CreateTimely` to complete the [Creation Stage] of the
     /// compute protocol. Unlike `CreateTimely`, it is only sent to the first worker of the
     /// replica, and then distributed through the timely runtime. `CreateInstance` instructs the
@@ -274,13 +251,8 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
 impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoComputeCommand {
         use proto_compute_command::Kind::*;
-        use proto_compute_command::*;
         ProtoComputeCommand {
             kind: Some(match self {
-                ComputeCommand::CreateTimely { config, epoch } => CreateTimely(ProtoCreateTimely {
-                    config: Some(config.into_proto()),
-                    epoch: Some(epoch.into_proto()),
-                }),
                 ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
                 ComputeCommand::InitializationComplete => InitializationComplete(()),
                 ComputeCommand::UpdateConfiguration(params) => {
@@ -303,14 +275,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
 
     fn from_proto(proto: ProtoComputeCommand) -> Result<Self, TryFromProtoError> {
         use proto_compute_command::Kind::*;
-        use proto_compute_command::*;
         match proto.kind {
-            Some(CreateTimely(ProtoCreateTimely { config, epoch })) => {
-                Ok(ComputeCommand::CreateTimely {
-                    config: config.into_rust_if_some("ProtoCreateTimely::config")?,
-                    epoch: epoch.into_rust_if_some("ProtoCreateTimely::epoch")?,
-                })
-            }
             Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
             Some(InitializationComplete(())) => Ok(ComputeCommand::InitializationComplete),
             Some(UpdateConfiguration(params)) => {
@@ -661,15 +626,6 @@ impl RustType<ProtoPeek> for Peek {
 
 fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
     (0..1).prop_map(|_| OpenTelemetryContext::empty())
-}
-
-impl TryIntoTimelyConfig for ComputeCommand {
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
-        match self {
-            ComputeCommand::CreateTimely { config, epoch } => Ok((config, epoch)),
-            cmd => Err(cmd),
-        }
-    }
 }
 
 #[cfg(test)]

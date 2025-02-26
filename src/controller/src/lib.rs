@@ -200,11 +200,13 @@ pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
     ///
     /// See [`self.install_watch_set`] for a description of watch sets.
     immediate_watch_sets: Vec<WatchSetId>,
+
+    arrangement_exert_proportionality: u32,
 }
 
 impl<T: ComputeControllerTimestamp> Controller<T> {
     pub fn set_arrangement_exert_proportionality(&mut self, value: u32) {
-        self.compute.set_arrangement_exert_proportionality(value);
+        self.arrangement_exert_proportionality = value;
     }
 
     /// Returns the connection context installed in the controller.
@@ -251,6 +253,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             unfulfilled_watch_sets,
             watch_set_id_gen: _,
             immediate_watch_sets,
+            arrangement_exert_proportionality,
         } = self;
 
         let compute = compute.dump().await?;
@@ -279,6 +282,10 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             field("readiness", format!("{readiness:?}"))?,
             field("unfulfilled_watch_sets", unfulfilled_watch_sets)?,
             field("immediate_watch_sets", immediate_watch_sets)?,
+            field(
+                "arrangement_exert_proportionality",
+                arrangement_exert_proportionality,
+            )?,
         ]);
         Ok(serde_json::Value::Object(map))
     }
@@ -719,6 +726,7 @@ where
             unfulfilled_watch_sets: BTreeMap::new(),
             watch_set_id_gen: Gen::default(),
             immediate_watch_sets: Vec::new(),
+            arrangement_exert_proportionality: 16,
         };
 
         if !this.read_only {

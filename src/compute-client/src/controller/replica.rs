@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use mz_build_info::BuildInfo;
-use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch};
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_REPLICA_EXPIRATION;
 use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
@@ -44,7 +44,6 @@ type Client<T> = SequentialHydration<T>;
 pub(super) struct ReplicaConfig {
     pub location: ClusterReplicaLocation,
     pub logging: LoggingConfig,
-    pub arrangement_exert_proportionality: u32,
     pub grpc_client: GrpcClientParameters,
     /// The offset to use for replica expiration, if any.
     pub expiration_offset: Option<Duration>,
@@ -259,17 +258,6 @@ where
     /// contain replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut ComputeCommand<T>) {
         match command {
-            ComputeCommand::CreateTimely { config, epoch } => {
-                *config = TimelyConfig {
-                    workers: self.config.location.workers,
-                    process: 0,
-                    addresses: self.config.location.dataflow_addrs.clone(),
-                    arrangement_exert_proportionality: self
-                        .config
-                        .arrangement_exert_proportionality,
-                };
-                *epoch = self.epoch;
-            }
             ComputeCommand::CreateInstance(InstanceConfig {
                 logging,
                 expiration_offset,

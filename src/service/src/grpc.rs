@@ -254,7 +254,7 @@ struct GrpcServerState<F> {
 
 impl<F, G> GrpcServer<F>
 where
-    F: Fn() -> G + Send + Sync + 'static,
+    F: Fn() -> BoxFuture<'static, G> + Send + Sync + 'static,
 {
     /// Starts the server, listening for gRPC connections on `listen_addr`.
     ///
@@ -348,7 +348,7 @@ where
         let mut request = request.into_inner();
         let state = Arc::clone(&self.state);
         let stream = stream! {
-            let mut client = (state.client_builder)();
+            let mut client = (state.client_builder)().await;
             loop {
                 select! {
                     command = request.next() => {

@@ -89,13 +89,7 @@ message ProtoTrace {
 }
 
 message ProtoStorageCommand {
-  message ProtoCreateTimely {
-    mz_cluster_client.client.ProtoTimelyConfig config = 1;
-    mz_cluster_client.client.ProtoClusterStartupEpoch epoch = 2;
-  }
-
   oneof kind {
-    ProtoCreateTimely create_timely = 6;
     ProtoCreateSources create_sources = 1;
     ProtoAllowCompaction allow_compaction = 2;
     google.protobuf.Empty initialization_complete = 3;

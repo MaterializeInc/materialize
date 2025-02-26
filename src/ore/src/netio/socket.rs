@@ -21,6 +21,7 @@ use std::task::{ready, Context, Poll};
 use std::{fmt, io};
 
 use async_trait::async_trait;
+use flatcontainer::IntoOwned;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{self, TcpListener, TcpStream, UnixListener, UnixStream};
@@ -348,6 +349,16 @@ impl Listener {
                 let (stream, _addr) = ready!(listener.poll_accept(cx))?;
                 Poll::Ready(Some(Ok(Stream::Unix(stream))))
             }
+        }
+    }
+
+    pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
+        match self {
+            Listener::Tcp(listener) => listener.local_addr().map(SocketAddr::Inet),
+            Listener::Unix(listener) => listener.local_addr().map(|a| {
+                let path = a.as_pathname().and_then(|p| p.to_str().into_owned());
+                SocketAddr::Unix(UnixSocketAddr { path })
+            }),
         }
     }
 }
