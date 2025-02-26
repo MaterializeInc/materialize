@@ -1,5 +1,5 @@
 ---
-title: "Ingesting data"
+title: "Ingest data"
 description: "How to ingest data into Materialize from external systems."
 disable_list: true
 menu:
