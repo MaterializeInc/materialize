@@ -53,6 +53,7 @@ COPY --from=console /etc/nginx/templates/default.conf.template /etc/nginx/templa
 # port 6876.
 RUN MZ_ENDPOINT=http://localhost:6876 \
     MZ_NGINX_LISTENER_CONFIG="listen 6874;" \
+    NGINX_ENTRYPOINT_LOCAL_RESOLVERS=true \
     envsubst '${MZ_ENDPOINT} ${MZ_NGINX_LISTENER_CONFIG}' < /etc/nginx/templates/default.conf.template > /etc/nginx/sites-enabled/default \
     && rm /etc/nginx/templates/default.conf.template
 
