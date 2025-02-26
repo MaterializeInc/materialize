@@ -1,6 +1,8 @@
 Before it starts consuming the replication stream, Materialize takes a snapshot
-of the relevant tables in your publication. Until this snapshot is complete,
-Materialize won't have the same view of your data as your PostgreSQL database.
+of the relevant tables in your publication. You will not be able to query the
+source until the snapshotting completes and the source status changes to
+**Running**. That is, your queries to the source will block until the
+snapshotting completes.
 
 In this step, you'll first verify that the source is running and then check the
 status of the snapshotting process.
