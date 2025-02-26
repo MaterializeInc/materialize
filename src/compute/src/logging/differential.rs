@@ -20,18 +20,16 @@ use differential_dataflow::logging::{
 };
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
-use mz_timely_util::containers::{
-    columnar_exchange, Col2ValBatcher, ColumnBuilder, ProvidedBuilder,
-};
+use mz_timely_util::containers::{Col2ValBatcher, ColumnBuilder, ProvidedBuilder};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
-use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Stream;
 
-use crate::extensions::arrange::MzArrangeCore;
+use crate::extensions::arrange::MzArrange;
 use crate::logging::compute::{ArrangementHeapSizeOperatorDrop, ComputeEvent};
 use crate::logging::{
     consolidate_and_pack, DifferentialLog, EventQueue, LogCollection, LogVariant,
@@ -164,8 +162,7 @@ pub(super) fn construct<A: Allocate>(
             let variant = LogVariant::Differential(variant);
             if config.index_logs.contains_key(&variant) {
                 let trace = collection
-                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, mz_repr::Diff>),
+                    .mz_arrange::<Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                         &format!("Arrange {variant:?}"),
                     )
                     .trace;

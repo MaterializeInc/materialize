@@ -17,14 +17,13 @@ use std::time::Duration;
 use columnar::Index;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, Diff, Row, Timestamp};
-use mz_timely_util::containers::{columnar_exchange, Col2ValBatcher, Column, ColumnBuilder};
+use mz_repr::{Datum, Diff, Timestamp};
+use mz_timely_util::containers::{Col2ValBatcher, Column, ColumnBuilder};
 use mz_timely_util::replay::MzReplay;
 use timely::communication::Allocate;
-use timely::dataflow::channels::pact::ExchangeCore;
 use timely::Container;
 
-use crate::extensions::arrange::MzArrangeCore;
+use crate::extensions::arrange::MzArrange;
 use crate::logging::initialize::ReachabilityEvent;
 use crate::logging::{consolidate_and_pack, EventQueue, LogCollection, LogVariant, TimelyLog};
 use crate::row_spine::RowRowBuilder;
@@ -98,8 +97,7 @@ pub(super) fn construct<A: Allocate>(
         for variant in logs_active {
             if config.index_logs.contains_key(&variant) {
                 let trace = updates
-                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, Timestamp, Diff>),
+                    .mz_arrange::<Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                         &format!("Arrange {variant:?}"),
                     )
                     .trace;
