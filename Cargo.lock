@@ -1773,7 +1773,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3538270d33cc669650c4b093848450d380def10c331d38c768e34cac80576e6e"
 dependencies = [
  "termcolor",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -3055,7 +3055,7 @@ version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14dbbfd5c71d70241ecf9e6f13737f7b5ce823821063188d7e46c41d371eebd5"
 dependencies = [
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -6915,7 +6915,7 @@ dependencies = [
  "thiserror 1.0.61",
  "tracing",
  "uncased",
- "unicode-width 0.1.10",
+ "unicode-width 0.2.0",
  "workspace-hack",
 ]
 
@@ -8096,7 +8096,7 @@ checksum = "1526bb6aa9f10ec339fb10360f22c57edf81d5678d0278e93bc12a47ffbe4b01"
 dependencies = [
  "bytecount",
  "fnv",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -8615,7 +8615,7 @@ checksum = "b55c4d17d994b637e2f4daf6e5dc5d660d209d5642377d675d7a1c3ab69fa579"
 dependencies = [
  "arrayvec 0.5.2",
  "typed-arena",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -10324,7 +10324,7 @@ checksum = "56c3ee73732ffceaea7b8f6b719ce3bb17f253fa27461ffeaf568ebd0cdb4b85"
 dependencies = [
  "papergrid",
  "tabled_derive",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -11314,9 +11314,9 @@ checksum = "1dd624098567895118886609431a7c3b8f516e41d30e0643f03d94592a147e36"
 
 [[package]]
 name = "unicode-width"
-version = "0.1.10"
+version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0edd1e5b14653f783770bce4a4dabb4a5108a5370a5f5d8cfe8710c361f6c8b"
+checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
 
 [[package]]
 name = "unicode-width"
