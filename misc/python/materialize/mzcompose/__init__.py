@@ -126,7 +126,9 @@ def get_default_system_parameters(
         "kafka_default_metadata_fetch_interval": "1s",
         "mysql_offset_known_interval": "1s",
         "force_source_table_syntax": "true" if force_source_table_syntax else "false",
-        "persist_batch_columnar_format": "structured",
+        "persist_batch_columnar_format": (
+            "structured" if version > MzVersion.parse_mz("v0.135.0-dev") else "both_v2"
+        ),
         "persist_batch_delete_enabled": "true",
         "persist_batch_structured_order": "true",
         "persist_batch_structured_key_lower_len": "256",
@@ -141,6 +143,9 @@ def get_default_system_parameters(
         "persist_pubsub_client_enabled": "true",
         "persist_pubsub_push_diff_enabled": "true",
         "persist_record_compactions": "true",
+        "persist_record_schema_id": (
+            "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
+        ),
         # 16 MiB - large enough to avoid a big perf hit, small enough to get more coverage...
         "persist_blob_target_size": "16777216",
         "persist_stats_audit_percent": "100",
