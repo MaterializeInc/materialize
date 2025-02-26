@@ -72,7 +72,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["html_reports"] }
 datadriven = { version = "0.8.0", features = ["async"] }
-futures-task = "0.3.21"
+futures-task = "0.3.31"
 num_cpus = "1.16.0"
 tempfile = "3.14.0"
 
