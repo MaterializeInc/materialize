@@ -22,7 +22,7 @@ derivative = "2.2.0"
 dynfmt = { version = "0.1.5", features = ["curly"] }
 enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
-globset = "0.4.14"
+globset = "0.4.15"
 hex = "0.4.3"
 http = "1.1.0"
 im = "15.1.0"

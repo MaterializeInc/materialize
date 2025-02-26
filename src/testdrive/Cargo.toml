@@ -23,7 +23,7 @@ chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 flate2 = "1.0.32"
 futures = "0.3.25"
-globset = "0.4.14"
+globset = "0.4.15"
 hex = "0.4.3"
 http = "1.1.0"
 humantime = "2.1.0"
