@@ -52,7 +52,7 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-timely-util = { path = "../timely-util" }
 mz-tls-util = { path = "../tls-util" }
 mz-tracing = { path = "../tracing" }
-native-tls = "0.2.11"
+native-tls = "0.2.14"
 openssl = { version = "0.10.48", features = ["vendored"] }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
