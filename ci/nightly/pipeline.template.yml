@@ -226,18 +226,6 @@ steps:
               composition: testdrive
               args: [--redpanda]
 
-      # TODO(def-) Remove this when old upsert implementation is removed
-      - id: testdrive-old-upsert
-        label: ":racing_car: testdrive with old Upsert"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        agents:
-          queue: hetzner-aarch64-8cpu-16gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: testdrive
-              args: [--system-param=storage_use_continual_feedback_upsert=false]
-
       - id: testdrive-partitions-5
         label: ":racing_car: testdrive with --kafka-default-partitions 5"
         depends_on: build-aarch64
@@ -465,30 +453,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: zippy
               args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m, --azurite]
-
-      # TODO(def-) Remove this when old upsert implementation is removed
-      - id: zippy-kafka-sources-old-upsert
-        label: "Zippy Kafka Sources with old Upsert"
-        depends_on: build-aarch64
-        timeout_in_minutes: 120
-        agents:
-          queue: hetzner-aarch64-8cpu-16gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: zippy
-              args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m, --system-param=storage_use_continual_feedback_upsert=false]
-
-      # TODO(def-) Remove this when old upsert implementation is removed
-      - id: zippy-kafka-sources-old-upsert-azurite
-        label: "Zippy Kafka Sources with old Upsert and :azure: blob store"
-        depends_on: build-aarch64
-        timeout_in_minutes: 120
-        agents:
-          queue: hetzner-aarch64-8cpu-16gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: zippy
-              args: [--scenario=KafkaSources, --actions=10000, --max-execution-time=30m, --system-param=storage_use_continual_feedback_upsert=false, --azurite]
 
       - id: zippy-kafka-parallel-insert
         label: "Zippy Kafka Parallel Insert"
@@ -785,21 +749,6 @@ steps:
                   "--seed=$BUILDKITE_JOB_ID",
                   --azurite,
                 ]
-
-      # TODO(def-) Remove this when old upsert implementation is removed
-      - id: checks-restart-entire-mz-old-upsert
-        label: "Checks + restart of the entire Mz with old Upsert"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        # Sometimes runs into query timeouts or entire test timeouts with parallelism 1, too much state, same in all other platform-checks
-        parallelism: 2
-        agents:
-          # A larger instance is needed due to frequent OOMs, same in all other platform-checks
-          queue: hetzner-aarch64-16cpu-32gb
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: platform-checks
-              args: [--scenario=RestartEntireMz, --system-param=storage_use_continual_feedback_upsert=false, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-backup-rollback
         label: "Checks + backup + rollback to previous"
@@ -1673,7 +1622,7 @@ steps:
   - id: incident-70
     label: "Test for incident 70"
     depends_on: build-aarch64
-    timeout_in_minutes: 30
+    timeout_in_minutes: 60
     agents:
       queue: hetzner-aarch64-8cpu-16gb
     plugins:

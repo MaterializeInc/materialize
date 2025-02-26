@@ -16,7 +16,6 @@ import glob
 from pathlib import Path
 
 from materialize import MZ_ROOT, ci_util, spawn
-from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azure import Azurite
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
@@ -138,16 +137,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         additional_system_parameter_defaults[key] = val
 
-    leaves_tombstones = (
-        "true"
-        if additional_system_parameter_defaults.get(
-            "storage_use_continual_feedback_upsert",
-            get_default_system_parameters()["storage_use_continual_feedback_upsert"],
-        )
-        == "false"
-        else "false"
-    )
-
     materialized = Materialized(
         default_size=args.default_size,
         external_blob_store=True,
@@ -168,7 +157,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         fivetran_destination_files_path="/share/tmp",
         entrypoint_extra=[
             f"--var=uses-redpanda={args.redpanda}",
-            f"--var=leaves-tombstones={leaves_tombstones}",
         ],
     )
 
@@ -343,16 +331,6 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         additional_system_parameter_defaults[key] = val
 
-    leaves_tombstones = (
-        "true"
-        if additional_system_parameter_defaults.get(
-            "storage_use_continual_feedback_upsert",
-            get_default_system_parameters()["storage_use_continual_feedback_upsert"],
-        )
-        == "false"
-        else "false"
-    )
-
     mz_old = Materialized(
         default_size=Materialized.Size.DEFAULT_SIZE,
         image=get_old_image_for_source_table_migration_test(),
@@ -373,15 +351,11 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         fivetran_destination_files_path="/share/tmp",
         entrypoint_extra=[
             f"--var=uses-redpanda={args.redpanda}",
-            f"--var=leaves-tombstones={leaves_tombstones}",
         ],
     )
 
-    print(additional_system_parameter_defaults)
     x = dict(additional_system_parameter_defaults)
     additional_system_parameter_defaults["force_source_table_syntax"] = "true"
-    print(additional_system_parameter_defaults)
-    print(x)
 
     mz_new = Materialized(
         default_size=Materialized.Size.DEFAULT_SIZE,
