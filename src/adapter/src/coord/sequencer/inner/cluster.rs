@@ -614,6 +614,7 @@ impl Coordinator {
                 } else {
                     ReplicaLogging::default()
                 };
+                panic!("Wassup");
                 ClusterVariant::Managed(ClusterVariantManaged {
                     size: plan.size.clone(),
                     availability_zones: plan.availability_zones.clone(),
