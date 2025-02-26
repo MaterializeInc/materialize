@@ -1174,7 +1174,7 @@ class AlterSinkPgSource(Check):
                 > ALTER SINK sink_alter_pg SET FROM pg2;
 
                 # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=20s
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=30s
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO pg_table2 VALUES (2);
@@ -1192,7 +1192,7 @@ class AlterSinkPgSource(Check):
                 > ALTER SINK sink_alter_pg SET FROM pg3;
 
                 # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=20s
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=30s
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO pg_table3 VALUES (3);
