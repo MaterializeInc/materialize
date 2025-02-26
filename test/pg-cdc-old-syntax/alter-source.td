@@ -320,7 +320,7 @@ INSERT INTO table_a VALUES (4, 'four', 4);
 3 three 1
 4 four 4
 
-? EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM table_a WHERE f3 IS NULL;
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM table_a WHERE f3 IS NULL;
 Explained Query (fast path):
   Constant <empty>
 

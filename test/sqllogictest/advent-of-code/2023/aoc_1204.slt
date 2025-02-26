@@ -64,7 +64,7 @@ FROM winning_points;
 184
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH parsed AS (
   SELECT regexp_split_to_table(input, '\n') AS line FROM aoc_1204
 ),
@@ -207,7 +207,7 @@ FROM
 978
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
 lines(line string) AS (
     SELECT
@@ -450,7 +450,7 @@ select * from part1, part2;
 23  314
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
     -- PART 0
     -- Parse the input as lines of text with line numbers.

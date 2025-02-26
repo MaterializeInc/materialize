@@ -334,7 +334,7 @@ fn test_time() {
     // `current_timestamp()`, though we don't care what the timestamp is.
     let rows = client
         .query(
-            "EXPLAIN OPTIMIZED PLAN FOR SELECT now(), current_timestamp()",
+            "EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT now(), current_timestamp()",
             &[],
         )
         .unwrap();
@@ -3259,7 +3259,7 @@ async fn test_explain_as_of() {
             assert_eq!(ts, query_ts);
             client
                 .query_one(
-                    &format!("EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM {query}"),
+                    &format!("EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM {query}"),
                     &[],
                 )
                 .await?;

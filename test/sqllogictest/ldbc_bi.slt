@@ -409,7 +409,7 @@ CREATE OR REPLACE VIEW Post_View AS
 # \set datetime '\'2010-06-11T09:21:46.000+00:00\'::TIMESTAMP'
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH
   message_count AS (
     SELECT 0.0 + count(*) AS cnt
       FROM Message
@@ -487,7 +487,7 @@ EOF
 # \set tagClass '\'ChristianBishop\''
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH
 MyTag AS (
 SELECT Tag.id AS id, Tag.name AS name
   FROM TagClass
@@ -586,7 +586,8 @@ EOF
 # \set country '\'China\''
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR SELECT Forum.id                AS "forum.id"
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+SELECT Forum.id                AS "forum.id"
      , Forum.title             AS "forum.title"
      , Forum.creationDate      AS "forum.creationDate"
      , Forum.ModeratorPersonId AS "person.id"
@@ -702,7 +703,7 @@ statement ok
 CREATE INDEX Top100PopularForumsQ04_id ON Top100PopularForumsQ04 (id);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH
   Top100_Popular_Forums AS (
     SELECT id, creationDate, maxNumberOfMembers
     FROM Top100PopularForumsQ04
@@ -818,7 +819,7 @@ EOF
 
 # TODO(mgree) predicate push down anomaly on Tag.name
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH detail AS (
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH detail AS (
 SELECT Message.CreatorPersonId AS CreatorPersonId
      , sum(coalesce(Cs.c, 0))  AS replyCount
      , sum(coalesce(Plm.c, 0)) AS likeCount
@@ -939,7 +940,7 @@ CREATE INDEX PopularityScoreQ06_person2id ON PopularityScoreQ06 (person2id);
 
 # rewritten query to manually push filter down
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH applicable_posts AS (
        SELECT message1.MessageId,
               message1.CreatorPersonId AS person1id
@@ -1052,7 +1053,7 @@ EOF
 
 # Gábor's version, yields identical output
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH poster_w_liker AS (
         SELECT DISTINCT
             message1.CreatorPersonId AS person1id,
@@ -1158,7 +1159,7 @@ EOF
 # TODO(mgree) predicate push down anomaly on Tag.name
 # original umbra query
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH poster_w_liker AS (
         SELECT DISTINCT
             message1.CreatorPersonId AS person1id,
@@ -1274,7 +1275,7 @@ EOF
 
 # TODO(mgree) predicate push down anomaly on Tag.name
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH MyMessage AS (
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH MyMessage AS (
   SELECT m.MessageId
   FROM Message_hasTag_Tag m, Tag
   WHERE Tag.name = 'Slovenia' and m.TagId = Tag.Id
@@ -1374,7 +1375,7 @@ EOF
 # \set endDate '\'2010-06-28\''::timestamp
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH Person_interested_in_Tag AS (
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH Person_interested_in_Tag AS (
     SELECT Person.id AS PersonId
       FROM Person
       JOIN Person_hasInterest_Tag
@@ -1562,7 +1563,7 @@ EOF
 # \set endDate '\'2012-11-24\''::timestamp
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH
 MPP AS (SELECT RootPostId, count(*) as MessageCount FROM Message WHERE Message.creationDate BETWEEN '2012-08-29'::TIMESTAMP AND '2012-11-24'::TIMESTAMP GROUP BY RootPostId)
 SELECT Person.id AS "person.id"
      , Person.firstName AS "person.firstName"
@@ -1619,7 +1620,7 @@ EOF
 # \set maxPathDistance 4 -- fixed value
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH friends AS
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH friends AS
   (SELECT Person2Id
      FROM Person_knows_Person
     WHERE Person1Id = 6597069770479
@@ -1803,7 +1804,7 @@ EOF
 # \set endDate '\'2013-01-10\''::timestamp
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH Persons_of_country_w_friends AS (
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH Persons_of_country_w_friends AS (
     SELECT Person.id AS PersonId
          , Person_knows_Person.Person2Id AS FriendId
          , Person_knows_Person.creationDate AS creationDate
@@ -1898,7 +1899,7 @@ EOF
 # \set languages '\'{es, ta, pt}\''::varchar[]
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH
   matching_message AS (
     SELECT MessageId,
            CreatorPersonId
@@ -1972,7 +1973,7 @@ EOF
 
 # original version
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH person_w_posts AS (
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH person_w_posts AS (
     SELECT Person.id, count(Message.MessageId) as messageCount
       FROM Person
       LEFT JOIN Message
@@ -2061,7 +2062,7 @@ EOF
 # \set endDate '\'2012-11-09\''::timestamp
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH Zombies AS (
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH Zombies AS (
     SELECT Person.id AS zombieid
       FROM Country
       JOIN City
@@ -2239,7 +2240,7 @@ EOF
 # \set country2 '\'Taiwan\''
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH PersonPairCandidates AS (
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH PersonPairCandidates AS (
     SELECT Person1.id AS Person1Id
          , Person2.id AS Person2Id
          , City1.id AS cityId
@@ -2461,7 +2462,7 @@ EOF
 # \set endDate '\'2012-11-10\''::timestamp
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH
   -- forums within the date range
   myForums AS (
       SELECT id FROM Forum f WHERE f.creationDate BETWEEN '2012-11-06'::TIMESTAMP AND '2012-11-10'::TIMESTAMP
@@ -2607,7 +2608,7 @@ EOF
 
 # original, w/crossjoins
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
   srcs (f bigint) AS (SELECT 1450::bigint),
   dsts (t bigint) AS (SELECT 15393162796819),
   myForums (id bigint) AS (
@@ -3007,7 +3008,7 @@ EOF
 
 # TODO(mgree) predicate push down anomaly on Tag.name
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH
   subgraphA AS (
     SELECT DISTINCT Person.id AS PersonId, Message.MessageId AS MessageId
     FROM Person
@@ -3208,7 +3209,7 @@ EOF
 # \set delta '12'
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH MyMessage as (
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH MyMessage as (
     SELECT *
     FROM Message
 -- (tag)<-[:HAS_TAG]-(message)
@@ -3336,7 +3337,7 @@ EOF
 # \set tag '\'Fyodor_Dostoyevsky\''
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH
 PersonWithInterest AS (
 SELECT pt.PersonId AS PersonId
 FROM Person_hasInterest_Tag pt, Tag t
@@ -3431,7 +3432,7 @@ EOF
 # \set city2Id 1138::bigint
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR CREATE OR REPLACE MATERIALIZED VIEW PathQ19 AS
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR CREATE OR REPLACE MATERIALIZED VIEW PathQ19 AS
 WITH
   -- asymmetrize...
   knows_asymmetric AS (
@@ -3527,7 +3528,7 @@ statement ok
 CREATE INDEX PathQ19_src ON PathQ19 (src);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH
   srcs AS (SELECT id FROM Person WHERE locationcityid = 655::bigint),
   dsts AS (SELECT id FROM Person WHERE locationcityid = 1138::bigint),
   completed_paths AS (
@@ -3614,7 +3615,7 @@ EOF
 
 # q19 (frank's version)
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
   -- Source and destination identifiers, which do not evolve recursively.
   srcs (f bigint) AS (SELECT id FROM Person WHERE locationcityid = 655::bigint),
   dsts (t bigint) AS (SELECT id FROM Person WHERE locationcityid = 1138::bigint),
@@ -3774,7 +3775,7 @@ EOF
 
 # original query, w/cross joins
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
   srcs (f bigint) AS (SELECT id FROM Person WHERE locationcityid = 655::bigint),
   dsts (t bigint) AS (SELECT id FROM Person WHERE locationcityid = 1138::bigint),
   shorts (dir bool, gsrc bigint, dst bigint, w double precision, dead bool, iter bigint) AS (
@@ -4022,7 +4023,7 @@ statement ok
 CREATE INDEX PathQ20_src ON PathQ20 (src);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH minimal_paths AS (
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH minimal_paths AS (
   WITH MUTUALLY RECURSIVE
     paths (src bigint, dst bigint, w bigint) AS (
       SELECT 10995116285979::bigint AS src, 10995116285979::bigint AS dst, 0 AS w
@@ -4130,7 +4131,7 @@ EOF
 
 # without the unused src
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH minimal_paths AS (
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH minimal_paths AS (
   WITH MUTUALLY RECURSIVE
     paths (dst bigint, w bigint) AS (
       SELECT 10995116285979::bigint AS dst, 0 AS w
@@ -4234,7 +4235,7 @@ EOF
 
 # tracking hops
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH minimal_paths AS (
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH minimal_paths AS (
   WITH MUTUALLY RECURSIVE
     paths (src bigint, dst bigint, w bigint, hops bigint) AS (
       SELECT 10995116285979::bigint AS src, 10995116285979::bigint AS dst, 0 AS w, 0 AS hops
@@ -4348,7 +4349,7 @@ EOF
 
 # original query, w/extra crossjoins
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
   srcs(f bigint) AS (SELECT 10995116285979::bigint),
   dsts(t bigint) AS (
       SELECT personid

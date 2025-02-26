@@ -177,11 +177,20 @@ impl<'a> Explain<'a> for MirRelationExpr {
 
     type Text = ExplainSinglePlan<'a, MirRelationExpr>;
 
+    type VerboseText = ExplainSinglePlan<'a, MirRelationExpr>;
+
     type Json = ExplainSinglePlan<'a, MirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_single_plan(context)
+    }
+
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
         self.as_explain_single_plan(context)
     }
 

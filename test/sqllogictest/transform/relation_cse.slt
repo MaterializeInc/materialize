@@ -27,7 +27,7 @@ CREATE TABLE t2 (f1 INTEGER, f2 INTEGER);
 
 # no CSE detection here, no predicates in query
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 AS a1 , t1 AS a2;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 AS a1 , t1 AS a2;
 ----
 Explained Query:
   With
@@ -53,7 +53,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 AS a1 , t1 AS a2, t1 AS a3;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 AS a1 , t1 AS a2, t1 AS a3;
 ----
 Explained Query:
   With
@@ -78,7 +78,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 AS a1 , t1 AS a2 WHERE a1.f1 = 1 AND a2.f1 = 1;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 AS a1 , t1 AS a2 WHERE a1.f1 = 1 AND a2.f1 = 1;
 ----
 Explained Query:
   With
@@ -101,7 +101,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 AS a1 , t1 AS a2, t1 AS a3 WHERE a1.f1 = 1 AND a2.f1 = 1 AND a3.f1 = 1;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 AS a1 , t1 AS a2, t1 AS a3 WHERE a1.f1 = 1 AND a2.f1 = 1 AND a3.f1 = 1;
 ----
 Explained Query:
   With
@@ -131,7 +131,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1) WHERE a1.f1 = 1 AND a2.f1 = 1;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1) WHERE a1.f1 = 1 AND a2.f1 = 1;
 ----
 Explained Query:
   With
@@ -160,7 +160,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND f2 = (SELECT f1 FROM t1);
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND f2 = (SELECT f1 FROM t1);
 ----
 Explained Query:
   With
@@ -197,7 +197,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1) AND f2 = (SELECT f1 FROM t1 WHERE f1 = 1);
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1) AND f2 = (SELECT f1 FROM t1 WHERE f1 = 1);
 ----
 Explained Query:
   With
@@ -235,7 +235,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND EXISTS (SELECT f1 FROM t1);
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) AND EXISTS (SELECT f1 FROM t1);
 ----
 Explained Query:
   Project (#0, #1) // { arity: 2 }
@@ -264,7 +264,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) OR f2 = (SELECT f1 FROM t1);
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1) OR f2 = (SELECT f1 FROM t1);
 ----
 Explained Query:
   With
@@ -315,7 +315,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT *
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT *
 FROM (SELECT * FROM t1 WHERE f1 = 1) AS a1
 JOIN (SELECT * FROM t1 WHERE f1 = 1) AS a2
 ON TRUE
@@ -341,7 +341,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT *
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT *
 FROM (SELECT * FROM t1 WHERE f1 = 1) AS a1
 , (SELECT * FROM t1 WHERE f1 = 1) AS a2
 WHERE a1.f2 = 2
@@ -370,7 +370,7 @@ EOF
 
 # No CSE with only partially-overlapping predicates
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT *
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT *
 FROM (SELECT * FROM t1 WHERE f1 = 1) AS a1
 , (SELECT * FROM t1 WHERE f1 = 1) AS a2
 WHERE a1.f2 = 2
@@ -405,7 +405,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1;
 ----
 Explained Query:
   With
@@ -426,7 +426,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1 UNION SELECT * FROM t1 WHERE f1 = 1;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1 UNION SELECT * FROM t1 WHERE f1 = 1;
 ----
 Explained Query:
   With
@@ -454,7 +454,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT (SELECT f1 FROM t1 WHERE f1 = 1) , (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT (SELECT f1 FROM t1 WHERE f1 = 1) , (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1;
 ----
 Explained Query:
   With
@@ -498,7 +498,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT MIN((SELECT f1 FROM t1 WHERE f1 = 1)), MAX((SELECT f1 FROM t1 WHERE f1 = 1)) FROM t1;
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT MIN((SELECT f1 FROM t1 WHERE f1 = 1)), MAX((SELECT f1 FROM t1 WHERE f1 = 1)) FROM t1;
 ----
 Explained Query:
   With
@@ -561,7 +561,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1 WHERE EXISTS (SELECT f1 FROM t1 WHERE f1 = 1);
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1 WHERE EXISTS (SELECT f1 FROM t1 WHERE f1 = 1);
 ----
 Explained Query:
   With
@@ -611,7 +611,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT (SELECT f1 FROM t1 WHERE f1 = 1) FROM t1
 UNION ALL
 SELECT f1 FROM t1 WHERE f1 = 1
 ----
@@ -668,7 +668,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM t1 AS a1, t1 AS a2
 UNION ALL
 SELECT * FROM t1 AS a1, t1 AS a2
@@ -697,7 +697,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)
 UNION ALL
 SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)
@@ -744,7 +744,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) WHERE f1 = 1
 UNION ALL
 SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) WHERE f1 = 2
@@ -787,7 +787,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM
 (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) AS s1,
 (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) AS s2
@@ -825,7 +825,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM
 (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) AS s1,
 (SELECT a2.f1 AS f1 FROM t1 AS a1 LEFT JOIN t1 AS a2 USING (f1)) AS s2
@@ -872,7 +872,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM t1 WHERE f1 = 1 AND f2 = 2
 UNION ALL
 SELECT * FROM t1 WHERE f1 = 1 AND f2 = 2
@@ -900,7 +900,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM t1 WHERE f1 = 1 OR f1 = 2
 UNION ALL
 SELECT * FROM t1 WHERE f1 = 1 OR f1 = 2
@@ -927,7 +927,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1)
 UNION ALL
 SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1)
@@ -957,7 +957,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1)
 UNION ALL
 SELECT * FROM t1 WHERE f1 = (SELECT f1 FROM t1 WHERE f1 = 1)
@@ -1002,7 +1002,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT f1 + 1 FROM (SELECT f1 + 2 AS f1 FROM t1)
 UNION ALL
 SELECT f1 + 1 FROM (SELECT f1 + 2 AS f1 FROM t1)
@@ -1030,7 +1030,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT MIN(f1) FROM t1
 UNION ALL
 SELECT MIN(f1) FROM t1;
@@ -1064,7 +1064,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT DISTINCT f1 FROM t1
 UNION ALL
 SELECT DISTINCT f1 FROM t1
@@ -1088,7 +1088,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT f1, COUNT(*) FROM t1 GROUP BY f1
 UNION ALL
 SELECT f1, COUNT(*) FROM t1 GROUP BY f1
@@ -1115,7 +1115,7 @@ EOF
 # CSEs containing an expression / function
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT f1 + f1 + f1 + f1 FROM t1
 UNION ALL
 SELECT f1 + f1 + f1 + f1 FROM t1
@@ -1139,7 +1139,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT ABS(f1) FROM t1
 UNION ALL
 SELECT ABS(f1) FROM t1
@@ -1167,7 +1167,7 @@ EOF
 ##
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 (SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1)
 UNION ALL
 (SELECT * FROM t1 WHERE f1 = 1 UNION ALL SELECT * FROM t1 WHERE f1 = 1)
@@ -1192,7 +1192,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 (SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
 UNION ALL
 (SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
@@ -1226,7 +1226,7 @@ EOF
 ##
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 (SELECT f1 FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
 UNION ALL
 (SELECT f2 FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
@@ -1258,7 +1258,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 (SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
 UNION ALL
 (SELECT * FROM t2 WHERE EXISTS (SELECT * FROM t1 WHERE f1 = 1))
@@ -1295,7 +1295,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM
 (SELECT f1 FROM t2 UNION ALL SELECT f1 FROM t1 WHERE f1 = 1) ,
 (SELECT f2 FROM t2 UNION ALL SELECT f1 FROM t1 WHERE f1 = 1)
 ----
@@ -1330,7 +1330,7 @@ EOF
 
 # Same predicate, different projections
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT f1 FROM t1 WHERE f1 = 1
 UNION ALL
 SELECT f2 FROM t1 WHERE f1 = 1
@@ -1359,7 +1359,7 @@ EOF
 
 #
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = 1 AND a2.f1 = 2
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 = 1 AND a2.f1 = 2
 ----
 Explained Query:
   With
@@ -1385,7 +1385,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 JOIN t1 AS a2 USING (f1)) WHERE f1 = 1
 UNION ALL
 SELECT * FROM (SELECT a2.f1 AS f1 FROM t1 AS a1 JOIN t1 AS a2 USING (f1)) WHERE f1 = 2
@@ -1428,7 +1428,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT * FROM t1 WHERE f1 = 1
 UNION ALL
 SELECT * FROM t1 WHERE f1 = 2
@@ -1453,7 +1453,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT MIN(f1) FROM t1
 UNION ALL
 SELECT MAX(f1) FROM t1
@@ -1496,7 +1496,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT MIN(f1) FROM t1
 UNION ALL
 SELECT MIN(f2) FROM t1
@@ -1544,7 +1544,7 @@ EOF
 # Basic support for recursive queries.
 # With materialize#27389 this stopped testing what it says it tests; see issue database-issues#8294.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c0(f1 INTEGER, f2 INTEGER) AS (
     SELECT f1, f2 FROM t1
@@ -1620,7 +1620,7 @@ EOF
 
 # Correlated WMR block.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
 SELECT bound, (
     WITH MUTUALLY RECURSIVE
         numbers (n int) as (

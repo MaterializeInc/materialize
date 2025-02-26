@@ -25,11 +25,20 @@ impl<'a> Explain<'a> for HirRelationExpr {
 
     type Text = ExplainSinglePlan<'a, HirRelationExpr>;
 
+    type VerboseText = ExplainSinglePlan<'a, HirRelationExpr>;
+
     type Json = ExplainSinglePlan<'a, HirRelationExpr>;
 
     type Dot = UnsupportedFormat;
 
     fn explain_text(&'a mut self, context: &'a Self::Context) -> Result<Self::Text, ExplainError> {
+        self.as_explain_single_plan(context)
+    }
+
+    fn explain_verbose_text(
+        &'a mut self,
+        context: &'a Self::Context,
+    ) -> Result<Self::VerboseText, ExplainError> {
         self.as_explain_single_plan(context)
     }
 

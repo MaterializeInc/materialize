@@ -102,7 +102,7 @@ rj  banana
 # Correlated inner join.
 # Plan:
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   first_name, fruit
 FROM
@@ -157,7 +157,7 @@ frank  mango
 # Outer context is a singleton literal collection.
 # Plan:
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   first_name, fruit
 FROM
@@ -198,7 +198,7 @@ CA  San_Diego
 # More complex limit expression.
 # Plan:
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) AS VERBOSE TEXT FOR
 SELECT s.state, c.name FROM
     (SELECT DISTINCT state FROM cities) s,
     LATERAL (SELECT name FROM cities WHERE state = s.state LIMIT ascii(substring(state, 1, 1)) - 64) c
@@ -243,7 +243,7 @@ TX  San_Antonio
 # A correlated subquery in the limit clause.
 # Plan:
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) AS VERBOSE TEXT FOR
 SELECT s.state, c.name
 FROM
   (SELECT DISTINCT state FROM cities) s,
@@ -321,7 +321,7 @@ TX  Austin
 # Limit is a cast.
 # Result:
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) AS VERBOSE TEXT FOR
 SELECT s.state, c.name FROM
     (SELECT DISTINCT state FROM cities) s,
     LATERAL (SELECT name FROM cities c LIMIT '1'::INT) c;
@@ -371,7 +371,7 @@ CA  Los_Angeles  Los_Angeles
 #
 # Plan:
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) AS VERBOSE TEXT FOR
 SELECT s.state, c1.name, c2.name FROM
     (SELECT DISTINCT state FROM cities) s,
     LATERAL (SELECT name FROM cities c WHERE state = s.state LIMIT mod(length(s.state), 3)) c1,
@@ -419,7 +419,7 @@ SELECT s.state, c.name FROM
 
 # Limit 0 reduces to the empty result during optimization.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) AS VERBOSE TEXT FOR
 SELECT s.state, c.name FROM
     (SELECT DISTINCT state FROM cities) s,
     LATERAL (SELECT name FROM cities c LIMIT 0) c;
@@ -495,7 +495,7 @@ TX  San_Francisco
 
 # Limit NULL is removed during optimization. (TODO)
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) FOR
+EXPLAIN OPTIMIZED PLAN WITH(arity, humanized expressions) AS VERBOSE TEXT FOR
 SELECT s.state, c.name FROM
     (SELECT DISTINCT state FROM cities) s,
     LATERAL (SELECT name FROM cities c LIMIT NULL) c;

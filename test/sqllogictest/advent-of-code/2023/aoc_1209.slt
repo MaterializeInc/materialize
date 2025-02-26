@@ -17,7 +17,7 @@ CREATE TABLE input (input TEXT);
 # no data
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 30)
 
     lines (line TEXT, line_no INT) AS (

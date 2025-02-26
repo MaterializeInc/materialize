@@ -31,7 +31,7 @@ count
 ----
 1
 
-? EXPLAIN OPTIMIZED PLAN WITH(join implementations) FOR SELECT * FROM delta_join;
+? EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR SELECT * FROM delta_join;
 Explained Query:
   Project (#0, #1, #0, #3)
     Filter (#0) IS NOT NULL

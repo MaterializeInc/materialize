@@ -72,7 +72,7 @@ mode cockroach
 
 # Test target cluster selection for mz_system tables without transactions.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(no fast path) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(no fast path) AS VERBOSE TEXT FOR
 SELECT * FROM mz_views;
 ----
 Explained Query:
@@ -93,7 +93,7 @@ statement ok
 SELECT * FROM t;
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(no fast path) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(no fast path) AS VERBOSE TEXT FOR
 SELECT * FROM mz_views;
 ----
 Explained Query:
@@ -110,7 +110,7 @@ ROLLBACK
 
 # Test constant error.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT 1 / 0
 ----
 Explained Query (fast path):
@@ -122,7 +122,7 @@ EOF
 
 # Test constant with two elements.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 (SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
 ----
 Explained Query (fast path):
@@ -136,7 +136,7 @@ EOF
 
 # Test catalog queries (index found based on cluster auto-routing).
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM mz_internal.mz_source_status_history
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM mz_internal.mz_source_status_history
 ----
 Explained Query (fast path):
   Project (#1, #0, #2..=#4)
@@ -151,7 +151,7 @@ EOF
 
 # Test fast path rendering on a non-trivial index.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT * FROM non_empty_mv where y + 7 = 9
 ----
 Explained Query (fast path):
@@ -167,7 +167,7 @@ EOF
 
 # Test fast path rendering on an empty index on an empty relation.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT * FROM empty_mv
 ----
 Explained Query (fast path):
@@ -182,7 +182,7 @@ EOF
 
 # Test basic linear chains (fast path).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT 1, a + b as c FROM iv WHERE b = 5 and a < 0 and a + b > 0
 ----
 Explained Query (fast path):
@@ -200,7 +200,7 @@ EOF
 
 # Test basic linear chains (slow path).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
 ----
 Explained Query:
@@ -218,7 +218,7 @@ EOF
 
 # Test table functions in the select clause (FlatMap).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT generate_series(a, b) from t
 ----
 Explained Query:
@@ -235,7 +235,7 @@ EOF
 
 # Test Threshold, Union, Distinct, Negate.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT a FROM t EXCEPT SELECT b FROM mv
 ----
 Explained Query:
@@ -260,7 +260,7 @@ EOF
 
 # Test Threshold, Union, Distinct, Negate.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT a FROM t EXCEPT ALL SELECT b FROM mv
 ----
 Explained Query:
@@ -283,7 +283,7 @@ EOF
 
 # Test TopK.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT * FROM ov
 ----
 Explained Query:
@@ -299,7 +299,7 @@ EOF
 
 # Test Finish.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
 ----
 Explained Query (fast path):
@@ -315,7 +315,7 @@ EOF
 
 # Test Reduce (global).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t
 ----
 Explained Query:
@@ -346,7 +346,7 @@ EOF
 
 # Test Reduce (local).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t GROUP BY b
 ----
 Explained Query:
@@ -364,7 +364,7 @@ EOF
 
 # Test EXISTS subqueries.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
 Explained Query:
@@ -415,7 +415,7 @@ EOF
 
 # Test SELECT subqueries.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE mv.b = t.b LIMIT 1) FROM t
 ----
 Explained Query:
@@ -482,7 +482,7 @@ EOF
 
 # Test outer joins (ON syntax).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT t1.a, t2.a
 FROM t as t1
 LEFT JOIN t as t2 ON t1.b = t2.b
@@ -532,7 +532,7 @@ EOF
 
 # Test a single CTE.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
 ----
 Explained Query:
@@ -558,7 +558,7 @@ EOF
 
 # Test EXPLAIN INDEX for an indexed source
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 INDEX t_a_idx
 ----
 materialize.public.t_a_idx:
@@ -573,7 +573,7 @@ EOF
 
 # Test EXPLAIN INDEX for an indexed view (first index)
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 INDEX iv_a_idx;
 ----
 materialize.public.iv_a_idx:
@@ -593,7 +593,7 @@ EOF
 
 # Test EXPLAIN INDEX for an indexed view (based on a prior index)
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 INDEX iv_b_idx;
 ----
 materialize.public.iv_b_idx:
@@ -609,7 +609,7 @@ EOF
 
 # Test EXPLAIN INDEX for an indexed view where the index is exactly the same as a prior index.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 INDEX iv_b_idx_2;
 ----
 materialize.public.iv_b_idx_2:
@@ -630,7 +630,7 @@ EOF
 # Test multiple CTEs: a case where we cannot pull the let statement up through
 # the join because the local l0 is correlated against the lhs of the enclosing join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   *
 FROM
@@ -695,7 +695,7 @@ EOF
 
 # Test cross join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT t1.a, t2.a FROM t as t1, t as t2
 ----
 Explained Query:
@@ -718,7 +718,7 @@ EOF
 
 # Test cyclic join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT t1.a, t2.a
 FROM
   t as t1,
@@ -769,7 +769,7 @@ COMPLETE 0
 
 # Test a differential join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c and d = e and b = f
@@ -797,7 +797,7 @@ EOF
 
 # Test a differential join WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, join implementations) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, join implementations) AS VERBOSE TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c and d = e and b = f
@@ -839,7 +839,7 @@ CREATE INDEX t_b_idx ON T(b);
 
 # Test a delta join without WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE b = c and d = e
@@ -867,7 +867,7 @@ EOF
 
 # Test a delta join WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE b = c and d = e
@@ -899,7 +899,7 @@ EOF
 
 # Test a delta join where the first input has both a full scan and a lookup.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR
 SELECT a, b, c, d, e, f
 FROM t, u, v
 WHERE a = c and b = e
@@ -931,7 +931,7 @@ EOF
 
 # Test an IndexedFilter join.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT a, max(b)
 FROM t
 WHERE a = 0
@@ -958,7 +958,7 @@ CREATE INDEX t_a_b_idx ON T(a,b)
 
 # Test an IndexedFilter join WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR
 SELECT a, max(b)
 FROM t
 WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
@@ -978,7 +978,7 @@ EOF
 
 # Test an IndexedFilter join on fast path WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR
 SELECT *
 FROM t
 WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
@@ -1000,7 +1000,7 @@ statement ok
 CREATE TABLE r(f0 INT, f1 INT, f2 INT, f3 INT, f4 INT, f5 INT, f6 INT, f7 INT, f8 INT, f9 INT, f10 INT, f11 INT, f12 INT, f13 INT, f14 INT, f15 INT, f16 INT);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR SELECT *
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT *
 FROM r AS r0, r AS r1
 WHERE
   r0.f0=r1.f0 AND
@@ -1037,7 +1037,7 @@ EOF
 
 ## linear chains is currently disabled for WMR.
 statement error not supported
-EXPLAIN OPTIMIZED PLAN WITH(linear chains) FOR
+EXPLAIN OPTIMIZED PLAN WITH(linear chains) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
     bar (a int) as (SELECT a FROM foo)
@@ -1071,7 +1071,7 @@ CREATE DEFAULT INDEX ON t;
 # EXPLAIN output is time-dependent, so we don't want show the output here, just
 # assert that the query doesn't fail.
 statement ok
-EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM t WHERE a < mz_now();
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t WHERE a < mz_now();
 
 # Regression test for materialize#19177
 # ---
@@ -1089,14 +1089,14 @@ statement ok
 CREATE TABLE t2(x text);
 
 statement ok
-EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM t1, t2 WHERE t1.x || mz_internal.mz_session_id()  = t2.x || mz_internal.mz_session_id();
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t1, t2 WHERE t1.x || mz_internal.mz_session_id()  = t2.x || mz_internal.mz_session_id();
 
 # Regression test for the join visitation part of materialize#19177
 statement ok
-EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM t1, t2 WHERE t1.x || mz_now()  = t2.x || mz_now();
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t1, t2 WHERE t1.x || mz_now()  = t2.x || mz_now();
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT lag(x, 3, 'default') IGNORE NULLS OVER (ORDER BY x || x)
 FROM t1;
 ----
@@ -1114,7 +1114,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT first_value(x) OVER (ORDER BY x || x ROWS BETWEEN 5 preceding AND CURRENT ROW)
 FROM t1;
 ----
@@ -1154,7 +1154,7 @@ statement ok
 CREATE INDEX u_d ON u(d);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT *
 FROM t, u
 WHERE t.b = u.c;
@@ -1179,7 +1179,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT *
 FROM t, u
 WHERE t.b = u.d;
@@ -1215,7 +1215,7 @@ statement ok
 CREATE INDEX t_a_idx_2 ON t(a);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT *
 FROM t, u
 WHERE t.a = u.c
@@ -1239,7 +1239,7 @@ EOF
 
 # An index is used two times by the same (self) join. We should show a 1st input and a non-1st input usage.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT *
 FROM t AS t1, t AS t2, t AS t3
 WHERE t1.a = t2.a AND t2.a = t3.a;
@@ -1266,7 +1266,7 @@ EOF
 
 # An index is used in both a join and a full scan.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 (SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
  FROM t AS t1, t AS t2
  WHERE t1.a = t2.a)
@@ -1301,7 +1301,7 @@ EOF
 
 # An index exists that can't be used for the join because of having the wrong key.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 (SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
  FROM t AS t1, t AS t2
  WHERE t1.b = t2.b)
@@ -1347,7 +1347,7 @@ statement ok
 CREATE INDEX t_non_null_a_idx ON t_non_null(a);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 (SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
  FROM t_non_null AS t1, t_non_null AS t2
  WHERE t1.b = t2.b)
@@ -1382,7 +1382,7 @@ EOF
 # This has 1 more full scan than the previous test, because the join needs 2 different arrangements.
 # (But we print only one full scan due to deduplication.)
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 (SELECT t1.a + t2.a AS a, t1.b + t2.b AS b
  FROM t_non_null AS t1, t_non_null AS t2
  WHERE t1.b = t2.b + 1)
@@ -1413,7 +1413,7 @@ EOF
 
 # An index is used in both a lookup and a full scan.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT * FROM t
 UNION
 SELECT * FROM t WHERE a = 5;
@@ -1438,7 +1438,7 @@ statement ok
 CREATE INDEX t_b_idx ON t(b);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT * FROM t
 UNION ALL
 SELECT * FROM t WHERE b = 7
@@ -1472,7 +1472,7 @@ EOF
 
 # Fast path with a LIMIT and no ORDER BY. This is not a full scan.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT a+b as x
 FROM t
 WHERE a < 7
@@ -1494,7 +1494,7 @@ EOF
 
 # Same query without a LIMIT, so full scan
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT a+b as x
 FROM t
 WHERE a < 7;
@@ -1514,7 +1514,7 @@ EOF
 
 # Same query with a LIMIT + ORDER BY, so full scan
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT a+b as x
 FROM t
 WHERE a < 7
@@ -1553,7 +1553,7 @@ statement ok
 CREATE INDEX t4_idx_c ON t4(c);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR
 SELECT * FROM t4;
 ----
 Explained Query (fast path):
@@ -1575,7 +1575,7 @@ statement ok
 SET CLUSTER = no_replicas;
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT * FROM t4;
 ----
 Explained Query:
@@ -1602,7 +1602,7 @@ CREATE TABLE t6(
 
 # WITH(EQUIVALENCES)
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(EQUIVALENCES) FOR
+EXPLAIN OPTIMIZED PLAN WITH(EQUIVALENCES) AS VERBOSE TEXT FOR
 SELECT *
 FROM t5, t6
 WHERE x = a AND b IN (8,9);
@@ -1627,7 +1627,7 @@ Target cluster: no_replicas
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(EQUIVALENCES, HUMANIZED EXPRESSIONS) FOR
+EXPLAIN OPTIMIZED PLAN WITH(EQUIVALENCES, HUMANIZED EXPRESSIONS) AS VERBOSE TEXT FOR
 SELECT *
 FROM t5, t6
 WHERE x = a AND b IN (8,9);
@@ -1654,7 +1654,7 @@ EOF
 # `count(*)` is planned as `count(true)`. We take care in EXPLAIN to show `count(true)` as `count(*)` to avoid confusing
 # users.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT count(*)
 FROM t5;
 ----
@@ -1682,13 +1682,13 @@ Target cluster: no_replicas
 EOF
 
 query error DISTINCT \* not supported as function args
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT count(distinct *)
 FROM t5;
 
 # `count(true)` is currently also printed as `count(*)` in EXPLAIN, which I'd say is fine.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT count(true)
 FROM t5;
 ----
@@ -1717,7 +1717,7 @@ EOF
 
 # But `count(DISTINCT true)` means an entirely different thing, so EXPLAIN shouldn't conflate it with `count(*)`.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
 SELECT count(DISTINCT true)
 FROM t5;
 ----

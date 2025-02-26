@@ -165,7 +165,7 @@ CREATE INDEX fk_lineitem_partsuppkey ON lineitem (l_partkey ASC, l_suppkey ASC);
 
 query T multiline
 -- Query 01
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
 	l_returnflag,
 	l_linestatus,
@@ -207,7 +207,7 @@ EOF
 
 query T multiline
 -- Query 02
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     s_acctbal,
     s_name,
@@ -318,7 +318,7 @@ EOF
 
 query T multiline
 -- Query 03
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     l_orderkey,
     sum(l_extendedprice * (1 - l_discount)) AS revenue,
@@ -373,7 +373,7 @@ EOF
 
 query T multiline
 -- Query 04
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     o_orderpriority,
     count(*) AS order_count
@@ -423,7 +423,7 @@ EOF
 
 query T multiline
 -- Query 05
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     n_name,
     sum(l_extendedprice * (1 - l_discount)) AS revenue
@@ -494,7 +494,7 @@ EOF
 
 query T multiline
 -- Query 06
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     sum(l_extendedprice * l_discount) AS revenue
 FROM
@@ -533,7 +533,7 @@ EOF
 
 query T multiline
 -- Query 07
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     supp_nation,
     cust_nation,
@@ -622,7 +622,7 @@ EOF
 
 query T multiline
 -- Query 08
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     o_year,
     sum(case
@@ -717,7 +717,7 @@ EOF
 
 query T multiline
 -- Query 09
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     nation,
     o_year,
@@ -796,7 +796,7 @@ EOF
 
 query T multiline
 -- Query 10
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     c_custkey,
     c_name,
@@ -866,7 +866,7 @@ EOF
 
 query T multiline
 -- Query 11
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     ps_partkey,
     sum(ps_supplycost * ps_availqty) AS value
@@ -939,7 +939,7 @@ EOF
 
 query T multiline
 -- Query 12
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     l_shipmode,
     sum(case
@@ -993,7 +993,7 @@ EOF
 
 query T multiline
 -- Query 13
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     c_count,
     count(*) AS custdist
@@ -1062,7 +1062,7 @@ EOF
 
 query T multiline
 -- Query 14
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     100.00 * sum(case
         when p_type like 'PROMO%'
@@ -1127,7 +1127,7 @@ create view revenue (supplier_no, total_revenue) as
 
 query T multiline
 -- Query 15
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     s_suppkey,
     s_name,
@@ -1186,7 +1186,7 @@ drop view revenue
 
 query T multiline
 -- Query 16
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     p_brand,
     p_type,
@@ -1272,7 +1272,7 @@ EOF
 
 query T multiline
 -- Query 17
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
   sum(l_extendedprice) / 7.0 AS avg_yearly
 FROM
@@ -1349,7 +1349,7 @@ EOF
 
 query T multiline
 -- Query 18
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     c_name,
     c_custkey,
@@ -1435,7 +1435,7 @@ EOF
 
 query T multiline
 -- Query 19
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     sum(l_extendedprice* (1 - l_discount)) AS revenue
 FROM
@@ -1508,7 +1508,7 @@ EOF
 
 query T multiline
 -- Query 20
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     s_name,
     s_address
@@ -1627,7 +1627,7 @@ EOF
 
 query T multiline
 -- Query 21
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     s_name,
     count(*) AS numwait
@@ -1751,7 +1751,7 @@ EOF
 
 query T multiline
 -- Query 22
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     cntrycode,
     count(*) AS numcust,

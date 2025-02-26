@@ -8665,10 +8665,14 @@ impl<'a> Parser<'a> {
         };
 
         let format = if self.parse_keyword(AS) {
-            match self.parse_one_of_keywords(&[TEXT, JSON, DOT]) {
+            match self.parse_one_of_keywords(&[TEXT, JSON, DOT, VERBOSE]) {
                 Some(TEXT) => Some(ExplainFormat::Text),
                 Some(JSON) => Some(ExplainFormat::Json),
                 Some(DOT) => Some(ExplainFormat::Dot),
+                Some(VERBOSE) => {
+                    self.expect_keyword(TEXT)?;
+                    Some(ExplainFormat::VerboseText)
+                }
                 None => return Err(ParserError::new(self.index, "expected a format")),
                 _ => unreachable!(),
             }
