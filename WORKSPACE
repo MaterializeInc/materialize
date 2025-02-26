@@ -462,6 +462,13 @@ crates_repository(
             additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.rocksdb.bazel",
             compile_data = [":out_dir"],
             gen_build_script = False,
+            patch_args = ["-p1"],
+            # `librocksdb-sys` pulls in `snappy` as a submodule which includes it's own
+            # `BUILD.bazel` file. This file doesn't integrate super well with `librocksdb-sys`
+            # so we patch the repo to delete it and use our own build definitions.
+            patches = [
+                "@//misc/bazel/c_deps:patches/snappy-config.patch",
+            ],
             rustc_env = {
                 "OUT_DIR": "$(execpath :out_dir)",
             },
