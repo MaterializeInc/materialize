@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.zippy.all_actions import ValidateAll
+from materialize.zippy.all_actions import Action, ValidateAll  # noqa
 from materialize.zippy.backup_and_restore_actions import BackupAndRestore
 from materialize.zippy.balancerd_actions import (
     BalancerdRestart,
@@ -18,7 +18,7 @@ from materialize.zippy.balancerd_actions import (
 from materialize.zippy.blob_store_actions import BlobStoreRestart, BlobStoreStart
 from materialize.zippy.crdb_actions import CockroachRestart, CockroachStart
 from materialize.zippy.debezium_actions import CreateDebeziumSource, DebeziumStart
-from materialize.zippy.framework import ActionOrFactory
+from materialize.zippy.framework import ActionFactory, ActionOrFactory  # noqa
 from materialize.zippy.kafka_actions import (
     CreateTopicParameterized,
     Ingest,
