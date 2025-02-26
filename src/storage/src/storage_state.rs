@@ -953,6 +953,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let mut commands = vec![];
         loop {
             match command_rx.recv()? {
+                StorageCommand::CreateTimely { .. } => {
+                    // The Timely config was already applied/checked in `ClusterClient::send`, so
+                    // we can ignore the `CreateTimely` command here.
+                }
                 StorageCommand::InitializationComplete => break,
                 command => commands.push(command),
             }
