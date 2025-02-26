@@ -1492,18 +1492,49 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: retain-history
 
-  - id: data-ingest
-    label: "Data Ingest"
-    depends_on: build-aarch64
-    timeout_in_minutes: 90
-    parallelism: 2
-    agents:
-      queue: hetzner-aarch64-8cpu-16gb
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: data-ingest
-          # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
-          #args: [--azurite]
+  - group: "Data Ingest"
+    key: data-ingest
+    steps:
+    - id: data-ingest-1-replica
+      label: "Data Ingest (1 replica)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-8cpu-16gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=1]
+
+    - id: data-ingest-2-replicas
+      label: "Data Ingest (2 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-8cpu-16gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=2]
+      skip: "Reenable when database-issues#8990 is fixed"
+
+    - id: data-ingest-8-replicas
+      label: "Data Ingest (8 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-16cpu-32gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=8]
+      skip: "Reenable when database-issues#8990 is fixed"
 
   - group: "Parallel Workload"
     key: parallel-workload
