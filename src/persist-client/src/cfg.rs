@@ -37,8 +37,10 @@ use crate::project::OPTIMIZE_IGNORED_DATA_DECODE;
 use crate::read::READER_LEASE_DURATION;
 
 const LTS_VERSIONS: &[Version] = &[
-    // 25.1
-    Version::new(0, 130, 0),
+    // 25.1.0
+    Version::new(0, 130, 1),
+    // 25.1.1
+    Version::new(0, 130, 3),
 ];
 
 /// The tunable knobs for persist.
