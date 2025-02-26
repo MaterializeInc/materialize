@@ -171,8 +171,9 @@ impl S3BlobConfig {
                 .read_timeout(READ_TIMEOUT_MARKER)
                 .build(),
         );
-
+        dbg!(&loader);
         let client = mz_aws_util::s3::new_client(&loader.load().await);
+        dbg!(client.config());
         Ok(S3BlobConfig {
             metrics,
             client,
