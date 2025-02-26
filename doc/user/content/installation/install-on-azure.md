@@ -58,6 +58,12 @@ your version of Python, install it.
 If you don't have Helm version 3.2.0+ installed, refer to the [Helm
 documentation](https://helm.sh/docs/intro/install/).
 
+### jq (Optional)
+
+*Optional*. `jq` is used to parse the EKS cluster name and region from the
+Terraform outputs. Alternatively, you can manually specify the name and region.
+If you want to use `jq` and do not have `jq` installed, install.
+
 ## A. Authenticate with Azure
 
 1. Open a Terminal window.

@@ -34,26 +34,22 @@ Materialize does not support nor recommend these modules for production use.
 
 ### Google cloud project
 
-- If you do not have a GCP project to use for this tutorial, create one.
+You need a GCP project for which you have a role (such as
+`roles/resourcemanager.projectIamAdmin` or `roles/owner`) that includes
+[permissions to manage access to the
+project](https://cloud.google.com/iam/docs/granting-changing-revoking-access).
 
-- For the project, you must have a role (such as
-  `roles/resourcemanager.projectIamAdmin` or `roles/owner`) that
-  includes [permissions to manage access to the
-  project](https://cloud.google.com/iam/docs/granting-changing-revoking-access).
+### gcloud CLI (Inititalized)
 
-### gcloud CLI
-
-If you do not have the gcloud CLI installed,
-
-- Install the gcloud CLI. For details, see the [Install the gcloud CLI
-  documentation](https://cloud.google.com/sdk/docs/install).
+- If you do not have gcloud CLI, install. For details, see the [Install the
+  gcloud CLI documentation](https://cloud.google.com/sdk/docs/install).
 
 - Initialize the gcloud CLI to specify the GCP project you want to use. For
   details, see the [Install the gcloud CLI documentation](https://cloud.google.com/sdk/docs/install).
 
 ### Terraform
 
-If you don't have Terraform installed, [install
+If you do not have Terraform installed, [install
 Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terraform).
 
 ### kubectl and plugins
@@ -78,8 +74,14 @@ Otherwise, you will need to manually install the `gke-gcloud-auth-plugin` for
 
 ### Helm 3.2.0+
 
-If you don't have Helm version 3.2.0+ installed, refer to the [Helm
-documentation](https://helm.sh/docs/intro/install/).
+If you do not have Helm version 3.2.0+ installed, install.  For details, see the
+[Helm documentation](https://helm.sh/docs/intro/install/).
+
+### jq (Optional)
+
+*Optional*. `jq` is used to parse the EKS cluster name and region from the
+Terraform outputs. Alternatively, you can manually specify the name and region.
+If you want to use `jq` and do not have `jq` installed, install.
 
 ## A. Configure GCP project andservice account
 
@@ -274,8 +276,8 @@ node instance type, etc.), see the
    connection_strings = <sensitive>
    gke_cluster = <sensitive>
    service_accounts = {
-   "gke_sa" = "mz-simple-gke-sa@mz-scratch.iam.gserviceaccount.com"
-   "materialize_sa" = "mz-simple-materialize-sa@mz-scratch.iam.gserviceaccount.com"
+   "gke_sa" = "mz-simple-gke-sa@my-project.iam.gserviceaccount.com"
+   "materialize_sa" = "mz-simple-materialize-sa@my-project.iam.gserviceaccount.com"
    }
    ```
 
@@ -389,8 +391,8 @@ node instance type, etc.), see the
    connection_strings = <sensitive>
    gke_cluster = <sensitive>
    service_accounts = {
-     "gke_sa" = "mz-simple-gke-sa@mz-scratch.iam.gserviceaccount.com"
-     "materialize_sa" = "mz-simple-materialize-sa@mz-scratch.iam.gserviceaccount.com"
+     "gke_sa" = "mz-simple-gke-sa@my-project.iam.gserviceaccount.com"
+     "materialize_sa" = "mz-simple-materialize-sa@my-project.iam.gserviceaccount.com"
    }
    ```
 
