@@ -34,8 +34,9 @@ use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
 use mz_orchestrator::scheduling_config::ServiceSchedulingConfig;
 use mz_orchestrator::{
-    CpuLimit, DiskLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
-    ServiceEvent, ServicePort, ServiceProcessMetrics, ServiceStatus,
+    CpuLimit, DiskLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, Service,
+    ServiceAssignments, ServiceConfig, ServiceEvent, ServicePort, ServiceProcessMetrics,
+    ServiceStatus,
 };
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::error::ErrorExt;
@@ -149,26 +150,15 @@ impl LaunchSpec {
         image: impl AsRef<OsStr>,
         args: &[impl AsRef<OsStr>],
         wrapper: &[String],
-        full_id: &str,
-        listen_addrs: &BTreeMap<String, String>,
         memory_limit: Option<&MemoryLimit>,
         cpu_limit: Option<&CpuLimit>,
     ) -> Command {
-        let wrapper_parts = || {
-            (
-                &wrapper[0],
-                wrapper[1..]
-                    .iter()
-                    .map(|part| interpolate_command(part, full_id, listen_addrs)),
-            )
-        };
-
         let mut cmd = match self {
             Self::Direct => {
                 if wrapper.is_empty() {
                     Command::new(image)
                 } else {
-                    let (program, wrapper_args) = wrapper_parts();
+                    let (program, wrapper_args) = (&wrapper[0], &wrapper[1..]);
                     let mut cmd = Command::new(program);
                     cmd.args(wrapper_args);
                     cmd.arg(image);
@@ -189,7 +179,7 @@ impl LaunchSpec {
                 }
 
                 if !wrapper.is_empty() {
-                    let (program, wrapper_args) = wrapper_parts();
+                    let (program, wrapper_args) = (&wrapper[0], &wrapper[1..]);
                     cmd.arg(program);
                     cmd.args(wrapper_args);
                 };
@@ -483,7 +473,7 @@ struct EnsureServiceConfig {
     pub image: String,
     /// A function that generates the arguments for each process of the service
     /// given the assigned listen addresses for each named port.
-    pub args: Box<dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync>,
+    pub args: Box<dyn Fn(ServiceAssignments) -> Vec<String> + Send + Sync>,
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
@@ -628,13 +618,46 @@ impl OrchestratorWorker {
             None
         };
 
+        // The service might already exist. If it has the same config as requested (currently we
+        // can check only the scale), we have nothing to do. Otherwise we need to drop and recreate
+        // it.
+        let old_scale = {
+            let services = self.services.lock().expect("lock poisoned");
+            services.get(&id).map(|states| states.len())
+        };
+        match old_scale {
+            Some(old) if old == usize::from(scale) => return Ok(()),
+            Some(_old) => self.drop_service(&id).await?,
+            None => (),
+        }
+
+        let mut peer_addresses = Vec::new();
+        for i in 0..scale.into() {
+            let addresses = ports_in
+                .iter()
+                .map(|port| {
+                    let addr = socket_path(&run_dir, &port.name, i);
+                    (port.name.clone(), addr)
+                })
+                .collect();
+            peer_addresses.push(addresses);
+        }
+
         {
             let mut services = self.services.lock().expect("lock poisoned");
-            let process_states = services.entry(id.clone()).or_default();
 
             // Create the state for new processes.
-            let mut new_process_states = vec![];
-            for i in process_states.len()..scale.into() {
+            let mut process_states = vec![];
+            for i in 0..scale.into() {
+                let bind_addresses = &peer_addresses[i];
+
+                let mut command_wrapper = self.config.command_wrapper.clone();
+                command_wrapper.get_mut(1..).map(|parts| {
+                    for part in parts {
+                        *part = interpolate_command(&part[..], &full_id, bind_addresses);
+                    }
+                });
+
                 // Allocate listeners for each TCP proxy, if requested.
                 let mut ports = vec![];
                 let mut tcp_proxy_addrs = BTreeMap::new();
@@ -656,8 +679,23 @@ impl OrchestratorWorker {
                     };
                     ports.push(ServiceProcessPort {
                         name: port.name.clone(),
+                        address: bind_addresses[&port.name].clone(),
                         tcp_proxy_listener,
                     });
+                }
+
+                let assignments = ServiceAssignments {
+                    bind_addresses,
+                    peer_addresses: &peer_addresses,
+                };
+                let mut args = args(assignments);
+
+                if disk {
+                    if let Some(scratch) = &scratch_dir {
+                        args.push(format!("--scratch-directory={}", scratch.display()));
+                    } else {
+                        panic!("internal error: service requested disk but no scratch directory was configured");
+                    }
                 }
 
                 // Launch supervisor process.
@@ -666,19 +704,18 @@ impl OrchestratorWorker {
                     self.supervise_service_process(ServiceProcessConfig {
                         id: id.to_string(),
                         run_dir: run_dir.clone(),
-                        scratch_dir: scratch_dir.clone(),
                         i,
                         image: image.clone(),
-                        args: &args,
+                        args,
+                        command_wrapper,
                         ports,
                         memory_limit,
                         cpu_limit,
-                        disk,
                         launch_spec: self.config.launch_spec,
                     }),
                 );
 
-                new_process_states.push(ProcessState {
+                process_states.push(ProcessState {
                     _handle: handle.abort_on_drop(),
                     status: ProcessStatus::NotReady,
                     status_time: Utc::now(),
@@ -689,8 +726,7 @@ impl OrchestratorWorker {
 
             // Update the in-memory process state. We do this after we've created
             // all process states to avoid partially updating our in-memory state.
-            process_states.truncate(scale.into());
-            process_states.extend(new_process_states);
+            services.insert(id, process_states);
         }
 
         self.maybe_write_prometheus_service_discovery_file().await;
@@ -773,20 +809,18 @@ impl OrchestratorWorker {
         ServiceProcessConfig {
             id,
             run_dir,
-            scratch_dir,
             i,
             image,
             args,
+            command_wrapper,
             ports,
             memory_limit,
             cpu_limit,
-            disk,
             launch_spec,
         }: ServiceProcessConfig,
     ) -> impl Future<Output = ()> {
         let suppress_output = self.config.suppress_output;
         let propagate_crashes = self.config.propagate_crashes;
-        let command_wrapper = self.config.command_wrapper.clone();
         let image = self.config.image_dir.join(image);
         let pid_file = run_dir.join(format!("{i}.pid"));
         let full_id = self.config.full_id(&id);
@@ -799,23 +833,6 @@ impl OrchestratorWorker {
             service_event_tx: self.service_event_tx.clone(),
         };
 
-        let listen_addrs = ports
-            .iter()
-            .map(|p| {
-                let addr = socket_path(&run_dir, &p.name, i);
-                (p.name.clone(), addr)
-            })
-            .collect();
-        let mut args = args(&listen_addrs);
-
-        if disk {
-            if let Some(scratch) = &scratch_dir {
-                args.push(format!("--scratch-directory={}", scratch.display()));
-            } else {
-                panic!("internal error: service requested disk but no scratch directory was configured");
-            }
-        }
-
         async move {
             let mut proxy_handles = vec![];
             for port in ports {
@@ -824,13 +841,12 @@ impl OrchestratorWorker {
                         "{full_id}-{i}: {} tcp proxy listening on {}",
                         port.name, tcp_listener.local_addr,
                     );
-                    let uds_path = &listen_addrs[&port.name];
                     let handle = mz_ore::task::spawn(
                         || format!("{full_id}-{i}-proxy-{}", port.name),
                         tcp_proxy(TcpProxyConfig {
                             name: format!("{full_id}-{i}-{}", port.name),
                             tcp_listener,
-                            uds_path: uds_path.clone(),
+                            uds_path: port.address,
                         }),
                     );
                     proxy_handles.push(handle.abort_on_drop());
@@ -844,8 +860,6 @@ impl OrchestratorWorker {
                     &image,
                     &args,
                     &command_wrapper,
-                    &full_id,
-                    &listen_addrs,
                     memory_limit.as_ref(),
                     cpu_limit.as_ref(),
                 );
@@ -931,15 +945,14 @@ impl OrchestratorWorker {
     }
 }
 
-struct ServiceProcessConfig<'a> {
+struct ServiceProcessConfig {
     id: String,
     run_dir: PathBuf,
-    scratch_dir: Option<PathBuf>,
     i: usize,
     image: String,
-    args: &'a (dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync),
+    args: Vec<String>,
+    command_wrapper: Vec<String>,
     ports: Vec<ServiceProcessPort>,
-    disk: bool,
     memory_limit: Option<MemoryLimit>,
     cpu_limit: Option<CpuLimit>,
     launch_spec: LaunchSpec,
@@ -947,6 +960,7 @@ struct ServiceProcessConfig<'a> {
 
 struct ServiceProcessPort {
     name: String,
+    address: String,
     tcp_proxy_listener: Option<AddressedTcpListener>,
 }
 

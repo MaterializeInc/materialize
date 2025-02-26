@@ -22,6 +22,7 @@ futures = "0.3.25"
 itertools = "0.12.1"
 lgalloc = "0.4"
 mz-cluster = { path = "../cluster" }
+mz-cluster-client = { path = "../cluster-client/" }
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }

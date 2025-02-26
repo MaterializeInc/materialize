@@ -35,34 +35,32 @@
 
 use std::any::Any;
 use std::cmp::Ordering;
-use std::fmt::Display;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use futures::stream::FuturesUnordered;
-use futures::{FutureExt, StreamExt};
-use mz_cluster_client::client::ClusterStartupEpoch;
-use mz_ore::cast::CastFrom;
-use mz_ore::netio::{Listener, Stream};
+use futures::TryFutureExt;
+use mz_ore::netio::{Listener, SocketAddr, Stream};
+use mz_ore::retry::Retry;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
-use tracing::{debug, info, warn};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tracing::{info, warn};
 
 /// Creates communication mesh from cluster config
 pub async fn initialize_networking(
     workers: usize,
-    process: usize,
-    addresses: Vec<String>,
-    epoch: ClusterStartupEpoch,
+    bind_address: String,
+    peer_addresses: Vec<String>,
 ) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error> {
     info!(
-        process = process,
-        ?addresses,
-        "initializing network for timely instance, with {} processes for epoch number {epoch}",
-        addresses.len()
+        ?workers,
+        ?bind_address,
+        ?peer_addresses,
+        "initializing network for timely instance"
     );
-    let sockets = create_sockets(addresses, u64::cast_from(process), epoch)
+    let (process, sockets) = create_sockets(bind_address, peer_addresses)
         .await
         .context("failed to set up timely sockets")?;
 
@@ -129,233 +127,132 @@ where
 ///
 /// The item at index i in the resulting vec, is a Some(TcpSocket) to process i, except
 /// for item `my_index` which is None (no socket to self).
+///
+// FIXME: make this robust against peers crashing
 async fn create_sockets(
-    addresses: Vec<String>,
-    my_index: u64,
-    my_epoch: ClusterStartupEpoch,
-) -> Result<Vec<Option<Stream>>, anyhow::Error> {
-    let my_index_uz = usize::cast_from(my_index);
-    assert!(my_index_uz < addresses.len());
-    let n_peers = addresses.len() - 1;
-    let mut results: Vec<_> = (0..addresses.len()).map(|_| None).collect();
+    bind_address: String,
+    peer_addresses: Vec<String>,
+) -> Result<(usize, Vec<Option<Stream>>), anyhow::Error> {
+    let peers = peer_addresses.len();
 
-    let my_address = &addresses[my_index_uz];
-
-    // [btv] Binding to the address (which is of the form
-    // `hostname:port`) unnecessarily involves a DNS query. We should
-    // get the port from here, but otherwise just bind to `0.0.0.0`.
-    // Previously we bound to `my_address`, which caused
-    // https://github.com/MaterializeInc/cloud/issues/5070 .
-    let bind_address = match regex::Regex::new(r":(\d{1,5})$")
-        .unwrap()
-        .captures(my_address)
-    {
-        Some(cap) => {
-            let p: u16 = cap[1].parse().context("Port out of range")?;
-            format!("0.0.0.0:{p}")
+    // If `bind_address` contains a hostname, replace it with `0.0.0.0`, to avoid a DNS lookup and
+    // prevent issues such as cloud#5070.
+    let bind_address = match SocketAddr::from_str(&bind_address)? {
+        SocketAddr::Inet(mut addr) => {
+            addr.set_ip([0, 0, 0, 0].into());
+            SocketAddr::Inet(addr)
         }
-        None => {
-            // Address is not of the form `hostname:port`; it's
-            // probably a path to a Unix-domain socket.
-            my_address.to_string()
-        }
-    };
-    let listener = loop {
-        let mut tries = 0;
-        match Listener::bind(&bind_address).await {
-            Ok(ok) => break ok,
-            Err(e) => {
-                warn!("failed to listen on address {bind_address}: {e}");
-                tries += 1;
-                if tries == 10 {
-                    return Err(e.into());
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-        }
+        addr @ SocketAddr::Unix(_) => addr,
     };
 
-    struct ConnectionEstablished {
-        peer_index: u64,
-        stream: Stream,
-    }
+    let listener = Retry::default()
+        .initial_backoff(Duration::from_secs(1))
+        .clamp_backoff(Duration::from_secs(1))
+        .max_tries(10)
+        .retry_async(|_| {
+            Listener::bind(&bind_address)
+                .inspect_err(|error| warn!(%bind_address, "failed to listen: {error}"))
+        })
+        .await?;
 
-    let mut futs = FuturesUnordered::new();
-    for i in 0..my_index {
-        let address = addresses[usize::cast_from(i)].clone();
-        futs.push(
-            async move {
-                start_connection(address, my_index, my_epoch)
-                    .await
-                    .map(move |stream| ConnectionEstablished {
-                        peer_index: i,
-                        stream,
-                    })
-            }
-            .boxed(),
-        );
-    }
+    // FIXME: this won't work with hostnames
+    let listen_addr = listener.local_addr().unwrap().to_string();
+    let my_index = peer_addresses
+        .iter()
+        .position(|s| *s == listen_addr)
+        .unwrap();
+    info!("listen at: {listen_addr}, my_index = {my_index}");
 
-    futs.push({
-        let f = async {
-            await_connection(&listener, my_index, my_epoch)
-                .await
-                .map(|(stream, peer_index)| ConnectionEstablished { peer_index, stream })
-        }
-        .boxed();
-        f
-    });
+    let accept = accept_peer_connections(listener, peer_addresses.len());
+    let connect = start_peer_connections(my_index, peer_addresses);
+    let (mut accepted, mut connected) = futures::try_join!(accept, connect)?;
 
-    while results.iter().filter(|maybe| maybe.is_some()).count() != n_peers {
-        let ConnectionEstablished { peer_index, stream } = futs
-            .next()
-            .await
-            .expect("we should always at least have a listener task")?;
+    let streams = (0..peers)
+        .map(|peer| match peer.cmp(&my_index) {
+            Ordering::Less => Some(connected.remove(peer)),
+            Ordering::Equal => None,
+            Ordering::Greater => Some(accepted.remove(peer)),
+        })
+        .collect();
 
-        let from_listener = match my_index.cmp(&peer_index) {
-            Ordering::Less => true,
-            Ordering::Equal => panic!("someone claimed to be us"),
-            Ordering::Greater => false,
-        };
-
-        if from_listener {
-            futs.push({
-                let f = async {
-                    await_connection(&listener, my_index, my_epoch)
-                        .await
-                        .map(|(stream, peer_index)| ConnectionEstablished { peer_index, stream })
-                }
-                .boxed();
-                f
-            });
-        }
-
-        let old = std::mem::replace(&mut results[usize::cast_from(peer_index)], Some(stream));
-        if old.is_some() {
-            panic!("connected to peer {peer_index} multiple times");
-        }
-    }
-
-    Ok(results)
+    Ok((my_index, streams))
 }
 
-#[derive(Debug)]
-/// This task can never successfully boot, since
-/// a peer has seen a higher epoch from `environmentd`.
-pub struct EpochMismatch {
-    /// The epoch we know about
-    mine: ClusterStartupEpoch,
-    /// The higher epoch from our peer
-    peer: ClusterStartupEpoch,
-}
-
-impl Display for EpochMismatch {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let EpochMismatch { mine, peer } = self;
-        write!(f, "epoch mismatch: ours was {mine}; the peer's was {peer}")
-    }
-}
-
-impl std::error::Error for EpochMismatch {}
-
-async fn start_connection(
-    address: String,
-    my_index: u64,
-    my_epoch: ClusterStartupEpoch,
-) -> Result<Stream, anyhow::Error> {
-    loop {
-        info!(
-            process = my_index,
-            "Attempting to connect to process at {address}"
-        );
-
-        match Stream::connect(&address).await {
-            Ok(mut s) => {
-                if let Stream::Tcp(tcp) = &s {
-                    tcp.set_nodelay(true)?;
-                }
-                use tokio::io::AsyncWriteExt;
-
-                s.write_all(&my_index.to_be_bytes()).await?;
-
-                s.write_all(&my_epoch.to_bytes()).await?;
-
-                let mut buffer = [0u8; 16];
-                use tokio::io::AsyncReadExt;
-                s.read_exact(&mut buffer).await?;
-                let peer_epoch = ClusterStartupEpoch::from_bytes(buffer);
-                debug!("start: received peer epoch {peer_epoch}");
-
-                match my_epoch.cmp(&peer_epoch) {
-                    Ordering::Less => {
-                        return Err(EpochMismatch {
-                            mine: my_epoch,
-                            peer: peer_epoch,
-                        }
-                        .into());
-                    }
-                    Ordering::Greater => {
-                        warn!(
-                            process = my_index,
-                            "peer at address {address} gave older epoch ({peer_epoch}) than ours ({my_epoch})"
-                        );
-                    }
-                    Ordering::Equal => return Ok(s),
-                }
-            }
-            Err(err) => {
-                info!(
-                    process = my_index,
-                    "error connecting to process at {address}: {err}; will retry"
-                );
-            }
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-}
-
-async fn await_connection(
-    listener: &Listener,
-    my_index: u64, // only for logging
-    my_epoch: ClusterStartupEpoch,
-) -> Result<(Stream, u64), anyhow::Error> {
-    loop {
-        info!(process = my_index, "awaiting connection from peer");
-        let mut s = listener.accept().await?.0;
-        info!(process = my_index, "accepted connection from peer");
+async fn start_peer_connections(
+    my_index: usize,
+    peer_addresses: Vec<String>,
+) -> Result<Vec<Stream>, anyhow::Error> {
+    async fn try_connect(my_index: usize, address: &str) -> Result<Stream, anyhow::Error> {
+        let mut s = Stream::connect(address).await?;
         if let Stream::Tcp(tcp) = &s {
             tcp.set_nodelay(true)?;
         }
 
-        let mut buffer = [0u8; 16];
-        use tokio::io::AsyncReadExt;
+        s.write_all(&my_index.to_be_bytes()).await?;
 
-        s.read_exact(&mut buffer[0..8]).await?;
-        let peer_index = u64::from_be_bytes((&buffer[0..8]).try_into().unwrap());
-        debug!("await: received peer index {peer_index}");
-
-        s.read_exact(&mut buffer).await?;
-        let peer_epoch = ClusterStartupEpoch::from_bytes(buffer);
-        debug!("await: received peer epoch {peer_epoch}");
-
-        use tokio::io::AsyncWriteExt;
-        s.write_all(&my_epoch.to_bytes()[..]).await?;
-
-        match my_epoch.cmp(&peer_epoch) {
-            Ordering::Less => {
-                return Err(EpochMismatch {
-                    mine: my_epoch,
-                    peer: peer_epoch,
-                }
-                .into());
-            }
-            Ordering::Greater => {
-                warn!(
-                    process = my_index,
-                    "peer {peer_index} gave older epoch ({peer_epoch}) than ours ({my_epoch})"
-                );
-            }
-            Ordering::Equal => return Ok((s, peer_index)),
-        }
+        Ok(s)
     }
+
+    let mut streams = Vec::new();
+    for (peer, address) in peer_addresses.iter().enumerate() {
+        info!(peer, address, "attempting to connect to process");
+
+        let stream = Retry::default()
+            .initial_backoff(Duration::from_secs(1))
+            .clamp_backoff(Duration::from_secs(1))
+            .retry_async(|_| {
+                try_connect(my_index, address).inspect_err(|error| {
+                    info!(peer, address, "failed to connect: {error}; retrying");
+                })
+            })
+            .await?;
+
+        streams.push(stream);
+
+        info!(peer, "connected to process");
+    }
+
+    Ok(streams)
+}
+
+async fn accept_peer_connections(
+    listener: Listener,
+    peers: usize,
+) -> Result<Vec<Stream>, anyhow::Error> {
+    async fn try_accept(listener: &Listener) -> Result<(usize, Stream), anyhow::Error> {
+        let (mut s, _) = listener.accept().await?;
+        if let Stream::Tcp(tcp) = &s {
+            tcp.set_nodelay(true)?;
+        }
+
+        let mut buf = [0; 8];
+        s.read_exact(&mut buf).await?;
+        let index = usize::from_be_bytes(buf);
+
+        Ok((index, s))
+    }
+
+    let mut streams = Vec::new();
+    for _ in 0..peers {
+        streams.push(None);
+    }
+
+    while streams.iter().any(|s| s.is_none()) {
+        info!("accepting a connection");
+
+        let (peer, stream) = Retry::default()
+            .initial_backoff(Duration::from_millis(1))
+            .clamp_backoff(Duration::from_millis(1))
+            .retry_async(|_| {
+                try_accept(&listener).inspect_err(|error| {
+                    info!("failed to accept: {error}; retrying");
+                })
+            })
+            .await?;
+
+        streams[peer] = Some(stream);
+    }
+
+    let streams = streams.into_iter().map(|s| s.unwrap()).collect();
+    Ok(streams)
 }

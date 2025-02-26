@@ -10,8 +10,9 @@
 //! Types for commands to clusters.
 
 use std::num::NonZeroI64;
+use std::str::FromStr;
 
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::{RustType, TryFromProtoError};
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -141,10 +142,10 @@ impl Ord for ClusterStartupEpoch {
 pub struct TimelyConfig {
     /// Number of per-process worker threads
     pub workers: usize,
-    /// Identity of this process
-    pub process: usize,
+    /// The bind address of this process.
+    pub bind_address: String,
     /// Addresses of all processes
-    pub addresses: Vec<String>,
+    pub peer_addresses: Vec<String>,
     /// Proportionality value that decides whether to exert additional arrangement merge effort.
     ///
     /// Specifically, additional merge effort is exerted when the size of the second-largest batch
@@ -156,46 +157,18 @@ pub struct TimelyConfig {
     pub arrangement_exert_proportionality: u32,
 }
 
-impl RustType<ProtoTimelyConfig> for TimelyConfig {
-    fn into_proto(&self) -> ProtoTimelyConfig {
-        ProtoTimelyConfig {
-            workers: self.workers.into_proto(),
-            addresses: self.addresses.into_proto(),
-            process: self.process.into_proto(),
-            arrangement_exert_proportionality: self.arrangement_exert_proportionality,
-        }
-    }
-
-    fn from_proto(proto: ProtoTimelyConfig) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            process: proto.process.into_rust()?,
-            workers: proto.workers.into_rust()?,
-            addresses: proto.addresses.into_rust()?,
-            arrangement_exert_proportionality: proto.arrangement_exert_proportionality,
-        })
+impl ToString for TimelyConfig {
+    fn to_string(&self) -> String {
+        serde_json::to_string(self).unwrap()
     }
 }
 
-impl TimelyConfig {
-    /// Split the timely configuration into `parts` pieces, each with a different `process` number.
-    pub fn split_command(&self, parts: usize) -> Vec<Self> {
-        (0..parts)
-            .map(|part| TimelyConfig {
-                process: part,
-                ..self.clone()
-            })
-            .collect()
-    }
-}
+impl FromStr for TimelyConfig {
+    type Err = serde_json::Error;
 
-/// A trait for specific cluster commands that can be unpacked into
-/// `CreateTimely` variants.
-pub trait TryIntoTimelyConfig {
-    /// Attempt to unpack `self` into a `(TimelyConfig, ClusterStartupEpoch)`. Otherwise,
-    /// fail and return `self` back.
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self>
-    where
-        Self: Sized;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
+    }
 }
 
 /// Specifies the location of a cluster replica.
@@ -225,14 +198,6 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // slow
-        fn timely_config_protobuf_roundtrip(expect in any::<TimelyConfig>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoTimelyConfig>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // slow

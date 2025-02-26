@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use bytesize::ByteSize;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use futures::future::BoxFuture;
 use mz_expr::row::RowCollection;
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
@@ -83,7 +84,7 @@ pub type ComputeGrpcClient = GrpcClient<ComputeProtoServiceTypes>;
 #[async_trait]
 impl<F, G> ProtoCompute for GrpcServer<F>
 where
-    F: Fn() -> G + Send + Sync + 'static,
+    F: Fn() -> BoxFuture<'static, G> + Send + Sync + 'static,
     G: ComputeClient + 'static,
 {
     type CommandResponseStreamStream = ResponseStream<ProtoComputeResponse>;
@@ -208,25 +209,9 @@ impl<T> PartitionedComputeState<T>
 where
     T: ComputeControllerTimestamp,
 {
-    fn reset(&mut self) {
-        let PartitionedComputeState {
-            parts: _,
-            max_result_size: _,
-            frontiers,
-            peek_responses,
-            pending_subscribes,
-            copy_to_responses,
-        } = self;
-        frontiers.clear();
-        peek_responses.clear();
-        pending_subscribes.clear();
-        copy_to_responses.clear();
-    }
-
     /// Observes commands that move past, and prepares state for responses.
     pub fn observe_command(&mut self, command: &ComputeCommand<T>) {
         match command {
-            ComputeCommand::CreateTimely { .. } => self.reset(),
             ComputeCommand::UpdateConfiguration(config) => {
                 if let Some(max_result_size) = config.max_result_size {
                     self.max_result_size = max_result_size;
@@ -251,14 +236,6 @@ where
         //  * Forward `CreateTimely` and `UpdateConfiguration` commands to all shards.
         //  * Forward all other commands to the first shard only.
         match command {
-            ComputeCommand::CreateTimely { config, epoch } => {
-                let timely_cmds = config.split_command(self.parts);
-
-                timely_cmds
-                    .into_iter()
-                    .map(|config| Some(ComputeCommand::CreateTimely { config, epoch }))
-                    .collect()
-            }
             command @ ComputeCommand::UpdateConfiguration(_) => {
                 vec![Some(command); self.parts]
             }

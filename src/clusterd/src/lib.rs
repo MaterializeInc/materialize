@@ -19,6 +19,7 @@ use futures::future;
 use hyper_util::rt::TokioIo;
 use mz_build_info::{build_info, BuildInfo};
 use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_cluster_client::client::TimelyConfig;
 use mz_compute::server::ComputeInstanceContext;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
 use mz_http_util::DynamicFilterTarget;
@@ -82,6 +83,12 @@ struct Args {
     /// GRPC requests.
     #[clap(long, env = "GRPC_HOST", value_name = "NAME")]
     grpc_host: Option<String>,
+
+    // === Timely cluster options. ===
+    #[clap(long)]
+    storage_timely_config: TimelyConfig,
+    #[clap(long)]
+    compute_timely_config: TimelyConfig,
 
     // === Storage options. ===
     /// The URL for the Persist PubSub service.
@@ -326,7 +333,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         SYSTEM_TIME.clone(),
         connection_context.clone(),
         StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
-    )?;
+        args.storage_timely_config,
+    )
+    .await?;
     info!(
         "listening for storage controller connections on {}",
         args.storage_controller_listen_addr
@@ -354,7 +363,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             worker_core_affinity: args.worker_core_affinity,
             connection_context,
         },
-    )?;
+        args.compute_timely_config,
+    )
+    .await?;
     info!(
         "listening for compute controller connections on {}",
         args.compute_controller_listen_addr
