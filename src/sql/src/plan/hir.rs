@@ -3507,7 +3507,7 @@ impl AggregateExpr {
     pub fn is_count_asterisk(&self) -> bool {
         // This could be much less cumbersome if box/deref pattern
         // syntax were stable: <https://github.com/rust-lang/rust/issues/29641>
-        if self.func != AggregateFunc::Count {
+        if self.func != AggregateFunc::Count || self.distinct {
             return false;
         }
         match &*self.expr {

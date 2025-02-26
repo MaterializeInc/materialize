@@ -690,3 +690,55 @@ Project (#0, #1, #3)
       Get materialize.public.account_details
 
 EOF
+
+statement ok
+CREATE TABLE t5(
+    x int,
+    y int NOT NULL,
+    z int
+);
+
+# `count(*)` is planned as `count(true)`. We take care in EXPLAIN to show `count(true)` as `count(*)` to avoid confusing
+# users.
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT count(*)
+FROM t5;
+----
+Reduce aggregates=[count(*)]
+  Get materialize.public.t5
+
+Target cluster: quickstart
+
+EOF
+
+query error DISTINCT \* not supported as function args
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT count(distinct *)
+FROM t5;
+
+# `count(true)` is currently also printed as `count(*)` in EXPLAIN, which I'd say is fine.
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT count(true)
+FROM t5;
+----
+Reduce aggregates=[count(*)]
+  Get materialize.public.t5
+
+Target cluster: quickstart
+
+EOF
+
+# But `count(DISTINCT true)` means an entirely different thing, so EXPLAIN shouldn't conflate it with `count(*)`.
+query T multiline
+EXPLAIN RAW PLAN AS TEXT FOR
+SELECT count(DISTINCT true)
+FROM t5;
+----
+Reduce aggregates=[count(distinct true)]
+  Get materialize.public.t5
+
+Target cluster: quickstart
+
+EOF
