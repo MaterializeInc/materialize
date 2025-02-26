@@ -1,6 +1,6 @@
 ---
 title: "Ingest data"
-description: "How to ingest data into Materialize from external systems."
+description: "Best practices for ingesting data into Materialize from external systems."
 disable_list: true
 menu:
   main:
