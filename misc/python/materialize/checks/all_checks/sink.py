@@ -932,20 +932,26 @@ class AlterSink(Check):
             Testdrive(dedent(s))
             for s in [
                 """
+                $ set-from-sql var=running_count
+                SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter';
+
                 > ALTER SINK sink_alter SET FROM table_alter2;
 
-                # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+                > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter';
+                true
 
                 > INSERT INTO table_alter1 VALUES (10, 'aa')
                 > INSERT INTO table_alter2 VALUES (11, 'bb')
                 > INSERT INTO table_alter3 VALUES (12, 'cc')
                 """,
                 """
+                $ set-from-sql var=running_count
+                SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter';
+
                 > ALTER SINK sink_alter SET FROM table_alter3;
 
-                # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+                > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter';
+                true
 
                 > INSERT INTO table_alter1 VALUES (100, 'aaa')
                 > INSERT INTO table_alter2 VALUES (101, 'bbb')
@@ -1006,10 +1012,14 @@ class AlterSinkMv(Check):
                 """
                 > CREATE TABLE table_alter_mv2 (a INT);
                 > CREATE MATERIALIZED VIEW mv_alter2 AS SELECT * FROM table_alter_mv2
+
+                $ set-from-sql var=running_count
+                SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_mv';
+
                 > ALTER SINK sink_alter_mv SET FROM mv_alter2;
 
-                # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+                > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_mv';
+                true
 
                 > INSERT INTO table_alter_mv1 VALUES (10)
                 > INSERT INTO table_alter_mv2 VALUES (11)
@@ -1017,10 +1027,14 @@ class AlterSinkMv(Check):
                 """
                 > CREATE TABLE table_alter_mv3 (a INT);
                 > CREATE MATERIALIZED VIEW mv_alter3 AS SELECT * FROM table_alter_mv3
+
+                $ set-from-sql var=running_count
+                SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_mv';
+
                 > ALTER SINK sink_alter_mv SET FROM mv_alter3;
 
-                # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+                > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_mv';
+                true
 
                 > INSERT INTO table_alter_mv1 VALUES (100)
                 > INSERT INTO table_alter_mv2 VALUES (101)
@@ -1077,17 +1091,25 @@ class AlterSinkLGSource(Check):
             for s in [
                 """
                 > CREATE SOURCE lg2 FROM LOAD GENERATOR COUNTER (UP TO 4, TICK INTERVAL '5s');
+
+                $ set-from-sql var=running_count
+                SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_lg';
+
                 > ALTER SINK sink_alter_lg SET FROM lg2;
 
-                # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+                > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_lg';
+                true
                 """,
                 """
                 > CREATE SOURCE lg3 FROM LOAD GENERATOR COUNTER (UP TO 6, TICK INTERVAL '5s');
+
+                $ set-from-sql var=running_count
+                SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_lg';
+
                 > ALTER SINK sink_alter_lg SET FROM lg3;
 
-                # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+                > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_lg';
+                true
                 """,
             ]
         ]
@@ -1171,10 +1193,14 @@ class AlterSinkPgSource(Check):
                   FROM POSTGRES CONNECTION pg_conn1
                   (PUBLICATION 'pg')
                 > CREATE TABLE pg2 FROM SOURCE pg_source2 (REFERENCE pg_table2)
+
+                $ set-from-sql var=running_count
+                SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_pg';
+
                 > ALTER SINK sink_alter_pg SET FROM pg2;
 
-                # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=30s
+                > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_pg';
+                true
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO pg_table2 VALUES (2);
@@ -1189,10 +1215,14 @@ class AlterSinkPgSource(Check):
                   FROM POSTGRES CONNECTION pg_conn1
                   (PUBLICATION 'pg')
                 > CREATE TABLE pg3 FROM SOURCE pg_source3 (REFERENCE pg_table3)
+
+                $ set-from-sql var=running_count
+                SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_pg';
+
                 > ALTER SINK sink_alter_pg SET FROM pg3;
 
-                # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=30s
+                > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_pg';
+                true
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO pg_table3 VALUES (3);
@@ -1249,20 +1279,28 @@ class AlterSinkWebhook(Check):
             for s in [
                 """
                 > CREATE SOURCE webhook_alter2 FROM WEBHOOK BODY FORMAT TEXT;
+
+                $ set-from-sql var=running_count
+                SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_wh';
+
                 > ALTER SINK sink_alter_wh SET FROM webhook_alter2;
 
-                # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+                > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_wh';
+                true
 
                 $ webhook-append database=materialize schema=public name=webhook_alter2
                 2
                 """,
                 """
                 > CREATE SOURCE webhook_alter3 FROM WEBHOOK BODY FORMAT TEXT;
+
+                $ set-from-sql var=running_count
+                SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_wh';
+
                 > ALTER SINK sink_alter_wh SET FROM webhook_alter3;
 
-                # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+                > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_wh';
+                true
 
                 $ webhook-append database=materialize schema=public name=webhook_alter3
                 3
@@ -1316,10 +1354,13 @@ class AlterSinkOrder(Check):
                 """
                 > CREATE TABLE table_alter_order2 (x int, y string)
 
+                $ set-from-sql var=running_count
+                SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_order';
+
                 > ALTER SINK sink_alter_order SET FROM table_alter_order2;
 
-                # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+                > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_order';
+                true
 
                 > INSERT INTO table_alter_order2 VALUES (1, 'b')
                 > INSERT INTO table_alter_order1 VALUES (10, 'aa')
@@ -1327,10 +1368,14 @@ class AlterSinkOrder(Check):
                 """,
                 """
                 > CREATE TABLE table_alter_order3 (x int, y string)
+
+                $ set-from-sql var=running_count
+                SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_order';
+
                 > ALTER SINK sink_alter_order SET FROM table_alter_order3;
 
-                # Wait for the actual restart to have occurred before inserting
-                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=8s
+                > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_order';
+                true
 
                 > INSERT INTO table_alter_order3 VALUES (2, 'c')
                 > INSERT INTO table_alter_order3 VALUES (12, 'cc')
