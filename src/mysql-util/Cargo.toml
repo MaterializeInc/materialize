@@ -11,6 +11,8 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.95"
+aws-config = { version = "1.2.0", default-features = false, features = ["sso"] }
+aws-sdk-rds = "1.78.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 itertools = "0.12.1"
