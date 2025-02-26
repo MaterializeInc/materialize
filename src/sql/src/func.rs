@@ -3049,7 +3049,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!() => Operation::nullary(|_ecx| {
                 // COUNT(*) is equivalent to COUNT(true).
                 // This is mirrored in `AggregateExpr::is_count_asterisk`, so if you modify this,
-                // then attend to that code also.
+                // then attend to that code also (in both HIR and MIR).
                 Ok((HirScalarExpr::literal_true(), AggregateFunc::Count))
             }) => Int64, 2803;
             params!(Any) => AggregateFunc::Count => Int64, 2147;

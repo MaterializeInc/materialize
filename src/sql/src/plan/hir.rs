@@ -3504,21 +3504,14 @@ impl AggregateExpr {
         self.func.output_type(self.expr.typ(outers, inner, params))
     }
 
+    /// Returns whether the expression is COUNT(*) or not.  Note that
+    /// when we define the count builtin in sql::func, we convert
+    /// COUNT(*) to COUNT(true), making it indistinguishable from
+    /// literal COUNT(true), but we prefer to consider this as the
+    /// former.
+    ///
+    /// (MIR has the same `is_count_asterisk`.)
     pub fn is_count_asterisk(&self) -> bool {
-        // This could be much less cumbersome if box/deref pattern
-        // syntax were stable: <https://github.com/rust-lang/rust/issues/29641>
-        if self.func != AggregateFunc::Count {
-            return false;
-        }
-        match &*self.expr {
-            HirScalarExpr::Literal(
-                row,
-                mz_repr::ColumnType {
-                    scalar_type: mz_repr::ScalarType::Bool,
-                    nullable: false,
-                },
-            ) => row.unpack_first() == mz_repr::Datum::True,
-            _ => false,
-        }
+        self.func == AggregateFunc::Count && self.expr.is_literal_true() && !self.distinct
     }
 }
