@@ -45,7 +45,7 @@ tokio = { version = "1.38.0", features = ["macros"] }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.2"
+prost-build = "0.13.4"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]

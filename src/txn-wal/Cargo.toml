@@ -35,7 +35,7 @@ rand = { version = "0.8.5", default-features = false, features = ["small_rng"] }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.2"
+prost-build = "0.13.4"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]
