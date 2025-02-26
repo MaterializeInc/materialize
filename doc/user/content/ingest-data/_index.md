@@ -9,14 +9,16 @@ menu:
     weight: 11
 ---
 
-Materialize can ingest data from various external systems:
+You can ingest data into Materialize from various external systems:
 
 {{< multilinkbox >}}
 {{< linkbox title="Databases (CDC)" >}}
 - [PostgreSQL](/ingest-data/postgres/)
 - [MySQL](/ingest-data/mysql/)
 - [SQL Server](/ingest-data/cdc-sql-server/)
+- [MongoDB](https://github.com/MaterializeIncLabs/materialize-mongodb-debezium)
 - [CockroachDB](/ingest-data/cdc-cockroachdb/)
+- [Other databases](/integrations/#databases)
 {{</ linkbox >}}
 {{< linkbox title="Message Brokers" >}}
 - [Kafka](/ingest-data/kafka/)
