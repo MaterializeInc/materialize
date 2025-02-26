@@ -586,7 +586,8 @@ EOF
 # \set country '\'China\''
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) FOR SELECT AS VERBOSE TEXT FORum.id                AS "forum.id"
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+SELECT Forum.id                AS "forum.id"
      , Forum.title             AS "forum.title"
      , Forum.creationDate      AS "forum.creationDate"
      , Forum.ModeratorPersonId AS "person.id"
