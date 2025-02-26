@@ -61,7 +61,7 @@ num_enum = "0.7.3"
 ordered-float = { version = "4.6.0", features = ["serde"] }
 postgres-protocol = { version = "0.6.5" }
 prost = { version = "0.13.4", features = ["no-recursion-limit"] }
-regex = "1.7.0"
+regex = "1.10.6"
 ryu = "1.0.12"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0.125", features = ["arbitrary_precision", "preserve_order"] }

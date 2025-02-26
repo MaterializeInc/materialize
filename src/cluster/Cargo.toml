@@ -18,7 +18,7 @@ futures = "0.3.25"
 mz-cluster-client = { path = "../cluster-client" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing_"] }
 mz-service = { path = "../service" }
-regex = "1.7.0"
+regex = "1.10.6"
 timely = "0.18.1"
 tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "net"] }
 tracing = "0.1.37"

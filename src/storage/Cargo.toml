@@ -70,7 +70,7 @@ rdkafka = { version = "0.29.0", features = [
     "libz-static",
     "zstd",
 ] }
-regex = { version = "1.7.0" }
+regex = { version = "1.10.6" }
 rocksdb = { version = "0.22.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
 seahash = "4"
 serde = { version = "1.0.152", features = ["derive"] }
