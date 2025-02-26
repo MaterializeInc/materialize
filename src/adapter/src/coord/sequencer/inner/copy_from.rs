@@ -17,7 +17,7 @@ use mz_repr::{CatalogItemId, Datum, RowArena};
 use mz_sql::plan::{self, CopyFromFilter, CopyFromSource, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
-use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
+use mz_storage_types::oneshot_sources::{ContentShape, OneshotIngestionRequest};
 use smallvec::SmallVec;
 use url::Url;
 use uuid::Uuid;
@@ -39,6 +39,8 @@ impl Coordinator {
             id,
             source,
             columns: _,
+            source_desc,
+            mfp,
             params,
             filter,
         } = plan;
@@ -148,10 +150,25 @@ impl Coordinator {
             }
         };
 
+        let source_mfp = mfp
+            .into_plan()
+            .map_err(|s| AdapterError::internal("copy_from", s))
+            .and_then(|mfp| {
+                mfp.into_nontemporal().map_err(|_| {
+                    AdapterError::internal("copy_from", "temporal MFP not allowed in copy from")
+                })
+            });
+        let source_mfp = return_if_err!(source_mfp, ctx);
+        let shape = ContentShape {
+            source_desc,
+            source_mfp,
+        };
+
         let request = OneshotIngestionRequest {
             source,
             format,
             filter,
+            shape,
         };
 
         let target_cluster = match self
