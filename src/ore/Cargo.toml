@@ -34,7 +34,7 @@ futures = { version = "0.3.25", optional = true }
 hibitset = { version = "0.6.4", optional = true }
 itertools = "0.12.1"
 lgalloc = { version = "0.4", optional = true }
-libc = { version = "0.2.138", optional = true }
+libc = { version = "0.2.170", optional = true }
 mz-ore-proc = { path = "../ore-proc", default-features = false }
 num = "0.4.3"
 # The vendored feature is transitively depended upon by tokio-openssl.
