@@ -3336,15 +3336,10 @@ impl AggregateExpr {
     /// COUNT(*) to COUNT(true), making it indistinguishable from
     /// literal COUNT(true), but we prefer to consider this as the
     /// former.
+    ///
+    /// (HIR has the same `is_count_asterisk`.)
     pub fn is_count_asterisk(&self) -> bool {
-        match self {
-            AggregateExpr {
-                func: AggregateFunc::Count,
-                expr,
-                distinct: false,
-            } => expr.is_literal_true(),
-            _ => false,
-        }
+        self.func == AggregateFunc::Count && self.expr.is_literal_true() && !self.distinct
     }
 }
 
