@@ -20,7 +20,7 @@ paste = "1.0.11"
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = "0.13.4"
-serde = { version = "1.0.152", features = ["derive"] }
+serde = { version = "1.0.218", features = ["derive"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
@@ -35,7 +35,7 @@ anyhow = "1.0.95"
 md-5 = "0.10.5"
 mz-build-tools = { path = "../build-tools", default-features = false }
 prost-build = "0.13.2"
-serde = { version = "1.0.152", features = ["derive"] }
+serde = { version = "1.0.218", features = ["derive"] }
 serde_json = "1.0.125"
 
 [package.metadata.cargo-udeps.ignore]

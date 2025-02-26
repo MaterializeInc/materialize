@@ -18,7 +18,7 @@ prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.4", features = ["no-recursion-limit"] }
-serde = { version = "1.0.152", features = ["derive"] }
+serde = { version = "1.0.218", features = ["derive"] }
 tokio-stream = "0.1.11"
 tonic = "0.12.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }

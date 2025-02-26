@@ -59,7 +59,7 @@ proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.4", features = ["no-recursion-limit"] }
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.10.6"
-serde = { version = "1.0.152", features = ["derive"] }
+serde = { version = "1.0.218", features = ["derive"] }
 serde_json = { version = "1.0.125", features = ["preserve_order"] }
 thiserror = "1.0.37"
 timely = "0.18.1"

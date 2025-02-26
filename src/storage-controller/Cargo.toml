@@ -36,7 +36,7 @@ mz-tls-util = { path = "../tls-util" }
 mz-txn-wal = { path = "../txn-wal" }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 prost = { version = "0.13.4", features = ["no-recursion-limit"] }
-serde = { version = "1.0.152", features = ["derive"] }
+serde = { version = "1.0.218", features = ["derive"] }
 serde_json = { version = "1.0.125" }
 timely = "0.18.1"
 tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "test-util", "time"] }

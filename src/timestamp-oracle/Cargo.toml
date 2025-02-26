@@ -22,7 +22,7 @@ mz-postgres-client = { path = "../postgres-client" }
 mz-repr = { path = "../repr", features = ["tracing_"] }
 postgres-protocol = { version = "0.6.5" }
 rand = "0.8.5"
-serde = "1.0.152"
+serde = "1.0.218"
 tokio = { version = "1.38.0", features = ["rt", "time"] }
 tracing = "0.1.37"
 uuid = { version = "1.7.0", features = ["v4"] }

@@ -42,7 +42,7 @@ rdkafka = { version = "0.29.0", features = [
     "libz-static",
     "zstd",
 ] }
-serde = { version = "1.0.152", features = ["derive"] }
+serde = { version = "1.0.218", features = ["derive"] }
 serde_json = { version = "1.0.125" }
 smallvec = { version = "1.10.0", features = ["serde", "union"] }
 static_assertions = "1.1"

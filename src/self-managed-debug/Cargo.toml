@@ -19,7 +19,7 @@ kube = { version = "0.92.1", default-features = false, features = ["client", "ru
 mz-build-info = { path = "../build-info" }
 mz-cloud-resources = { path = "../cloud-resources"}
 mz-ore = { path = "../ore", features = ["cli", "test"] }
-serde = "1.0.152"
+serde = "1.0.218"
 serde_yaml = "0.9.25"
 tokio = "1.38.0"
 tracing = "0.1.37"
