@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.95"
-arrow = { version = "53.3.0", default-features = false }
+arrow = { version = "54.2.0", default-features = false }
 async-compression = { version = "0.4.11", features = ["bzip2", "gzip", "tokio", "xz", "zstd"] }
 async-stream = "0.3.3"
 aws-types = "1.1.1"

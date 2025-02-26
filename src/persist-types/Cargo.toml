@@ -13,7 +13,7 @@ workspace = true
 # don't leak in dependencies on other Materialize packages.
 [dependencies]
 anyhow = { version = "1.0.95", features = ["backtrace"] }
-arrow = { version = "53.3.0", default-features = false }
+arrow = { version = "54.2.0", default-features = false }
 bytes = { version = "1.3.0", features = ["serde"] }
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 hex = "0.4.3"
