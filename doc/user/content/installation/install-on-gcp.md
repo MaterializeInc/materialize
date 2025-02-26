@@ -39,7 +39,7 @@ You need a GCP project for which you have a role (such as
 [permissions to manage access to the
 project](https://cloud.google.com/iam/docs/granting-changing-revoking-access).
 
-### gcloud CLI
+### gcloud CLI (Inititalized)
 
 - If you do not have gcloud CLI, install. For details, see the [Install the
   gcloud CLI documentation](https://cloud.google.com/sdk/docs/install).
