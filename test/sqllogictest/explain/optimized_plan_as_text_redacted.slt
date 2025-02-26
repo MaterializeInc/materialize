@@ -351,7 +351,7 @@ EOF
 
 # Test redaction with the equivalences analysis.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted, equivalences) AS TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted, equivalences) AS VERBOSE TEXT FOR
 SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELECT * FROM mv WHERE t.b > mv.b)
 ----
 Explained Query:
