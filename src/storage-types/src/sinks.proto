@@ -23,7 +23,7 @@ import "storage-types/src/connections.proto";
 import "storage-types/src/controller.proto";
 
 message ProtoStorageSinkDesc {
-  reserved 5, 7, 8, 9, 10;
+  reserved 5, 7, 8, 9, 10, 14;
   mz_repr.global_id.ProtoGlobalId from = 1;
   mz_repr.relation_and_scalar.ProtoRelationDesc from_desc = 2;
   ProtoStorageSinkConnection connection = 3;
@@ -33,14 +33,6 @@ message ProtoStorageSinkDesc {
   mz_repr.antichain.ProtoU64Antichain as_of = 11;
   bool with_snapshot = 12;
   uint64 version = 13;
-  ProtoSinkPartitionStrategy partition_strategy = 14;
-}
-
-message ProtoSinkPartitionStrategy {
-  oneof kind {
-    google.protobuf.Empty v0 = 1;
-    google.protobuf.Empty v1 = 2;
-  }
 }
 
 message ProtoSinkEnvelope {

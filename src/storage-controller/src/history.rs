@@ -240,8 +240,7 @@ mod tests {
     use mz_storage_types::instances::StorageInstanceId;
     use mz_storage_types::sinks::{
         KafkaIdStyle, KafkaSinkCompressionType, KafkaSinkConnection, KafkaSinkFormat,
-        KafkaSinkFormatType, SinkEnvelope, SinkPartitionStrategy, StorageSinkConnection,
-        StorageSinkDesc,
+        KafkaSinkFormatType, SinkEnvelope, StorageSinkConnection, StorageSinkDesc,
     };
     use mz_storage_types::sources::load_generator::{
         LoadGenerator, LoadGeneratorOutput, LoadGeneratorSourceExportDetails,
@@ -387,7 +386,6 @@ mod tests {
                 transactional_id: KafkaIdStyle::Legacy,
                 topic_metadata_refresh_interval: Default::default(),
             }),
-            partition_strategy: SinkPartitionStrategy::V1,
             with_snapshot: Default::default(),
             version: Default::default(),
             envelope: SinkEnvelope::Upsert,
