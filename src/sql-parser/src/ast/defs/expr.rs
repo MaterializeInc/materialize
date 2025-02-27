@@ -24,7 +24,7 @@ use mz_ore::soft_assert_eq_or_log;
 use mz_sql_lexer::keywords::*;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Ident, OrderByExpr, Query, UnresolvedItemName, Value};
+use crate::ast::{AstDataType, AstInfo, Ident, OrderByExpr, Query, UnresolvedItemName, Value};
 
 /// An SQL expression of any type.
 ///
@@ -321,36 +321,60 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 }
             }
             Expr::Cast { expr, data_type } => {
-                // We are potentially rewriting an expression like
-                //     CAST(<expr> OP <expr> AS <type>)
-                // to
-                //     <expr> OP <expr>::<type>
-                // which could incorrectly change the meaning of the expression
-                // as the `::` binds tightly. To be safe, we wrap the inner
-                // expression in parentheses
-                //    (<expr> OP <expr>)::<type>
-                // unless the inner expression is of a type that we know is
-                // safe to follow with a `::` to without wrapping.
-                let needs_wrap = !matches!(
-                    **expr,
-                    Expr::Nested(_)
-                        | Expr::Value(_)
-                        | Expr::Cast { .. }
-                        | Expr::Function { .. }
-                        | Expr::Identifier { .. }
-                        | Expr::Collate { .. }
-                        | Expr::HomogenizingFunction { .. }
-                        | Expr::NullIf { .. }
-                );
-                if needs_wrap {
-                    f.write_str('(');
+                // We cannot rewrite casts that use the 'list' type with the
+                // Postgres cast operator because losing the outer parentheses
+                // can cause the behavior to change.
+                //
+                // For example consider the following expression:
+                //      CAST(<field> AS <type> list)[index]
+                // would get re-written as:
+                //      (<field>)::<type> list[index]
+                //
+                // The original statement is indexing into the casted list, but
+                // the re-written statement is casting to an Array<List<type>>.
+                let can_rewrite_to_pg = !data_type.is_list();
+
+                // We prefer rewriting to the Postgres cast operator ('::')
+                // because it's more readable, especially when casts are
+                // chained.
+                if can_rewrite_to_pg {
+                    // We are potentially rewriting an expression like
+                    //     CAST(<expr> OP <expr> AS <type>)
+                    // to
+                    //     <expr> OP <expr>::<type>
+                    // which could incorrectly change the meaning of the expression
+                    // as the `::` binds tightly. To be safe, we wrap the inner
+                    // expression in parentheses
+                    //    (<expr> OP <expr>)::<type>
+                    // unless the inner expression is of a type that we know is
+                    // safe to follow with a `::` to without wrapping.
+                    let needs_wrap = !matches!(
+                        **expr,
+                        Expr::Nested(_)
+                            | Expr::Value(_)
+                            | Expr::Cast { .. }
+                            | Expr::Function { .. }
+                            | Expr::Identifier { .. }
+                            | Expr::Collate { .. }
+                            | Expr::HomogenizingFunction { .. }
+                            | Expr::NullIf { .. }
+                    );
+                    if needs_wrap {
+                        f.write_str('(');
+                    }
+                    f.write_node(&expr);
+                    if needs_wrap {
+                        f.write_str(')');
+                    }
+                    f.write_str("::");
+                    f.write_node(data_type);
+                } else {
+                    f.write_str("CAST(");
+                    f.write_node(&expr);
+                    f.write_str(" AS ");
+                    f.write_node(data_type);
+                    f.write_str(")");
                 }
-                f.write_node(&expr);
-                if needs_wrap {
-                    f.write_str(')');
-                }
-                f.write_str("::");
-                f.write_node(data_type);
             }
             Expr::Collate { expr, collation } => {
                 f.write_node(&expr);

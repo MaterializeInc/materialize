@@ -57,7 +57,7 @@ pub trait AstInfo: Clone {
     /// The type used for cluster names.
     type ClusterName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type used for data types.
-    type DataType: AstDisplay + Clone + Hash + Debug + Eq + Ord;
+    type DataType: AstDataType + AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// The type stored next to CTEs for their assigned ID.
     type CteId: Clone + Hash + Debug + Eq + Ord;
     /// The type used for role references.
@@ -66,6 +66,11 @@ pub trait AstInfo: Clone {
     type NetworkPolicyName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
     /// They type used for any object names. Objects are the superset of all objects in Materialize.
     type ObjectName: AstDisplay + Clone + Hash + Debug + Eq + Ord;
+}
+
+pub trait AstDataType {
+    /// Returns whether or not this type is the Materialize `list` type.
+    fn is_list(&self) -> bool;
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
@@ -221,6 +226,12 @@ pub enum RawDataType {
         /// Typ modifiers appended to the type name, e.g. `numeric(38,0)`.
         typ_mod: Vec<i64>,
     },
+}
+
+impl AstDataType for RawDataType {
+    fn is_list(&self) -> bool {
+        matches!(self, RawDataType::List(_))
+    }
 }
 
 impl AstDisplay for RawDataType {

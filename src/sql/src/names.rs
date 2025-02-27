@@ -25,7 +25,9 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_repr::{ColumnName, RelationVersionSelector};
 use mz_sql_parser::ast::visit_mut::VisitMutNode;
-use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr, RawNetworkPolicyName, Version};
+use mz_sql_parser::ast::{
+    AstDataType, CreateContinualTaskStatement, Expr, RawNetworkPolicyName, Version,
+};
 use mz_sql_parser::ident;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -676,6 +678,12 @@ pub enum ResolvedDataType {
         print_id: bool,
     },
     Error,
+}
+
+impl AstDataType for ResolvedDataType {
+    fn is_list(&self) -> bool {
+        matches!(self, ResolvedDataType::AnonymousList(_))
+    }
 }
 
 impl AstDisplay for ResolvedDataType {
