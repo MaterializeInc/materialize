@@ -63,7 +63,7 @@ timely = "0.18.1"
 thiserror = "1.0.37"
 tokio = { version = "1.38.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tokio-metrics = "0.4.0"
-tokio-stream = "0.1.11"
+tokio-stream = "0.1.17"
 tonic = "0.12.1"
 tracing = "0.1.37"
 uuid = { version = "1.7.0", features = ["v4"] }
