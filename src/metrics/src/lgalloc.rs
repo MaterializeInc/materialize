@@ -7,14 +7,15 @@
 
 use std::collections::BTreeMap;
 use std::ops::AddAssign;
-use std::time::Duration;
-use tracing::error;
 
 use lgalloc::{FileStats, SizeClassStats};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{raw, MetricsRegistry};
 use paste::paste;
 use prometheus::core::{AtomicU64, GenericGauge};
+use tracing::error;
+
+use crate::MetricsUpdate;
 
 /// Error during FileStats
 #[derive(Debug, thiserror::Error)]
@@ -81,7 +82,7 @@ macro_rules! metrics_size_class {
         @file $(($f_name:ident, $f_metric:ident, $f_desc:expr)),*
     ) => {
         paste! {
-            struct LgMetrics {
+            pub(crate) struct LgMetrics {
                 size_class: BTreeMap<usize, LgMetricsSC>,
                 $($metric: raw::UIntGaugeVec,)*
                 $($f_metric: raw::UIntGaugeVec,)*
@@ -184,19 +185,14 @@ metrics_size_class! {
 }
 
 /// Register a task to read lgalloc stats.
-#[allow(clippy::unused_async)]
-pub async fn register_metrics_into(metrics_registry: &MetricsRegistry) {
-    let mut lgmetrics = LgMetrics::new(metrics_registry);
+pub(crate) fn register_metrics_into(metrics_registry: &MetricsRegistry) -> LgMetrics {
+    LgMetrics::new(metrics_registry)
+}
 
-    mz_ore::task::spawn(|| "lgalloc_stats_update", async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            if let Err(err) = lgmetrics.update() {
-                error!("lgalloc stats update failed: {err}");
-                break;
-            }
-        }
-    });
+impl MetricsUpdate for LgMetrics {
+    type Error = Error;
+    const NAME: &'static str = "lgalloc";
+    fn update(&mut self) -> Result<(), Self::Error> {
+        self.update()
+    }
 }

@@ -26,11 +26,12 @@ use mz_dyncfg::ConfigSet;
 /// Config being linked into one binary but not the other.
 pub fn all_dyncfgs() -> ConfigSet {
     let mut configs = ConfigSet::default();
-    configs = mz_persist_client::cfg::all_dyncfgs(configs);
-    configs = mz_txn_wal::all_dyncfgs(configs);
-    configs = mz_compute_types::dyncfgs::all_dyncfgs(configs);
     configs = mz_adapter_types::dyncfgs::all_dyncfgs(configs);
-    configs = mz_storage_types::dyncfgs::all_dyncfgs(configs);
+    configs = mz_compute_types::dyncfgs::all_dyncfgs(configs);
     configs = mz_controller_types::dyncfgs::all_dyncfgs(configs);
+    configs = mz_metrics::all_dyncfgs(configs);
+    configs = mz_persist_client::cfg::all_dyncfgs(configs);
+    configs = mz_storage_types::dyncfgs::all_dyncfgs(configs);
+    configs = mz_txn_wal::all_dyncfgs(configs);
     configs
 }

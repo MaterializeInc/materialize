@@ -45,6 +45,7 @@ mz-controller-types = { path = "../controller-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
 mz-kafka-util = { path = "../kafka-util" }
+mz-metrics = { path = "../metrics" }
 mz-mysql-util = { path = "../mysql-util" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["chrono", "async", "process", "tracing_"] }
