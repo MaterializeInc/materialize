@@ -101,22 +101,8 @@ node instance type, etc.), see the
 
 1. Open a Terminal window.
 
-1. Clone the [Materialize's sample Terraform
-   repo](https://github.com/MaterializeInc/terraform-google-materialize) and
-   checkout the `v0.2.5` tag.
+{{% self-managed/versions/step-clone-aws-terraform-repo %}}
 
-   {{< tabs >}}
-   {{< tab "Clone via SSH" >}}
-   ```bash
-   git clone --depth 1 -b v0.2.5 git@github.com:MaterializeInc/terraform-aws-materialize.git
-   ```
-   {{< /tab >}}
-   {{< tab "Clone via HTTPS" >}}
-   ```bash
-   git clone --depth 1 -b v0.2.5 https://github.com/MaterializeInc/terraform-aws-materialize.git
-   ```
-   {{< /tab >}}
-   {{< /tabs >}}
 1. Go to the `examples/simple` folder in the Materialize Terraform repo
    directory.
 
