@@ -1354,7 +1354,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 raise ValueError("Never completed")
 
             # Can take a while for balancerd to come up
-            for i in range(240):
+            for i in range(600):
                 try:
                     status = spawn.capture(
                         [
