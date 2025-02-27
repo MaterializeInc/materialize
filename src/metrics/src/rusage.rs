@@ -11,12 +11,14 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use prometheus::{Gauge, IntGauge};
 
+use crate::MetricsUpdate;
+
 macro_rules! metrics {
     ($namespace:ident $(($name:ident, $desc:expr, $suffix:expr, $type:ident)),*) => {
         metrics! { @define $namespace $(($name, $desc, $suffix, $type)),*}
     };
     (@define $namespace:ident $(($name:ident, $desc:expr, $suffix:expr, $type:ident)),*) => {
-        struct RuMetrics {
+        pub(crate) struct RuMetrics {
             $($name: <$type as Unit>::Gauge,)*
         }
         impl RuMetrics {
@@ -28,16 +30,17 @@ macro_rules! metrics {
                     )),)*
                 }
             }
-            fn update(&self) {
+            fn update_internal(&self) -> Result<(), std::io::Error> {
                 let rusage = unsafe {
                     let mut rusage = std::mem::zeroed();
                     let ret = libc::getrusage(libc::RUSAGE_SELF, &mut rusage);
                     if ret < 0 {
-                        return;
+                        return Err(std::io::Error::last_os_error());
                     }
                     rusage
                 };
                 $(self.$name.set(<$type as Unit>::from(rusage.$name));)*
+                Ok(())
             }
         }
     };
@@ -116,16 +119,14 @@ metrics! {
 }
 
 /// Register a task to read rusage stats.
-#[allow(clippy::unused_async)]
-pub async fn register_metrics_into(metrics_registry: &MetricsRegistry) {
-    let rusage = RuMetrics::new(metrics_registry);
+pub(crate) fn register_metrics_into(metrics_registry: &MetricsRegistry) -> RuMetrics {
+    RuMetrics::new(metrics_registry)
+}
 
-    mz_ore::task::spawn(|| "rusage_stats_update", async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            rusage.update();
-        }
-    });
+impl MetricsUpdate for RuMetrics {
+    type Error = std::io::Error;
+    const NAME: &'static str = "rusage";
+    fn update(&mut self) -> Result<(), Self::Error> {
+        self.update_internal()
+    }
 }

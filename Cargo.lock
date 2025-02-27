@@ -4643,6 +4643,7 @@ dependencies = [
  "mz-dyncfg",
  "mz-expr",
  "mz-kafka-util",
+ "mz-metrics",
  "mz-mysql-util",
  "mz-orchestrator",
  "mz-ore",
@@ -5183,6 +5184,7 @@ dependencies = [
  "mz-dyncfg",
  "mz-dyncfgs",
  "mz-expr",
+ "mz-metrics",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
@@ -5384,14 +5386,13 @@ name = "mz-dyncfgs"
 version = "0.0.0"
 dependencies = [
  "mz-adapter-types",
- "mz-build-tools",
  "mz-compute-types",
  "mz-controller-types",
  "mz-dyncfg",
+ "mz-metrics",
  "mz-persist-client",
  "mz-storage-types",
  "mz-txn-wal",
- "prost-build",
  "workspace-hack",
 ]
 
@@ -5886,11 +5887,13 @@ version = "0.0.0"
 dependencies = [
  "lgalloc",
  "libc",
+ "mz-dyncfg",
  "mz-ore",
  "paste",
  "prometheus",
  "thiserror 1.0.61",
  "tokio",
+ "tokio-util",
  "tracing",
  "workspace-hack",
 ]

@@ -452,6 +452,11 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             .cfg()
             .apply_from(&dyncfg_updates);
 
+        // Note: We're only updating mz_metrics from the compute state here, but not from the
+        // equivalent storage state. This is because they're running on the same process and
+        // share the metrics.
+        mz_metrics::update_dyncfg(&dyncfg_updates);
+
         self.compute_state.apply_worker_config();
     }
 
