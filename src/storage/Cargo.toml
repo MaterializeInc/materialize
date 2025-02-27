@@ -59,7 +59,7 @@ mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-pin-project = "1.0.12"
+pin-project = "1.1.9"
 postgres-replication = { version = "0.6.7" }
 prometheus = { version = "0.13.3", default-features = false }
 prost = { version = "0.13.4", features = ["no-recursion-limit"] }
