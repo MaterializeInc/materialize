@@ -56,13 +56,13 @@ event-listener = { version = "5.4.0" }
 event-listener-strategy = { version = "0.5.2" }
 flate2 = { version = "1.0.32", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
-futures-channel = { version = "0.3.30", features = ["sink"] }
+futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
 futures-executor = { version = "0.3.30" }
 futures-io = { version = "0.3.31" }
 futures-sink = { version = "0.3.31" }
-futures-task = { version = "0.3.30" }
-futures-util = { version = "0.3.30", features = ["channel", "io", "sink"] }
+futures-task = { version = "0.3.31" }
+futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
 getrandom = { version = "0.2.10", default-features = false, features = ["std"] }
 half = { version = "2.4.1", features = ["num-traits"] }
 hashbrown = { version = "0.14.5", features = ["raw"] }
@@ -192,13 +192,13 @@ event-listener = { version = "5.4.0" }
 event-listener-strategy = { version = "0.5.2" }
 flate2 = { version = "1.0.32", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
-futures-channel = { version = "0.3.30", features = ["sink"] }
+futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
 futures-executor = { version = "0.3.30" }
 futures-io = { version = "0.3.31" }
 futures-sink = { version = "0.3.31" }
-futures-task = { version = "0.3.30" }
-futures-util = { version = "0.3.30", features = ["channel", "io", "sink"] }
+futures-task = { version = "0.3.31" }
+futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
 getrandom = { version = "0.2.10", default-features = false, features = ["std"] }
 half = { version = "2.4.1", features = ["num-traits"] }
 hashbrown = { version = "0.14.5", features = ["raw"] }
