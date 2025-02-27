@@ -560,7 +560,7 @@ The quickstart used an index since:
 
 Before creating an index (which represents query results stored in memory),
 consider its memory usage as well as its [compute cost
-implications](/administration/billing/#compute). For best practices when
+implications](/administration/usage/#compute). For best practices when
 creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 
 ### Additional information
@@ -571,7 +571,7 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 - [Views](/concepts/views/)
 - [Idiomatic Materialize SQL
   chart](/transform-data/idiomatic-materialize-sql/appendix/idiomatic-sql-chart/)
-- [Usage](/administration/billing/#compute)
+- [Usage](/administration/usage/#compute)
 - [`CREATE INDEX`](/sql/create-index/)
 - [`CREATE SCHEMA`](/sql/create-schema/)
 - [`CREATE SOURCE`](/sql/create-source/)

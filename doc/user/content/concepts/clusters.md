@@ -58,7 +58,7 @@ and serve queries.
   To increase the capacity of a cluster, you must increase its
   [size](#cluster-sizing).
 
-- See also [Usage](/administration/billing/).
+- See also [Usage](/administration/usage/).
 
 {{< /note >}}
 
@@ -150,4 +150,4 @@ hydration cost and the steady-state cost.
 - [`CREATE CLUSTER`](/sql/create-cluster)
 - [`ALTER CLUSTER`](/sql/alter-cluster)
 - [System clusters](/sql/system-clusters)
-- [Usage](/administration/billing/)
+- [Usage](/administration/usage/)
