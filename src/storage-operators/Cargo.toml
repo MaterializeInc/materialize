@@ -23,7 +23,7 @@ derivative = "2.2.0"
 differential-dataflow = "0.13.6"
 futures = "0.3.25"
 glob = "0.3.2"
-http = "1.1.0"
+http = "1.2.0"
 itertools = "0.12.1"
 mz-aws-util = { path = "../aws-util" }
 mz-arrow-util = { path = "../arrow-util" }

@@ -24,7 +24,7 @@ enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
 globset = "0.4.15"
 hex = "0.4.3"
-http = "1.1.0"
+http = "1.2.0"
 im = "15.1.0"
 ipnet = "2.11.0"
 itertools = "0.12.1"

@@ -17,7 +17,7 @@ crossbeam-channel = "0.5.14"
 derivative = "2.2.0"
 differential-dataflow = "0.13.6"
 futures = "0.3.25"
-http = "1.1.0"
+http = "1.2.0"
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-types = { path = "../compute-types" }
