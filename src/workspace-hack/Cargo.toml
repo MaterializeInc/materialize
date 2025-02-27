@@ -294,7 +294,7 @@ camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
-pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
+pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 
@@ -303,7 +303,7 @@ camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
-pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
+pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 
@@ -311,7 +311,7 @@ rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "proce
 camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
-pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
+pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
@@ -320,7 +320,7 @@ security-framework = { version = "2.10.0", features = ["alpn"] }
 camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
-pathdiff = { version = "0.2.1", default-features = false, features = ["camino"] }
+pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.7", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
