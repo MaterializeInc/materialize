@@ -45,7 +45,7 @@ serde_json = "1.0.125"
 thiserror = "1.0.37"
 timely = "0.18.1"
 tokio = "1.38.0"
-tokio-stream = "0.1.11"
+tokio-stream = "0.1.17"
 tonic = "0.12.1"
 tracing = "0.1.37"
 uuid = { version = "1.7.0", features = ["serde", "v4"] }

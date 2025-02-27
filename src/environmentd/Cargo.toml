@@ -104,7 +104,7 @@ tempfile = "3.14.0"
 thiserror = "1.0.37"
 tokio = { version = "1.38.0", features = ["sync"] }
 tokio-postgres = { version = "0.7.8" }
-tokio-stream = { version = "0.1.11", features = ["net"] }
+tokio-stream = { version = "0.1.17", features = ["net"] }
 tower = { version = "0.4.13", features = ["buffer", "limit", "load-shed"] }
 tower-http = { version = "0.5.2", features = ["cors"] }
 tracing = "0.1.37"
