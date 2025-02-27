@@ -18,12 +18,12 @@ resource "random_password" "db_password" {
 
 variable "operator_version" {
   type    = string
-  default = "v25.2.0-beta.1.tgz"
+  default = "v25.1.2.tgz"
 }
 
 variable "orchestratord_version" {
   type    = string
-  default = "v0.130.3"
+  default = "v0.130.4"
 }
 
 module "materialize_infrastructure" {
@@ -36,7 +36,7 @@ module "materialize_infrastructure" {
   environment  = "dev"
   install_materialize_operator = true
   use_local_chart = true
-  helm_chart = "materialize-operator-v25.2.0-beta.1.tgz"
+  helm_chart = "materialize-operator-v25.1.2.tgz"
   operator_version = var.operator_version
   orchestratord_version = var.orchestratord_version
 

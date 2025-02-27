@@ -179,7 +179,7 @@ class AWS:
 
         vars = [
             "-var",
-            "operator_version=v25.2.0-beta.1",
+            "operator_version=v25.1.2",
             "-var",
             f"orchestratord_version={tag}",
         ]
