@@ -16,4 +16,4 @@ menu:
 
 As part of the Self-managed Materialize, Materialize provides:
 
-{{% self-managed/self-managed-products %}}
+{{% self-managed/versions/self-managed-products %}}

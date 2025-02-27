@@ -92,7 +92,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    some sample configuration files. Download the sample configuration files from
    the Materialize repo:
 
-   {{% self-managed/curl-sample-files-local-install %}}
+   {{% self-managed/versions/curl-sample-files-local-install %}}
 
 1. Install the Materialize Helm chart.
 
@@ -108,16 +108,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
       helm repo update materialize
       ```
 
-   1. Install the Materialize Operator. The operator will be installed in the
-      `materialize` namespace.
-
-      ```shell
-      helm install my-materialize-operator materialize/materialize-operator \
-          --namespace=materialize --create-namespace \
-          --version v25.1.1 \
-          --set observability.podMetrics.enabled=true \
-          -f sample-values.yaml
-      ```
+   {{% self-managed/versions/step-install-helm-version-local-kind-install %}}
 
    1. Verify the installation and check the status:
 
