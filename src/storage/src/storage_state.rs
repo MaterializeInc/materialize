@@ -647,6 +647,16 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // machinery will get confused if there are not at least
                 // statistics for the "main" source.
                 for (export_id, export) in ingestion_description.source_exports.iter() {
+                    info!(
+                        worker = %self.timely_worker.index(),
+                        num_workers = %self.timely_worker.peers(),
+                        %ingestion_id,
+                        %export_id,
+                        ?as_of,
+                        ?resume_uppers,
+                        "rendering ingestion export",
+                    );
+
                     let resume_upper = resume_uppers[export_id].clone();
                     self.storage_state.aggregated_statistics.initialize_source(
                         *export_id,
@@ -670,6 +680,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     .filter(|(_, frontier)| frontier.is_empty())
                     .map(|(id, _)| *id)
                     .collect();
+
+                tracing::info!("finished_exports: {:?}", finished_exports);
 
                 resume_uppers.retain(|id, _| !finished_exports.contains(id));
                 source_resume_uppers.retain(|id, _| !finished_exports.contains(id));
@@ -1386,7 +1398,9 @@ impl StorageState {
                         // exports
                         None if self.reported_frontiers.contains_key(&id) => (),
                         None => {
-                            soft_panic_or_log!("AllowCompaction command for non-existent {id}");
+                            soft_panic_or_log!(
+                                "AllowCompaction command for non-existent {id}: {frontier:?}"
+                            );
                             continue;
                         }
                     }
