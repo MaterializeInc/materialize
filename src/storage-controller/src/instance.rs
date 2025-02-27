@@ -209,6 +209,9 @@ where
             StorageCommand::RunIngestions(ingestions) => {
                 for ingestion in ingestions {
                     self.active_ingestions.insert(ingestion.id);
+                    for export_id in ingestion.description.source_exports.keys() {
+                        self.active_exports.insert(*export_id);
+                    }
                 }
             }
             StorageCommand::RunSinks(sinks) => {
@@ -223,6 +226,9 @@ where
                     }
                     if frontier.is_empty() {
                         self.active_ingestions.remove(id);
+                    }
+                    if frontier.is_empty() {
+                        self.active_exports.remove(id);
                     }
                 }
             }
