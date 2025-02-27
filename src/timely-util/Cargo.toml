@@ -18,7 +18,7 @@ columnation = "0.1.0"
 differential-dataflow = "0.13.6"
 either = "1"
 futures-util = "0.3.31"
-lgalloc = "0.4"
+lgalloc = "0.5"
 mz-ore = { path = "../ore", features = ["async", "process", "tracing_", "test"] }
 num-traits = "0.2"
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
