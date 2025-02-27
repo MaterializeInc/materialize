@@ -16,7 +16,7 @@ itertools = "0.12.1"
 mz-compute-types = { path = "../compute-types" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore" }
-mz-repr = { path = "../repr", features = ["tracing_"] }
+mz-repr = { path = "../repr", features = ["tracing"] }
 mz-sql = { path = "../sql" }
 ordered-float = { version = "4.6.0", features = ["serde"] }
 paste = "1.0.11"

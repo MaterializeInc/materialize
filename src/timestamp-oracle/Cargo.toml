@@ -16,10 +16,10 @@ dec = "0.4.8"
 deadpool-postgres = "0.10.3"
 futures = "0.3.25"
 mz-adapter-types = { path = "../adapter-types" }
-mz-ore = { path = "../ore", features = ["chrono", "async", "tracing_"] }
+mz-ore = { path = "../ore", features = ["chrono", "async", "tracing"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-client = { path = "../postgres-client" }
-mz-repr = { path = "../repr", features = ["tracing_"] }
+mz-repr = { path = "../repr", features = ["tracing"] }
 postgres-protocol = { version = "0.6.5" }
 rand = "0.8.5"
 serde = "1.0.218"

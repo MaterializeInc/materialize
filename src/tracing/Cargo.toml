@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-mz-ore = { path = "../ore", default-features = false, features = ["test", "tracing_"] }
+mz-ore = { path = "../ore", default-features = false, features = ["test", "tracing"] }
 mz-proto = { path = "../proto", default-features = false }
 prost = { version = "0.13.4", features = ["no-recursion-limit"] }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }

@@ -2038,7 +2038,7 @@ impl RowPacker<'_> {
                     // We plan to remove the `Dummy` variant soon (materialize#17099). To prepare for that, we
                     // emit a log to Sentry here, to notify us of any instances that might have
                     // been made durable.
-                    #[cfg(feature = "tracing_")]
+                    #[cfg(feature = "tracing")]
                     tracing::error!("protobuf decoding found Dummy datum");
                     self.push(Datum::Dummy);
                 }

@@ -35,13 +35,13 @@ mz-durable-cache = { path = "../durable-cache" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
 mz-orchestrator = { path = "../orchestrator" }
-mz-ore = { path = "../ore", features = ["chrono", "async", "tracing_"] }
+mz-ore = { path = "../ore", features = ["chrono", "async", "tracing"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgtz = { path = "../pgtz" }
 mz-proto = { path = "../proto" }
-mz-repr = { path = "../repr", features = ["tracing_"] }
+mz-repr = { path = "../repr", features = ["tracing"] }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-storage-client = { path = "../storage-client" }

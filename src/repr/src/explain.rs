@@ -50,10 +50,10 @@ use crate::{ColumnType, GlobalId, ScalarType};
 pub mod dot;
 pub mod json;
 pub mod text;
-#[cfg(feature = "tracing_")]
+#[cfg(feature = "tracing")]
 pub mod tracing;
 
-#[cfg(feature = "tracing_")]
+#[cfg(feature = "tracing")]
 pub use crate::explain::tracing::trace_plan;
 
 /// Possible output formats for an explanation.
