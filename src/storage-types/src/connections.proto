@@ -131,4 +131,5 @@ message ProtoMySqlConnection {
   string_or_secret.ProtoStringOrSecret tls_root_cert = 6;
   ProtoTlsIdentity tls_identity = 7;
   ProtoTunnel tunnel = 8;
+  aws.ProtoAwsConnectionReference aws_connection = 9;
 }
