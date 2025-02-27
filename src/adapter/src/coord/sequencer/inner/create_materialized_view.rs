@@ -611,7 +611,12 @@ impl Coordinator {
         // `bootstrap_storage_collections`.
         if let Some(storage_as_of_ts) = storage_as_of.as_option() {
             let stmt = mz_sql::parse::parse(&create_sql)
-                .expect("create_sql is valid")
+                .map_err(|_| {
+                    AdapterError::internal(
+                        "create materialized view",
+                        "original SQL should roundtrip",
+                    )
+                })?
                 .into_element()
                 .ast;
             let ast::Statement::CreateMaterializedView(mut stmt) = stmt else {
