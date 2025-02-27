@@ -1019,6 +1019,7 @@ mod test {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn test_binding_consolidation() {
         use std::sync::atomic::Ordering;
 
