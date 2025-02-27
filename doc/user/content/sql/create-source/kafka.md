@@ -98,8 +98,7 @@ Note that:
 - Using this envelope is required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction).
 
 - This envelope can lead to high memory and disk utilization in the cluster
-  maintaining the source. We recommend using a standard-sized cluster, rather
-  than a legacy-sized cluster, to automatically spill the workload to disk. See
+  maintaining the source. See also
   [spilling to disk](#spilling-to-disk) for details.
 
 #### Null keys
@@ -196,8 +195,6 @@ the current value for _each key_ in the source to produce retractions when keys
 are updated. When using [standard cluster sizes](/sql/create-cluster/#size),
 Materialize will automatically offload this state to disk, seamlessly handling
 key spaces that are larger than memory.
-
-Spilling to disk is not available with [legacy cluster sizes](/sql/create-cluster/#legacy-sizes).
 
 ### Exposing source metadata
 

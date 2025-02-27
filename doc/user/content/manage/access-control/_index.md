@@ -21,6 +21,6 @@ aliases:
 
 {{< annotation type="In progress" >}}
 Access control is not yet available in the self-managed version of Materialize.
-Please [contact our team](https://materialize.com/docs/support/) with your
+Please [contact our team](/support/) with your
 specific access control requirements.
 {{</ annotation >}}

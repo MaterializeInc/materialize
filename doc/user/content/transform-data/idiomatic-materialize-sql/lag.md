@@ -209,7 +209,7 @@ Using idiomatic Materialize SQL, the following example finds the previous day's
 order total. That is, the example uses a self join on `orders_daily_totals`. The
 row ordering on the `order_date` field is represented by an **equality
 condition** using an [interval of `1
-DAY`](https://materialize.com/docs/sql/types/interval/#valid-operations). The
+DAY`](/sql/types/interval/#valid-operations). The
 query excludes the first row in the results since the first row does not have a
 previous row.
 
@@ -275,7 +275,7 @@ order total. The example uses a self [`LEFT JOIN/LEFT OUTER
 JOIN`](/sql/select/join/#left-outer-join) on `orders_daily_totals`. The
 row ordering on the `order_date` field is represented by an **equality
 condition** using an [interval of `1
-DAY`](https://materialize.com/docs/sql/types/interval/#valid-operations). The
+DAY`](/sql/types/interval/#valid-operations). The
 query includes the first row in the results, using `null` as the previous value.
 
 <table>
@@ -338,7 +338,7 @@ FROM orders_daily_totals;
 ## See also
 
 - [Lead over](/transform-data/idiomatic-materialize-sql/lead)
-- [`INTERVAL`](https://materialize.com/docs/sql/types/interval/)
+- [`INTERVAL`](/sql/types/interval/)
 - [`LEFT JOIN/LEFT OUTER JOIN`](/sql/select/join/#left-outer-join)
 - [`LAG()`](/sql/functions/#lag)
 - [Window functions](/sql/functions/#window-functions)

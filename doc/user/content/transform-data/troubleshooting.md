@@ -100,7 +100,7 @@ this means that the index was correctly used. If that's not the case, consider:
 If you are just looking to validate data and don't want to deal with query
 optimization at this stage, you can improve the efficiency of validation
 queries by reducing the amount of data that Materialize needs to read. You can
-achieve this by adding `LIMIT` clauses or [temporal filters](https://materialize.com/docs/transform-data/patterns/temporal-filters/)
+achieve this by adding `LIMIT` clauses or [temporal filters](/transform-data/patterns/temporal-filters/)
 to your queries.
 
 **`LIMIT` clause**
@@ -116,7 +116,7 @@ FROM <source, materialized view or table>
 LIMIT <25 or less>;
 ```
 
-To verify whether the query will return quickly, use [`EXPLAIN PLAN`](https://materialize.com/docs/sql/explain-plan/)
+To verify whether the query will return quickly, use [`EXPLAIN PLAN`](/sql/explain-plan/)
 to get the execution plan for the query, and validate that it starts with
 `Explained Query (fast path)`.
 
@@ -139,7 +139,7 @@ more details on temporal filter pushdown, see the [reference documentation](/tra
 <!-- Copied from doc/user/content/manage/troubleshooting.md#Transactions -->
 Transactions are a database concept for bundling multiple query steps into a
 single, all-or-nothing operation. You can read more about them in the
-[transactions](https://materialize.com/docs/sql/begin) section of our docs.
+[transactions](/sql/begin) section of our docs.
 
 In Materialize, `BEGIN` starts a transaction block. All statements in a
 transaction block will be executed in a single transaction until an explicit

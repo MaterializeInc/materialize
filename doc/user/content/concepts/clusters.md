@@ -67,7 +67,7 @@ and serve queries.
   To increase the capacity of a cluster, you must increase its
   [size](#cluster-sizing).
 
-- See also [Usage](/administration/billing/).
+- See also [Usage](/administration/usage/).
 
 {{< /note >}}
 
@@ -114,4 +114,4 @@ To gauge the performance and utilization of your clusters, use the
 - [`CREATE CLUSTER`](/sql/create-cluster)
 - [`ALTER CLUSTER`](/sql/alter-cluster)
 - [System clusters](/sql/system-clusters)
-- [Usage](/administration/billing/)
+- [Usage](/administration/usage/)

@@ -190,7 +190,7 @@ available, the cluster can continue to maintain dataflows and serve queries.
   To increase the capacity of a cluster, you must increase its
   [size](#resizing).
 
-- See also [Usage](/administration/billing/).
+- See also [Usage](/administration/usage/).
 
 {{< /note >}}
 

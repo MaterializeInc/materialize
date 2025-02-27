@@ -163,7 +163,7 @@ configuration of resources for an SSH tunnel. For more details, see the
 If you are prototyping and already have a cluster to host your PostgreSQL
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
-[resource isolation](https://materialize.com/docs/sql/create-cluster/#resource-isolation).
+[resource isolation](/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
 {{% postgres-direct/create-a-cluster %}}

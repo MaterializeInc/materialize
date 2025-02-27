@@ -28,7 +28,7 @@ Ensure that you have:
 If you are prototyping and already have a cluster to host your webhook
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
-[resource isolation](https://materialize.com/docs/sql/create-cluster/#resource-isolation).
+[resource isolation](/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
@@ -75,7 +75,7 @@ CREATE SOURCE hubspot_source
 ```
 
 After a successful run, the command returns a `NOTICE` message containing the
-unique [webhook URL](https://materialize.com/docs/sql/create-source/webhook/#webhook-url)
+unique [webhook URL](/sql/create-source/webhook/#webhook-url)
 that allows you to `POST` events to the source. Copy and store it. You will need
 it for the next step.
 
@@ -86,7 +86,7 @@ https://<HOST>/api/webhook/<database>/<schema>/<src_name>
 ```
 
 If you missed the notice, you can find the URLs for all webhook sources in the
-[`mz_internal.mz_webhook_sources`](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_webhook_sources)
+[`mz_internal.mz_webhook_sources`](/sql/system-catalog/mz_internal/#mz_webhook_sources)
 system table.
 
 ### Access and authentication
@@ -192,7 +192,7 @@ FROM hubspot_source;
 
 We highly recommend using the [`try_parse_monotonic_iso8601_timestamp`](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown)
 function when casting from `text` to `timestamp`, which enables [temporal filter
-pushdown](https://materialize.com/docs/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
+pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
 ### Deduplication
 
