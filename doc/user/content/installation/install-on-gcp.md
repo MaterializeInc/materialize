@@ -236,15 +236,15 @@ node instance type, etc.), see the
 1. Create a `terraform.tfvars` file (you can copy from the
    `terraform.tfvars.example` file) and specify:
 
-   -  Your GCP project ID and
+   -  Your GCP project ID.
 
-   -  A secure password for the Cloud SQL PostgreSQL database (to be created).
+   -  A prefix (e.g., `mz-simple`) for your resources.
 
    -  The region for the GKE cluster.
 
    ```bash
    project_id = "enter-your-gcp-project-id"
-   database_password  = "enter-secure-password"
+   prefix  = "enter-your-prefix" //  e.g., mz-simple
    region = "us-central1"
    ```
 
@@ -269,7 +269,7 @@ node instance type, etc.), see the
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   Apply complete! Resources: 18 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 20 added, 0 changed, 0 destroyed.
 
    Outputs:
 
@@ -283,8 +283,8 @@ node instance type, etc.), see the
 
 1. Configure `kubectl` to connect to your EKS cluster, specifying:
 
-   - `<cluster name>`. By default, the example Terraform module creates a
-     `mz-simple-gke` cluster.
+   - `<cluster name>`. Your cluster name has the form `<your prefix>-gke`; e.g.,
+     mz-simple-gke.
 
    - `<region>`. By default, the example Terraform module uses the `us-central1`
      region.
