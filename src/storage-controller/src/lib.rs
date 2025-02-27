@@ -2174,6 +2174,11 @@ where
             // Note that while collections are dropped, the `client` may already
             // be cleared out, before we do this post-processing!
             if let Some(client) = instance {
+                if read_frontier.is_empty() {
+                    if id.is_user() {
+                        tracing::info!(%id, "final AllowCompaction from PendingCompactionCommand");
+                    }
+                }
                 client.send(StorageCommand::AllowCompaction(vec![(
                     id,
                     read_frontier.clone(),
