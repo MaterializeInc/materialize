@@ -141,7 +141,6 @@ node instance type, etc.), see the
    |--------------------|-------------|
    | `namespace`       | A namespace (e.g., `my-demo`) that will be used to form part of the prefix for your AWS resources. <br> **Requirements:** <br> - Maximum of 12 characters <br> - Must start with a lowercase letter <br> - Must be lowercase alphanumeric and hyphens only |
    | `environment`     | An environment name (e.g., `dev`, `test`) that will be used to form part of the prefix for your AWS resources. <br> **Requirements:** <br> - Maximum of 8 characters <br> - Must be lowercase alphanumeric only |
-   | `database_password` | A secure password for the RDS PostgreSQL database (to be created). |
 
 
    ```bash
@@ -150,7 +149,6 @@ node instance type, etc.), see the
 
    namespace = "enter-namespace"   // maximum 12 characters, start with a letter, contain lowercase alphanumeric and hyphens only (e.g. my-demo)
    environment = "enter-environment" // maximum 8 characters, lowercase alphanumeric only (e.g., dev, test)
-   database_password  = "enter-secure-password"
    ```
 
 1. Initialize the terraform directory.
