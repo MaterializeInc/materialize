@@ -165,7 +165,7 @@ harness = false
 [[bench]]
 name = "bytes"
 harness = false
-required-features = ["bytes_", "region", "tracing_", "lgalloc", "derivative"]
+required-features = ["bytes_", "region", "tracing_", "derivative"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

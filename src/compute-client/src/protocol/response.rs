@@ -589,6 +589,8 @@ impl Arbitrary for SubscribeBatch<mz_repr::Timestamp> {
 pub enum StatusResponse {
     /// Reports the hydration status of dataflow operators.
     OperatorHydration(OperatorHydrationStatus),
+    /// Reports limit violations for dataflows.
+    DataflowLimitExceeded(DataflowLimitStatus),
 }
 
 impl RustType<ProtoStatusResponse> for StatusResponse {
@@ -597,6 +599,7 @@ impl RustType<ProtoStatusResponse> for StatusResponse {
 
         let kind = match self {
             Self::OperatorHydration(status) => Kind::OperatorHydration(status.into_proto()),
+            Self::DataflowLimitExceeded(status) => Kind::DataflowLimitStatus(status.into_proto()),
         };
         ProtoStatusResponse { kind: Some(kind) }
     }
@@ -607,6 +610,9 @@ impl RustType<ProtoStatusResponse> for StatusResponse {
         match proto.kind {
             Some(Kind::OperatorHydration(status)) => {
                 Ok(Self::OperatorHydration(status.into_rust()?))
+            }
+            Some(Kind::DataflowLimitStatus(status)) => {
+                Ok(Self::DataflowLimitExceeded(status.into_rust()?))
             }
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStatusResponse::kind",
@@ -646,6 +652,29 @@ impl RustType<ProtoOperatorHydrationStatus> for OperatorHydrationStatus {
             lir_id: proto.lir_id.into_rust()?,
             worker_id: proto.worker_id.into_rust()?,
             hydrated: proto.hydrated.into_rust()?,
+        })
+    }
+}
+
+/// A dataflow exceeded some limit.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub struct DataflowLimitStatus {
+    /// The ID of the compute collection exported by the dataflow.
+    pub collection_id: GlobalId,
+}
+
+impl RustType<ProtoDataflowLimitStatus> for DataflowLimitStatus {
+    fn into_proto(&self) -> ProtoDataflowLimitStatus {
+        ProtoDataflowLimitStatus {
+            collection_id: Some(self.collection_id.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoDataflowLimitStatus) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            collection_id: proto
+                .collection_id
+                .into_rust_if_some("ProtoDataflowLimitStatus::collection_id")?,
         })
     }
 }
