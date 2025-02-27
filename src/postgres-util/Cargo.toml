@@ -52,7 +52,7 @@ tunnel = [
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.2"
+prost-build = "0.13.4"
 tonic-build = "0.12.1"
 
 [package.metadata.cargo-udeps.ignore]

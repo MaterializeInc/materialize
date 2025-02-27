@@ -90,7 +90,7 @@ rand = "0.8.5"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.2"
+prost-build = "0.13.4"
 
 [features]
 default = [
