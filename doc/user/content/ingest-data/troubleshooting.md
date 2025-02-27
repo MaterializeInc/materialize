@@ -57,7 +57,7 @@ able to query your source (or, queries will return no data) until Materialize
 has finished ingesting the initial snapshot.
 
 Snapshotting can take between a few minutes to several hours, depending on the
-size of your dataset and the [size of your ingestion cluster](https://materialize.com/docs/sql/create-cluster/#disk-enabled-sizes).
+size of your dataset and the [size of your ingestion cluster](/sql/create-cluster/#size).
 
 To determine whether your source has completed ingesting the initial snapshot,
 you can query the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)

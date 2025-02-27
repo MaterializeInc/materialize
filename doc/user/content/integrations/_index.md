@@ -161,7 +161,7 @@ Materialize integrates with dbt through the [`dbt-materialize`](https://github.c
 
 | Service   | Support level                    | Notes                                                                                                                                                                                                                          |             |
 | --------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
-| dbt Core  | {{< supportLevel beta >}}        | See the [`dbt-materialize` reference documentation](https://materialize.com/docs/manage/dbt/) for more details, and the [development workflows guide](/integrations/dbt/) for common dbt patterns. | [](#notify) |
+| dbt Core  | {{< supportLevel beta >}}        | See the [`dbt-materialize` reference documentation](/manage/dbt/) for more details, and the [development workflows guide](/integrations/dbt/) for common dbt patterns. | [](#notify) |
 | dbt Cloud | {{< supportLevel in-progress >}} | Not supported yet. We are working with the dbt community to bring native Materialize support to dbt Cloud soon.                                                                                                                | [](#notify) |
 
 ### Terraform
@@ -275,7 +275,7 @@ The level of support for these tools will improve as we extend the coverage of `
 
 | Service | Support level              | Notes                                                                                                                                |             |
 | ------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------- |
-| Deepnote   | {{< supportLevel production >}} | Connect using the [Materialize connection](https://deepnote.com/docs/materialize). See the [Deepnote integration page](https://materialize.com/docs/serve-results/deepnote/).                            |
+| Deepnote   | {{< supportLevel production >}} | Connect using the [Materialize connection](https://deepnote.com/docs/materialize). See the [Deepnote integration page](/serve-results/deepnote/).                            |
 | Hex     | {{< supportLevel beta >}}  | Connect using the [Materialize connection](https://learn.hex.tech/docs/connect-to-data/data-connections/overview). |                 |
 | Retool  | {{< supportLevel alpha >}} | Connect using the [PostgreSQL integration](https://retool.com/integrations/postgresql).                                              | [](#notify) |
 

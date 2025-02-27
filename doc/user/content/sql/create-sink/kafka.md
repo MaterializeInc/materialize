@@ -473,7 +473,7 @@ The expression:
   * Can refer to any column in the sink's underlying relation when using the
     [upsert envelope](#upsert-envelope).
   * Can refer to any column in the sink's key when using the
-    [Debezium envelope](#debezium-envelope).
+    [Debezium envelope](#debezium).
 
 Materialize uses the computed hash value to assign a partition to each message
 as follows:

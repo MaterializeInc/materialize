@@ -353,7 +353,7 @@ enables a simple and rudimentary way to grant authorization to your webhook
 source.
 
 To store the sensitive credentials and make them reusable across multiple
-`CREATE SOURCE` statements, use [secrets](https://materialize.com/docs/sql/create-secret/).
+`CREATE SOURCE` statements, use [secrets](/sql/create-secret/).
 
 ```mzsql
 CREATE SECRET basic_hook_auth AS 'Basic <base64_auth>';

@@ -95,45 +95,6 @@ the cluster is hosting, this operation **might incur downtime**.
 See the reference documentation for [`ALTER CLUSTER`](/sql/alter-cluster#graceful-cluster-resizing)
 for more details on cluster resizing.
 
-#### Legacy sizes
-
-Materialize also offers some legacy sizes. Clusters using legacy sizes run on
-older hardware without local disks attached.
-
-In most cases, you **should not** use legacy sizes. [Standard sizes](#size)
-offer better performance per credit for nearly all workloads. We recommend using
-standard sizes for all new clusters, and recommend migrating existing
-legacy-sized clusters to standard sizes. In many cases, migrating from
-legacy to standard sizes will result in a 25-50% cost reduction.
-
-However, certain rare workloads exhibit better performance per credit on legacy
-sizes. Materialize is committed to supporting these workloads on legacy sizes
-until they have equivalent or better performance per credit on standard sizes.
-
-{{< if-past "2024-04-15" >}}
-{{< warning >}}
-Materialize regions that were enabled after 15 April 2024 do not have access
-to legacy sizes.
-{{< /warning >}}
-{{< /if-past >}}
-
-When legacy sizes are enabled for a region, the following sizes are available:
-
-* `3xsmall`
-* `2xsmall`
-* `xsmall`
-* `small`
-* `medium`
-* `large`
-* `xlarge`
-* `2xlarge`
-* `3xlarge`
-* `4xlarge`
-* `5xlarge`
-* `6xlarge`
-
-The correspondence between non-legacy sizes and legacy sizes is shown in the [credit
-usage table](#credit-usage).
 
 ### Replication factor
 
