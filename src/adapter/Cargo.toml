@@ -24,7 +24,7 @@ fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 governor = "0.6.3"
 hex = "0.4.3"
-http = "1.1.0"
+http = "1.2.0"
 ipnet = "2.11.0"
 itertools = "0.12.1"
 launchdarkly-server-sdk = { version = "1.0.0", default-features = false, features = [
