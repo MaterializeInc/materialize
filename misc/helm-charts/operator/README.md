@@ -141,6 +141,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.defaultSizes.support` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.system` |  | ``"25cc"`` |
 | `operator.features.authentication` | Whether to enable environmentd rbac checks TODO: this is not yet supported in the helm chart | ``false`` |
+| `operator.features.databaseNetworkPolicies` | Whether to enable database network policies. Network policies don't yet work in self-managed | ``false`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
 | `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.135.0-dev.0"`` |
