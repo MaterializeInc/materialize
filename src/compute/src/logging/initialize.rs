@@ -21,6 +21,7 @@ use mz_timely_util::containers::{Column, ColumnBuilder};
 use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::container::{ContainerBuilder, PushInto};
+use timely::dataflow::Scope;
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
@@ -39,10 +40,7 @@ use crate::typedefs::{ErrBatcher, ErrBuilder};
 pub fn initialize<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-) -> (
-    super::compute::Logger,
-    BTreeMap<LogVariant, (TraceBundle, usize)>,
-) {
+) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
     // Track time relative to the Unix epoch, rather than when the server
@@ -68,17 +66,22 @@ pub fn initialize<A: Allocate + 'static>(
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
     // loggers with timely either before or after creating them.
+    let dataflow_index = context.worker.next_dataflow_index();
     let traces = if config.log_logging {
         context.register_loggers();
-        context.construct_dataflows()
+        context.construct_dataflow()
     } else {
-        let traces = context.construct_dataflows();
+        let traces = context.construct_dataflow();
         context.register_loggers();
         traces
     };
 
-    let logger = worker.log_register().get("materialize/compute").unwrap();
-    (logger, traces)
+    let compute_logger = worker.log_register().get("materialize/compute").unwrap();
+    LoggingTraces {
+        traces,
+        dataflow_index,
+        compute_logger,
+    }
 }
 
 pub(super) type ReachabilityEvent = (usize, Vec<(usize, usize, bool, Timestamp, Diff)>);
@@ -96,36 +99,59 @@ struct LoggingContext<'a, A: Allocate> {
     shared_state: Rc<RefCell<SharedLoggingState>>,
 }
 
-impl<A: Allocate + 'static> LoggingContext<'_, A> {
-    fn construct_dataflows(&mut self) -> BTreeMap<LogVariant, (TraceBundle, usize)> {
-        let mut collections = BTreeMap::new();
-        collections.extend(super::timely::construct(
-            self.worker,
-            self.config,
-            self.t_event_queue.clone(),
-            Rc::clone(&self.shared_state),
-        ));
-        collections.extend(super::reachability::construct(
-            self.worker,
-            self.config,
-            self.r_event_queue.clone(),
-        ));
-        collections.extend(super::differential::construct(
-            self.worker,
-            self.config,
-            self.d_event_queue.clone(),
-            Rc::clone(&self.shared_state),
-        ));
-        collections.extend(super::compute::construct(
-            self.worker,
-            self.config,
-            self.c_event_queue.clone(),
-            Rc::clone(&self.shared_state),
-        ));
+pub(crate) struct LoggingTraces {
+    /// Exported traces, by log variant.
+    pub traces: BTreeMap<LogVariant, TraceBundle>,
+    /// The index of the dataflow that exports the traces.
+    pub dataflow_index: usize,
+    /// The compute logger.
+    pub compute_logger: super::compute::Logger,
+}
 
-        let errs = self
-            .worker
-            .dataflow_named("Dataflow: logging errors", |scope| {
+impl<A: Allocate + 'static> LoggingContext<'_, A> {
+    fn construct_dataflow(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
+        self.worker.dataflow_named("Dataflow: logging", |scope| {
+            let mut collections = BTreeMap::new();
+
+            let super::timely::Return {
+                collections: timely_collections,
+                compute_events: compute_events_timely,
+            } = super::timely::construct(scope.clone(), self.config, self.t_event_queue.clone());
+            collections.extend(timely_collections);
+
+            let super::reachability::Return {
+                collections: reachability_collections,
+            } = super::reachability::construct(
+                scope.clone(),
+                self.config,
+                self.r_event_queue.clone(),
+            );
+            collections.extend(reachability_collections);
+
+            let super::differential::Return {
+                collections: differential_collections,
+                compute_events: compute_events_differential,
+            } = super::differential::construct(
+                scope.clone(),
+                self.config,
+                self.d_event_queue.clone(),
+                Rc::clone(&self.shared_state),
+            );
+            collections.extend(differential_collections);
+
+            let super::compute::Return {
+                collections: compute_collections,
+            } = super::compute::construct(
+                scope.clone(),
+                scope.parent.clone(),
+                self.config,
+                self.c_event_queue.clone(),
+                [compute_events_timely, compute_events_differential],
+                Rc::clone(&self.shared_state),
+            );
+            collections.extend(compute_collections);
+
+            let errs = scope.scoped("logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowError, Diff> =
                     Collection::empty(scope).into();
                 collection
@@ -133,17 +159,16 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                     .trace
             });
 
-        // TODO(vmarcos): If we introduce introspection sources that would match
-        // type specialization for keys, we'd need to ensure that type specialized
-        // variants reach the map below (issue database-issues#6763).
-        collections
-            .into_iter()
-            .map(|(log, collection)| {
-                let bundle =
-                    TraceBundle::new(collection.trace, errs.clone()).with_drop(collection.token);
-                (log, (bundle, collection.dataflow_index))
-            })
-            .collect()
+            let traces = collections
+                .into_iter()
+                .map(|(log, collection)| {
+                    let bundle = TraceBundle::new(collection.trace, errs.clone())
+                        .with_drop(collection.token);
+                    (log, bundle)
+                })
+                .collect();
+            traces
+        })
     }
 
     /// Construct a new reachability logger for timestamp type `T`.
@@ -177,8 +202,6 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         self.register_reachability_logger::<(Timestamp, Subtime)>(&mut register, 2);
         register.insert_logger("differential/arrange", d_logger);
         register.insert_logger("materialize/compute", c_logger.clone());
-
-        self.shared_state.borrow_mut().compute_logger = Some(c_logger);
     }
 
     fn simple_logger<CB: ContainerBuilder>(
