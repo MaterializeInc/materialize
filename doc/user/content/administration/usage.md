@@ -1,20 +1,15 @@
 ---
-title: "Usage & pricing"
-description: "Understand workload and storage costs for self-managed Materialize, and learn best practices for cost control."
+title: "Usage overview"
+description: "Overview of the resource usage."
 menu:
   main:
     parent: "manage"
     weight: 50
+aliases:
+  - /administration/billing/
 ---
 
-## Licensing
-
-Use of self-managed Materialize is [license-based](/license/). [Contact
-Materialize](/support/) to obtain a license.
-
-## Usage
-
-### Compute
+## Compute
 
 In Materialize, [clusters](/concepts/clusters/) are pools of compute resources
 (CPU, memory, and scratch disk space) for running your workloads, such as
@@ -40,12 +35,12 @@ objects.
 The cluster size for a workload will depend on the workload's compute and
 storage requirements.
 
+Clusters are always "on", and you can adjust the [replication
+factor](/sql/create-cluster/#replication-factor) for
+fault tolerance. See [Compute usage factors](#compute-usage-factors) for more
+information on increasing a cluster's replication factor.
 
-Clusters are always "on", and you can adjust the [replication factor](/sql/create-cluster/#replication-factor)
-for fault tolerance. See [Compute cost factors](#compute-cost-factors) for more
-information on the cost of increasing a cluster's replication factor.
-
-### Compute cost factors
+## Compute usage factors
 
 Factors that contribute to compute usage include:
 
@@ -57,7 +52,7 @@ Factors that contribute to compute usage include:
 | [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/)  |• [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/) that do not use indexes and materialized views perform work. <br>• [`SELECT`s](/sql/select/) and [`SUBSCRIBE`s](/sql/subscribe/) that use indexes and materialized views are computationally **free**.|
 | [Sinks](/concepts/sinks/) | Only small CPU/memory costs.|
 
-### Storage
+## Storage
 
 In Materialize, storage is roughly proportional to the size of your source
 datasets plus the size of any materialized views, with some overhead from
@@ -67,13 +62,3 @@ Most data in Materialize is continually compacted, with the exception of
 [append-only sources](/sql/create-source/#append-only-envelope). As such, the
 total state stored in Materialize tends to grow at a rate that is more similar
 to OLTP databases than cloud data warehouses.
-
-## Additional references
-
-- https://materialize.com/pricing/
-
-- [How Materialized can lower the cost of freshness for data teams](https://materialize.com/promotions/cost-of-freshness/?utm_campaign=General&utm_source=documentation)
-
-<style>
-redb { color: Red; font-weight: 500; }
-</style>

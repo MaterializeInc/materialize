@@ -86,7 +86,8 @@ operators (`Filter`, `Join`, `Project`). Others are specific to Materialize
 In general, a high level understanding of what these operators do is sufficient
 for effective debugging: `Filter` filters records, `Join` joins records from
 two or more inputs, `Map` applies a function to transform records, etc. You can
-find more details on these operators in the [`EXPLAIN PLAN` documentation](/sql/explain-plan/#reference-plan-operators).
+find more details on these operators in the [`EXPLAIN PLAN` (Plan operators: In
+decorrelated and optimized plans)](/sql/explain-plan/#reference-plan-operators).
 But it's not important to have a deep understanding of all these operators for
 effective debugging.
 
