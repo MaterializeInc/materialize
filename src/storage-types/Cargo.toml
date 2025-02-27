@@ -37,7 +37,7 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
-mz-ore = { path = "../ore", features = ["async", "tracing_"] }
+mz-ore = { path = "../ore", features = ["async", "tracing"] }
 mz-mysql-util = { path = "../mysql-util" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }

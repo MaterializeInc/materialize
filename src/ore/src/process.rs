@@ -36,8 +36,8 @@
 ///     tap into the existing whole-process retry logic. Use halt judiciously in
 ///     these cases, as restarting a process can be inefficient (e.g., mandatory
 ///     restart backoff, rehydrating expensive state).
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]
-#[cfg(feature = "tracing_")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
+#[cfg(feature = "tracing")]
 #[macro_export]
 macro_rules! halt {
     ($($arg:expr),* $(,)?) => {{
@@ -50,8 +50,8 @@ macro_rules! halt {
 ///
 /// `exit!` forwards the provided arguments to the [`tracing::info`] macro, then
 /// terminates the process with given exit code.
-#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing_")))]
-#[cfg(feature = "tracing_")]
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
+#[cfg(feature = "tracing")]
 #[macro_export]
 macro_rules! exit {
     ($exit_code:literal, $($arg:expr),* $(,)?) => {{

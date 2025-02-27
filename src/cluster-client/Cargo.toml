@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.95"
 http = "1.2.0"
-mz-ore = { path = "../ore", features = ["tracing_"] }
+mz-ore = { path = "../ore", features = ["tracing"] }
 mz-proto = { path = "../proto" }
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }

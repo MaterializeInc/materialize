@@ -43,14 +43,14 @@ hex = "0.4.3"
 itertools = "0.12.1"
 mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = [
-    "bytes_",
+    "bytes",
     "flatcontainer",
     "id_gen",
     "smallvec",
     "region",
     "stack",
     "test",
-    "tracing_",
+    "tracing",
 ], default-features = false }
 mz-persist-types = { path = "../persist-types", default-features = false }
 mz-pgtz = { path = "../pgtz", default-features = false }
@@ -78,7 +78,7 @@ proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 thiserror = "1.0.37"
 tracing = { version = "0.1.37" }
 
-# for the tracing_ feature
+# for the tracing feature
 tracing-subscriber = { version = "0.3.19", default-features = false, optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
@@ -100,7 +100,7 @@ default = [
     "mz-proto/default",
     "workspace-hack",
 ]
-tracing_ = ["tracing-subscriber"]
+tracing = ["tracing-subscriber"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
