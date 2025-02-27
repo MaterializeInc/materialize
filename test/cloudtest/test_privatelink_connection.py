@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import time
 from textwrap import dedent
 
 import pytest
@@ -59,6 +60,9 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
     )[0][0]
 
     exists(resource=f"vpcendpoint/connection-{aws_connection_id}")
+
+    # Less flaky if we sleep before checking the status
+    time.sleep(5)
 
     assert (
         "unknown"
