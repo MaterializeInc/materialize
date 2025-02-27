@@ -9,7 +9,7 @@
 
 
 def cluster_pod_name(cluster_id: str, replica_id: str, process: int = 0) -> str:
-    return f"pod/cluster-{cluster_id}-replica-{replica_id}-gen-0-{process}"
+    return f"pod/cluster-{cluster_id}-replica-{replica_id}-gen-0-{process}-0"
 
 
 def cluster_service_name(cluster_id: str, replica_id: str) -> str:
