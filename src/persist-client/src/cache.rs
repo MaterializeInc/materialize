@@ -86,7 +86,8 @@ impl PersistClientCache {
             Arc::clone(&state_cache),
             pubsub_client.receiver,
         );
-        let isolated_runtime = IsolatedRuntime::new(cfg.isolated_runtime_worker_threads);
+        let isolated_runtime =
+            IsolatedRuntime::new(registry, Some(cfg.isolated_runtime_worker_threads));
 
         PersistClientCache {
             cfg,

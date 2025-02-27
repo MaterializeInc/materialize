@@ -223,7 +223,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             .await?;
 
             if force_downgrade_upper {
-                let isolated_runtime = Arc::new(IsolatedRuntime::default());
+                let isolated_runtime = Arc::new(IsolatedRuntime::new(&metrics_registry, None));
                 let pubsub_sender: Arc<dyn PubSubSender> = Arc::new(NoopPubSubSender);
                 let shared_states = Arc::new(StateCache::new(
                     &cfg,

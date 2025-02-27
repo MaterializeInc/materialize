@@ -54,7 +54,7 @@ use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs, TracingOrches
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::error::ErrorExt;
 use mz_ore::metric;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{register_runtime_metrics, MetricsRegistry};
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task::RuntimeExt;
 use mz_ore::url::SensitiveUrl;
@@ -724,6 +724,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         },
         metrics_registry.clone(),
     ))?;
+    register_runtime_metrics("main", runtime.metrics(), &metrics_registry);
 
     let span = tracing::info_span!("environmentd::run").entered();
 
