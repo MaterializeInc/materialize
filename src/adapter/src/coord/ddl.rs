@@ -210,6 +210,7 @@ impl Coordinator {
         let mut copies_to_drop = vec![];
         let mut clusters_to_create = vec![];
         let mut cluster_replicas_to_create = vec![];
+        let mut update_metrics_config = false;
         let mut update_tracing_config = false;
         let mut update_compute_config = false;
         let mut update_storage_config = false;
@@ -309,6 +310,11 @@ impl Coordinator {
                 }
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
+                    update_metrics_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_metrics_config_var(name);
                     update_tracing_config |= vars::is_tracing_var(name);
                     update_compute_config |= self
                         .catalog
@@ -787,6 +793,9 @@ impl Coordinator {
                 }
             });
 
+            if update_metrics_config {
+                mz_metrics::update_dyncfg(&self.catalog().system_config().dyncfg_updates());
+            }
             if update_compute_config {
                 self.update_compute_config();
             }
