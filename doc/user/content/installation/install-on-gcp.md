@@ -198,22 +198,7 @@ node instance type, etc.), see the
 {{< /tip >}}
 
 
-1. Clone the [Materialize's sample Terraform
-   repo](https://github.com/MaterializeInc/terraform-google-materialize) and
-   checkout the `v0.1.3` tag.
-
-   {{< tabs >}}
-   {{< tab "Clone via SSH" >}}
-   ```bash
-   git clone --depth 1 -b v0.1.3 git@github.com:MaterializeInc/terraform-google-materialize.git
-   ```
-   {{< /tab >}}
-   {{< tab "Clone via HTTPS" >}}
-   ```bash
-   git clone --depth 1 -b v0.1.3 https://github.com/MaterializeInc/terraform-google-materialize.git
-   ```
-   {{< /tab >}}
-   {{< /tabs >}}
+{{% self-managed/versions/step-clone-google-terraform-repo %}}
 
 1. Go to the `examples/simple` folder in the Materialize Terraform repo
    directory.
