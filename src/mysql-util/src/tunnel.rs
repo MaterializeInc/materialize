@@ -12,6 +12,8 @@ use std::net::IpAddr;
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
+use aws_config::SdkConfig;
+use aws_sdk_rds::auth_token::{AuthTokenGenerator, Config as RdsAuthConfig};
 use mysql_async::{Conn, Opts, OptsBuilder};
 
 use mz_ore::future::{InTask, TimeoutError};
@@ -215,6 +217,7 @@ pub struct Config {
     in_task: InTask,
     ssh_timeout_config: SshTimeoutConfig,
     mysql_timeout_config: TimeoutConfig,
+    aws_config: Option<SdkConfig>,
 }
 
 impl Config {
@@ -224,6 +227,7 @@ impl Config {
         ssh_timeout_config: SshTimeoutConfig,
         in_task: InTask,
         mysql_timeout_config: TimeoutConfig,
+        aws_config: Option<SdkConfig>,
     ) -> Result<Self, MySqlError> {
         let opts = mysql_timeout_config.apply_to_opts(builder)?;
         Ok(Self {
@@ -232,6 +236,7 @@ impl Config {
             in_task,
             ssh_timeout_config,
             mysql_timeout_config,
+            aws_config,
         })
     }
 
@@ -269,6 +274,22 @@ impl Config {
         ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<MySqlConn, MySqlError> {
         let mut opts_builder = OptsBuilder::from_opts(self.inner.clone());
+
+        if let Some(aws_config) = &self.aws_config {
+            let (host, port) = self.address();
+            let rds_config = RdsAuthConfig::builder()
+                .hostname(host)
+                .port(port as u64)
+                .username(self.inner.user().expect("MySQL: username provider"))
+                .build()?;
+            let generator = AuthTokenGenerator::new(rds_config);
+            let token = generator.auth_token(&aws_config).await?;
+            // Cleartext plugin must be enabled for IAM authentication, for security,
+            // the network traffic is SSL/TLS encrypted.
+            opts_builder = opts_builder
+                .pass(Some(token.to_string()))
+                .enable_cleartext_plugin(true);
+        }
 
         match &self.tunnel {
             TunnelConfig::Direct { resolved_ips } => {

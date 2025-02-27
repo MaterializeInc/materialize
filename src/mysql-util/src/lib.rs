@@ -116,6 +116,9 @@ pub enum MySqlError {
     MySql(#[from] mysql_async::Error),
     #[error("connection attempt timed out after {0:?}")]
     ConnectionTimeout(Duration),
+    /// Error retrieving AWS authorization token
+    #[error("error retrieving AWS auth token: {0}")]
+    AwsTokenError(#[from] aws_sdk_rds::error::BoxError)
 }
 
 /// Quotes MySQL identifiers. [See MySQL quote_identifier()](https://github.com/mysql/mysql-sys/blob/master/functions/quote_identifier.sql)
