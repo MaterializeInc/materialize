@@ -119,7 +119,7 @@ reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features 
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
 semver = { version = "1.0.23", features = ["serde"] }
-serde = { version = "1.0.203", features = ["alloc", "derive", "rc"] }
+serde = { version = "1.0.218", features = ["alloc", "derive", "rc"] }
 serde_json = { version = "1.0.127", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
 sha2 = { version = "0.10.6", features = ["asm"] }
 similar = { version = "2.2.1", features = ["inline", "unicode"] }
@@ -256,7 +256,7 @@ reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features 
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
 semver = { version = "1.0.23", features = ["serde"] }
-serde = { version = "1.0.203", features = ["alloc", "derive", "rc"] }
+serde = { version = "1.0.218", features = ["alloc", "derive", "rc"] }
 serde_json = { version = "1.0.127", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
 sha2 = { version = "0.10.6", features = ["asm"] }
 similar = { version = "2.2.1", features = ["inline", "unicode"] }
