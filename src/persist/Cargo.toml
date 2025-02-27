@@ -43,7 +43,7 @@ futures-util = "0.3.31"
 md-5 = "0.10.5"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-dyncfg = { path = "../dyncfg" }
-mz-ore = { path = "../ore", default-features = false, features = ["metrics", "async", "bytes_", "region", "parquet"] }
+mz-ore = { path = "../ore", default-features = false, features = ["metrics", "async", "bytes", "region", "parquet"] }
 mz-persist-types = { path = "../persist-types" }
 mz-postgres-client = { path = "../postgres-client" }
 mz-proto = { path = "../proto" }

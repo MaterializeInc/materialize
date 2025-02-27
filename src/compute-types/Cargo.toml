@@ -16,9 +16,9 @@ differential-dataflow = "0.13.6"
 itertools = "0.12.1"
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
-mz-ore = { path = "../ore", features = ["tracing_", "metrics"] }
+mz-ore = { path = "../ore", features = ["tracing", "metrics"] }
 mz-proto = { path = "../proto" }
-mz-repr = { path = "../repr", features = ["tracing_"] }
+mz-repr = { path = "../repr", features = ["tracing"] }
 mz-storage-types = { path = "../storage-types" }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }

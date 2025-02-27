@@ -48,7 +48,7 @@ mz-kafka-util = { path = "../kafka-util" }
 mz-metrics = { path = "../metrics" }
 mz-mysql-util = { path = "../mysql-util" }
 mz-orchestrator = { path = "../orchestrator" }
-mz-ore = { path = "../ore", features = ["chrono", "async", "process", "tracing_"] }
+mz-ore = { path = "../ore", features = ["chrono", "async", "process", "tracing"] }
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-pgcopy = { path = "../pgcopy" }
@@ -56,7 +56,7 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-pgwire-common = { path = "../pgwire-common" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto" }
-mz-repr = { path = "../repr", features = ["tracing_"] }
+mz-repr = { path = "../repr", features = ["tracing"] }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
 mz-segment = { path = "../segment" }
