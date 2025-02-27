@@ -45,7 +45,20 @@ row 2
 
 $ set-regex match=u\d+ replacement=UID
 
-? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
+Explained Query:
+  CrossJoin type=differential
+    ArrangeBy keys=[[]]
+      Filter (#0) IS NOT NULL
+        ReadStorage materialize.public.t1
+    ArrangeBy keys=[[]]
+      ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT * FROM t1 AS a1, t1 AS a2 WHERE a1.f1 IS NOT NULL;
 Explained Query:
   CrossJoin type=differential
     ArrangeBy keys=[[]]

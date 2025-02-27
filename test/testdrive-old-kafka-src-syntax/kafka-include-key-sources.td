@@ -339,7 +339,16 @@ key    id1  id2  measurement
 # For UPSERT sources with INCLUDE KEY, we expect the queries to
 # take advantage of the uniqueness propery of the key column.
 
-? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT named FROM bareformatconfluent;
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT named FROM bareformatconfluent;
+Explained Query:
+  Project (#0)
+    ReadStorage materialize.public.bareformatconfluent
+
+Source materialize.public.bareformatconfluent
+
+Target cluster: quickstart
+
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT named FROM bareformatconfluent;
 Explained Query:
   Project (#0)
     ReadStorage materialize.public.bareformatconfluent
@@ -350,7 +359,17 @@ Target cluster: quickstart
 
 > CREATE DEFAULT INDEX ON bareformatconfluent;
 
-? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT named FROM bareformatconfluent;
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT named FROM bareformatconfluent;
+Explained Query (fast path):
+  Project (#0)
+    ReadIndex on=materialize.public.bareformatconfluent bareformatconfluent_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.bareformatconfluent_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT named FROM bareformatconfluent;
 Explained Query (fast path):
   Project (#0)
     ReadIndex on=materialize.public.bareformatconfluent bareformatconfluent_primary_idx=[*** full scan ***]
@@ -373,7 +392,17 @@ Target cluster: quickstart
 # For ENVELOPE NONE with INCLUDE KEY, uniqueness is not guaranteed,
 # so we expect that query plans will contain an explicit Distinct on
 
-? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT named FROM envelope_none_with_key;
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT named FROM envelope_none_with_key;
+Explained Query:
+  Distinct project=[#0] monotonic
+    Project (#0)
+      ReadStorage materialize.public.envelope_none_with_key
+
+Source materialize.public.envelope_none_with_key
+
+Target cluster: quickstart
+
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT named FROM envelope_none_with_key;
 Explained Query:
   Distinct project=[#0] monotonic
     Project (#0)
@@ -385,7 +414,18 @@ Target cluster: quickstart
 
 > CREATE DEFAULT INDEX ON envelope_none_with_key;
 
-? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT named FROM envelope_none_with_key;
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT named FROM envelope_none_with_key;
+Explained Query:
+  Distinct project=[#0] monotonic
+    Project (#0)
+      ReadIndex on=envelope_none_with_key envelope_none_with_key_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.envelope_none_with_key_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT DISTINCT named FROM envelope_none_with_key;
 Explained Query:
   Distinct project=[#0] monotonic
     Project (#0)

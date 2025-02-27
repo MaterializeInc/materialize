@@ -709,7 +709,7 @@ class AccumulateReductions(Dataflow):
 
 > SET CLUSTER = idx_cluster;
 
-?[version>=13000] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT count(*) FROM accumulable;
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT count(*) FROM accumulable;
 Explained Query:
   With
     cte l0 =
@@ -732,8 +732,13 @@ Used Indexes:
 
 Target cluster: idx_cluster
 
-?[version<13000] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT count(*) FROM accumulable;
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT count(*) FROM accumulable;
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)] // { arity: 1 }
+        Project () // { arity: 0 }
+          ReadIndex on=accumulable i_accumulable=[*** full scan ***] // { arity: 5 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l0 // { arity: 1 }
@@ -744,11 +749,6 @@ Explained Query:
               Get l0 // { arity: 1 }
           Constant // { arity: 0 }
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[count(*)] // { arity: 1 }
-        Project () // { arity: 0 }
-          ReadIndex on=accumulable i_accumulable=[*** full scan ***] // { arity: 5 }
 
 Used Indexes:
   - materialize.public.i_accumulable (*** full scan ***)
@@ -2122,7 +2122,7 @@ class HydrateIndex(Scenario):
 1
 > ALTER CLUSTER idx_cluster SET (REPLICATION FACTOR 1)
 > SET CLUSTER = idx_cluster
-?[version>=13000] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT COUNT(*) FROM t1
+?[version>=13500] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT COUNT(*) FROM t1
 Explained Query:
   With
     cte l0 =
@@ -2145,8 +2145,13 @@ Used Indexes:
 
 Target cluster: idx_cluster
 
-?[version<13000] EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT COUNT(*) FROM t1
+?[version<13500] EXPLAIN OPTIMIZED PLAN FOR SELECT COUNT(*) FROM t1
 Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)] // {{ arity: 1 }}
+        Project () // {{ arity: 0 }}
+          ReadIndex on=t1 i1=[*** full scan ***] // {{ arity: 2 }}
   Return // {{ arity: 1 }}
     Union // {{ arity: 1 }}
       Get l0 // {{ arity: 1 }}
@@ -2157,11 +2162,6 @@ Explained Query:
               Get l0 // {{ arity: 1 }}
           Constant // {{ arity: 0 }}
             - ()
-  With
-    cte l0 =
-      Reduce aggregates=[count(*)] // {{ arity: 1 }}
-        Project () // {{ arity: 0 }}
-          ReadIndex on=t1 i1=[*** full scan ***] // {{ arity: 2 }}
 
 Used Indexes:
   - materialize.public.i1 (*** full scan ***)

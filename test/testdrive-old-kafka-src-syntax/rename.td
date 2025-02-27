@@ -238,7 +238,7 @@ name                                create_sql
 materialize.public.dependent_view   "CREATE VIEW \"materialize\".\"public\".\"dependent_view\" AS SELECT * FROM \"materialize\".\"public\".\"renamed_mz_view\""
 
 $ skip-if
-SELECT mz_version_num() < 13300;
+SELECT mz_version_num() < 13500;
 
 > SHOW CREATE SINK renamed_sink
 name                            create_sql
@@ -874,7 +874,7 @@ name                                create_sql
 materialize.to_be_renamed.mz_data  "CREATE SOURCE \"materialize\".\"to_be_renamed\".\"mz_data\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-${testdrive.seed}') FORMAT AVRO USING SCHEMA '{   \"name\": \"row\",   \"type\": \"record\",   \"fields\": [     {\"name\": \"a\", \"type\": \"long\"},     {\"name\": \"b\", \"type\": \"string\"}   ] }' EXPOSE PROGRESS AS \"materialize\".\"to_be_renamed\".\"mz_data_progress\""
 
 $ skip-if
-SELECT mz_version_num() < 13300;
+SELECT mz_version_num() < 13500;
 
 > SHOW CREATE SINK to_be_renamed.sink1;
 name                                create_sql
@@ -892,7 +892,7 @@ name                                create_sql
 materialize.foo_bar.mz_data  "CREATE SOURCE \"materialize\".\"foo_bar\".\"mz_data\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-${testdrive.seed}') FORMAT AVRO USING SCHEMA '{   \"name\": \"row\",   \"type\": \"record\",   \"fields\": [     {\"name\": \"a\", \"type\": \"long\"},     {\"name\": \"b\", \"type\": \"string\"}   ] }' EXPOSE PROGRESS AS \"materialize\".\"foo_bar\".\"mz_data_progress\""
 
 $ skip-if
-SELECT mz_version_num() < 13300;
+SELECT mz_version_num() < 13500;
 
 > SHOW CREATE SINK foo_bar.sink1;
 name                                create_sql
