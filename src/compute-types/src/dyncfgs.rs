@@ -50,6 +50,41 @@ pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
 /// Enable lgalloc.
 pub const ENABLE_LGALLOC: Config<bool> = Config::new("enable_lgalloc", true, "Enable lgalloc.");
 
+/// Enable lgalloc's eager memory return/reclamation feature.
+pub const ENABLE_LGALLOC_EAGER_RECLAMATION: Config<bool> = Config::new(
+    "enable_lgalloc_eager_reclamation",
+    true,
+    "Enable lgalloc's eager return behavior.",
+);
+
+/// The interval at which the background thread wakes.
+pub const LGALLOC_BACKGROUND_INTERVAL: Config<Duration> = Config::new(
+    "lgalloc_background_interval",
+    Duration::from_secs(1),
+    "Scheduling interval for lgalloc's background worker.",
+);
+
+/// Enable lgalloc's eager memory return/reclamation feature.
+pub const LGALLOC_FILE_GROWTH_DAMPENER: Config<usize> = Config::new(
+    "lgalloc_file_growth_dampener",
+    0,
+    "Lgalloc's file growth dampener parameter.",
+);
+
+/// Enable lgalloc's eager memory return/reclamation feature.
+pub const LGALLOC_LOCAL_BUFFER_BYTES: Config<usize> = Config::new(
+    "lgalloc_local_buffer_bytes",
+    32 << 20,
+    "Lgalloc's local buffer bytes parameter.",
+);
+
+/// The bytes to reclaim (slow path) per size class, for each background thread activation.
+pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
+    "lgalloc_slow_clear_bytes",
+    32 << 20,
+    "Clear byte size per size class for every invocation",
+);
+
 /// Enable lgalloc for columnation.
 pub const ENABLE_COLUMNATION_LGALLOC: Config<bool> = Config::new(
     "enable_columnation_lgalloc",
@@ -62,13 +97,6 @@ pub const ENABLE_COLUMNAR_LGALLOC: Config<bool> = Config::new(
     "enable_columnar_lgalloc",
     true,
     "Enable allocating aligned regions in columnar from lgalloc.",
-);
-
-/// Enable lgalloc's eager memory return/reclamation feature.
-pub const ENABLE_LGALLOC_EAGER_RECLAMATION: Config<bool> = Config::new(
-    "enable_lgalloc_eager_reclamation",
-    true,
-    "Enable lgalloc's eager return behavior.",
 );
 
 /// The interval at which the compute server performs maintenance tasks.
@@ -95,20 +123,6 @@ pub const DATAFLOW_MAX_INFLIGHT_BYTES_CC: Config<Option<usize>> = Config::new(
     None,
     "The maximum number of in-flight bytes emitted by persist_sources feeding \
      compute dataflows in cc clusters.",
-);
-
-/// The interval at which the background thread wakes.
-pub const LGALLOC_BACKGROUND_INTERVAL: Config<Duration> = Config::new(
-    "lgalloc_background_interval",
-    Duration::from_secs(1),
-    "Scheduling interval for lgalloc's background worker.",
-);
-
-/// The bytes to reclaim (slow path) per size class, for each background thread activation.
-pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
-    "lgalloc_slow_clear_bytes",
-    32 << 20,
-    "Clear byte size per size class for every invocation",
 );
 
 /// The term `n` in the growth rate `1 + 1/(n + 1)` for `ConsolidatingVec`.
@@ -193,14 +207,16 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_CORRECTION_V2)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
-        .add(&ENABLE_COLUMNATION_LGALLOC)
+        .add(&LGALLOC_BACKGROUND_INTERVAL)
+        .add(&LGALLOC_FILE_GROWTH_DAMPENER)
+        .add(&LGALLOC_LOCAL_BUFFER_BYTES)
+        .add(&LGALLOC_SLOW_CLEAR_BYTES)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
+        .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&ENABLE_COLUMNAR_LGALLOC)
         .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
-        .add(&LGALLOC_BACKGROUND_INTERVAL)
-        .add(&LGALLOC_SLOW_CLEAR_BYTES)
         .add(&HYDRATION_CONCURRENCY)
         .add(&COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO)
         .add(&COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO)
