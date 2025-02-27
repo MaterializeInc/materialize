@@ -32,19 +32,6 @@ WHERE
 
 mode cockroach
 
-# Must explain the "Raw Plan".
-query T multiline
-EXPLAIN RAW PLAN FOR
-VIEW v;
-----
-Project (#0, #1, #3)
-  Filter (#1 = 100)
-    LeftOuterJoin (integer_to_bigint(#0) = #2)
-      Get materialize.public.accounts
-      Get materialize.public.account_details
-
-EOF
-
 # Must explain the "Locally Optimized Plan".
 query T multiline
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR
@@ -158,7 +145,7 @@ FROM
 WHERE
   balance = 100;
 
-# Ensure that flag whas used during planning.
+# Ensure that flag was used during planning.
 query T multiline
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR
 VIEW v;
@@ -218,5 +205,53 @@ Return
               Distinct project=[#0]
                 Get l1
             Get l1
+
+EOF
+
+## Constant views
+## (Regression tests for https://github.com/MaterializeInc/database-issues/issues/8985 )
+
+statement ok
+CREATE VIEW v2 AS SELECT 1;
+
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR
+REPLAN VIEW v2
+----
+Constant
+  - (1)
+
+EOF
+
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR
+CREATE VIEW v3 AS SELECT 5;
+----
+Constant
+  - (5)
+
+EOF
+
+# LOCALLY OPTIMIZED PLAN FOR constant MV
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR
+CREATE MATERIALIZED VIEW v3 AS SELECT 5;
+----
+Constant
+  - (5)
+
+Target cluster: quickstart
+
+EOF
+
+# LOCALLY OPTIMIZED PLAN FOR constant peek
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR
+SELECT 5;
+----
+Constant
+  - (5)
+
+Target cluster: mz_catalog_server
 
 EOF

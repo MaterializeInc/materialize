@@ -833,13 +833,29 @@ fn create_environmentd_statefulset_object(
             config
                 .bootstrap_builtin_catalog_server_cluster_replica_size
                 .as_ref()
-                .map(|size| {
-                    format!("--bootstrap-builtin-catalog-server-cluster-replica-size={size}")
-                }),
+                .map(|size| format!("--bootstrap-builtin-catalog-server-cluster-replica-size={size}")),
             config
                 .bootstrap_builtin_analytics_cluster_replica_size
                 .as_ref()
                 .map(|size| format!("--bootstrap-builtin-analytics-cluster-replica-size={size}")),
+            config
+                .bootstrap_builtin_system_cluster_replication_factor
+                .as_ref()
+                .map(|replication_factor| {
+                    format!("--bootstrap-builtin-system-cluster-replication-factor={replication_factor}")
+                }),
+            config
+                .bootstrap_builtin_probe_cluster_replication_factor
+                .as_ref()
+                .map(|replication_factor| format!("--bootstrap-builtin-probe-cluster-replication-factor={replication_factor}")),
+            config
+                .bootstrap_builtin_support_cluster_replication_factor
+                .as_ref()
+                .map(|replication_factor| format!("--bootstrap-builtin-support-cluster-replication-factor={replication_factor}")),
+            config
+                .bootstrap_builtin_analytics_cluster_replication_factor
+                .as_ref()
+                .map(|replication_factor| format!("--bootstrap-builtin-analytics-cluster-replication-factor={replication_factor}")),
         ]
         .into_iter()
         .flatten(),
@@ -893,6 +909,11 @@ fn create_environmentd_statefulset_object(
     if config.enable_internal_statement_logging {
         args.push("--system-parameter-default=enable_internal_statement_logging=true".into());
     }
+
+    if config.disable_statement_logging {
+        args.push("--system-parameter-default=statement_logging_max_sample_rate=0".into());
+    }
+
     if config.disable_authentication {
         args.push("--system-parameter-default=enable_rbac_checks=false".into());
     }

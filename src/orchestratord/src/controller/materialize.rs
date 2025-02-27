@@ -76,6 +76,8 @@ pub struct MaterializeControllerArgs {
     enable_security_context: bool,
     #[clap(long)]
     enable_internal_statement_logging: bool,
+    #[clap(long, default_value = "false")]
+    disable_statement_logging: bool,
 
     #[clap(long)]
     orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
@@ -106,6 +108,14 @@ pub struct MaterializeControllerArgs {
     bootstrap_builtin_catalog_server_cluster_replica_size: Option<String>,
     #[clap(long)]
     bootstrap_builtin_analytics_cluster_replica_size: Option<String>,
+    #[clap(long)]
+    bootstrap_builtin_system_cluster_replication_factor: Option<u32>,
+    #[clap(long)]
+    bootstrap_builtin_probe_cluster_replication_factor: Option<u32>,
+    #[clap(long)]
+    bootstrap_builtin_support_cluster_replication_factor: Option<u32>,
+    #[clap(long)]
+    bootstrap_builtin_analytics_cluster_replication_factor: Option<u32>,
 
     #[clap(
         long,

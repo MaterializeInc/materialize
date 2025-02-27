@@ -107,7 +107,12 @@ The following table lists the configurable parameters of the Materialize operato
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
+| `balancerd.enabled` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
+| `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``{}`` |
 | `clusterd.nodeSelector` | Node selector to use for clusterd pods spawned by the operator | ``{}`` |
+| `console.enabled` | Flag to indicate whether to create console pods for the environments | ``true`` |
+| `console.imageTagMapOverride` | Override the mapping of environmentd versions to console versions | ``{}`` |
+| `console.nodeSelector` | Node selector to use for console pods spawned by the operator | ``{}`` |
 | `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``{}`` |
 | `networkPolicies.egress` | egress from Materialize pods to sources and sinks | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
 | `networkPolicies.enabled` | Whether to enable network policies for securing communication between pods | ``false`` |
@@ -125,19 +130,20 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.cloudProvider.providers.gcp` | GCP Configuration (placeholder for future use) | ``{"enabled":false}`` |
 | `operator.cloudProvider.region` | Common cloud provider settings | ``"kind"`` |
 | `operator.cloudProvider.type` | Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local' | ``"local"`` |
+| `operator.clusters.defaultReplicationFactor.analytics` |  | ``0`` |
+| `operator.clusters.defaultReplicationFactor.probe` |  | ``0`` |
+| `operator.clusters.defaultReplicationFactor.support` |  | ``0`` |
+| `operator.clusters.defaultReplicationFactor.system` |  | ``0`` |
 | `operator.clusters.defaultSizes.analytics` |  | ``"25cc"`` |
-| `operator.clusters.defaultSizes.catalogServer` |  | ``"50cc"`` |
+| `operator.clusters.defaultSizes.catalogServer` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.default` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.probe` |  | ``"mz_probe"`` |
 | `operator.clusters.defaultSizes.support` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.system` |  | ``"25cc"`` |
 | `operator.features.authentication` | Whether to enable environmentd rbac checks TODO: this is not yet supported in the helm chart | ``false`` |
-| `operator.features.consoleImageTagMapOverride` | Override the mapping of environmentd versions to console versions | ``{}`` |
-| `operator.features.createBalancers` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
-| `operator.features.createConsole` | Flag to indicate whether to create console pods for the environments | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
-| `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.130.3"`` |
+| `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.130.4"`` |
 | `operator.nodeSelector` |  | ``{}`` |
 | `operator.resources.limits` | Resource limits for the operator's CPU and memory | ``{"memory":"512Mi"}`` |
 | `operator.resources.requests` | Resources requested by the operator for CPU and memory | ``{"cpu":"100m","memory":"512Mi"}`` |
@@ -162,7 +168,7 @@ Specify each parameter using the `--set key=value[,key=value]` argument to `helm
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v0.130.3 \
+  --set operator.image.tag=v0.130.4 \
   materialize/materialize-operator
 ```
 
@@ -197,7 +203,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.130.3
+  environmentdImageRef: materialize/environmentd:v0.130.4
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:

@@ -15,7 +15,7 @@
 # deployed to production, but the version needs to be bumped whenever features
 # that the console depends upon are removed (to a version of the console that
 # doesn't depend on those features).
-FROM materialize/console:25.1.0 AS console
+FROM materialize/console:25.2.0 AS console
 
 MZFROM ubuntu-base
 
@@ -46,7 +46,7 @@ RUN apt-get update \
 COPY postgresql.conf pg_hba.conf /etc/postgresql/16/main/
 
 COPY --from=console /usr/share/nginx/html /usr/share/nginx/html
-COPY --from=console /etc/nginx/templates/default.conf.template /etc/nginx/templates/default.conf.template
+COPY console_nginx.template /etc/nginx/templates/default.conf.template
 
 # Configure the console to listen on port 6874 and proxy API requests through to
 # the Materialize instance that will be started and listening for requests on

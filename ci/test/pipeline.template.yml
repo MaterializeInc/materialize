@@ -208,6 +208,7 @@ steps:
           queue: mac
         coverage: skip
         sanitizer: skip
+        branches: "main v*.* self-managed/v*"
 
       - id: lint-deps
         label: Lint dependencies
@@ -742,6 +743,7 @@ steps:
           composition: skip-version-upgrade
     agents:
       queue: hetzner-aarch64-4cpu-8gb
+    skip: "Version upgrade skips are allowed for LTS releases now"
 
   - id: deploy-website
     label: Deploy website

@@ -1422,7 +1422,7 @@ pub mod datadriven {
         BatchParts, BLOB_TARGET_SIZE, BUILDER_STRUCTURED, STRUCTURED_ORDER,
     };
     use crate::cfg::COMPACTION_MEMORY_BOUND_BYTES;
-    use crate::fetch::{Cursor, EncodedPart};
+    use crate::fetch::EncodedPart;
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::encoding::Schemas;
@@ -1894,9 +1894,10 @@ pub mod datadriven {
             )
             .await
             .expect("invalid batch part");
-            let mut cursor = Cursor::default();
-            while let Some(((k, _v, t, d), _)) = cursor.pop(&part) {
+            let part = part.normalize(&datadriven.client.metrics.columnar);
+            for ((k, _v), t, d) in part.records().expect("codec records").iter() {
                 let (k, d) = (String::decode(k, &StringSchema).unwrap(), i64::decode(d));
+                let t = u64::from_le_bytes(t);
                 write!(s, "{k} {t} {d}\n");
             }
         }
@@ -2148,10 +2149,11 @@ pub mod datadriven {
                     )
                     .await
                     .expect("invalid batch part");
+                    let part = part.normalize(&datadriven.client.metrics.columnar);
 
                     let mut updates = Vec::new();
-                    let mut cursor = Cursor::default();
-                    while let Some(((k, _v, mut t, d), _)) = cursor.pop(&part) {
+                    for ((k, _v), t, d) in part.records().expect("codec data").iter() {
+                        let mut t = u64::decode(t);
                         t.advance_by(as_of.borrow());
                         updates.push((
                             String::decode(k, &StringSchema).unwrap(),

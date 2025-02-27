@@ -60,6 +60,9 @@ pub enum BatchColumnarFormat {
     /// with a schema of `(k, k_c, v, v_c, t, d)`, where `k` are the serialized bytes and `k_c` is
     /// nested columnar data.
     Both(usize),
+    /// Rows are encoded to a columnar struct. The batch is written down as Parquet
+    /// with a schema of `(t, d, k_s, v_s)`, where `k_s` is nested columnar data.
+    Structured,
 }
 
 impl BatchColumnarFormat {
@@ -75,6 +78,7 @@ impl BatchColumnarFormat {
             "row" => BatchColumnarFormat::Row,
             "both" => BatchColumnarFormat::Both(0),
             "both_v2" => BatchColumnarFormat::Both(2),
+            "structured" => BatchColumnarFormat::Structured,
             x => {
                 let default = BatchColumnarFormat::default();
                 soft_panic_or_log!("Invalid batch columnar type: {x}, falling back to {default}");
@@ -100,6 +104,7 @@ impl BatchColumnarFormat {
             // The V0 format has been deprecated and we ignore its structured columns.
             BatchColumnarFormat::Both(0 | 1) => false,
             BatchColumnarFormat::Both(_) => true,
+            BatchColumnarFormat::Structured => true,
         }
     }
 }
@@ -406,29 +411,51 @@ impl BlobTraceUpdates {
         lgbytes: &ColumnarMetrics,
         proto: ProtoColumnarRecords,
     ) -> Result<Self, TryFromProtoError> {
-        let binary_array = |data: Bytes, offsets: Vec<i32>| match BinaryArray::try_new(
-            OffsetBuffer::new(offsets.into()),
-            ::arrow::buffer::Buffer::from_bytes(data.into()),
-            None,
-        ) {
-            Ok(data) => Ok(realloc_array(&data, lgbytes)),
-            Err(e) => Err(TryFromProtoError::InvalidFieldError(format!(
-                "Unable to decode binary array from repeated proto fields: {e:?}"
-            ))),
+        let binary_array = |data: Bytes, offsets: Vec<i32>| {
+            if offsets.is_empty() && proto.len > 0 {
+                return Ok(None);
+            };
+            match BinaryArray::try_new(
+                OffsetBuffer::new(offsets.into()),
+                ::arrow::buffer::Buffer::from_bytes(data.into()),
+                None,
+            ) {
+                Ok(data) => Ok(Some(realloc_array(&data, lgbytes))),
+                Err(e) => Err(TryFromProtoError::InvalidFieldError(format!(
+                    "Unable to decode binary array from repeated proto fields: {e:?}"
+                ))),
+            }
         };
 
-        let ret = ColumnarRecords::new(
-            binary_array(proto.key_data, proto.key_offsets)?,
-            binary_array(proto.val_data, proto.val_offsets)?,
-            realloc_array(&proto.timestamps.into(), lgbytes),
-            realloc_array(&proto.diffs.into(), lgbytes),
-        );
+        let codec_key = binary_array(proto.key_data, proto.key_offsets)?;
+        let codec_val = binary_array(proto.val_data, proto.val_offsets)?;
+
+        let timestamps = realloc_array(&proto.timestamps.into(), lgbytes);
+        let diffs = realloc_array(&proto.diffs.into(), lgbytes);
         let ext =
             ColumnarRecordsStructuredExt::from_proto(proto.key_structured, proto.val_structured)?;
 
-        let updates = match ext {
-            None => Self::Row(ret),
-            Some(ext) => Self::Both(ret, ext),
+        let updates = match (codec_key, codec_val, ext) {
+            (Some(codec_key), Some(codec_val), Some(ext)) => BlobTraceUpdates::Both(
+                ColumnarRecords::new(codec_key, codec_val, timestamps, diffs),
+                ext,
+            ),
+            (Some(codec_key), Some(codec_val), None) => BlobTraceUpdates::Row(
+                ColumnarRecords::new(codec_key, codec_val, timestamps, diffs),
+            ),
+            (None, None, Some(ext)) => BlobTraceUpdates::Structured {
+                key_values: ext,
+                timestamps,
+                diffs,
+            },
+            (k, v, ext) => {
+                return Err(TryFromProtoError::InvalidPersistState(format!(
+                    "unexpected mix of key/value columns: k={:?}, v={}, ext={}",
+                    k.is_some(),
+                    v.is_some(),
+                    ext.is_some(),
+                )))
+            }
         };
 
         Ok(updates)
@@ -487,6 +514,16 @@ impl BlobTraceUpdates {
                     this.get_or_make_structured::<K, V>(key_schema, val_schema)
                         .clone(),
                 )
+            }
+            BatchColumnarFormat::Structured => {
+                let mut this = self.clone();
+                Self::Structured {
+                    key_values: this
+                        .get_or_make_structured::<K, V>(key_schema, val_schema)
+                        .clone(),
+                    timestamps: this.timestamps().clone(),
+                    diffs: this.diffs().clone(),
+                }
             }
         }
     }
@@ -686,9 +723,9 @@ pub fn encode_trace_inline_meta<T: Timestamp + Codec64>(batch: &BlobTraceBatchPa
             let metadata = ProtoFormatMetadata::StructuredMigration(2);
             (ProtoBatchFormat::ParquetStructured, Some(metadata))
         }
-
         BlobTraceUpdates::Structured { .. } => {
-            unimplemented!("codec data should exist before reaching parquet encoding")
+            let metadata = ProtoFormatMetadata::StructuredMigration(3);
+            (ProtoBatchFormat::ParquetStructured, Some(metadata))
         }
     };
 

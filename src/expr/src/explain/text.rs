@@ -484,7 +484,7 @@ impl MirRelationExpr {
             Project { outputs, input } => {
                 FmtNode {
                     fmt_root: |f, ctx| {
-                        let outputs = mode.seq(outputs, self.column_names(ctx));
+                        let outputs = mode.seq(outputs, input.column_names(ctx));
                         let outputs = CompactScalars(outputs);
                         write!(f, "{}Project ({})", ctx.indent, outputs)?;
                         self.fmt_analyses(f, ctx)
@@ -496,6 +496,9 @@ impl MirRelationExpr {
             Map { scalars, input } => {
                 FmtNode {
                     fmt_root: |f, ctx: &mut PlanRenderingContext<'_, MirRelationExpr>| {
+                        // Here, it's better to refer to `self.column_names(ctx)` rather than
+                        // `input.column_names(ctx)`, because then we also get humanization for refs
+                        // to cols introduced earlier by the same `Map`.
                         let scalars = mode.seq(scalars, self.column_names(ctx));
                         let scalars = CompactScalars(scalars);
                         write!(f, "{}Map ({})", ctx.indent, scalars)?;

@@ -13,7 +13,7 @@ operator:
     # -- The Docker repository for the operator image
     repository: materialize/orchestratord
     # -- The tag/version of the operator image to be used
-    tag: v0.130.3
+    tag: v0.130.4
     # -- Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
 
@@ -24,12 +24,6 @@ operator:
     enableInternalStatementLogging: true
 
   features:
-    # -- Flag to indicate whether to create balancerd pods for the environments
-    createBalancers: true
-    # -- Flag to indicate whether to create console pods for the environments
-    createConsole: true
-    # -- Override the mapping of environmentd versions to console versions
-    consoleImageTagMapOverride: {}
     # -- Whether to enable environmentd rbac checks
     # TODO: this is not yet supported in the helm chart
     authentication: false
@@ -197,8 +191,13 @@ operator:
       system: 25cc
       probe: mz_probe
       support: 25cc
-      catalogServer: 50cc
+      catalogServer: 25cc
       analytics: 25cc
+    defaultReplicationFactor:
+      system: 0
+      probe: 0
+      support: 0
+      analytics: 0
 
   # Node selector to use for the operator pod
   nodeSelector: {}
@@ -223,6 +222,20 @@ environmentd:
 
 clusterd:
   # -- Node selector to use for clusterd pods spawned by the operator
+  nodeSelector: {}
+
+balancerd:
+  # -- Flag to indicate whether to create balancerd pods for the environments
+  enabled: true
+  # -- Node selector to use for balancerd pods spawned by the operator
+  nodeSelector: {}
+
+console:
+  # -- Flag to indicate whether to create console pods for the environments
+  enabled: true
+  # -- Override the mapping of environmentd versions to console versions
+  imageTagMapOverride: {}
+  # -- Node selector to use for console pods spawned by the operator
   nodeSelector: {}
 
 # RBAC (Role-Based Access Control) settings

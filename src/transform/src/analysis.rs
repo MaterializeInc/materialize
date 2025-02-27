@@ -1024,7 +1024,7 @@ mod column_names {
                     typ,
                     access_strategy: _,
                 } => {
-                    // Emit ColumnName::Global instanceds for each column in the
+                    // Emit ColumnName::Global instances for each column in the
                     // `Get` type. Those can be resolved to real names later when an
                     // ExpressionHumanizer is available.
                     (0..typ.columns().len())

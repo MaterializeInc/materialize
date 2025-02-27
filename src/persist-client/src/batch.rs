@@ -688,13 +688,7 @@ where
                     .codecs
                     .val
                     .encode(|| V::encode(val, &mut self.val_buf));
-                validate_schema(
-                    &self.builder.write_schemas,
-                    &self.key_buf,
-                    &self.val_buf,
-                    Some(key),
-                    Some(val),
-                );
+                validate_schema(&self.builder.write_schemas, key, val);
 
                 let update = (
                     (self.key_buf.as_slice(), self.val_buf.as_slice()),
@@ -881,32 +875,18 @@ where
 // inline it at the two callers.
 pub(crate) fn validate_schema<K: Codec, V: Codec>(
     stats_schemas: &Schemas<K, V>,
-    key: &[u8],
-    val: &[u8],
-    decoded_key: Option<&K>,
-    decoded_val: Option<&V>,
+    decoded_key: &K,
+    decoded_val: &V,
 ) {
     // Attempt to catch any bad schema usage in CI. This is probably too
     // expensive to run in prod.
     if !mz_ore::assert::SOFT_ASSERTIONS.load(Ordering::Relaxed) {
         return;
     }
-    let key_valid = match decoded_key {
-        Some(key) => K::validate(key, &stats_schemas.key),
-        None => {
-            let key = K::decode(key, &stats_schemas.key).expect("valid encoded key");
-            K::validate(&key, &stats_schemas.key)
-        }
-    };
+    let key_valid = K::validate(decoded_key, &stats_schemas.key);
     let () = key_valid
         .unwrap_or_else(|err| panic!("constructing batch with mismatched key schema: {}", err));
-    let val_valid = match decoded_val {
-        Some(val) => V::validate(val, &stats_schemas.val),
-        None => {
-            let val = V::decode(val, &stats_schemas.val).expect("valid encoded val");
-            V::validate(&val, &stats_schemas.val)
-        }
-    };
+    let val_valid = V::validate(decoded_val, &stats_schemas.val);
     let () = val_valid
         .unwrap_or_else(|err| panic!("constructing batch with mismatched val schema: {}", err));
 }
@@ -1135,6 +1115,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             BatchColumnarFormat::Both(_) => {
                 self.cfg.inline_writes_single_max_bytes.saturating_div(2)
             }
+            BatchColumnarFormat::Structured => self.cfg.inline_writes_single_max_bytes,
         };
 
         let (name, write_future) = if updates.goodbytes() < inline_threshold {

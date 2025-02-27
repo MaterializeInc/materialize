@@ -40,6 +40,9 @@ spec:
         - "--cloud-provider={{ .Values.operator.cloudProvider.type }}"
         - "--region={{ .Values.operator.cloudProvider.region }}"
         - "--secrets-controller={{ .Values.operator.secretsController }}"
+        # (SangJunBak) For self-managed, we disable statement logging due to performance issues
+        # https://github.com/MaterializeInc/cloud/issues/10755
+        - "--disable-statement-logging"
         {{- range $key, $value := include "materialize-operator.selectorLabels" . | fromYaml }}
         - "--orchestratord-pod-selector-labels={{ $key }}={{ $value }}"
         {{- end }}
@@ -63,14 +66,14 @@ spec:
         {{- end }}
 
         {{/* Feature Flags */}}
-        {{- if .Values.operator.features.createBalancers }}
+        {{- if .Values.balancerd.enabled }}
         - "--create-balancers"
         {{- end }}
-        {{- if .Values.operator.features.createConsole }}
+        {{- if .Values.console.enabled }}
         - "--create-console"
         {{- end }}
-        - "--console-image-tag-default=25.1.0"
-        {{- range $key, $value := .Values.operator.features.consoleImageTagMapOverride }}
+        - "--console-image-tag-default=25.2.0"
+        {{- range $key, $value := .Values.console.imageTagMapOverride }}
         - "--console-image-tag-map={{ $key }}={{ $value }}"
         {{- end }}
         {{- if not .Values.operator.features.authentication }}
@@ -100,6 +103,18 @@ spec:
         {{ if .Values.operator.clusters.defaultSizes.analytics }}
         - "--bootstrap-builtin-analytics-cluster-replica-size={{ .Values.operator.clusters.defaultSizes.analytics }}"
         {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.system nil }}
+        - "--bootstrap-builtin-system-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.system }}"
+        {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.probe nil }}
+        - "--bootstrap-builtin-probe-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.probe }}"
+        {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.support nil }}
+        - "--bootstrap-builtin-support-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.support }}"
+        {{- end }}
+        {{ if ne .Values.operator.clusters.defaultReplicationFactor.analytics nil }}
+        - "--bootstrap-builtin-analytics-cluster-replication-factor={{ .Values.operator.clusters.defaultReplicationFactor.analytics }}"
+        {{- end }}
         {{- end }}
         - "--image-pull-policy={{ kebabcase .Values.operator.image.pullPolicy }}"
         {{- range $key, $value := .Values.environmentd.nodeSelector }}
@@ -107,6 +122,12 @@ spec:
         {{- end }}
         {{- range $key, $value := .Values.clusterd.nodeSelector }}
         - "--clusterd-node-selector={{ $key }}={{ $value }}"
+        {{- end }}
+        {{- range $key, $value := .Values.balancerd.nodeSelector }}
+        - "--balancerd-node-selector={{ $key }}={{ $value }}"
+        {{- end }}
+        {{- range $key, $value := .Values.console.nodeSelector }}
+        - "--console-node-selector={{ $key }}={{ $value }}"
         {{- end }}
         {{- if .Values.storage.storageClass.name }}
         - "--ephemeral-volume-class={{ .Values.storage.storageClass.name }}"

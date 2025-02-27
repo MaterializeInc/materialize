@@ -9,12 +9,9 @@
 
 //! An Azure Blob Storage implementation of [Blob] storage.
 
-use std::fmt::Debug;
-use std::sync::Arc;
-
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use azure_core::StatusCode;
+use azure_core::{ExponentialRetryOptions, RetryOptions, StatusCode, TransportOptions};
 use azure_identity::create_default_credential;
 use azure_storage::{prelude::*, CloudLocation, EMULATOR_ACCOUNT};
 use azure_storage_blobs::blob::operations::GetBlobResponse;
@@ -22,6 +19,9 @@ use azure_storage_blobs::prelude::*;
 use bytes::Bytes;
 use futures_util::stream::FuturesOrdered;
 use futures_util::StreamExt;
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
+use std::time::Duration;
 use tracing::{info, warn};
 use url::Url;
 use uuid::Uuid;
@@ -32,6 +32,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::lgbytes::{LgBytes, MetricsRegion};
 use mz_ore::metrics::MetricsRegistry;
 
+use crate::cfg::BlobKnobs;
 use crate::error::Error;
 use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
 use crate::metrics::S3BlobMetrics;
@@ -64,6 +65,7 @@ impl AzureBlobConfig {
         prefix: String,
         metrics: S3BlobMetrics,
         url: Url,
+        knobs: Box<dyn BlobKnobs>,
         cfg: Arc<ConfigSet>,
     ) -> Result<Self, Error> {
         let client = if account == EMULATOR_ACCOUNT {
@@ -75,6 +77,21 @@ impl AzureBlobConfig {
                 },
                 StorageCredentials::emulator(),
             )
+            .transport({
+                // Azure uses reqwest / hyper internally, but we specify a client explicitly to
+                // plumb through our timeouts.
+                TransportOptions::new(Arc::new(
+                    reqwest::ClientBuilder::new()
+                        .timeout(knobs.operation_attempt_timeout())
+                        .read_timeout(knobs.read_timeout())
+                        .connect_timeout(knobs.connect_timeout())
+                        .build()
+                        .expect("valid config for azure HTTP client"),
+                ))
+            })
+            .retry(RetryOptions::exponential(
+                ExponentialRetryOptions::default().max_total_elapsed(knobs.operation_timeout()),
+            ))
             .blob_service_client()
             .container_client(container)
         } else {
@@ -120,6 +137,34 @@ impl AzureBlobConfig {
 
     /// Returns a new [AzureBlobConfig] for use in unit tests.
     pub fn new_for_test() -> Result<Option<Self>, Error> {
+        struct TestBlobKnobs;
+        impl Debug for TestBlobKnobs {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("TestBlobKnobs").finish_non_exhaustive()
+            }
+        }
+        impl BlobKnobs for TestBlobKnobs {
+            fn operation_timeout(&self) -> Duration {
+                Duration::from_secs(30)
+            }
+
+            fn operation_attempt_timeout(&self) -> Duration {
+                Duration::from_secs(10)
+            }
+
+            fn connect_timeout(&self) -> Duration {
+                Duration::from_secs(5)
+            }
+
+            fn read_timeout(&self) -> Duration {
+                Duration::from_secs(5)
+            }
+
+            fn is_cc_active(&self) -> bool {
+                false
+            }
+        }
+
         let container_name = match std::env::var(Self::EXTERNAL_TESTS_AZURE_CONTAINER) {
             Ok(container) => container,
             Err(_) => {
@@ -139,6 +184,7 @@ impl AzureBlobConfig {
             prefix,
             metrics,
             Url::parse(&format!("http://localhost:40111/{}", container_name)).expect("valid url"),
+            Box::new(TestBlobKnobs),
             Arc::new(ConfigSet::default()),
         )?;
 

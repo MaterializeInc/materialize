@@ -326,7 +326,17 @@ RUN curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.3/deb-s3-
 RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH_GCC-2.17.2.zip" > awscli.zip \
     && unzip awscli.zip \
     && ./aws/install \
-    && rm -rf aws
+    && rm -rf aws awscli.zip
+
+# Install the gcloud CLI.
+
+RUN arch_gcloud=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm/" -e "s/amd64/x86_64/") \
+    && curl -fsSL "https://storage.googleapis.com/cloud-sdk-release/google-cloud-cli-507.0.0-linux-$arch_gcloud.tar.gz" > gcloud.tar.gz \
+    && tar -xzf gcloud.tar.gz -C /opt \
+    && rm gcloud.tar.gz \
+    && CLOUDSDK_CORE_DISABLE_PROMPTS=1 /opt/google-cloud-sdk/install.sh --path-update false \
+    && /opt/google-cloud-sdk/bin/gcloud config set disable_usage_reporting false \
+    && /opt/google-cloud-sdk/bin/gcloud components install gke-gcloud-auth-plugin
 
 # Install docs site dependencies. These are towards the end for the same reason
 # as the Python dependencies. These are only supported on x86_64 at the moment.
@@ -410,7 +420,7 @@ ENV TARGET_CC=$CC
 ENV TARGET_CXX=$CXX
 ENV TARGET_CXXSTDLIB=static=stdc++
 ENV TARGET_RANLIB=$RANLIB
-ENV PATH=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin:$PATH
+ENV PATH=/opt/google-cloud-sdk/bin:/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin:$PATH
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_DIR=/mnt/build

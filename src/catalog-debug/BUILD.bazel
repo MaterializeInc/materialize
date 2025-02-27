@@ -29,9 +29,10 @@ rust_binary(
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.130.3",
+    version = "0.130.4",
     deps = [
         "//src/adapter:mz_adapter",
+        "//src/adapter-types:mz_adapter_types",
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/cloud-resources:mz_cloud_resources",

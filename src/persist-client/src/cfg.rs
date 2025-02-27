@@ -36,6 +36,11 @@ use crate::operators::STORAGE_SOURCE_DECODE_FUEL;
 use crate::project::OPTIMIZE_IGNORED_DATA_DECODE;
 use crate::read::READER_LEASE_DURATION;
 
+const LTS_VERSIONS: &[Version] = &[
+    // 25.1
+    Version::new(0, 130, 0),
+];
+
 /// The tunable knobs for persist.
 ///
 /// Tuning inputs:
@@ -321,6 +326,10 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::batch::STRUCTURED_KEY_LOWER_LEN)
         .add(&crate::batch::MAX_RUN_LEN)
         .add(&crate::batch::MAX_RUNS)
+        .add(&BLOB_OPERATION_TIMEOUT)
+        .add(&BLOB_OPERATION_ATTEMPT_TIMEOUT)
+        .add(&BLOB_CONNECT_TIMEOUT)
+        .add(&BLOB_READ_TIMEOUT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
@@ -586,27 +595,54 @@ impl RetryParameters {
     }
 }
 
-// TODO: Replace with dynamic values when PersistConfig is integrated with LD
+pub(crate) const BLOB_OPERATION_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_operation_timeout",
+    Duration::from_secs(180),
+    "Maximum time allowed for a network call, including retry attempts.",
+);
+
+pub(crate) const BLOB_OPERATION_ATTEMPT_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_operation_attempt_timeout",
+    Duration::from_secs(90),
+    "Maximum time allowed for a single network call.",
+);
+
+pub(crate) const BLOB_CONNECT_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_connect_timeout",
+    Duration::from_secs(7),
+    "Maximum time to wait for a socket connection to be made.",
+);
+
+pub(crate) const BLOB_READ_TIMEOUT: Config<Duration> = Config::new(
+    "persist_blob_read_timeout",
+    Duration::from_secs(10),
+    "Maximum time to wait to read the first byte of a response, including connection time.",
+);
+
 impl BlobKnobs for PersistConfig {
     fn operation_timeout(&self) -> Duration {
-        Duration::from_secs(180)
+        BLOB_OPERATION_TIMEOUT.get(self)
     }
 
     fn operation_attempt_timeout(&self) -> Duration {
-        Duration::from_secs(90)
+        BLOB_OPERATION_ATTEMPT_TIMEOUT.get(self)
     }
 
     fn connect_timeout(&self) -> Duration {
-        Duration::from_secs(7)
+        BLOB_CONNECT_TIMEOUT.get(self)
     }
 
     fn read_timeout(&self) -> Duration {
-        Duration::from_secs(10)
+        BLOB_READ_TIMEOUT.get(self)
     }
 
     fn is_cc_active(&self) -> bool {
         self.is_cc_active
     }
+}
+
+pub fn check_data_version(code_version: &Version, data_version: &Version) -> Result<(), String> {
+    check_data_version_with_lts_versions(code_version, data_version, LTS_VERSIONS)
 }
 
 // If persist gets some encoded ProtoState from the future (e.g. two versions of
@@ -633,7 +669,44 @@ impl BlobKnobs for PersistConfig {
 // data we read is going to be because we fetched it using a pointer stored in
 // some persist state. If we can handle the state, we can handle the blobs it
 // references, too.
-pub fn check_data_version(code_version: &Version, data_version: &Version) -> Result<(), String> {
+pub(crate) fn check_data_version_with_lts_versions(
+    code_version: &Version,
+    data_version: &Version,
+    lts_versions: &[Version],
+) -> Result<(), String> {
+    // Allow upgrades specifically between consecutive LTS releases.
+    let base_code_version = Version {
+        patch: 0,
+        ..code_version.clone()
+    };
+    let base_data_version = Version {
+        patch: 0,
+        ..data_version.clone()
+    };
+    if data_version >= code_version {
+        for window in lts_versions.windows(2) {
+            if base_code_version == window[0] && base_data_version <= window[1] {
+                return Ok(());
+            }
+        }
+
+        if let Some(last) = lts_versions.last() {
+            if base_code_version == *last
+                // kind of arbitrary, but just ensure we don't accidentally
+                // upgrade too far (the previous check should ensure that a
+                // new version won't take over from a too-old previous
+                // version, but we want to make sure the other side also
+                // doesn't get confused)
+                && base_data_version
+                    .minor
+                    .saturating_sub(base_code_version.minor)
+                    < 40
+            {
+                return Ok(());
+            }
+        }
+    }
+
     // Allow one minor version of forward compatibility. We could avoid the
     // clone with some nested comparisons of the semver fields, but this code
     // isn't particularly performance sensitive and I find this impl easier to
