@@ -1856,8 +1856,12 @@ impl Coordinator {
             }
         }
 
-        // Inform the controllers about their initial configuration.
         let system_config = self.catalog().system_config();
+
+        // Inform metrics about the initial system configuration.
+        mz_metrics::update_dyncfg(&system_config.dyncfg_updates());
+
+        // Inform the controllers about their initial configuration.
         let compute_config = flags::compute_config(system_config);
         let storage_config = flags::storage_config(system_config);
         let scheduling_config = flags::orchestrator_scheduling_config(system_config);

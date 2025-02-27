@@ -2223,6 +2223,11 @@ impl SystemVars {
         name == MAX_RESULT_SIZE.name() || self.is_dyncfg_var(name) || is_tracing_var(name)
     }
 
+    /// Returns whether the named variable is a metrics configuration parameter
+    pub fn is_metrics_config_var(&self, name: &str) -> bool {
+        self.is_dyncfg_var(name)
+    }
+
     /// Returns whether the named variable is a storage configuration parameter.
     pub fn is_storage_config_var(&self, name: &str) -> bool {
         name == PG_SOURCE_CONNECT_TIMEOUT.name()
