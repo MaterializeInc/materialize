@@ -135,22 +135,7 @@ node instance type, etc.), see the
 
 1. Open a Terminal window.
 
-1. Clone the [Materialize's sample Terraform
-   repo](https://github.com/MaterializeInc/terraform-azurerm-materialize) and
-   checkout the `v0.1.2` tag.
-
-   {{< tabs >}}
-   {{< tab "Clone via SSH" >}}
-   ```bash
-   git clone --depth 1 -b v0.1.2 git@github.com:MaterializeInc/terraform-azurerm-materialize.git
-   ```
-   {{< /tab >}}
-   {{< tab "Clone via HTTPS" >}}
-   ```bash
-   git clone --depth 1 -b v0.1.2 https://github.com/MaterializeInc/terraform-azurerm-materialize.git
-   ```
-   {{< /tab >}}
-   {{< /tabs >}}
+{{% self-managed/versions/step-clone-azure-terraform-repo %}}
 
 1. Go to the `examples/simple` folder in the Materialize Terraform repo
    directory.
