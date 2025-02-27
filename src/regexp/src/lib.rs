@@ -97,6 +97,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn test_regexp_split_array() {
         // Expected outputs generated from postgres.
         struct TestCase {
