@@ -72,19 +72,20 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    minikube start
    ```
 
-1. Add labels `materialize.cloud/disk=true` and
-   `workload=materialize-instance` to the node.
+1. Add labels `materialize.cloud/disk=true` and `workload=materialize-instance`
+   to the `minikube` node (in this example, named `minikube`).
+
+   Get all nodes and their labels:
 
    ```shell
    kubectl get nodes --show-labels
    ```
 
-   Add the labels to the node, substituting `<node-name>` with the name of the
-   node (e.g., `minikube`).
+   Add the labels to the node (in this example, `minikube`):
 
    ```shell
-   kubectl label node <node-name> materialize.cloud/disk=true
-   kubectl label node <node-name> workload=materialize-instance
+   kubectl label node minikube materialize.cloud/disk=true
+   kubectl label node minikube workload=materialize-instance
    ```
 
    Verify that the labels were successfully applied by running the following command again:
@@ -125,13 +126,13 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
       ```none
       NAME                                           READY   STATUS    RESTARTS   AGE
-      pod/my-materialize-operator-669d674ccf-h5842   1/1     Running   0          12m
+      pod/my-materialize-operator-7c75785df9-6cn88   1/1     Running   0          9s
 
       NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
-      deployment.apps/my-materialize-operator   1/1     1            1           12m
+      deployment.apps/my-materialize-operator   1/1     1            1           9s
 
       NAME                                                 DESIRED   CURRENT         READY   AGE
-      replicaset.apps/my-materialize-operator-669d674ccf   1         1               1       12m
+      replicaset.apps/my-materialize-operator-7c75785df9   1         1               1       9s
       ```
 
       If you run into an error during deployment, refer to the
@@ -151,6 +152,35 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
         ```shell
         kubectl apply -f sample-minio.yaml
         ```
+
+    1. Verify the installation and check the status:
+
+       ```shell
+       kubectl get all -n materialize
+       ```
+
+       Wait for the components to be ready and in the `Running` state:
+
+       ```none
+       NAME                                           READY   STATUS    RESTARTS   AGE
+       pod/minio-777db75dd4-7cd77                     1/1     Running   0          30s
+       pod/my-materialize-operator-7c75785df9-6cn88   1/1     Running   0          88s
+       pod/postgres-55fbcd88bf-zkwvz                  1/1     Running   0          34s
+
+       NAME               TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+       service/minio      ClusterIP   10.98.114.67    <none>        9000/TCP   30s
+       service/postgres   ClusterIP   10.98.144.251   <none>        5432/TCP   34s
+
+       NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
+       deployment.apps/minio                     1/1     1            1           30s
+       deployment.apps/my-materialize-operator   1/1     1            1           88s
+       deployment.apps/postgres                  1/1     1            1           34s
+
+       NAME                                                 DESIRED   CURRENT          READY   AGE
+       replicaset.apps/minio-777db75dd4                     1         1                1       30s
+       replicaset.apps/my-materialize-operator-7c75785df9   1         1                1       88s
+       replicaset.apps/postgres-55fbcd88bf                  1         1                1       34s
+       ```
 
 1. Install the metrics service to the `kube-system` namespace.
 
@@ -192,7 +222,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
       ```none
       NAME                             READY   STATUS    RESTARTS   AGE
-      metrics-server-89dfdc559-tgvtg   1/1     Running   0          14m
+      metrics-server-89dfdc559-jt94n   1/1     Running   0          14m
       ```
 
 1. Install Materialize into a new `materialize-environment` namespace:
@@ -212,43 +242,36 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
        Wait for the components to be ready and in the `Running` state.
 
-
        ```none
-       NAME                                             READY   STATUS      RESTARTS   AGE
-       pod/mzk7x050omzi-balancerd-5b99dff555-7qltf      1/1     Running     0          19s
-       pod/mzk7x050omzi-cluster-s1-replica-s1-gen-1-0   1/1     Running     0          22s
-       pod/mzk7x050omzi-cluster-s2-replica-s2-gen-1-0   1/1     Running     0          22s
-       pod/mzk7x050omzi-cluster-s3-replica-s3-gen-1-0   1/1     Running     0          22s
-       pod/mzk7x050omzi-cluster-u1-replica-u1-gen-1-0   1/1     Running     0          22s
-       pod/mzk7x050omzi-console-8c45c4b95-8ng29         1/1     Running     0          12s
-       pod/mzk7x050omzi-console-8c45c4b95-jwj6c         1/1     Running     0          12s
-       pod/mzk7x050omzi-environmentd-1-0                1/1     Running     0          36s
+       NAME                                             READY   STATUS    RESTARTS          AGE
+       pod/mz10wiu7fyr7-balancerd-fddc4bd7c-lwqmp       1/1     Running   0                 19s
+       pod/mz10wiu7fyr7-cluster-s2-replica-s1-gen-1-0   1/1     Running   0                 26s
+       pod/mz10wiu7fyr7-cluster-u1-replica-u1-gen-1-0   1/1     Running   0                 25s
+       pod/mz10wiu7fyr7-console-6cbcd997dc-95tf2        1/1     Running   0                 12s
+       pod/mz10wiu7fyr7-console-6cbcd997dc-bbm5h        1/1     Running   0                 12s
+       pod/mz10wiu7fyr7-environmentd-1-0                1/1     Running   0                 32s
 
-       NAME                                               TYPE          CLUSTER-IP   EXTERNAL-IP   PORT(S)                                          AGE
-       service/mzk7x050omzi-balancerd                     ClusterIP     None         <none>        6876/TCP,6875/TCP                                19s
-       service/mzk7x050omzi-cluster-s1-replica-s1-gen-1   ClusterIP     None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP     22s
-       service/mzk7x050omzi-cluster-s2-replica-s2-gen-1   ClusterIP     None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP     22s
-       service/mzk7x050omzi-cluster-s3-replica-s3-gen-1   ClusterIP     None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP     22s
-       service/mzk7x050omzi-cluster-u1-replica-u1-gen-1   ClusterIP     None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP     22s
-       service/mzk7x050omzi-console                       ClusterIP     None         <none>        8080/TCP                                         12s
-       service/mzk7x050omzi-environmentd                  ClusterIP     None         <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP              19s
-       service/mzk7x050omzi-environmentd-1                ClusterIP     None         <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP              36s
-       service/mzk7x050omzi-persist-pubsub-1              ClusterIP     None         <none>        6879/TCP                                         36s
+       NAME                                               TYPE        CLUSTER-IP          EXTERNAL-IP   PORT(S)                                        AGE
+       service/mz10wiu7fyr7-balancerd                     ClusterIP   None                <none>        6876/TCP,6875/TCP                              19s
+       service/mz10wiu7fyr7-cluster-s2-replica-s1-gen-1   ClusterIP   None                <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   26s
+       service/mz10wiu7fyr7-cluster-u1-replica-u1-gen-1   ClusterIP   None                <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   26s
+       service/mz10wiu7fyr7-console                       ClusterIP   None                <none>        8080/TCP                                       12s
+       service/mz10wiu7fyr7-environmentd                  ClusterIP   None                <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            19s
+       service/mz10wiu7fyr7-environmentd-1                ClusterIP   None                <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            32s
+       service/mz10wiu7fyr7-persist-pubsub-1              ClusterIP   None                <none>        6879/TCP                                       32s
 
-       NAME                                     READY   UP-TO-DATE   AVAILABLE     AGE
-       deployment.apps/mzk7x050omzi-balancerd   1/1     1            1             19s
-       deployment.apps/mzk7x050omzi-console     2/2     2            2             12s
+       NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
+       deployment.apps/mz10wiu7fyr7-balancerd   1/1     1            1           19s
+       deployment.apps/mz10wiu7fyr7-console     2/2     2            2           12s
 
-       NAME                                                DESIRED   CURRENT     READY   AGE
-       replicaset.apps/mzk7x050omzi-balancerd-5b99dff555   1         1           1       19s
-       replicaset.apps/mzk7x050omzi-console-8c45c4b95      2         2           2       12s
+       NAME                                               DESIRED   CURRENT   READY          AGE
+       replicaset.apps/mz10wiu7fyr7-balancerd-fddc4bd7c   1         1         1              19s
+       replicaset.apps/mz10wiu7fyr7-console-6cbcd997dc    2         2         2              12s
 
        NAME                                                        READY   AGE
-       statefulset.apps/mzk7x050omzi-cluster-s1-replica-s1-gen-1   1/1     22s
-       statefulset.apps/mzk7x050omzi-cluster-s2-replica-s2-gen-1   1/1     22s
-       statefulset.apps/mzk7x050omzi-cluster-s3-replica-s3-gen-1   1/1     22s
-       statefulset.apps/mzk7x050omzi-cluster-u1-replica-u1-gen-1   1/1     22s
-       statefulset.apps/mzk7x050omzi-environmentd-1                1/1     36s
+       statefulset.apps/mz10wiu7fyr7-cluster-s2-replica-s1-gen-1   1/1     26s
+       statefulset.apps/mz10wiu7fyr7-cluster-u1-replica-u1-gen-1   1/1     26s
+       statefulset.apps/mz10wiu7fyr7-environmentd-1                1/1     32s
        ```
 
        If you run into an error during deployment, refer to the
@@ -260,14 +283,15 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
       ```none
       NAME                            TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)       AGE
-      service/mzk7x050omzi-console    ClusterIP   None           <none>        8080/TCP      12s
+      service/mz10wiu7fyr7-console    ClusterIP   None            <none>        8080/TCP      12s
       ```
 
-   1. Forward the Materialize Console service to your local machine:
+   1. Forward the Materialize Console service to your local machine
+      (substitute your service name for `mz10wiu7fyr7-console`):
 
       ```shell
       while true;
-      do kubectl port-forward svc/mzlvmx9h6dpx-console 8080:8080 -n materialize-environment 2>&1 |
+      do kubectl port-forward svc/mz10wiu7fyr7-console 8080:8080 -n materialize-environment 2>&1 |
       grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
       done;
       ```
@@ -288,8 +312,6 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
    1. Open a browser to
       [http://localhost:8080](http://localhost:8080).
-
-      ![Image of self-managed Materialize Console running on local minikube](/images/self-managed/self-managed-console-minkiube.png)
 
    {{< tip >}}
 

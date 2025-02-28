@@ -178,13 +178,13 @@ node instance type, etc.), see the
 1. Create a `terraform.tfvars` file (you can copy from the
    `terraform.tfvars.example` file) and specify:
 
-   - The prefix for the resources. Prefix must be between 3-17 characters,
-     containing only alphanumeric characters and dashes.
+   - The prefix for the resources. Prefix has a maximum of 10 characters and
+     contains only alphanumeric characters and dashes.
 
    -  The location for the AKS cluster.
 
    ```bash
-   prefix="enter-prefix"  //  3-17 characters, containing only alphanumeric characters and dashes; e.g. my-demo-dev
+   prefix="enter-prefix"  //  maximum 10 characters, containing only alphanumeric characters and dashes; e.g. my-demo
    location="eastus2"
    ```
 
@@ -216,7 +216,7 @@ node instance type, etc.), see the
    aks_cluster = <sensitive>
    connection_strings = <sensitive>
    kube_config = <sensitive>
-   resource_group_name = "my-demo-dev-rg"
+   resource_group_name = "my-demo-rg"
    ```
 
 1. Configure `kubectl` to connect to your cluster:
@@ -245,13 +245,13 @@ node instance type, etc.), see the
 
    ```none
    NAME                                                              READY       STATUS    RESTARTS   AGE
-   pod/materialize-mz-simple-materialize-operator-74d8f549d6-lkjjf   1/1         Running   0          36m
+   pod/materialize-my-demo-materialize-operator-74d8f549d6-lkjjf   1/1         Running   0          36m
 
    NAME                                                         READY       UP-TO-DATE   AVAILABLE   AGE
-   deployment.apps/materialize-mz-simple-materialize-operator   1/1         1            1           36m
+   deployment.apps/materialize-my-demo-materialize-operator   1/1         1            1           36m
 
    NAME                                                                        DESIRED   CURRENT   READY   AGE
-   replicaset.apps/materialize-mz-simple-materialize-operator-74d8f549d6       1         1         1       36m
+   replicaset.apps/materialize-my-demo-materialize-operator-74d8f549d6       1         1         1       36m
     ```
 
 1. Once the Materialize operator is deployed and running, you can deploy the
@@ -310,7 +310,7 @@ node instance type, etc.), see the
    aks_cluster = <sensitive>
    connection_strings = <sensitive>
    kube_config = <sensitive>
-   resource_group_name = "my-demo-dev-rg"
+   resource_group_name = "my-demo-rg"
    ```
 
 1. Verify the installation and check the status:
@@ -323,44 +323,38 @@ node instance type, etc.), see the
 
    ```none
    NAME                                             READY   STATUS      RESTARTS      AGE
-   pod/create-db-demo-db-wxq9k                      0/1     Completed   0             2m37s
-   pod/mzypt46hq3ei-balancerd-6946cdcbf6-5lrjk      1/1     Running     0             2m10s
-   pod/mzypt46hq3ei-cluster-s1-replica-s1-gen-1-0   1/1     Running     0             2m12s
-   pod/mzypt46hq3ei-cluster-s2-replica-s2-gen-1-0   1/1     Running     0             2m12s
-   pod/mzypt46hq3ei-cluster-s3-replica-s3-gen-1-0   1/1     Running     0             2m12s
-   pod/mzypt46hq3ei-cluster-u1-replica-u1-gen-1-0   1/1     Running     0             2m12s
-   pod/mzypt46hq3ei-console-86b57b7688-8tqqf        1/1     Running     0             2m
-   pod/mzypt46hq3ei-console-86b57b7688-sqs47        1/1     Running     0             2m
-   pod/mzypt46hq3ei-environmentd-1-0                1/1     Running     0             2m20s
+   pod/create-db-demo-db-pw7mj                      0/1     Completed   0             39s
+   pod/mzl88mc8f6if-balancerd-b66f4c485-rnvxj       1/1     Running     0             15s
+   pod/mzl88mc8f6if-cluster-s2-replica-s1-gen-1-0   1/1     Running     0             18s
+   pod/mzl88mc8f6if-cluster-u1-replica-u1-gen-1-0   1/1     Running     0             18s
+   pod/mzl88mc8f6if-console-689565cfcc-4dkzf        1/1     Running     0             7s
+   pod/mzl88mc8f6if-console-689565cfcc-g2bqv        1/1     Running     0             7s
+   pod/mzl88mc8f6if-environmentd-1-0                1/1     Running     0             23s
 
    NAME                                               TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                                        AGE
-   service/mzypt46hq3ei-balancerd                     ClusterIP   None            <none>        6876/TCP,6875/TCP                              2m10s
-   service/mzypt46hq3ei-cluster-s1-replica-s1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   2m12s
-   service/mzypt46hq3ei-cluster-s2-replica-s2-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   2m12s
-   service/mzypt46hq3ei-cluster-s3-replica-s3-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   2m12s
-   service/mzypt46hq3ei-cluster-u1-replica-u1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   2m12s
-   service/mzypt46hq3ei-console                       ClusterIP   None            <none>        8080/TCP                                       2m
-   service/mzypt46hq3ei-environmentd                  ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            2m10s
-   service/mzypt46hq3ei-environmentd-1                ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            2m20s
-   service/mzypt46hq3ei-persist-pubsub-1              ClusterIP   None            <none>        6879/TCP                                       2m20s
+   service/mzl88mc8f6if-balancerd                     ClusterIP   None            <none>        6876/TCP,6875/TCP                              15s
+   service/mzl88mc8f6if-cluster-s2-replica-s1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   18s
+   service/mzl88mc8f6if-cluster-u1-replica-u1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   18s
+   service/mzl88mc8f6if-console                       ClusterIP   None            <none>        8080/TCP                                       7s
+   service/mzl88mc8f6if-environmentd                  ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            15s
+   service/mzl88mc8f6if-environmentd-1                ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            23s
+   service/mzl88mc8f6if-persist-pubsub-1              ClusterIP   None            <none>        6879/TCP                                       23s
 
    NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
-   deployment.apps/mzypt46hq3ei-balancerd   1/1     1            1           2m10s
-   deployment.apps/mzypt46hq3ei-console     2/2     2            2           2m
+   deployment.apps/mzl88mc8f6if-balancerd   1/1     1            1           15s
+   deployment.apps/mzl88mc8f6if-console     2/2     2            2           7s
 
-   NAME                                                DESIRED   CURRENT   READY      AGE
-   replicaset.apps/mzypt46hq3ei-balancerd-6946cdcbf6   1         1         1          2m10s
-   replicaset.apps/mzypt46hq3ei-console-86b57b7688     2         2         2          2m
+   NAME                                               DESIRED   CURRENT   READY      AGE
+   replicaset.apps/mzl88mc8f6if-balancerd-b66f4c485   1         1         1          16s
+   replicaset.apps/mzl88mc8f6if-console-689565cfcc    2         2         2          8s
 
    NAME                                                        READY   AGE
-   statefulset.apps/mzypt46hq3ei-cluster-s1-replica-s1-gen-1   1/1     2m12s
-   statefulset.apps/mzypt46hq3ei-cluster-s2-replica-s2-gen-1   1/1     2m12s
-   statefulset.apps/mzypt46hq3ei-cluster-s3-replica-s3-gen-1   1/1     2m12s
-   statefulset.apps/mzypt46hq3ei-cluster-u1-replica-u1-gen-1   1/1     2m12s
-   statefulset.apps/mzypt46hq3ei-environmentd-1                1/1     2m20s
+   statefulset.apps/mzl88mc8f6if-cluster-s2-replica-s1-gen-1   1/1     19s
+   statefulset.apps/mzl88mc8f6if-cluster-u1-replica-u1-gen-1   1/1     19s
+   statefulset.apps/mzl88mc8f6if-environmentd-1                1/1     24s
 
    NAME                          STATUS     COMPLETIONS   DURATION   AGE
-   job.batch/create-db-demo-db   Complete   1/1           15s        2m37s
+   job.batch/create-db-demo-db   Complete   1/1           10s        40s
    ```
 
 1. Open the Materialize Console in your browser:
@@ -369,15 +363,15 @@ node instance type, etc.), see the
 
       ```none
       NAME                           TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
-      service/mzypt46hq3ei-console   ClusterIP   None         <none>        8080/TCP   2m
+      service/mzl88mc8f6if-console   ClusterIP   None         <none>        8080/TCP   7s
       ```
 
    1. Forward the Materialize Console service to your local machine (substitute
-      your service name for `mzypt46hq3ei-console`):
+      your service name for `mzl88mc8f6if-console`):
 
       ```shell
       while true;
-      do kubectl port-forward svc/mzypt46hq3ei-console 8080:8080 -n materialize-environment 2>&1 |
+      do kubectl port-forward svc/mzl88mc8f6if-console 8080:8080 -n materialize-environment 2>&1 |
       grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
       done;
       ```

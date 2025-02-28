@@ -269,7 +269,7 @@ node instance type, etc.), see the
 1. Configure `kubectl` to connect to your EKS cluster, specifying:
 
    - `<cluster name>`. Your cluster name has the form `<your prefix>-gke`; e.g.,
-     mz-simple-gke.
+     `mz-simple-gke`.
 
    - `<region>`. By default, the example Terraform module uses the `us-central1`
      region.
@@ -391,44 +391,38 @@ node instance type, etc.), see the
 
    ```none
    NAME                                             READY   STATUS      RESTARTS      AGE
-   pod/create-db-demo-db-bhkbm                      0/1     Completed   0             32m
-   pod/mzqtg81ev0ht-balancerd-564fccb868-l6x42      1/1     Running     0             104s
-   pod/mzqtg81ev0ht-cluster-s1-replica-s1-gen-1-0   1/1     Running     0             102s
-   pod/mzqtg81ev0ht-cluster-s2-replica-s2-gen-1-0   1/1     Running     0             102s
-   pod/mzqtg81ev0ht-cluster-s3-replica-s3-gen-1-0   1/1     Running     0             101s
-   pod/mzqtg81ev0ht-cluster-u1-replica-u1-gen-1-0   1/1     Running     0             101s
-   pod/mzqtg81ev0ht-console-56f4496fdc-r7jdr        1/1     Running     0             93s
-   pod/mzqtg81ev0ht-console-56f4496fdc-v2z5n        1/1     Running     0             93s
-   pod/mzqtg81ev0ht-environmentd-1-0                1/1     Running     0             111s
+   pod/create-db-demo-db-jcpnn                      0/1     Completed   0             2m11s
+   pod/mzpzk74xji8b-balancerd-669988bb94-5vbps      1/1     Running     0             98s
+   pod/mzpzk74xji8b-cluster-s2-replica-s1-gen-1-0   1/1     Running     0             96s
+   pod/mzpzk74xji8b-cluster-u1-replica-u1-gen-1-0   1/1     Running     0             96s
+   pod/mzpzk74xji8b-console-5dc9f87498-hqxdw        1/1     Running     0             91s
+   pod/mzpzk74xji8b-console-5dc9f87498-x95qj        1/1     Running     0             91s
+   pod/mzpzk74xji8b-environmentd-1-0                1/1     Running     0             113s
 
    NAME                                               TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                                        AGE
-   service/mzqtg81ev0ht-balancerd                     ClusterIP   None            <none>        6876/TCP,6875/TCP                              104s
-   service/mzqtg81ev0ht-cluster-s1-replica-s1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   102s
-   service/mzqtg81ev0ht-cluster-s2-replica-s2-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   102s
-   service/mzqtg81ev0ht-cluster-s3-replica-s3-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   102s
-   service/mzqtg81ev0ht-cluster-u1-replica-u1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   101s
-   service/mzqtg81ev0ht-console                       ClusterIP   None            <none>        8080/TCP                                       93s
-   service/mzqtg81ev0ht-environmentd                  ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            104s
-   service/mzqtg81ev0ht-environmentd-1                ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            111s
-   service/mzqtg81ev0ht-persist-pubsub-1              ClusterIP   None            <none>        6879/TCP                                       111s
+   service/mzpzk74xji8b-balancerd                     ClusterIP   None            <none>        6876/TCP,6875/TCP                              98s
+   service/mzpzk74xji8b-cluster-s2-replica-s1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   97s
+   service/mzpzk74xji8b-cluster-u1-replica-u1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   96s
+   service/mzpzk74xji8b-console                       ClusterIP   None            <none>        8080/TCP                                       91s
+   service/mzpzk74xji8b-environmentd                  ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            99s
+   service/mzpzk74xji8b-environmentd-1                ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            113s
+   service/mzpzk74xji8b-persist-pubsub-1              ClusterIP   None            <none>        6879/TCP                                       113s
 
    NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
-   deployment.apps/mzqtg81ev0ht-balancerd   1/1     1            1           104s
-   deployment.apps/mzqtg81ev0ht-console     2/2     2            2           93s
+   deployment.apps/mzpzk74xji8b-balancerd   1/1     1            1           98s
+   deployment.apps/mzpzk74xji8b-console     2/2     2            2           91s
 
    NAME                                                DESIRED   CURRENT   READY      AGE
-   replicaset.apps/mzqtg81ev0ht-balancerd-564fccb868   1         1         1          104s
-   replicaset.apps/mzqtg81ev0ht-console-56f4496fdc     2         2         2          93s
+   replicaset.apps/mzpzk74xji8b-balancerd-669988bb94   1         1         1          98s
+   replicaset.apps/mzpzk74xji8b-console-5dc9f87498     2         2         2          91s
 
    NAME                                                        READY   AGE
-   statefulset.apps/mzqtg81ev0ht-cluster-s1-replica-s1-gen-1   1/1     102s
-   statefulset.apps/mzqtg81ev0ht-cluster-s2-replica-s2-gen-1   1/1     102s
-   statefulset.apps/mzqtg81ev0ht-cluster-s3-replica-s3-gen-1   1/1     102s
-   statefulset.apps/mzqtg81ev0ht-cluster-u1-replica-u1-gen-1   1/1     101s
-   statefulset.apps/mzqtg81ev0ht-environmentd-1                1/1     111s
+   statefulset.apps/mzpzk74xji8b-cluster-s2-replica-s1-gen-1   1/1     97s
+   statefulset.apps/mzpzk74xji8b-cluster-u1-replica-u1-gen-1   1/1     96s
+   statefulset.apps/mzpzk74xji8b-environmentd-1                1/1     113s
 
    NAME                          STATUS     COMPLETIONS   DURATION   AGE
-   job.batch/create-db-demo-db   Complete   1/1           14s        32m
+   job.batch/create-db-demo-db   Complete   1/1           13s        2m11s
    ```
 
 1. Open the Materialize Console in your browser:
@@ -437,15 +431,15 @@ node instance type, etc.), see the
 
       ```none
       NAME                           TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
-      service/mzqtg81ev0ht-console   ClusterIP   None         <none>        8080/TCP   93s
+      service/mzpzk74xji8b-console   ClusterIP   None         <none>        8080/TCP   91s
       ```
 
    1. Forward the Materialize Console service to your local machine (substitute
-      your service name for `mzqtg81ev0ht-console`):
+      your service name for `mzpzk74xji8b-console`):
 
       ```shell
       while true;
-      do kubectl port-forward svc/mzqtg81ev0ht-console 8080:8080 -n materialize-environment 2>&1 |
+      do kubectl port-forward svc/mzpzk74xji8b-console 8080:8080 -n materialize-environment 2>&1 |
       grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
       done;
       ```

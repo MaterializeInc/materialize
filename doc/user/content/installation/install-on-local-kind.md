@@ -67,19 +67,20 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    kind create cluster
    ```
 
-1. Add labels `materialize.cloud/disk=true` and
-   `workload=materialize-instance` to the node.
+1. Add labels `materialize.cloud/disk=true` and `workload=materialize-instance`
+   to the `kind` node (in this example, the `kind-control-plane` node).
+
+   Get all nodes and their labels:
 
    ```shell
    kubectl get nodes --show-labels
    ```
 
-   Add the labels to the node, substituting `<node-name>` with the name of the
-   node (e.g., `kind-control-plane`).
+   Add the labels to the node  (in this example, `kind-control-plane`):
 
    ```shell
-   kubectl label node <node-name> materialize.cloud/disk=true
-   kubectl label node <node-name> workload=materialize-instance
+   kubectl label node kind-control-plane materialize.cloud/disk=true
+   kubectl label node kind-control-plane workload=materialize-instance
    ```
 
    Verify that the labels were successfully applied by running the following command again:
@@ -120,13 +121,13 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
       ```none
       NAME                                           READY   STATUS    RESTARTS   AGE
-      pod/my-materialize-operator-776b98455b-w9kkl   1/1     Running   0          6s
+      pod/my-materialize-operator-6c4c7d6fc9-hbzvr   1/1     Running   0          16s
 
       NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
-      deployment.apps/my-materialize-operator   1/1     1            1           6s
+      deployment.apps/my-materialize-operator   1/1     1            1           16s
 
-      NAME                                                 DESIRED   CURRENT   READY   AGE
-      replicaset.apps/my-materialize-operator-776b98455b   1         1         1       6s
+      NAME                                                 DESIRED   CURRENT         READY   AGE
+      replicaset.apps/my-materialize-operator-6c4c7d6fc9   1         1               1       16s
       ```
 
       If you run into an error during deployment, refer to the
@@ -146,6 +147,35 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
         ```shell
         kubectl apply -f sample-minio.yaml
         ```
+
+    1. Verify the installation and check the status:
+
+       ```shell
+       kubectl get all -n materialize
+       ```
+
+       Wait for the components to be ready and in the `Running` state:
+
+       ```none
+       NAME                                           READY   STATUS     RESTARTS   AGE
+       pod/minio-777db75dd4-zcl89                     1/1     Running    0          84s
+       pod/my-materialize-operator-6c4c7d6fc9-hbzvr   1/1     Running    0          107s
+       pod/postgres-55fbcd88bf-b4kdv                  1/1     Running    0          86s
+
+       NAME               TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+       service/minio      ClusterIP   10.96.51.9     <none>        9000/TCP   84s
+       service/postgres   ClusterIP   10.96.19.166   <none>        5432/TCP   86s
+
+       NAME                                      READY   UP-TO-DATE    AVAILABLE   AGE
+       deployment.apps/minio                     1/1     1             1           84s
+       deployment.apps/my-materialize-operator   1/1     1             1           107s
+       deployment.apps/postgres                  1/1     1             1           86s
+
+       NAME                                                 DESIRED    CURRENT         READY   AGE
+       replicaset.apps/minio-777db75dd4                     1          1               1       84s
+       replicaset.apps/my-materialize-operator-6c4c7d6fc9   1          1               1       107s
+       replicaset.apps/postgres-55fbcd88bf                  1          1               1       86s
+       ```
 
 1. Install the metrics service to the `kube-system` namespace.
 
@@ -187,7 +217,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
       ```none
       NAME                             READY   STATUS    RESTARTS   AGE
-      metrics-server-89dfdc559-tgvtg   1/1     Running   0          14m
+      metrics-server-89dfdc559-bq59m   1/1     Running   0          2m6s
       ```
 
 1. Install Materialize into a new `materialize-environment` namespace:
@@ -209,40 +239,34 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
        ```none
        NAME                                             READY   STATUS    RESTARTS   AGE
-       pod/mzlvmx9h6dpx-balancerd-f5c689b95-kjtzf       1/1     Running   0          45s
-       pod/mzlvmx9h6dpx-cluster-s1-replica-s1-gen-1-0   1/1     Running   0          51s
-       pod/mzlvmx9h6dpx-cluster-s2-replica-s2-gen-1-0   1/1     Running   0          51s
-       pod/mzlvmx9h6dpx-cluster-s3-replica-s3-gen-1-0   1/1     Running   0          51s
-       pod/mzlvmx9h6dpx-cluster-u1-replica-u1-gen-1-0   1/1     Running   0          51s
-       pod/mzlvmx9h6dpx-console-6b746b7d57-p24n4        1/1     Running   0          32s
-       pod/mzlvmx9h6dpx-console-6b746b7d57-qjs4p        1/1     Running   0          32s
-       pod/mzlvmx9h6dpx-environmentd-1-0                1/1     Running   0          60s
+       pod/mz32bsnzerqo-balancerd-756b65959c-6q9db      1/1     Running   0                 12s
+       pod/mz32bsnzerqo-cluster-s2-replica-s1-gen-1-0   1/1     Running   0                 14s
+       pod/mz32bsnzerqo-cluster-u1-replica-u1-gen-1-0   1/1     Running   0                 14s
+       pod/mz32bsnzerqo-console-6b7c975fb9-jkm8l        1/1     Running   0          5s
+       pod/mz32bsnzerqo-console-6b7c975fb9-z8g8f        1/1     Running   0          5s
+       pod/mz32bsnzerqo-environmentd-1-0                1/1     Running   0                 19s
 
-       NAME                                               TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)                                        AGE
-       service/mzlvmx9h6dpx-balancerd                     ClusterIP   None         <none>        6876/TCP,6875 TCP                              45s
-       service/mzlvmx9h6dpx-cluster-s1-replica-s1-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878 TCP   51s
-       service/mzlvmx9h6dpx-cluster-s2-replica-s2-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878 TCP   51s
-       service/mzlvmx9h6dpx-cluster-s3-replica-s3-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878 TCP   51s
-       service/mzlvmx9h6dpx-cluster-u1-replica-u1-gen-1   ClusterIP   None         <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878 TCP   51s
-       service/mzlvmx9h6dpx-console                       ClusterIP   None         <none>        8080 TCP                                       32s
-       service/mzlvmx9h6dpx-environmentd                  ClusterIP   None         <none>        6875/TCP,6876/TCP,6877/TCP,6878 TCP            45s
-       service/mzlvmx9h6dpx-environmentd-1                ClusterIP   None         <none>        6875/TCP,6876/TCP,6877/TCP,6878 TCP            60s
-       service/mzlvmx9h6dpx-persist-pubsub-1              ClusterIP   None         <none>        6879 TCP                                       60s
+       NAME                                               TYPE        CLUSTER-IP          EXTERNAL-IP   PORT(S)                                        AGE
+       service/mz32bsnzerqo-balancerd                     ClusterIP   None                <none>        6876/TCP,6875/TCP                              12s
+       service/mz32bsnzerqo-cluster-s2-replica-s1-gen-1   ClusterIP   None                <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   14s
+       service/mz32bsnzerqo-cluster-u1-replica-u1-gen-1   ClusterIP   None                <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   14s
+       service/mz32bsnzerqo-console                       ClusterIP   None                <none>        8080/TCP                                       5s
+       service/mz32bsnzerqo-environmentd                  ClusterIP   None                <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            12s
+       service/mz32bsnzerqo-environmentd-1                ClusterIP   None                <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            19s
+       service/mz32bsnzerqo-persist-pubsub-1              ClusterIP   None                <none>        6879/TCP                                       19s
 
        NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
-       deployment.apps/mzlvmx9h6dpx-balancerd   1/1     1            1           45s
-       deployment.apps/mzlvmx9h6dpx-console     2/2     2            2           32s
+       deployment.apps/mz32bsnzerqo-balancerd   1/1     1            1           12s
+       deployment.apps/mz32bsnzerqo-console     2/2     2            2           5s
 
-       NAME                                               DESIRED   CURRENT   READY   AGE
-       replicaset.apps/mzlvmx9h6dpx-balancerd-f5c689b95   1         1         1       45s
-       replicaset.apps/mzlvmx9h6dpx-console-6b746b7d57    2         2         2       32s
+       NAME                                                DESIRED   CURRENT   READY          AGE
+       replicaset.apps/mz32bsnzerqo-balancerd-756b65959c   1         1         1              12s
+       replicaset.apps/mz32bsnzerqo-console-6b7c975fb9     2         2         2              5s
 
        NAME                                                        READY   AGE
-       statefulset.apps/mzlvmx9h6dpx-cluster-s1-replica-s1-gen-1   1/1     51s
-       statefulset.apps/mzlvmx9h6dpx-cluster-s2-replica-s2-gen-1   1/1     51s
-       statefulset.apps/mzlvmx9h6dpx-cluster-s3-replica-s3-gen-1   1/1     51s
-       statefulset.apps/mzlvmx9h6dpx-cluster-u1-replica-u1-gen-1   1/1     51s
-       statefulset.apps/mzlvmx9h6dpx-environmentd-1                1/1     60s
+       statefulset.apps/mz32bsnzerqo-cluster-s2-replica-s1-gen-1   1/1     14s
+       statefulset.apps/mz32bsnzerqo-cluster-u1-replica-u1-gen-1   1/1     14s
+       statefulset.apps/mz32bsnzerqo-environmentd-1                1/1     19s
        ```
 
        If you run into an error during deployment, refer to the
@@ -253,16 +277,16 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    1. From the previous `kubectl` output, find the Materialize Console service.
 
       ```none
-      NAME                           TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
-      service/mzlvmx9h6dpx-console   ClusterIP   None         <none>        8080 TCP   32s
+      NAME                           TYPE        CLUSTER-IP   EXTERNAL-IP    PORT(S)    AGE
+      service/mz32bsnzerqo-console   ClusterIP   None         <none>        8080 TCP   5s
       ```
 
    1. Forward the Materialize Console service to your local machine (substitute
-      your service name for `mzlvmx9h6dpx-console`):
+      your service name for `mz32bsnzerqo-console`):
 
       ```shell
       while true;
-      do kubectl port-forward svc/mzlvmx9h6dpx-console 8080:8080 -n materialize-environment 2>&1 |
+      do kubectl port-forward svc/mz32bsnzerqo-console 8080:8080 -n materialize-environment 2>&1 |
       grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
       done;
       ```
@@ -283,8 +307,6 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
    1. Open a browser to
       [http://localhost:8080](http://localhost:8080).
-
-      ![Image of  self-managed Materialize Console running on local kind](/images/self-managed/self-managed-console-kind.png)
 
 
    {{< tip >}}
