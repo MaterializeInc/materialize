@@ -286,7 +286,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
       ```shell
       while true;
-      do kubectl port-forward svc/mz32bsnzerqo-console 8080:8080 -n materialize-environment 2>&1 |
+      do kubectl port-forward svc/mz32bsnzerqo-console 8080:8080 -n materialize-environment 2>&1 | tee /dev/stderr |
       grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
       done;
       ```
