@@ -75,7 +75,7 @@ rocksdb = { version = "0.22.0", default-features = false, features = ["snappy", 
 seahash = "4"
 serde = { version = "1.0.218", features = ["derive"] }
 serde_json = { version = "1.0.125" }
-serde_bytes = { version = "0.11.14" }
+serde_bytes = { version = "0.11.15" }
 sha2 = "0.10.6"
 timely = "0.18.1"
 tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "test-util"] }
