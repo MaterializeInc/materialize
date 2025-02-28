@@ -1322,6 +1322,7 @@ impl StorageState {
 
                     // Initialize shared frontier reporting.
                     for id in description.collection_ids() {
+                        tracing::info!(%id, "initializing frontier tracking for ingestion/export");
                         self.reported_frontiers
                             .entry(id)
                             .or_insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));
@@ -1388,6 +1389,9 @@ impl StorageState {
             }
             StorageCommand::AllowCompaction(list) => {
                 for (id, frontier) in list {
+                    if id.is_user() && frontier.is_empty() {
+                        tracing::info!(%id, "final AllowCompaction");
+                    }
                     match self.exports.get_mut(&id) {
                         Some(export_description) => {
                             // Update our knowledge of the `as_of`, in case we need to internally
@@ -1398,6 +1402,7 @@ impl StorageState {
                         // exports
                         None if self.reported_frontiers.contains_key(&id) => (),
                         None => {
+                            tracing::error!(%id, "final AllowCompaction doesn't match anything");
                             soft_panic_or_log!(
                                 "AllowCompaction command for non-existent {id}: {frontier:?}"
                             );
