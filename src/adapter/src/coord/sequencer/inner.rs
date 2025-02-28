@@ -3505,7 +3505,7 @@ impl Coordinator {
 
         // Re-resolve items in the altered statement
         // Parse statement.
-        let create_sink_stmt = match mz_sql::parse::parse(&plan.sink.create_sql)
+        let create_sink_stmt = match mz_sql::parse::parse(&plan.sink.create_sql, true)
             .expect("invalid create sink sql")
             .into_element()
             .ast
@@ -3692,7 +3692,7 @@ impl Coordinator {
 
         let inner = || -> Result<Connection, AdapterError> {
             // Parse statement.
-            let create_conn_stmt = match mz_sql::parse::parse(&cur_conn.create_sql)
+            let create_conn_stmt = match mz_sql::parse::parse(&cur_conn.create_sql, true)
                 .expect("invalid create sql persisted to catalog")
                 .into_element()
                 .ast
@@ -3740,7 +3740,7 @@ impl Coordinator {
             };
 
             // Parse statement.
-            let create_conn_stmt = match mz_sql::parse::parse(&plan.connection.create_sql)
+            let create_conn_stmt = match mz_sql::parse::parse(&plan.connection.create_sql, true)
                 .expect("invalid create sql persisted to catalog")
                 .into_element()
                 .ast
@@ -3958,7 +3958,7 @@ impl Coordinator {
 
         let create_sql_to_stmt_deps = |coord: &Coordinator, err_cx, create_source_sql| {
             // Parse statement.
-            let create_source_stmt = match mz_sql::parse::parse(create_source_sql)
+            let create_source_stmt = match mz_sql::parse::parse(create_source_sql, true)
                 .expect("invalid create sql persisted to catalog")
                 .into_element()
                 .ast

@@ -371,7 +371,7 @@ Issue a SQL query to get started. Need help?
         let mut session_client = self.startup(session).await?;
 
         // Parse the SQL statement.
-        let stmts = mz_sql::parse::parse(sql)?;
+        let stmts = mz_sql::parse::parse(sql, true)?;
         if stmts.len() != 1 {
             bail!("must supply exactly one query");
         }

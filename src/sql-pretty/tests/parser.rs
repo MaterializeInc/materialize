@@ -55,7 +55,7 @@ fn verify_pretty_expr(expr: &str) {
 }
 
 fn verify_pretty_statement(stmt: &str) {
-    let original = match parse_statements(stmt) {
+    let original = match parse_statements(stmt, true) {
         Ok(stmt) => match stmt.into_iter().next() {
             Some(stmt) => stmt,
             None => return,
@@ -65,7 +65,7 @@ fn verify_pretty_statement(stmt: &str) {
     for n in &[1, 40, 1000000] {
         let n = *n;
         let pretty1 = to_pretty(&original.ast, n);
-        let prettied = parse_statements(&pretty1)
+        let prettied = parse_statements(&pretty1, true)
             .unwrap_or_else(|_| panic!("could not parse: {pretty1}, original: {stmt}"))
             .into_iter()
             .next()

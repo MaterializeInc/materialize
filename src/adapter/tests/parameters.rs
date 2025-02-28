@@ -109,7 +109,7 @@ async fn test_parameter_type_inference() {
     Catalog::with_debug(|catalog| async move {
         let conn_catalog = catalog.for_system_session();
         for (sql, types) in test_cases {
-            let stmt = mz_sql::parse::parse(sql).unwrap().into_element().ast;
+            let stmt = mz_sql::parse::parse(sql, true).unwrap().into_element().ast;
             let (stmt, _) = mz_sql::names::resolve(&conn_catalog, stmt).unwrap();
             let desc =
                 mz_sql::plan::describe(&PlanContext::zero(), &conn_catalog, stmt, &[]).unwrap();

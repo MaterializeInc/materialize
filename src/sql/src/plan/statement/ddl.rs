@@ -4419,7 +4419,7 @@ pub fn plan_create_cluster(
         let stmt = unplan_create_cluster(scx, plan.clone())
             .map_err(|e| PlanError::Replan(e.to_string()))?;
         let create_sql = stmt.to_ast_string_stable();
-        let stmt = parse::parse(&create_sql)
+        let stmt = parse::parse(&create_sql, true)
             .map_err(|e| PlanError::Replan(e.to_string()))?
             .into_element()
             .ast;
@@ -6837,7 +6837,7 @@ pub fn plan_alter_sink(
         AlterSinkAction::ChangeRelation(new_from) => {
             // First we reconstruct the original CREATE SINK statement
             let create_sql = item.create_sql();
-            let stmts = mz_sql_parser::parser::parse_statements(create_sql)?;
+            let stmts = mz_sql_parser::parser::parse_statements(create_sql, true)?;
             let [stmt]: [StatementParseResult; 1] = stmts
                 .try_into()
                 .expect("create sql of sink was not exactly one statement");

@@ -306,7 +306,7 @@ impl LanguageServer for Backend {
                 if let Some(json_args) = json_args {
                     let args = serde_json::from_value::<String>(json_args.clone())
                         .map_err(|_| build_error("Error deserializing parse args as String."))?;
-                    let statements = parse_statements(&args)
+                    let statements = parse_statements(&args, true)
                         .map_err(|_| build_error("Error parsing the statements."))?;
 
                     // Transform raw statements to splitted statements
@@ -520,7 +520,7 @@ impl Backend {
         let mut parse_results = self.parse_results.lock().await;
 
         // Parse the text
-        let parse_result = mz_sql_parser::parser::parse_statements(&params.text);
+        let parse_result = mz_sql_parser::parser::parse_statements(&params.text, true);
 
         match parse_result {
             // The parser will return Ok when everything is well written.

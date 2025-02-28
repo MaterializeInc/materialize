@@ -307,7 +307,7 @@ fn update_create_sql(
         }
     }
 
-    let mut ast = mz_sql_parser::parser::parse_statements(create_sql)
+    let mut ast = mz_sql_parser::parser::parse_statements(create_sql, true)
         .expect("non-system items must be parseable")
         .into_element()
         .ast;

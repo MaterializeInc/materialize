@@ -1937,3 +1937,10 @@ SELECT * FROM t JOIN t USING (a) AS b QUALIFY sum(a) OVER () = 1 AS OF 1234
 SELECT * FROM t JOIN t USING (a) AS b QUALIFY sum(a) OVER () = 1 AS OF 1234
 =>
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [Join { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, join_operator: Inner(Using { columns: [Ident("a")], alias: Some(Ident("b")) }) }] }], selection: None, group_by: [], having: None, qualify: Some(Op { op: Op { namespace: None, op: "=" }, expr1: Function(Function { name: Name(UnresolvedItemName([Ident("sum")])), args: Args { args: [Identifier([Ident("a")])], order_by: [] }, filter: None, over: Some(WindowSpec { partition_by: [], order_by: [], window_frame: None, ignore_nulls: false, respect_nulls: false }), distinct: false }), expr2: Some(Value(Number("1"))) }), options: [] }), order_by: [], limit: None, offset: None }, as_of: Some(At(Value(Number("1234")))) })
+
+parse-statement
+SELECT int_col::text, array_fill::text, text_col::text, array_fill2::text, array_col::text, array::text FROM array_type_view1
+----
+error: Expected left square bracket, found double colon
+SELECT int_col::text, array_fill::text, text_col::text, array_fill2::text, array_col::text, array::text FROM array_type_view1
+                                                                                                 ^

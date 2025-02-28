@@ -26,6 +26,7 @@ use std::fmt;
 
 use bytesize::ByteSize;
 use itertools::Itertools;
+use mz_ore::assert::soft_assertions_enabled;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::OptionExt;
@@ -38,6 +39,7 @@ use IsLateral::*;
 use IsOptional::*;
 
 use crate::ast::display::AstDisplay;
+use crate::ast::visit_mut::{visit_data_type_mut, visit_ident_mut, VisitMut};
 use crate::ast::*;
 use crate::ident;
 
@@ -121,17 +123,20 @@ pub fn parse_statements_with_limit(
             ByteSize::b(u64::cast_from(MAX_STATEMENT_BATCH_SIZE))
         ));
     }
-    Ok(parse_statements(sql))
+    Ok(parse_statements(sql, true))
 }
 
 /// Parses a SQL string containing zero or more SQL statements.
 #[mz_ore::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
-pub fn parse_statements(sql: &str) -> Result<Vec<StatementParseResult>, ParserStatementError> {
+pub fn parse_statements(
+    sql: &str,
+    assert_roundtrip: bool,
+) -> Result<Vec<StatementParseResult>, ParserStatementError> {
     let tokens = lexer::lex(sql).map_err(|error| ParserStatementError {
         error: error.into(),
         statement: None,
     })?;
-    let res = Parser::new(sql, tokens).parse_statements();
+    let res = Parser::new(sql, tokens).parse_statements(assert_roundtrip);
     // Don't trace sensitive raw sql, so we can only trace after parsing, and then can only output
     // redacted statements.
     debug!("{:?}", {
@@ -342,7 +347,10 @@ impl<'a> Parser<'a> {
         ParserError { pos, message }
     }
 
-    fn parse_statements(&mut self) -> Result<Vec<StatementParseResult<'a>>, ParserStatementError> {
+    fn parse_statements(
+        &mut self,
+        assert_roundtrip: bool,
+    ) -> Result<Vec<StatementParseResult<'a>>, ParserStatementError> {
         let mut stmts = Vec::new();
         let mut expecting_statement_delimiter = false;
         loop {
@@ -359,7 +367,7 @@ impl<'a> Parser<'a> {
                     .map_no_statement_parser_err();
             }
 
-            let s = self.parse_statement()?;
+            let s = self.parse_statement(assert_roundtrip)?;
             stmts.push(s);
             expecting_statement_delimiter = true;
         }
@@ -368,10 +376,58 @@ impl<'a> Parser<'a> {
     /// Parse a single top-level statement (such as SELECT, INSERT, CREATE, etc.),
     /// stopping before the statement separator, if any. Returns the parsed statement and the SQL
     /// fragment corresponding to it.
-    fn parse_statement(&mut self) -> Result<StatementParseResult<'a>, ParserStatementError> {
+    fn parse_statement(
+        &mut self,
+        assert_roundtrip: bool,
+    ) -> Result<StatementParseResult<'a>, ParserStatementError> {
         let before = self.peek_pos();
         let statement = self.parse_statement_inner()?;
         let after = self.peek_pos();
+
+        if assert_roundtrip
+            && soft_assertions_enabled()
+            && !matches!(statement, Statement::CreateSource(..))
+        {
+            // If we successfully parsed it, then it should also roundtrip through printing and then
+            // parsing it again.
+            for printed in [statement.to_ast_string(), statement.to_ast_string_stable()] {
+                let mut parsed = match parse_statements(&printed, false) {
+                    Ok(parsed) => parsed.into_element().ast,
+                    Err(err) => panic!(
+                        "reparse failed: {}: {}\noriginal sql: {}\n",
+                        statement, err, self.sql
+                    ),
+                };
+
+                // Ignore the char/bpchar issue
+                let mut statement = statement.clone();
+                let mut char_visitor = BpcharToCharVisitor {};
+                char_visitor.visit_statement_mut(&mut parsed);
+                char_visitor.visit_statement_mut(&mut statement);
+
+                // DECLARE and PREPARE remember the original SQL. Erase that here so it can differ
+                // if needed (for example, quoting identifiers vs not). This is ok because we
+                // still compare that the resulting ASTs are identical, and it's valid for
+                // those to come from different original strings.
+                match (&mut parsed, &statement) {
+                    (Statement::Declare(parsed), Statement::Declare(stmt)) => {
+                        parsed.sql.clone_from(&stmt.sql);
+                    }
+                    (Statement::Prepare(parsed), Statement::Prepare(stmt)) => {
+                        parsed.sql.clone_from(&stmt.sql);
+                    }
+                    _ => {}
+                }
+
+                if parsed != statement {
+                    panic!(
+                        "reparse comparison failed:\n{:?}\n!=\n{:?}\n{printed}\noriginal sql: {}\n",
+                        statement, parsed, self.sql
+                    );
+                }
+            }
+        }
+
         Ok(StatementParseResult::new(
             statement,
             self.sql[before..after].trim(),
@@ -3737,7 +3793,7 @@ impl<'a> Parser<'a> {
                 self.expected(self.peek_pos(), "end of statement", self.peek_token())?
             }
 
-            let stmt = self.parse_statement().map_err(|err| err.error)?.ast;
+            let stmt = self.parse_statement(true).map_err(|err| err.error)?.ast;
             match stmt {
                 Statement::Delete(stmt) => stmts.push(ContinualTaskStmt::Delete(stmt)),
                 Statement::Insert(stmt) => stmts.push(ContinualTaskStmt::Insert(stmt)),
@@ -6397,7 +6453,7 @@ impl<'a> Parser<'a> {
         };
 
         let relation = if self.consume_token(&Token::LParen) {
-            let query = self.parse_statement()?.ast;
+            let query = self.parse_statement(true)?.ast;
             self.expect_token(&Token::RParen)
                 .map_parser_err(StatementKind::Copy)?;
             match query {
@@ -8839,7 +8895,7 @@ impl<'a> Parser<'a> {
         let _ = self.parse_keywords(&[WITHOUT, HOLD]);
         self.expect_keyword(FOR)
             .map_parser_err(StatementKind::Declare)?;
-        let StatementParseResult { ast, sql } = self.parse_statement()?;
+        let StatementParseResult { ast, sql } = self.parse_statement(true)?;
         Ok(Statement::Declare(DeclareStatement {
             name,
             stmt: Box::new(ast),
@@ -8864,7 +8920,7 @@ impl<'a> Parser<'a> {
             .map_parser_err(StatementKind::Prepare)?;
         let pos = self.peek_pos();
         //
-        let StatementParseResult { ast, sql } = self.parse_statement()?;
+        let StatementParseResult { ast, sql } = self.parse_statement(true)?;
         if !matches!(
             ast,
             Statement::Select(_)
@@ -9727,6 +9783,34 @@ impl ParenthesizedFragment {
             // Queries become subquery expressions.
             ParenthesizedFragment::Query(query) => Expr::Subquery(Box::new(query)),
         }
+    }
+}
+
+struct BpcharToCharVisitor {}
+
+impl<'ast> VisitMut<'ast, Raw> for BpcharToCharVisitor {
+    fn visit_ident_mut(&mut self, node: &'ast mut Ident) {
+        if node.0 == "bpchar" {
+            node.0 = "char".to_string();
+        }
+        visit_ident_mut(self, node)
+    }
+
+    fn visit_data_type_mut(&mut self, node: &'ast mut RawDataType) {
+        match node {
+            RawDataType::Other {
+                name: RawItemName::Name(UnresolvedItemName(idents)),
+                ..
+            } => {
+                if idents.len() == 1 {
+                    if idents[0].0 == "bpchar" {
+                        idents[0].0 = "char".to_string();
+                    }
+                }
+            }
+            _ => {}
+        }
+        visit_data_type_mut(self, node)
     }
 }
 
