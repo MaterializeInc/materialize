@@ -29,6 +29,7 @@ message ProtoDataflowDescription {
     mz_repr.global_id.ProtoGlobalId id = 1;
     sources.ProtoSourceInstanceDesc source_instance_desc = 2;
     bool monotonic = 3;
+    mz_repr.antichain.ProtoU64Antichain upper = 4;
   }
 
   message ProtoIndexImport {
