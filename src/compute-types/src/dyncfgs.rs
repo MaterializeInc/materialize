@@ -202,7 +202,7 @@ pub const ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION: Config<bool> = Co
 /// Whether to apply logical backpressure in compute dataflows.
 pub const ENABLE_COMPUTE_LOGICAL_BACKPRESSURE: Config<bool> = Config::new(
     "enable_compute_logical_backpressure",
-    true,
+    false,
     "When enabled, compute dataflows will apply logical backpressure.",
 );
 
@@ -215,6 +215,13 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES: Config<Option<
         Some(1024),
         "The maximum number of capabilities retained by the logical backpressure operator.",
     );
+
+/// The slack to round observed timestamps up to.
+pub const COMPUTE_LOGICAL_BACKPRESSURE_SLACK: Config<Duration> = Config::new(
+    "compute_logical_backpressure_slack",
+    Duration::from_secs(1),
+    "Round observed timestamps to slack.",
+);
 
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
@@ -245,4 +252,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION)
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
+        .add(&COMPUTE_LOGICAL_BACKPRESSURE_SLACK)
 }

@@ -122,7 +122,7 @@ use futures::FutureExt;
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES,
-    ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
+    COMPUTE_LOGICAL_BACKPRESSURE_SLACK, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
 };
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
@@ -231,8 +231,6 @@ pub fn build_compute_dataflow<A: Allocate>(
         let mut tokens: BTreeMap<_, Rc<dyn Any>> = BTreeMap::new();
         let output_probe = Handle::default();
 
-        let slack = mz_repr::Timestamp::new(1000);
-
         scope.clone().region_named(&input_name, |region| {
             // Import declared sources into the rendering context.
             for (source_id, (source, _monotonic, upper)) in dataflow.source_imports.iter() {
@@ -304,6 +302,11 @@ pub fn build_compute_dataflow<A: Allocate>(
                         // Apply logical backpressure to the source.
                         let limit = COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES
                             .get(&compute_state.worker_config);
+                        let slack = COMPUTE_LOGICAL_BACKPRESSURE_SLACK
+                            .get(&compute_state.worker_config)
+                            .try_into()
+                            .expect("slack is a valid Timestamp");
+
                         let (token, stream) = ok_stream.limit_progress(
                             output_probe.clone(),
                             slack,
