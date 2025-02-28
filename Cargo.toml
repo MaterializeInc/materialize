@@ -262,6 +262,10 @@ gimli = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
 object = { opt-level = 3 }
 rustc-demangle = { opt-level = 3 }
+timely = { opt-level = 3 }
+differential-dataflow = { opt-level = 3 }
+mz-compute = { opt-level = 3 }
+mz-transform = { opt-level = 3 }
 
 [profile.release]
 # Compile time seems similar to "lto = false", runtime ~10% faster
