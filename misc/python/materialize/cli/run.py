@@ -297,10 +297,12 @@ def main() -> int:
             if args.monitoring:
                 command += ["--opentelemetry-endpoint=http://localhost:4317"]
         elif args.program == "sqllogictest":
+            # sqllogictest creates the scratch directory in a tmpfs mount, which doesn't work well with lgalloc
+            # https://github.com/MaterializeInc/database-issues/issues/8989
             formatted_params = [
                 f"{key}={value}"
                 for key, value in get_default_system_parameters().items()
-            ]
+            ] + ["enable_lgalloc=false"]
             system_parameter_default = ";".join(formatted_params)
             # Connect to the database to ensure it exists.
             _connect_sql(args.postgres)
