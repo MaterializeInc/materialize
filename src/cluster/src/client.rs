@@ -262,6 +262,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
                 epoch,
                 refill,
                 GenericBuilder::ZeroCopyBinary,
+                true,
             )
             .await?
         } else {
@@ -272,6 +273,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
                 epoch,
                 refill,
                 GenericBuilder::ZeroCopy,
+                true,
             )
             .await?
         };

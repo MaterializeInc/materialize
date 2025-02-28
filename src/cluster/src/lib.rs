@@ -13,3 +13,4 @@
 
 pub mod client;
 pub mod communication;
+pub mod communication_v2;
