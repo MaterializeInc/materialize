@@ -40,6 +40,7 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
 mz-cluster = { path = "../cluster" }
+mz-cluster-client = { path = "../cluster-client" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-mysql-util = { path = "../mysql-util" }
