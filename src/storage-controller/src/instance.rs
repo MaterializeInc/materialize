@@ -427,11 +427,12 @@ where
                 // This value is not currently used by storage, so we just choose
                 // some identifiable value.
                 arrangement_exert_proportionality: 1337,
-                // TODO
+                // Disable zero-copy by default.
+                // TODO: Bring in line with compute.
                 enable_zero_copy: false,
-                // TODO
+                // Do not use lgalloc to back zero-copy memory.
                 enable_zero_copy_lgalloc: false,
-                // TODO
+                // No limit; zero-copy is disabled.
                 zero_copy_limit: None,
             };
             *epoch = self.epoch;
