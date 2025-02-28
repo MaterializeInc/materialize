@@ -278,7 +278,7 @@ impl Config {
             let (host, port) = self.address();
             let username = self.inner.user().expect("MySQL: username required");
 
-            let token = rds_auth_token(host, port, username, &aws_config).await?;
+            let token = rds_auth_token(host, port, username, aws_config).await?;
             // Cleartext plugin must be enabled for IAM authentication, for security,
             // the network traffic is SSL/TLS encrypted.
             opts_builder = opts_builder
