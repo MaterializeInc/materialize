@@ -216,8 +216,6 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
         dyncfg_updates: ConfigUpdates,
     ) {
         self.arrangement_exert_proportionality = arrangement_exert_proportionality;
-        self.compute
-            .set_arrangement_exert_proportionality(arrangement_exert_proportionality);
 
         dyncfg_updates.apply(&self.dyncfg);
     }
