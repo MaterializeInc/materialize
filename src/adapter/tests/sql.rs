@@ -118,7 +118,7 @@ async fn datadriven() {
                             let sess = Session::dummy();
                             let catalog = catalog.for_session(&sess);
 
-                            let parsed = mz_sql::parse::parse(&test_case.input).unwrap();
+                            let parsed = mz_sql::parse::parse(&test_case.input, true).unwrap();
                             let pcx = &PlanContext::zero();
                             let scx = StatementContext::new(Some(pcx), &catalog);
                             let qcx = QueryContext::root(&scx, QueryLifetime::OneShot);

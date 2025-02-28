@@ -359,6 +359,8 @@ impl<T: AstInfo> AstDisplay for CsrConnectionAvro<T> {
             f.write_str(" ");
             f.write_node(seed);
         }
+        // It's ok that this is not writing `key_strategy` and `value_strategy`, because those are
+        // used only in purification, so there is no need to persist them to the catalog.
     }
 }
 impl_display_t!(CsrConnectionAvro);

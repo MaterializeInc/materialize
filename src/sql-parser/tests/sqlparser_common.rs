@@ -192,6 +192,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         COMMIT;
         ROLLBACK;
 "#,
+        true,
     )?;
 
     #[rustfmt::skip]  // rustfmt loses the structure of the expected vector by wrapping all lines
@@ -235,5 +236,5 @@ fn test_max_statement_batch_size() {
     let statements = format!("{statements}{statement}");
     let err = parse_statements_with_limit(&statements).expect_err("statements should be too big");
     assert!(err.contains("statement batch size cannot exceed "));
-    assert_ok!(parse_statements(&statements));
+    assert_ok!(parse_statements(&statements, true));
 }

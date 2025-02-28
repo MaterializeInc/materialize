@@ -2611,6 +2611,7 @@ mod tests {
 
             let parsed = mz_sql_parser::parser::parse_statements(
                 "create view public.foo as select 1 as bar",
+                true,
             )
             .expect("")
             .into_element()
@@ -2641,7 +2642,7 @@ mod tests {
         let columns = iter::repeat(column).take(column_count).join("");
         let create_sql = format!("{view_def}{columns})");
         let create_sql_check = create_sql.clone();
-        assert_ok!(mz_sql_parser::parser::parse_statements(&create_sql));
+        assert_ok!(mz_sql_parser::parser::parse_statements(&create_sql, true));
         assert_err!(mz_sql_parser::parser::parse_statements_with_limit(
             &create_sql
         ));
