@@ -154,6 +154,12 @@ pub struct TimelyConfig {
     /// The higher the proportionality value, the more eagerly arrangement batches are merged. A
     /// value of `0` (or `1`) disables eager merging.
     pub arrangement_exert_proportionality: u32,
+    /// Whether to use the zero copy allocator.
+    pub enable_zero_copy: bool,
+    /// Whether to use lgalloc to back the zero copy allocator.
+    pub enable_zero_copy_lgalloc: bool,
+    /// Optional limit on the number of empty buffers retained by the zero copy allocator.
+    pub zero_copy_limit: Option<usize>,
 }
 
 impl RustType<ProtoTimelyConfig> for TimelyConfig {
@@ -163,6 +169,9 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             addresses: self.addresses.into_proto(),
             process: self.process.into_proto(),
             arrangement_exert_proportionality: self.arrangement_exert_proportionality,
+            enable_zero_copy: self.enable_zero_copy,
+            enable_zero_copy_lgalloc: self.enable_zero_copy_lgalloc,
+            zero_copy_limit: self.zero_copy_limit.into_proto(),
         }
     }
 
@@ -172,6 +181,9 @@ impl RustType<ProtoTimelyConfig> for TimelyConfig {
             workers: proto.workers.into_rust()?,
             addresses: proto.addresses.into_rust()?,
             arrangement_exert_proportionality: proto.arrangement_exert_proportionality,
+            enable_zero_copy: proto.enable_zero_copy,
+            enable_zero_copy_lgalloc: proto.enable_zero_copy_lgalloc,
+            zero_copy_limit: proto.zero_copy_limit.into_rust()?,
         })
     }
 }

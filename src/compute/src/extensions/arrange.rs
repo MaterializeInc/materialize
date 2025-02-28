@@ -9,13 +9,13 @@
 
 use std::rc::Rc;
 
+use differential_dataflow::containers::Columnation;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
-use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, ScopeParent, StreamCore};
@@ -455,81 +455,5 @@ where
             });
             (size, capacity, allocations)
         })
-    }
-}
-
-mod flatcontainer {
-    use differential_dataflow::difference::Semigroup;
-    use differential_dataflow::lattice::Lattice;
-    use differential_dataflow::operators::arrange::Arranged;
-    use differential_dataflow::trace::TraceReader;
-    use mz_ore::flatcontainer::MzRegionPreference;
-    use timely::container::flatcontainer::{IntoOwned, Push, Region, ReserveItems};
-    use timely::dataflow::Scope;
-    use timely::progress::Timestamp;
-    use timely::PartialOrder;
-
-    use crate::extensions::arrange::{log_arrangement_size_inner, ArrangementSize};
-    use crate::typedefs::{FlatKeyValAgent, FlatKeyValSpine};
-
-    impl<G, K, V, T, R> ArrangementSize for Arranged<G, FlatKeyValAgent<K, V, T, R>>
-    where
-        Self: Clone,
-        G: Scope<Timestamp = T::Owned>,
-        G::Timestamp: Lattice + Ord + MzRegionPreference,
-        K: Region
-            + Clone
-            + Push<<K as Region>::Owned>
-            + for<'a> Push<<K as Region>::ReadItem<'a>>
-            + for<'a> ReserveItems<<K as Region>::ReadItem<'a>>
-            + 'static,
-        V: Region
-            + Clone
-            + Push<<V as Region>::Owned>
-            + for<'a> Push<<V as Region>::ReadItem<'a>>
-            + for<'a> ReserveItems<<V as Region>::ReadItem<'a>>
-            + 'static,
-        T: Region
-            + Clone
-            + Push<<T as Region>::Owned>
-            + for<'a> Push<<T as Region>::ReadItem<'a>>
-            + for<'a> ReserveItems<<T as Region>::ReadItem<'a>>
-            + 'static,
-        R: Region
-            + Clone
-            + Push<<R as Region>::Owned>
-            + for<'a> Push<&'a <R as Region>::Owned>
-            + for<'a> Push<<R as Region>::ReadItem<'a>>
-            + for<'a> ReserveItems<<R as Region>::ReadItem<'a>>
-            + 'static,
-        K::Owned: Clone + Ord,
-        V::Owned: Clone + Ord,
-        T::Owned: Lattice + for<'a> PartialOrder<<T as Region>::ReadItem<'a>> + Timestamp,
-        R::Owned:
-            Default + Ord + Semigroup + for<'a> Semigroup<<R as Region>::ReadItem<'a>> + 'static,
-        for<'a> <K as Region>::ReadItem<'a>: Copy + Ord,
-        for<'a> <V as Region>::ReadItem<'a>: Copy + Ord,
-        for<'a> <T as Region>::ReadItem<'a>: Copy + IntoOwned<'a> + Ord + PartialOrder<T::Owned>,
-        for<'a> <R as Region>::ReadItem<'a>: Copy + IntoOwned<'a, Owned = R::Owned> + Ord,
-    {
-        fn log_arrangement_size(self) -> Self {
-            log_arrangement_size_inner::<_, FlatKeyValSpine<K, V, T, R>, _>(self, |trace| {
-                let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-                let mut callback = |siz, cap| {
-                    size += siz;
-                    capacity += cap;
-                    allocations += usize::from(cap > 0);
-                };
-                trace.map_batches(|batch| {
-                    batch.storage.keys.heap_size(&mut callback);
-                    batch.storage.keys_offs.heap_size(&mut callback);
-                    batch.storage.vals.heap_size(&mut callback);
-                    batch.storage.vals_offs.heap_size(&mut callback);
-                    batch.storage.times.heap_size(&mut callback);
-                    batch.storage.diffs.heap_size(&mut callback);
-                });
-                (size, capacity, allocations)
-            })
-        }
     }
 }

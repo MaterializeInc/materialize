@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use columnar::Columnar;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
+use differential_dataflow::containers::Columnation;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::TraceReader;
@@ -28,7 +29,6 @@ use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::containers::{columnar_exchange, Col2ValBatcher, ColumnBuilder};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
-use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::scopes::Child;

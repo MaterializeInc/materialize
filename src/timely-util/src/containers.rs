@@ -18,9 +18,9 @@
 use std::hash::Hash;
 
 use columnar::Columnar;
+use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
 use differential_dataflow::Hashable;
-use timely::container::columnation::TimelyStack;
 
 pub mod stack;
 

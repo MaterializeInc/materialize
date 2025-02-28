@@ -20,6 +20,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
+use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::Collection;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, DecodeError};
@@ -27,7 +28,6 @@ use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
-use timely::container::columnation::TimelyStack;
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::progress::Antichain;
 use tokio::sync::Semaphore;

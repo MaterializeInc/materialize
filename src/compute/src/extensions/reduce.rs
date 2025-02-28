@@ -16,9 +16,9 @@
 use differential_dataflow::difference::{Abelian, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
 use differential_dataflow::Data;
+use differential_dataflow::IntoOwned;
 use timely::container::PushInto;
 use timely::dataflow::Scope;
 use timely::Container;

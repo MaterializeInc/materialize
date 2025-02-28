@@ -65,8 +65,8 @@ where
         // Attach a probe reporting the compute frontier.
         // The `apply_refresh` operator can round up frontiers, making it impossible to accurately
         // track the progress of the computation, so we need to attach the probe before it.
-        let mut probe = probe::Handle::default();
-        ok_collection = ok_collection.probe_with(&mut probe);
+        let probe = probe::Handle::default();
+        ok_collection = ok_collection.probe_with(&probe);
         let collection_state = compute_state.expect_collection_mut(sink_id);
         collection_state.compute_probe = Some(probe);
 

@@ -18,7 +18,7 @@
 
 use std::cell::Cell;
 
-use timely::container::columnation::{Columnation, TimelyStack};
+use differential_dataflow::containers::{Columnation, TimelyStack};
 use timely::container::{ContainerBuilder, PushInto};
 
 /// A Stacked container builder that keep track of container memory usage.

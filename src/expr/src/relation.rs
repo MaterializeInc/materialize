@@ -18,6 +18,7 @@ use std::num::NonZeroU64;
 use std::time::Instant;
 
 use bytesize::ByteSize;
+use differential_dataflow::containers::{Columnation, CopyRegion};
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
@@ -42,7 +43,6 @@ use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::{Strategy, Union};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use timely::container::columnation::{Columnation, CopyRegion};
 
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
