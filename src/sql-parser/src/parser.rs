@@ -1299,10 +1299,21 @@ impl<'a> Parser<'a> {
             self.expect_token(&Token::RBracket)?;
         }
 
-        Ok(Expr::Subscript {
-            expr: Box::new(expr),
-            positions,
-        })
+        // If the expression that is being cast can end with a type name, then let's parenthesize
+        // it. Otherwise, the `[...]` would melt into the type name (making it an array type).
+        // Specifically, the only expressions whose printing can end with a type name are casts, so
+        // check for that.
+        if matches!(expr, Expr::Cast { .. }) {
+            Ok(Expr::Subscript {
+                expr: Box::new(Expr::Nested(Box::new(expr))),
+                positions,
+            })
+        } else {
+            Ok(Expr::Subscript {
+                expr: Box::new(expr),
+                positions,
+            })
+        }
     }
 
     // Parse calls to substring(), which can take the form:
