@@ -19,6 +19,7 @@ use futures::future;
 use hyper_util::rt::TokioIo;
 use mz_build_info::{BuildInfo, build_info};
 use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_cluster_client::client::TimelyConfig;
 use mz_compute::server::ComputeInstanceContext;
 use mz_compute_client::service::proto_compute_server::ProtoComputeServer;
 use mz_http_util::DynamicFilterTarget;
@@ -85,6 +86,14 @@ struct Args {
     /// GRPC requests.
     #[clap(long, env = "GRPC_HOST", value_name = "NAME")]
     grpc_host: Option<String>,
+
+    // === Timely cluster options. ===
+    /// Configuration for the storage Timely cluster.
+    #[clap(long, env = "STORAGE_TIMELY_CONFIG")]
+    storage_timely_config: Option<TimelyConfig>,
+    /// Configuration for the compute Timely cluster.
+    #[clap(long, env = "COMPUTE_TIMELY_CONFIG")]
+    compute_timely_config: Option<TimelyConfig>,
 
     // === Storage options. ===
     /// The URL for the Persist PubSub service.

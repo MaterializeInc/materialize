@@ -21,8 +21,9 @@ mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
 mz-cloud-resources = { path = "../cloud-resources" }
-mz-compute = { path = "../compute" }
 mz-cluster = { path = "../cluster" }
+mz-cluster-client = { path = "../cluster-client" }
+mz-compute = { path = "../compute" }
 mz-compute-client = { path = "../compute-client" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-http-util = { path = "../http-util" }

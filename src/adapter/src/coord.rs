@@ -1882,10 +1882,12 @@ impl Coordinator {
         let compute_config = flags::compute_config(system_config);
         let storage_config = flags::storage_config(system_config);
         let scheduling_config = flags::orchestrator_scheduling_config(system_config);
+        let dyncfg_updates = system_config.dyncfg_updates();
         self.controller.compute.update_configuration(compute_config);
         self.controller.storage.update_parameters(storage_config);
         self.controller
             .update_orchestrator_scheduling_config(scheduling_config);
+        self.controller.update_configuration(dyncfg_updates);
 
         let mut policies_to_set: BTreeMap<CompactionWindow, CollectionIdBundle> =
             Default::default();
