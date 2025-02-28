@@ -1453,6 +1453,64 @@ SELECT MAP[1 => a, b => 1 + 2, a || 'b' => (SELECT 1), c => LIST[4, 5]]
 =>
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Map([MapEntry { key: Value(Number("1")), value: Identifier([Ident("a")]) }, MapEntry { key: Identifier([Ident("b")]), value: Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) } }, MapEntry { key: Op { op: Op { namespace: None, op: "||" }, expr1: Identifier([Ident("a")]), expr2: Some(Value(String("b"))) }, value: Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }) }, MapEntry { key: Identifier([Ident("c")]), value: List([Value(Number("4")), Value(Number("5"))]) }]), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
+# While maybe unexpected, list[] gets parsed as an array<list> type.
+
+parse-statement
+SELECT foo::uuid list[2] FROM fake_table;
+----
+SELECT foo::uuid list[] FROM fake_table
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Cast { expr: Identifier([Ident("foo")]), data_type: Array(List(Other { name: Name(UnresolvedItemName([Ident("uuid")])), typ_mod: [] })) }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("fake_table")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+# Subscripting after a cast. The danger here is that if the cast is to list or array, then the subscript could melt into
+# the type as if it were creating an array type if the parser and/or AST printer is not careful.
+
+parse-statement
+SELECT CAST(my_json AS uuid list)[my_index] FROM fake_table;
+----
+SELECT (my_json::uuid list)[my_index] FROM fake_table
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Subscript { expr: Nested(Cast { expr: Identifier([Ident("my_json")]), data_type: List(Other { name: Name(UnresolvedItemName([Ident("uuid")])), typ_mod: [] }) }), positions: [SubscriptPosition { start: Some(Identifier([Ident("my_index")])), end: None, explicit_slice: false }] }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("fake_table")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT CAST(my_json AS uuid[])[my_index] FROM fake_table;
+----
+SELECT (my_json::uuid[])[my_index] FROM fake_table
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Subscript { expr: Nested(Cast { expr: Identifier([Ident("my_json")]), data_type: Array(Other { name: Name(UnresolvedItemName([Ident("uuid")])), typ_mod: [] }) }), positions: [SubscriptPosition { start: Some(Identifier([Ident("my_index")])), end: None, explicit_slice: false }] }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("fake_table")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+# This would not plan, because we are subscripting into a uuid, but it's still nice if it roundtrips through the parser.
+parse-statement
+SELECT CAST(my_json AS uuid)[my_index] FROM fake_table;
+----
+SELECT (my_json::uuid)[my_index] FROM fake_table
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Subscript { expr: Nested(Cast { expr: Identifier([Ident("my_json")]), data_type: Other { name: Name(UnresolvedItemName([Ident("uuid")])), typ_mod: [] } }), positions: [SubscriptPosition { start: Some(Identifier([Ident("my_index")])), end: None, explicit_slice: false }] }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("fake_table")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+# Same as above, but with Postgres-style casts.
+
+parse-statement
+SELECT (my_json::uuid list)[my_index] FROM fake_table;
+----
+SELECT (my_json::uuid list)[my_index] FROM fake_table
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Subscript { expr: Nested(Cast { expr: Identifier([Ident("my_json")]), data_type: List(Other { name: Name(UnresolvedItemName([Ident("uuid")])), typ_mod: [] }) }), positions: [SubscriptPosition { start: Some(Identifier([Ident("my_index")])), end: None, explicit_slice: false }] }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("fake_table")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT (my_json::uuid[])[my_index] FROM fake_table;
+----
+SELECT (my_json::uuid[])[my_index] FROM fake_table
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Subscript { expr: Nested(Cast { expr: Identifier([Ident("my_json")]), data_type: Array(Other { name: Name(UnresolvedItemName([Ident("uuid")])), typ_mod: [] }) }), positions: [SubscriptPosition { start: Some(Identifier([Ident("my_index")])), end: None, explicit_slice: false }] }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("fake_table")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+# This would not plan, because we are subscripting into a uuid, but it's still nice if it roundtrips through the parser.
+parse-statement
+SELECT (my_json::uuid)[my_index] FROM fake_table;
+----
+SELECT (my_json::uuid)[my_index] FROM fake_table
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Subscript { expr: Nested(Cast { expr: Identifier([Ident("my_json")]), data_type: Other { name: Name(UnresolvedItemName([Ident("uuid")])), typ_mod: [] } }), positions: [SubscriptPosition { start: Some(Identifier([Ident("my_index")])), end: None, explicit_slice: false }] }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("fake_table")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
 # Map subqueries
 parse-statement
 SELECT MAP[]
