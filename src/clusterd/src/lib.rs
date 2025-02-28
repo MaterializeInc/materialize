@@ -25,7 +25,7 @@ use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metrics::{register_runtime_metrics, MetricsRegistry};
 use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
@@ -38,6 +38,7 @@ use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
+use tokio::runtime::Handle;
 use tower::Service;
 use tracing::{error, info};
 
@@ -184,6 +185,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .await?;
 
     let tracing_handle = Arc::new(tracing_handle);
+    register_runtime_metrics("main", Handle::current().metrics(), &metrics_registry);
 
     // Keep this _after_ the mz_ore::tracing::configure call so that its panic
     // hook runs _before_ the one that sends things to sentry.

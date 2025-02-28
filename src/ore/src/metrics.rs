@@ -182,9 +182,9 @@ pub type IntGaugeVec = DeleteOnDropWrapper<prometheus::IntGaugeVec>;
 /// Delete-on-drop shadow of Prometheus [raw::UIntGaugeVec].
 pub type UIntGaugeVec = DeleteOnDropWrapper<raw::UIntGaugeVec>;
 
-pub use prometheus::{Counter, Histogram, IntCounter, IntGauge};
-
 use crate::assert_none;
+
+pub use prometheus::{Counter, Histogram, IntCounter, IntGauge};
 
 /// Access to non-delete-on-drop vector types
 pub mod raw {
@@ -217,13 +217,12 @@ impl MetricsRegistry {
     }
 
     /// Registers a gauge whose value is computed when observed.
-    pub fn register_computed_gauge<F, P>(
+    pub fn register_computed_gauge<P>(
         &self,
         opts: MakeCollectorOpts,
-        f: F,
+        f: impl Fn() -> P::T + Send + Sync + 'static,
     ) -> ComputedGenericGauge<P>
     where
-        F: Fn() -> P::T + Send + Sync + 'static,
         P: Atomic + 'static,
     {
         let gauge = ComputedGenericGauge {
@@ -767,6 +766,65 @@ impl DurationMetric for &'_ mut f64 {
     fn record(&mut self, seconds: f64) {
         **self = seconds;
     }
+}
+
+/// Register the Tokio runtime's metrics in our metrics registry.
+#[cfg(feature = "async")]
+pub fn register_runtime_metrics(
+    name: &'static str,
+    runtime_metrics: tokio::runtime::RuntimeMetrics,
+    registry: &MetricsRegistry,
+) {
+    macro_rules! register {
+        ($method:ident, $doc:literal) => {
+            let metrics = runtime_metrics.clone();
+            registry.register_computed_gauge::<prometheus::core::AtomicU64>(
+                crate::metric!(
+                    name: concat!("mz_tokio_", stringify!($method)),
+                    help: $doc,
+                    const_labels: {"runtime" => name},
+                ),
+                move || <u64 as crate::cast::CastFrom<_>>::cast_from(metrics.$method()),
+            );
+        };
+    }
+
+    register!(
+        num_workers,
+        "The number of worker threads used by the runtime."
+    );
+    register!(
+        num_alive_tasks,
+        "The current number of alive tasks in the runtime."
+    );
+    register!(
+        global_queue_depth,
+        "The number of tasks currently scheduled in the runtime's global queue."
+    );
+    register!(
+        num_blocking_threads,
+        "The number of additional threads spawned by the runtime."
+    );
+    register!(
+        num_idle_blocking_threads,
+        "The number of idle threads which have spawned by the runtime for spawn_blocking calls."
+    );
+    register!(
+        spawned_tasks_count,
+        "The number of tasks spawned in this runtime since it was created."
+    );
+    register!(
+        remote_schedule_count,
+        "The number of tasks scheduled from outside of the runtime."
+    );
+    register!(
+        budget_forced_yield_count,
+        "The number of times that tasks have been forced to yield back to the scheduler after exhausting their task budgets."
+    );
+    register!(
+        blocking_queue_depth,
+        "The number of tasks currently scheduled in the blocking thread pool, spawned using spawn_blocking."
+    );
 }
 
 #[cfg(test)]

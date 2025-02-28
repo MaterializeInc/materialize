@@ -12,6 +12,7 @@
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use mz_ore::metrics::{register_runtime_metrics, MetricsRegistry};
 use mz_ore::task::{JoinHandle, RuntimeExt};
 use tokio::runtime::{Builder, Runtime};
 
@@ -41,9 +42,12 @@ pub struct IsolatedRuntime {
 
 impl IsolatedRuntime {
     /// Creates a new isolated runtime.
-    pub fn new(worker_threads: usize) -> IsolatedRuntime {
-        let runtime = Builder::new_multi_thread()
-            .worker_threads(worker_threads)
+    pub fn new(metrics: &MetricsRegistry, worker_threads: Option<usize>) -> IsolatedRuntime {
+        let mut runtime = Builder::new_multi_thread();
+        if let Some(worker_threads) = worker_threads {
+            runtime.worker_threads(worker_threads);
+        }
+        let runtime = runtime
             .thread_name_fn(|| {
                 static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
                 let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
@@ -54,6 +58,7 @@ impl IsolatedRuntime {
             .enable_all()
             .build()
             .expect("known to be valid");
+        register_runtime_metrics("persist", runtime.metrics(), metrics);
         IsolatedRuntime {
             inner: Some(runtime),
         }
@@ -79,7 +84,7 @@ impl IsolatedRuntime {
 
 impl Default for IsolatedRuntime {
     fn default() -> Self {
-        IsolatedRuntime::new(num_cpus::get())
+        IsolatedRuntime::new(&MetricsRegistry::new(), None)
     }
 }
 
