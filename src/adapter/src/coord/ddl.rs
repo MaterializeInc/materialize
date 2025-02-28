@@ -212,13 +212,13 @@ impl Coordinator {
         let mut cluster_replicas_to_create = vec![];
         let mut update_metrics_config = false;
         let mut update_tracing_config = false;
+        let mut update_controller_config = false;
         let mut update_compute_config = false;
         let mut update_storage_config = false;
         let mut update_pg_timestamp_oracle_config = false;
         let mut update_metrics_retention = false;
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
-        let mut update_arrangement_exert_proportionality = false;
         let mut update_http_config = false;
 
         for op in &ops {
@@ -316,6 +316,11 @@ impl Coordinator {
                         .system_config()
                         .is_metrics_config_var(name);
                     update_tracing_config |= vars::is_tracing_var(name);
+                    update_controller_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_controller_config_var(name);
                     update_compute_config |= self
                         .catalog
                         .state()
@@ -331,8 +336,6 @@ impl Coordinator {
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
                     update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
-                    update_arrangement_exert_proportionality |=
-                        name == vars::ARRANGEMENT_EXERT_PROPORTIONALITY.name();
                     update_http_config |= vars::is_http_config_var(name);
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
@@ -340,13 +343,13 @@ impl Coordinator {
                     // We could see if the config's have actually changed, but
                     // this is simpler.
                     update_tracing_config = true;
+                    update_controller_config = true;
                     update_compute_config = true;
                     update_storage_config = true;
                     update_pg_timestamp_oracle_config = true;
                     update_metrics_retention = true;
                     update_secrets_caching_config = true;
                     update_cluster_scheduling_config = true;
-                    update_arrangement_exert_proportionality = true;
                     update_http_config = true;
                 }
                 catalog::Op::RenameItem { id, .. } => {
@@ -796,6 +799,9 @@ impl Coordinator {
             if update_metrics_config {
                 mz_metrics::update_dyncfg(&self.catalog().system_config().dyncfg_updates());
             }
+            if update_controller_config {
+                self.update_controller_config();
+            }
             if update_compute_config {
                 self.update_compute_config();
             }
@@ -816,9 +822,6 @@ impl Coordinator {
             }
             if update_cluster_scheduling_config {
                 self.update_cluster_scheduling_config();
-            }
-            if update_arrangement_exert_proportionality {
-                self.update_arrangement_exert_proportionality();
             }
             if update_http_config {
                 self.update_http_config();
@@ -1292,14 +1295,12 @@ impl Coordinator {
         self.update_compute_read_policies(compute_policies);
     }
 
-    fn update_arrangement_exert_proportionality(&mut self) {
-        let prop = self
-            .catalog()
-            .system_config()
-            .arrangement_exert_proportionality();
-        self.controller
-            .compute
-            .set_arrangement_exert_proportionality(prop);
+    fn update_controller_config(&mut self) {
+        let sys_config = self.catalog().system_config();
+        self.controller.update_configuration(
+            sys_config.arrangement_exert_proportionality(),
+            sys_config.dyncfg_updates(),
+        );
     }
 
     fn update_http_config(&mut self) {
