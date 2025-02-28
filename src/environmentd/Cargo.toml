@@ -101,7 +101,7 @@ shell-words = "1.1.0"
 stacker = "0.1.17"
 sysctl = "0.5.4"
 tempfile = "3.14.0"
-thiserror = "1.0.37"
+thiserror = "2.0.11"
 tokio = { version = "1.38.0", features = ["sync"] }
 tokio-postgres = { version = "0.7.8" }
 tokio-stream = { version = "0.1.17", features = ["net"] }
