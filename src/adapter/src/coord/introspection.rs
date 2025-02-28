@@ -520,7 +520,7 @@ pub(super) struct SubscribeSpec {
 
 impl SubscribeSpec {
     fn to_plan(&self, catalog: &dyn SessionCatalog) -> Result<SubscribePlan, anyhow::Error> {
-        let parsed = mz_sql::parse::parse(self.sql)?.into_element();
+        let parsed = mz_sql::parse::parse(self.sql, true)?.into_element();
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, parsed.ast)?;
         let plan = mz_sql::plan::plan(None, catalog, stmt, &Params::empty(), &resolved_ids)?;
         match plan {

@@ -44,13 +44,13 @@ pub fn to_pretty<T: AstInfo>(stmt: &Statement<T>, width: usize) -> String {
 
 /// Parses `str` into SQL statements and pretty prints them.
 pub fn pretty_strs(str: &str, width: usize) -> Result<Vec<String>, Error> {
-    let stmts = parse_statements(str)?;
+    let stmts = parse_statements(str, true)?;
     Ok(stmts.iter().map(|s| to_pretty(&s.ast, width)).collect())
 }
 
 /// Parses `str` into a single SQL statement and pretty prints it.
 pub fn pretty_str(str: &str, width: usize) -> Result<String, Error> {
-    let stmts = parse_statements(str)?;
+    let stmts = parse_statements(str, true)?;
     if stmts.len() != 1 {
         return Err(Error::ExpectedOne);
     }

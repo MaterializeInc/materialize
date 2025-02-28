@@ -1353,7 +1353,7 @@ impl<'a> RunnerInner<'a> {
         in_transaction: &mut bool,
     ) -> Result<PrepareQueryOutcome<'r>, anyhow::Error> {
         // get statement
-        let statements = match mz_sql::parse::parse(sql) {
+        let statements = match mz_sql::parse::parse(sql, true) {
             Ok(statements) => statements,
             Err(e) => match output {
                 Ok(_) => {
@@ -2288,7 +2288,7 @@ fn generate_view_sql(
     // data structure cloning. However, running DDL is so slow that
     // it did not matter in terms of runtime. We can revisit this if
     // DDL cost drops dramatically in the future.
-    let stmts = parser::parse_statements(sql).unwrap_or_default();
+    let stmts = parser::parse_statements(sql, true).unwrap_or_default();
     assert!(stmts.len() == 1);
     let (query, query_as_of) = match &stmts[0].ast {
         Statement::Select(stmt) => (&stmt.query, &stmt.as_of),
@@ -2577,7 +2577,7 @@ fn derive_order_by_from_projection(
 
 /// Returns extra statements to execute after `stmt` is executed.
 fn mutate(sql: &str) -> Vec<String> {
-    let stmts = parser::parse_statements(sql).unwrap_or_default();
+    let stmts = parser::parse_statements(sql, true).unwrap_or_default();
     let mut additional = Vec::new();
     for stmt in stmts {
         match stmt.ast {

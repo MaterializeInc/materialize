@@ -36,7 +36,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     state.rewrite_pos_start = cmd.expected_start;
     state.rewrite_pos_end = cmd.expected_end;
 
-    let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
+    let stmts = mz_sql_parser::parser::parse_statements(&cmd.query, true)
         .with_context(|| format!("unable to parse SQL: {}", cmd.query))?;
     if stmts.len() != 1 {
         bail!("expected one statement, but got {}", stmts.len());
@@ -357,7 +357,7 @@ pub async fn run_fail_sql(
 ) -> Result<ControlFlow, anyhow::Error> {
     use Statement::{AlterSink, Commit, CreateConnection, Fetch, Rollback};
 
-    let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
+    let stmts = mz_sql_parser::parser::parse_statements(&cmd.query, true)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e));
 
     // Allow for statements that could not be parsed.
