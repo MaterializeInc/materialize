@@ -155,10 +155,10 @@ impl<M: MakeCollector> MakeCollector for DeleteOnDropWrapper<M> {
 
 impl<M: MetricVecExt> DeleteOnDropWrapper<M> {
     /// Returns a metric that deletes its labels from this metrics vector when dropped.
-    pub fn get_delete_on_drop_metric<'a, L: PromLabelsExt<'a>>(
+    pub fn get_delete_on_drop_metric<L: PromLabelsExt>(
         &self,
         labels: L,
-    ) -> DeleteOnDropMetric<'a, M, L> {
+    ) -> DeleteOnDropMetric<M, L> {
         self.inner.get_delete_on_drop_metric(labels)
     }
 }

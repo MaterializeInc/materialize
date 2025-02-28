@@ -27,7 +27,7 @@ use prometheus::core::AtomicU64;
 
 use crate::client::{ProtoStorageCommand, ProtoStorageResponse};
 
-pub type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
+pub type UIntGauge = DeleteOnDropGauge<AtomicU64, Vec<String>>;
 
 /// Storage controller metrics
 #[derive(Debug, Clone)]
@@ -79,7 +79,7 @@ impl StorageControllerMetrics {
     pub fn regressed_offset_known(
         &self,
         id: mz_repr::GlobalId,
-    ) -> DeleteOnDropCounter<'static, prometheus::core::AtomicU64, Vec<String>> {
+    ) -> DeleteOnDropCounter<prometheus::core::AtomicU64, Vec<String>> {
         self.regressed_offset_known
             .get_delete_on_drop_metric(vec![id.to_string()])
     }
@@ -151,8 +151,8 @@ impl InstanceMetrics {
 
 #[derive(Debug)]
 struct ReplicaMetricsInner {
-    messages_sent_bytes: DeleteOnDropHistogram<'static, Vec<String>>,
-    messages_received_bytes: DeleteOnDropHistogram<'static, Vec<String>>,
+    messages_sent_bytes: DeleteOnDropHistogram<Vec<String>>,
+    messages_received_bytes: DeleteOnDropHistogram<Vec<String>>,
 }
 
 /// Per-instance metrics

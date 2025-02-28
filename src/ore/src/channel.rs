@@ -33,10 +33,10 @@ pub trait InstrumentedChannelMetric {
     fn bump(&self);
 }
 
-impl<'a, P, L> InstrumentedChannelMetric for crate::metrics::DeleteOnDropCounter<'a, P, L>
+impl<P, L> InstrumentedChannelMetric for crate::metrics::DeleteOnDropCounter<P, L>
 where
     P: Atomic,
-    L: PromLabelsExt<'a>,
+    L: PromLabelsExt,
 {
     fn bump(&self) {
         self.inc()

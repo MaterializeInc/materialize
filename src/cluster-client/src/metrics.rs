@@ -102,13 +102,13 @@ impl ControllerMetrics {
 #[derive(Debug)]
 pub struct WallclockLagMetrics {
     /// Gauge tracking minimum dataflow wallclock lag.
-    wallclock_lag_seconds_min: DeleteOnDropGauge<'static, AtomicF64, Vec<String>>,
+    wallclock_lag_seconds_min: DeleteOnDropGauge<AtomicF64, Vec<String>>,
     /// Gauge tracking maximum dataflow wallclock lag.
-    wallclock_lag_seconds_max: DeleteOnDropGauge<'static, AtomicF64, Vec<String>>,
+    wallclock_lag_seconds_max: DeleteOnDropGauge<AtomicF64, Vec<String>>,
     /// Counter tracking the total sum of dataflow wallclock lag.
-    wallclock_lag_seconds_sum: DeleteOnDropCounter<'static, AtomicF64, Vec<String>>,
+    wallclock_lag_seconds_sum: DeleteOnDropCounter<AtomicF64, Vec<String>>,
     /// Counter tracking the total count of dataflow wallclock lag measurements.
-    wallclock_lag_seconds_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    wallclock_lag_seconds_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 
     /// State maintaining minimum and maximum wallclock lag.
     wallclock_lag_minmax: SlidingMinMax<f32>,

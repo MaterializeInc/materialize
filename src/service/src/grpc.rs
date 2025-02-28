@@ -454,7 +454,7 @@ impl GrpcServerMetrics {
 
 #[derive(Debug)]
 struct PerGrpcServerMetrics {
-    last_command_received: DeleteOnDropGauge<'static, AtomicU64, Vec<&'static str>>,
+    last_command_received: DeleteOnDropGauge<AtomicU64, Vec<&'static str>>,
 }
 
 const VERSION_HEADER_KEY: &str = "x-mz-version";

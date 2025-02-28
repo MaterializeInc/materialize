@@ -200,26 +200,26 @@ where
 /// so the user can choose the labels.
 pub struct RocksDBSharedMetrics {
     /// Latency of multi_gets, in fractional seconds.
-    pub multi_get_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub multi_get_latency: DeleteOnDropHistogram<Vec<String>>,
     /// Latency of write batch writes, in fractional seconds.
-    pub multi_put_latency: DeleteOnDropHistogram<'static, Vec<String>>,
+    pub multi_put_latency: DeleteOnDropHistogram<Vec<String>>,
 }
 
 /// Worker metrics about an instances usage of RocksDB. User-provided
 /// so the user can choose the labels.
 pub struct RocksDBInstanceMetrics {
     /// Size of multi_get batches.
-    pub multi_get_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub multi_get_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// Size of multi_get non-empty results.
-    pub multi_get_result_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub multi_get_result_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// Total size of bytes returned in the result
-    pub multi_get_result_bytes: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub multi_get_result_bytes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// The number of calls to rocksdb multi_get
-    pub multi_get_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub multi_get_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// The number of calls to rocksdb multi_put
-    pub multi_put_count: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub multi_put_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// Size of write batches.
-    pub multi_put_size: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub multi_put_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 }
 
 /// The result type for `multi_get`.
