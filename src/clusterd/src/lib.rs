@@ -94,6 +94,9 @@ struct Args {
     /// Configuration for the compute Timely cluster.
     #[clap(long, env = "COMPUTE_TIMELY_CONFIG")]
     compute_timely_config: Option<TimelyConfig>,
+    /// The index of the process in both Timely clusters.
+    #[clap(long, env = "PROCESS")]
+    process: Option<usize>,
 
     // === Storage options. ===
     /// The URL for the Persist PubSub service.
