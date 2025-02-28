@@ -319,7 +319,7 @@ pub struct HealthStatusMessage {
 ///
 /// Only one worker will be active and write to the status shard.
 ///
-/// The `OutputIndex` values that come across `health_stream` must be a strict subset of thosema,
+/// The `OutputIndex` values that come across `health_stream` must be a strict subset of those in
 /// `configs`'s keys.
 pub(crate) fn health_operator<'g, G, P>(
     scope: &Child<'g, G, mz_repr::Timestamp>,

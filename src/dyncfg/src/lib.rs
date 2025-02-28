@@ -299,6 +299,19 @@ impl<T: ConfigType> ConfigValHandle<T> {
     pub fn get(&self) -> T {
         T::from_val(self.val.load())
     }
+
+    /// Return a new handle that returns the constant value provided,
+    /// generally for testing.
+    pub fn disconnected<X>(value: X) -> Self
+    where
+        X: ConfigDefault<ConfigType = T>,
+    {
+        let config_val: ConfigVal = value.into_config_type().into();
+        Self {
+            val: config_val.into(),
+            _type: Default::default(),
+        }
+    }
 }
 
 /// A type-erased configuration value for when set of different types are stored

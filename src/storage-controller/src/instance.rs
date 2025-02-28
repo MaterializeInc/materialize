@@ -18,6 +18,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_cluster_client::ReplicaId;
+use mz_dyncfg::ConfigValHandle;
 use mz_ore::now::NowFn;
 use mz_ore::retry::{Retry, RetryState};
 use mz_ore::task::AbortOnDropHandle;
@@ -28,6 +29,7 @@ use mz_storage_client::client::{
     Status, StatusUpdate, StorageClient, StorageCommand, StorageGrpcClient, StorageResponse,
 };
 use mz_storage_client::metrics::{InstanceMetrics, ReplicaMetrics};
+use timely::order::TotalOrder;
 use timely::progress::Timestamp;
 use tokio::select;
 use tokio::sync::mpsc;
@@ -72,7 +74,7 @@ pub(crate) struct Instance<T> {
 
 impl<T> Instance<T>
 where
-    T: Timestamp + Lattice,
+    T: Timestamp + Lattice + TotalOrder,
     StorageGrpcClient: StorageClient<T>,
 {
     /// Creates a new [`Instance`].
@@ -81,8 +83,9 @@ where
         metrics: InstanceMetrics,
         now: NowFn,
         instance_response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
+        enable_snapshot_frontier: ConfigValHandle<bool>,
     ) -> Self {
-        let history = CommandHistory::new(metrics.for_history());
+        let history = CommandHistory::new(metrics.for_history(), enable_snapshot_frontier);
         let epoch = ClusterStartupEpoch::new(envd_epoch, 0);
 
         let mut instance = Self {
