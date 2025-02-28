@@ -67,7 +67,7 @@ pub(crate) struct Instance<T> {
     /// A function that returns the current time.
     now: NowFn,
     /// A sender for responses from replicas.
-    response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
+    response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
 }
 
 impl<T> Instance<T>
@@ -80,7 +80,7 @@ where
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
         now: NowFn,
-        instance_response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
+        instance_response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
     ) -> Self {
         let history = CommandHistory::new(metrics.for_history());
         let epoch = ClusterStartupEpoch::new(envd_epoch, 0);
@@ -101,11 +101,6 @@ where
         });
 
         instance
-    }
-
-    /// Returns the number of replicas of this storage instance.
-    pub fn replica_count(&self) -> usize {
-        self.replicas.len()
     }
 
     /// Returns the IDs of all replicas connected to this storage instance.
@@ -191,7 +186,10 @@ where
 
         if !status_updates.is_empty() {
             let response = StorageResponse::StatusUpdates(status_updates);
-            let _ = self.response_tx.send(response);
+            // NOTE: If we lift this "inject paused status" logic to the
+            // controller, we could instead return ReplicaId instead of an
+            // Option<ReplicaId>.
+            let _ = self.response_tx.send((None, response));
         }
     }
 
@@ -260,7 +258,7 @@ where
         config: ReplicaConfig,
         epoch: ClusterStartupEpoch,
         metrics: ReplicaMetrics,
-        response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
+        response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
@@ -312,7 +310,7 @@ struct ReplicaTask<T> {
     /// A channel upon which commands intended for the replica are delivered.
     command_rx: mpsc::UnboundedReceiver<StorageCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
-    response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
+    response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
 }
 
 impl<T> ReplicaTask<T>
@@ -386,6 +384,7 @@ where
                 command = self.command_rx.recv() => {
                     let Some(mut command) = command else {
                         // Controller is no longer interested in this replica. Shut down.
+                        tracing::debug!(%self.replica_id, "controller is no longer interested in this replica, shutting down message loop");
                         break;
                     };
 
@@ -399,7 +398,7 @@ where
                         bail!("replica unexpectedly gracefully terminated connection");
                     };
 
-                    if self.response_tx.send(response).is_err() {
+                    if self.response_tx.send((Some(self.replica_id), response)).is_err() {
                         // Controller is no longer interested in this replica. Shut down.
                         break;
                     }
