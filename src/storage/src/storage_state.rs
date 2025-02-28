@@ -1232,6 +1232,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
         );
 
         for id in stale_objects {
+            if id.is_user() {
+                tracing::info!(%id, "dropping STALE collection");
+            }
             self.storage_state.drop_collection(id);
         }
         for id in stale_oneshot_ingestions {
@@ -1432,6 +1435,9 @@ impl StorageState {
         //
         // If this object still has its frontiers reported, we will notify the
         // client envd of the drop.
+        if id.is_user() {
+            tracing::info!(%id, "dropping collection");
+        }
         if self.reported_frontiers.remove(&id).is_some() {
             // The only actions left are internal cleanup, so we can commit to
             // the client that these objects have been dropped.
