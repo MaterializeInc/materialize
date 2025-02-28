@@ -10,16 +10,49 @@ menu:
 
 ## Troubleshooting Kubernetes
 
-If you encounter issues with the Materialize operator, check the operator logs:
+### Materialize operator
+
+To check the status of the Materialize operator:
 
 ```shell
-kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
+kubectl -n materialize get all
 ```
+
+If you encounter issues with the Materialize operator,
+
+- Check the operator logs:
+
+  ```shell
+  kubectl -n materialize logs -l app.kubernetes.io/name=materialize-operator
+  ```
+
+- Check the events for the operator pod:
+
+  - You can use `kubectl describe`, substituting your pod name for `<pod-name>`:
+
+    ```shell
+    kubectl -n materialize describe pod/<pod-name>
+    ```
+
+  - You can use `kubectl get events`, substituting your pod name for
+    `<pod-name>`:
+
+    ```shell
+    kubectl -n materialize get events --sort-by=.metadata.creationTimestamp --field-selector involvedObject.name=<pod-name>
+    ```
+
+### Materialize deployment
 
 To check the status of your Materialize deployment, run:
 
 ```shell
-kubectl get all -n materialize
+kubectl  -n materialize-environment get all
+```
+
+To describe an object, you can use `kubectl describe`:
+
+```shell
+kubectl -n materialize-environment describe <type>/<name>
 ```
 
 For additional `kubectl` commands, see [kubectl Quick reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
