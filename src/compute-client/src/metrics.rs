@@ -31,11 +31,11 @@ use prometheus::core::{AtomicF64, AtomicU64};
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
 
-pub(crate) type IntCounter = DeleteOnDropCounter<'static, AtomicU64, Vec<String>>;
-type Gauge = DeleteOnDropGauge<'static, AtomicF64, Vec<String>>;
+pub(crate) type IntCounter = DeleteOnDropCounter<AtomicU64, Vec<String>>;
+type Gauge = DeleteOnDropGauge<AtomicF64, Vec<String>>;
 /// TODO(database-issues#7533): Add documentation.
-pub type UIntGauge = DeleteOnDropGauge<'static, AtomicU64, Vec<String>>;
-type Histogram = DeleteOnDropHistogram<'static, Vec<String>>;
+pub type UIntGauge = DeleteOnDropGauge<AtomicU64, Vec<String>>;
+type Histogram = DeleteOnDropHistogram<Vec<String>>;
 
 /// Compute controller metrics.
 #[derive(Debug, Clone)]

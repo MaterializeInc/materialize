@@ -40,7 +40,7 @@ impl KafkaSourceMetricDefs {
 pub(crate) struct KafkaSourceMetrics {
     labels: Vec<String>,
     defs: KafkaSourceMetricDefs,
-    partition_offset_map: BTreeMap<i32, DeleteOnDropGauge<'static, AtomicI64, Vec<String>>>,
+    partition_offset_map: BTreeMap<i32, DeleteOnDropGauge<AtomicI64, Vec<String>>>,
 }
 
 impl KafkaSourceMetrics {

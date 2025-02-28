@@ -322,9 +322,8 @@ pub struct Total {
     /// If provided, it is bumped on regressions, as opposed to `error!`
     /// logs.
     #[serde(skip)]
-    regressions: Option<
-        mz_ore::metrics::DeleteOnDropCounter<'static, prometheus::core::AtomicU64, Vec<String>>,
-    >,
+    regressions:
+        Option<mz_ore::metrics::DeleteOnDropCounter<prometheus::core::AtomicU64, Vec<String>>>,
 }
 
 impl From<Option<u64>> for Total {

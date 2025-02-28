@@ -142,24 +142,24 @@ impl SourceStatisticsMetricDefs {
 #[derive(Debug)]
 pub struct SourceStatisticsMetrics {
     // Counters
-    pub(crate) messages_received: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) updates_staged: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) updates_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) bytes_received: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) messages_received: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) updates_staged: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) updates_committed: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) bytes_received: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 
     // Gauges
-    pub(crate) snapshot_committed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) bytes_indexed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) records_indexed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) rehydration_latency_ms: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub(crate) snapshot_committed: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) bytes_indexed: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) records_indexed: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) rehydration_latency_ms: DeleteOnDropGauge<AtomicI64, Vec<String>>,
 
-    pub(crate) offset_known: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) offset_committed: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) snapshot_records_known: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
-    pub(crate) snapshot_records_staged: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) offset_known: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) offset_committed: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) snapshot_records_known: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) snapshot_records_staged: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 
     // Just prometheus.
-    pub(crate) envelope_state_tombstones: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) envelope_state_tombstones: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 }
 
 impl SourceStatisticsMetrics {
@@ -298,10 +298,10 @@ impl SinkStatisticsMetricDefs {
 #[derive(Debug)]
 pub struct SinkStatisticsMetrics {
     // Counters
-    pub(crate) messages_staged: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) messages_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) bytes_staged: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) bytes_committed: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) messages_staged: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) messages_committed: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) bytes_staged: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) bytes_committed: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 }
 
 impl SinkStatisticsMetrics {

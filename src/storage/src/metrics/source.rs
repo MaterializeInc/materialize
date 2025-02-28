@@ -115,11 +115,11 @@ impl GeneralSourceMetricDefs {
 /// General metrics about sources that are not specific to the source type
 pub(crate) struct SourceMetrics {
     /// The resume_upper for a source.
-    pub(crate) resume_upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    pub(crate) resume_upper: DeleteOnDropGauge<AtomicI64, Vec<String>>,
     /// The number of ready remap bindings that are held in the reclock commit upper operator.
-    pub(crate) commit_upper_ready_times: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) commit_upper_ready_times: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     /// The number of accepted remap bindings that are held in the reclock commit upper operator.
-    pub(crate) commit_upper_accepted_times: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    pub(crate) commit_upper_accepted_times: DeleteOnDropGauge<AtomicU64, Vec<String>>,
 }
 
 impl SourceMetrics {
@@ -145,12 +145,12 @@ impl SourceMetrics {
 
 /// Source-specific metrics used by the `persist_sink`
 pub(crate) struct SourcePersistSinkMetrics {
-    pub(crate) progress: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
-    pub(crate) row_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) row_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) error_inserts: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) error_retractions: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    pub(crate) processed_batches: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) progress: DeleteOnDropGauge<AtomicI64, Vec<String>>,
+    pub(crate) row_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) row_retractions: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) error_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) error_retractions: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) processed_batches: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 }
 
 impl SourcePersistSinkMetrics {
@@ -203,7 +203,7 @@ impl SourcePersistSinkMetrics {
 /// Metrics about committing offsets.
 pub(crate) struct OffsetCommitMetrics {
     /// The offset-domain resume_upper for a source.
-    pub(crate) offset_commit_failures: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    pub(crate) offset_commit_failures: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 }
 
 impl OffsetCommitMetrics {
