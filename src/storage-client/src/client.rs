@@ -21,6 +21,7 @@ use std::iter;
 use async_trait::async_trait;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use futures::future::BoxFuture;
 use mz_cluster_client::ReplicaId;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
 use mz_ore::assert_none;
@@ -93,7 +94,7 @@ pub type StorageGrpcClient = GrpcClient<StorageProtoServiceTypes>;
 #[async_trait]
 impl<F, G> ProtoStorage for GrpcServer<F>
 where
-    F: Fn() -> G + Send + Sync + 'static,
+    F: Fn() -> BoxFuture<'static, G> + Send + Sync + 'static,
     G: StorageClient + 'static,
 {
     type CommandResponseStreamStream = ResponseStream<ProtoStorageResponse>;
