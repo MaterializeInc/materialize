@@ -24,7 +24,7 @@ provider "google" {
 }
 
 module "materialize" {
-  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.1.1"
+  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.1.7"
 
   project_id = var.project_id
   region     = var.region

@@ -34,9 +34,7 @@ resource "azurerm_resource_group" "materialize" {
 }
 
 module "materialize" {
-  # TODO: Use ref when v0.1.3 is released
-  # source = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=v0.1.3"
-  source = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=c751b1f1345c961156b9253622b27774dd1d8d93"
+  source = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=v0.1.4"
   resource_group_name = azurerm_resource_group.materialize.name
   location            = "eastus2"
   prefix              = "tf-test"
