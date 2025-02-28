@@ -21,11 +21,15 @@ export CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=${CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR:-
 export CLUSTERD_SECRETS_READER=${CLUSTERD_SECRETS_READER:-local-file}
 export CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=${CLUSTERD_SECRETS_READER_LOCAL_DIR:-/mzdata/secrets}
 
-# Pass the host's FQDN as the host to be used for GRPC request validation only
-# when running in Kubernetes. In other contexts (like when running locally, or
-# in Docker), this is likely not desirable.
 if [[ "${KUBERNETES_SERVICE_HOST:-}" ]]; then
+    # Pass the host's FQDN as the host to be used for GRPC request validation
+    # only when running in Kubernetes. In other contexts (like when running
+    # locally, or in Docker), this is likely not desirable.
     export CLUSTERD_GRPC_HOST=${CLUSTERD_GRPC_HOST:-$(hostname --fqdn)}
+
+    # When running in Kubernetes, pass the StatefulSet replica's ordinal index
+    # as the process index.
+    export CLUSTERD_PROCESS=${CLUSTERD_PROCESS:-${HOSTNAME##*-}}
 fi
 
 exec clusterd "$@"
