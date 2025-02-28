@@ -159,7 +159,7 @@ node instance type, etc.), see the
    Upon successful completion, various fields and their values are output:
 
    ```bash
-   Apply complete! Resources: 76 added, 0 changed, 0 destroyed.
+   Apply complete! Resources: 77 added, 0 changed, 0 destroyed.
 
    Outputs:
 
@@ -185,8 +185,8 @@ node instance type, etc.), see the
      - Your cluster name has the form `{namespace}-{environment}-eks`; e.g.,
        `my-demo-dev-eks`.
 
-   - `<your-region>` with the region of your EKS cluster. By default, the
-     example Terraform module uses `us-east-1`.
+   - `<your-region>` with the region of your EKS cluster. The
+     simple example uses `us-east-1`.
 
    ```bash
    aws eks update-kubeconfig --name <your-eks-cluster-name> --region <your-region>
@@ -299,44 +299,38 @@ node instance type, etc.), see the
 
    ```none
    NAME                                             READY   STATUS      RESTARTS      AGE
-   pod/create-db-demo-db-6pw88                      0/1     Completed   0             5m31s
-   pod/mzoxtq6663xq-balancerd-d5c64779c-jzqv2       1/1     Running     0             5m16s
-   pod/mzoxtq6663xq-cluster-s1-replica-s1-gen-1-0   1/1     Running     0             5m21s
-   pod/mzoxtq6663xq-cluster-s2-replica-s2-gen-1-0   1/1     Running     0             5m21s
-   pod/mzoxtq6663xq-cluster-s3-replica-s3-gen-1-0   1/1     Running     0             5m21s
-   pod/mzoxtq6663xq-cluster-u1-replica-u1-gen-1-0   1/1     Running     0             5m21s
-   pod/mzoxtq6663xq-console-6f9f77654-d7wtb         1/1     Running     0             5m9s
-   pod/mzoxtq6663xq-console-6f9f77654-l8lnh         1/1     Running     0             5m9s
-   pod/mzoxtq6663xq-environmentd-1-0                1/1     Running     0             5m30s
+   pod/create-db-demo-db-6swk7                      0/1     Completed   0             33s
+   pod/mzutd2fbabf5-balancerd-6c9755c498-28kcw      1/1     Running     0             11s
+   pod/mzutd2fbabf5-cluster-s2-replica-s1-gen-1-0   1/1     Running     0             11s
+   pod/mzutd2fbabf5-cluster-u1-replica-u1-gen-1-0   1/1     Running     0             11s
+   pod/mzutd2fbabf5-console-57f94b4588-6lg2x        1/1     Running     0             4s
+   pod/mzutd2fbabf5-console-57f94b4588-v65lk        1/1     Running     0             4s
+   pod/mzutd2fbabf5-environmentd-1-0                1/1     Running     0             16s
 
    NAME                                               TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                                        AGE
-   service/mzoxtq6663xq-balancerd                     ClusterIP   None            <none>        6876/TCP,6875/TCP                              5m16s
-   service/mzoxtq6663xq-cluster-s1-replica-s1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   5m21s
-   service/mzoxtq6663xq-cluster-s2-replica-s2-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   5m21s
-   service/mzoxtq6663xq-cluster-s3-replica-s3-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   5m21s
-   service/mzoxtq6663xq-cluster-u1-replica-u1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   5m21s
-   service/mzoxtq6663xq-console                       ClusterIP   None            <none>        8080/TCP                                       5m9s
-   service/mzoxtq6663xq-environmentd                  ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            5m16s
-   service/mzoxtq6663xq-environmentd-1                ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            5m30s
-   service/mzoxtq6663xq-persist-pubsub-1              ClusterIP   None            <none>        6879/TCP                                       5m30s
+   service/mzutd2fbabf5-balancerd                     ClusterIP   None            <none>        6876/TCP,6875/TCP                              11s
+   service/mzutd2fbabf5-cluster-s2-replica-s1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   12s
+   service/mzutd2fbabf5-cluster-u1-replica-u1-gen-1   ClusterIP   None            <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   12s
+   service/mzutd2fbabf5-console                       ClusterIP   None            <none>        8080/TCP                                       4s
+   service/mzutd2fbabf5-environmentd                  ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            11s
+   service/mzutd2fbabf5-environmentd-1                ClusterIP   None            <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            16s
+   service/mzutd2fbabf5-persist-pubsub-1              ClusterIP   None            <none>        6879/TCP                                       16s
 
    NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
-   deployment.apps/mzoxtq6663xq-balancerd   1/1     1            1           5m16s
-   deployment.apps/mzoxtq6663xq-console     2/2     2            2           5m9s
+   deployment.apps/mzutd2fbabf5-balancerd   1/1     1            1           11s
+   deployment.apps/mzutd2fbabf5-console     2/2     2            2           4s
 
-   NAME                                               DESIRED   CURRENT   READY      AGE
-   replicaset.apps/mzoxtq6663xq-balancerd-d5c64779c   1         1         1          5m16s
-   replicaset.apps/mzoxtq6663xq-console-6f9f77654     2         2         2          5m9s qq
+   NAME                                                DESIRED   CURRENT   READY      AGE
+   replicaset.apps/mzutd2fbabf5-balancerd-6c9755c498   1         1         1          11s
+   replicaset.apps/mzutd2fbabf5-console-57f94b4588     2         2         2          4s
 
    NAME                                                        READY   AGE
-   statefulset.apps/mzoxtq6663xq-cluster-s1-replica-s1-gen-1   1/1     5m21s
-   statefulset.apps/mzoxtq6663xq-cluster-s2-replica-s2-gen-1   1/1     5m21s
-   statefulset.apps/mzoxtq6663xq-cluster-s3-replica-s3-gen-1   1/1     5m21s
-   statefulset.apps/mzoxtq6663xq-cluster-u1-replica-u1-gen-1   1/1     5m21s
-   statefulset.apps/mzoxtq6663xq-environmentd-1                1/1     5m30s
+   statefulset.apps/mzutd2fbabf5-cluster-s2-replica-s1-gen-1   1/1     12s
+   statefulset.apps/mzutd2fbabf5-cluster-u1-replica-u1-gen-1   1/1     11s
+   statefulset.apps/mzutd2fbabf5-environmentd-1                1/1     16s
 
-   NAME                           STATUS     COMPLETIONS   DURATION   AGE
-   job.batch/create-db-demo-db   Complete   1/1           3s         5m32s
+   NAME                          STATUS     COMPLETIONS   DURATION   AGE
+   job.batch/create-db-demo-db   Complete   1/1           11s        33s
    ```
 
 1. Open the Materialize Console in your browser:
@@ -345,15 +339,15 @@ node instance type, etc.), see the
 
       ```none
       NAME                           TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
-      service/mzoxtq6663xq-console   ClusterIP   None         <none>        8080/TCP   5m9s
+      service/mzutd2fbabf5-console   ClusterIP   None         <none>        8080/TCP   4s
       ```
 
    1. Forward the Materialize Console service to your local machine (substitute
-      your service name for `mzoxtq6663xq-console`):
+      your service name for `mzutd2fbabf5-console`):
 
       ```shell
       while true;
-      do kubectl port-forward service/mzoxtq6663xq-console 8080:8080 -n materialize-environment 2>&1 |
+      do kubectl port-forward service/mzutd2fbabf5-console 8080:8080 -n materialize-environment 2>&1 |
       grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
       done;
       ```

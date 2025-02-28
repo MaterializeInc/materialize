@@ -18,7 +18,7 @@ To configure the Materialize operator, you can:
 
   ```shell
   # Assumes you have added the Materialize operator Helm chart repository
-  helm install my-materialize-operator materialize/materialize-operator \ 
+  helm install my-materialize-operator materialize/materialize-operator \
      -f /path/to/your/config/values.yaml
   ```
 
