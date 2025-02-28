@@ -394,8 +394,8 @@ impl Error for DataflowError {}
 
 mod boxed_str {
 
-    use timely::container::columnation::Region;
-    use timely::container::columnation::StableRegion;
+    use differential_dataflow::containers::Region;
+    use differential_dataflow::containers::StableRegion;
 
     /// Region allocation for `String` data.
     ///
@@ -447,11 +447,11 @@ mod boxed_str {
 mod columnation {
     use std::iter::once;
 
+    use differential_dataflow::containers::{Columnation, Region, StableRegion};
     use mz_expr::EvalError;
     use mz_repr::adt::range::InvalidRangeError;
     use mz_repr::strconv::ParseError;
     use mz_repr::Row;
-    use timely::container::columnation::{Columnation, Region, StableRegion};
 
     use crate::errors::boxed_str::BoxStrStack;
     use crate::errors::{
@@ -907,8 +907,8 @@ mod columnation {
 
     #[cfg(test)]
     mod tests {
+        use differential_dataflow::containers::TimelyStack;
         use proptest::prelude::*;
-        use timely::container::columnation::TimelyStack;
 
         use super::*;
 

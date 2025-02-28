@@ -2238,6 +2238,15 @@ impl SystemVars {
         name == MAX_RESULT_SIZE.name() || self.is_dyncfg_var(name) || is_tracing_var(name)
     }
 
+    /// Returns whether the named variable is an initial compute configuration parameter
+    /// (things that go in `TimelyConfig` and cannot be changed at runtime).
+    pub fn is_initial_compute_config_var(&self, name: &str) -> bool {
+        name == ARRANGEMENT_EXERT_PROPORTIONALITY.name()
+            || name == ENABLE_TIMELY_ZERO_COPY.name()
+            || name == ENABLE_TIMELY_ZERO_COPY_LGALLOC.name()
+            || name == TIMELY_ZERO_COPY_LIMIT.name()
+    }
+
     /// Returns whether the named variable is a metrics configuration parameter
     pub fn is_metrics_config_var(&self, name: &str) -> bool {
         self.is_dyncfg_var(name)

@@ -129,10 +129,10 @@ use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 
+use differential_dataflow::containers::{Columnation, TimelyStack};
 use differential_dataflow::trace::implementations::BatchContainer;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
-use timely::container::columnation::{Columnation, TimelyStack};
 use timely::container::SizableContainer;
 use timely::progress::Antichain;
 use timely::{Container, PartialOrder};

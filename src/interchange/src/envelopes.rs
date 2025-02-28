@@ -13,8 +13,8 @@ use std::sync::LazyLock;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Batch, BatchReader, Cursor, TraceReader};
+use differential_dataflow::IntoOwned;
 use differential_dataflow::{AsCollection, Collection};
 use itertools::{EitherOrBoth, Itertools};
 use maplit::btreemap;

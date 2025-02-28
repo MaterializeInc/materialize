@@ -56,6 +56,7 @@ use std::fmt;
 use std::io;
 use std::rc::Rc;
 
+use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::AsCollection;
 use itertools::Itertools;
 use mz_mysql_util::quote_identifier;
@@ -66,7 +67,6 @@ use mz_storage_types::errors::{DataflowError, SourceError};
 use mz_storage_types::sources::SourceExport;
 use mz_timely_util::containers::stack::AccountedStackBuilder;
 use serde::{Deserialize, Serialize};
-use timely::container::columnation::TimelyStack;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::core::Partition;

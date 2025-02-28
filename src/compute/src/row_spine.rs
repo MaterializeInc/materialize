@@ -20,6 +20,7 @@ use differential_dataflow::trace::implementations::OffsetList;
 mod spines {
     use std::rc::Rc;
 
+    use differential_dataflow::containers::{Columnation, TimelyStack};
     use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
     use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
@@ -27,7 +28,6 @@ mod spines {
     use differential_dataflow::trace::implementations::Update;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use mz_repr::Row;
-    use timely::container::columnation::{Columnation, TimelyStack};
 
     use crate::row_spine::{DatumContainer, OffsetOptimized};
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
@@ -99,7 +99,7 @@ mod spines {
 
 /// A `Row`-specialized container using dictionary compression.
 mod container {
-    use differential_dataflow::trace::cursor::IntoOwned;
+    use differential_dataflow::IntoOwned;
     use std::cmp::Ordering;
 
     use differential_dataflow::trace::implementations::BatchContainer;

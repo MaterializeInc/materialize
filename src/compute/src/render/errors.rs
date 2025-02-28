@@ -11,9 +11,9 @@
 
 use std::hash::Hash;
 
+use differential_dataflow::containers::Columnation;
 use differential_dataflow::ExchangeData;
 use mz_repr::Row;
-use timely::container::columnation::Columnation;
 
 use crate::render::context::ShutdownToken;
 

@@ -14,6 +14,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
+use differential_dataflow::containers::{Columnation, CopyRegion};
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
@@ -21,7 +22,7 @@ use mz_timely_util::containers::{
     columnar_exchange, Col2ValBatcher, Column, ColumnBuilder, ProvidedBuilder,
 };
 use mz_timely_util::replay::MzReplay;
-use timely::container::columnation::{Columnation, CopyRegion};
+use timely::communication::Allocate;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};

@@ -24,10 +24,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll, Waker};
 
+use differential_dataflow::containers::{Columnation, TimelyStack};
 use futures_util::task::ArcWake;
 use futures_util::Stream;
 use timely::communication::{Pull, Push};
-use timely::container::columnation::{Columnation, TimelyStack};
 use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::ParallelizationContract;
 use timely::dataflow::channels::pushers::Tee;

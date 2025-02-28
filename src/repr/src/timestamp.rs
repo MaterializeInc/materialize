@@ -470,16 +470,10 @@ impl columnation::Columnation for Timestamp {
     type InnerRegion = columnation::CopyRegion<Timestamp>;
 }
 
-mod flatcontainer {
-    use flatcontainer::{IntoOwned, MirrorRegion};
-    use mz_ore::flatcontainer::MzRegionPreference;
+mod differential {
+    use differential_dataflow::IntoOwned;
 
     use crate::Timestamp;
-
-    impl MzRegionPreference for Timestamp {
-        type Owned = Self;
-        type Region = MirrorRegion<Timestamp>;
-    }
 
     impl<'a> IntoOwned<'a> for Timestamp {
         type Owned = Self;

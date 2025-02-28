@@ -12,11 +12,12 @@
 //! Consult [TopKPlan] documentation for details.
 
 use columnar::Columnar;
+use differential_dataflow::containers::Columnation;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::cursor::IntoOwned;
 use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
+use differential_dataflow::IntoOwned;
 use differential_dataflow::{AsCollection, Collection};
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
@@ -31,7 +32,6 @@ use mz_timely_util::operator::CollectionExt;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use timely::container::columnation::Columnation;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
@@ -841,11 +841,11 @@ pub mod monoids {
     use std::hash::{Hash, Hasher};
     use std::rc::Rc;
 
+    use differential_dataflow::containers::{Columnation, Region};
     use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
     use mz_expr::ColumnOrder;
     use mz_repr::{DatumVec, Diff, Row};
     use serde::{Deserialize, Serialize};
-    use timely::container::columnation::{Columnation, Region};
 
     /// A monoid containing a row and an ordering.
     #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash, Default)]

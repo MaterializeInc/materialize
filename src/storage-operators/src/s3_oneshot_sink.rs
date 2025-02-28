@@ -16,6 +16,7 @@ use std::rc::Rc;
 
 use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
+use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::Hashable;
 use futures::StreamExt;
 use mz_ore::cast::CastFrom;
@@ -31,7 +32,6 @@ use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use timely::container::columnation::TimelyStack;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Broadcast;
 use timely::dataflow::{Scope, Stream};
