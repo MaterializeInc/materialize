@@ -19,12 +19,15 @@ use std::time::Duration;
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use futures::stream::{BoxStream, StreamExt};
-use mz_cluster_client::client::ClusterReplicaLocation;
+use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
 use mz_compute_client::controller::ComputeControllerTimestamp;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
-use mz_controller_types::dyncfgs::CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL;
+use mz_controller_types::dyncfgs::{
+    ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
+    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
+};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_orchestrator::{
@@ -634,12 +637,39 @@ where
         let aws_connection_role_arn = self.connection_context().aws_connection_role_arn.clone();
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let secrets_args = self.secrets_args.to_flags();
+
+        // TODO(teskje): use the same values as for compute?
+        let storage_proto_timely_config = TimelyConfig {
+            // This value is not currently used by storage, so we just choose
+            // some identifiable value.
+            arrangement_exert_proportionality: 1337,
+            ..Default::default()
+        };
+        let compute_proto_timely_config = TimelyConfig {
+            arrangement_exert_proportionality: ARRANGEMENT_EXERT_PROPORTIONALITY.get(&self.dyncfg),
+            enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get(&self.dyncfg),
+            enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC.get(&self.dyncfg),
+            zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get(&self.dyncfg),
+            ..Default::default()
+        };
+
         let service = self.orchestrator.ensure_service(
             &service_name,
             ServiceConfig {
                 image: self.clusterd_image.clone(),
                 init_container_image: self.init_container_image.clone(),
                 args: Box::new(move |assigned| {
+                    let storage_timely_config = TimelyConfig {
+                        workers: location.allocation.workers,
+                        addresses: assigned.peer_addresses("storage"),
+                        ..storage_proto_timely_config
+                    };
+                    let compute_timely_config = TimelyConfig {
+                        workers: location.allocation.workers,
+                        addresses: assigned.peer_addresses("compute"),
+                        ..compute_proto_timely_config
+                    };
+
                     let mut args = vec![
                         format!(
                             "--storage-controller-listen-addr={}",
@@ -657,6 +687,14 @@ where
                         format!("--opentelemetry-resource=replica_id={}", replica_id),
                         format!("--persist-pubsub-url={}", persist_pubsub_url),
                         format!("--environment-id={}", environment_id),
+                        format!(
+                            "--storage-timely-config={}",
+                            storage_timely_config.to_string(),
+                        ),
+                        format!(
+                            "--compute-timely-config={}",
+                            compute_timely_config.to_string(),
+                        ),
                     ];
                     if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
                         args.push(format!(

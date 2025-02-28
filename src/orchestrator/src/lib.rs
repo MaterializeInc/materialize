@@ -267,6 +267,13 @@ pub struct ServiceAssignments<'a> {
     pub peer_addrs: &'a [BTreeMap<String, String>],
 }
 
+impl ServiceAssignments<'_> {
+    /// Return the peer addresses for the specified [`ServicePort`] name.
+    pub fn peer_addresses(&self, name: &str) -> Vec<String> {
+        self.peer_addrs.iter().map(|a| a[name].clone()).collect()
+    }
+}
+
 /// Describes a limit on memory.
 #[derive(Copy, Clone, Debug, PartialOrd, Eq, Ord, PartialEq)]
 pub struct MemoryLimit(pub ByteSize);
