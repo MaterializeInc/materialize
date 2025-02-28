@@ -31,7 +31,7 @@ prost = { version = "0.13.4", features = [
     "no-recursion-limit",
 ], optional = true }
 serde = { version = "1.0.218", features = ["derive"], optional = true }
-thiserror = "1.0.37"
+thiserror = "2.0.11"
 tokio = { version = "1.38.0", features = ["fs", "rt", "sync"] }
 tokio-postgres = { version = "0.7.8" }
 tracing = "0.1.37"
