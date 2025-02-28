@@ -1032,6 +1032,14 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         )
         time.sleep(10)
 
+        with psycopg.connect(
+            "postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+            autocommit=True,
+        ) as conn:
+            with conn.cursor() as cur:
+                # Required for some testdrive tests
+                cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 1)")
+
         with c.override(
             Testdrive(
                 materialize_url="postgres://materialize@127.0.0.1:6875/materialize",
@@ -1441,6 +1449,14 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             env=venv_env,
         )
         time.sleep(10)
+
+        with psycopg.connect(
+            "postgres://mz_system:materialize@127.0.0.1:6877/materialize",
+            autocommit=True,
+        ) as conn:
+            with conn.cursor() as cur:
+                # Required for some testdrive tests
+                cur.execute("ALTER CLUSTER mz_system SET (REPLICATION FACTOR 1)")
 
         with c.override(
             Testdrive(
