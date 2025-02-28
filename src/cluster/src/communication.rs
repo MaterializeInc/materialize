@@ -36,6 +36,7 @@
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Display;
+use std::num::NonZeroI64;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -56,13 +57,15 @@ pub async fn initialize_networking<P>(
     workers: usize,
     process: usize,
     addresses: Vec<String>,
-    epoch: ClusterStartupEpoch,
     refill: BytesRefill,
     builder_fn: impl Fn(TcpBuilder<P::Peer>) -> GenericBuilder,
 ) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error>
 where
     P: PeerBuilder,
 {
+    // FIXME
+    let epoch = ClusterStartupEpoch::new(NonZeroI64::new(1).unwrap(), 0);
+
     info!(
         process = process,
         ?addresses,
