@@ -19,7 +19,7 @@ http = "1.2.0"
 humantime = { version = "2.1.0" }
 mz-build-info = { path = "../build-info", default-features = false }
 mz-orchestrator = { path = "../orchestrator", default-features = false }
-mz-ore = { path = "../ore", default-features = false, features = ["tracing_", "cli", "test"] }
+mz-ore = { path = "../ore", default-features = false, features = ["tracing", "cli", "test"] }
 mz-repr = { path = "../repr", default-features = false, optional = true }
 mz-service = { path = "../service", default-features = false }
 mz-tracing = { path = "../tracing", default-features = false }

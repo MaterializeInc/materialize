@@ -18,7 +18,7 @@ headers = "0.4.0"
 http = "1.2.0"
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 include_dir = "0.7.3"
-mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing_"] }
+mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing"] }
 prometheus = { version = "0.13.3", default-features = false }
 serde = "1.0.218"
 serde_json = { version = "1.0.125" }

@@ -26,7 +26,7 @@ mz-catalog = { path = "../catalog" }
 mz-controller = { path = "../controller" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-environmentd = { path = "../environmentd", default-features = false }
-mz-ore = { path = "../ore", features = ["async", "tracing_"] }
+mz-ore = { path = "../ore", features = ["async", "tracing"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
@@ -50,9 +50,9 @@ time = "0.3.17"
 tracing = "0.1.37"
 tokio = "1.38.0"
 tokio-postgres = { version = "0.7.8", features = [
-  "with-chrono-0_4",
-  "with-uuid-1",
-  "with-serde_json-1",
+    "with-chrono-0_4",
+    "with-uuid-1",
+    "with-serde_json-1",
 ] }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tower-http = { version = "0.5.2", features = ["cors"] }

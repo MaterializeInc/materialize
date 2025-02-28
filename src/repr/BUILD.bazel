@@ -25,8 +25,8 @@ rust_library(
     compile_data = ["Cargo.toml"],
     crate_features = [
         "default",
+        "tracing",
         "tracing-subscriber",
-        "tracing_",
     ],
     data = [],
     disable_pipelining = False,
@@ -64,8 +64,8 @@ rust_test(
     crate = ":mz_repr",
     crate_features = [
         "default",
+        "tracing",
         "tracing-subscriber",
-        "tracing_",
     ],
     data = [] + glob(["src/adt/snapshots/*"]),
     env = {"INSTA_WORKSPACE_ROOT": "."},

@@ -28,7 +28,7 @@ mz-dyncfgs = { path = "../dyncfgs" }
 mz-http-util = { path = "../http-util" }
 mz-metrics = { path = "../metrics" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-mz-ore = { path = "../ore", features = ["async", "tracing_"] }
+mz-ore = { path = "../ore", features = ["async", "tracing"] }
 mz-persist-client = { path = "../persist-client" }
 mz-prof-http = { path = "../prof-http" }
 mz-service = { path = "../service" }
