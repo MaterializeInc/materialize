@@ -1450,3 +1450,13 @@ query T
 SELECT ARRAY[1,3,7,NULL] @> ARRAY[1,3,7,NULL] AS contains;
 ----
 false
+
+# Make sure we can index into a CAST-ed array.
+
+statement ok
+CREATE TABLE jsons (payload jsonb, random_index int, random_id uuid);
+
+statement ok
+CREATE MATERIALIZED VIEW json_mv AS (
+    SELECT * FROM jsons WHERE random_id = CAST(payload->>'my_field' AS uuid[])[random_index]
+)
