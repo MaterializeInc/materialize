@@ -9,7 +9,6 @@
 
 //! Service orchestration for tracing-aware services.
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::sync::Arc;
@@ -24,7 +23,7 @@ use mz_build_info::BuildInfo;
 #[cfg(feature = "tokio-console")]
 use mz_orchestrator::ServicePort;
 use mz_orchestrator::{
-    NamespacedOrchestrator, Orchestrator, Service, ServiceConfig, ServiceEvent,
+    NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics,
 };
 use mz_ore::cli::KeyValueArg;
@@ -398,10 +397,10 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let tracing_args = self.tracing_args.clone();
         let log_prefix_arg = format!("{}-{}", self.namespace, id);
-        let args_fn = move |listen_addrs: &BTreeMap<String, String>| {
+        let args_fn = move |assigned: ServiceAssignments| {
             #[cfg(feature = "tokio-console")]
-            let tokio_console_listen_addr = listen_addrs.get("tokio-console");
-            let mut args = (service_config.args)(listen_addrs);
+            let tokio_console_listen_addr = assigned.listen_addrs.get("tokio-console");
+            let mut args = (service_config.args)(assigned);
             let TracingCliArgs {
                 startup_log_filter,
                 log_prefix,

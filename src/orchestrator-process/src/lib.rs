@@ -33,8 +33,9 @@ use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
 use mz_orchestrator::scheduling_config::ServiceSchedulingConfig;
 use mz_orchestrator::{
-    CpuLimit, DiskLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, Service, ServiceConfig,
-    ServiceEvent, ServicePort, ServiceProcessMetrics, ServiceStatus,
+    CpuLimit, DiskLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, Service,
+    ServiceAssignments, ServiceConfig, ServiceEvent, ServicePort, ServiceProcessMetrics,
+    ServiceStatus,
 };
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::error::ErrorExt;
@@ -466,7 +467,7 @@ struct EnsureServiceConfig {
     pub image: String,
     /// A function that generates the arguments for each process of the service
     /// given the assigned listen addresses for each named port.
-    pub args: Box<dyn Fn(&BTreeMap<String, String>) -> Vec<String> + Send + Sync>,
+    pub args: Box<dyn Fn(ServiceAssignments) -> Vec<String> + Send + Sync>,
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
@@ -623,25 +624,32 @@ impl OrchestratorWorker {
             None => (),
         }
 
+        // Create sockets for all processes in the service.
+        let mut peer_addrs = Vec::new();
+        for i in 0..scale.into() {
+            let addresses = ports_in
+                .iter()
+                .map(|port| {
+                    let addr = socket_path(&run_dir, &port.name, i);
+                    (port.name.clone(), addr)
+                })
+                .collect();
+            peer_addrs.push(addresses);
+        }
+
         {
             let mut services = self.services.lock().expect("lock poisoned");
 
             // Create the state for new processes.
             let mut process_states = vec![];
             for i in 0..scale.into() {
-                let listen_addrs = ports_in
-                    .iter()
-                    .map(|p| {
-                        let addr = socket_path(&run_dir, &p.name, i);
-                        (p.name.clone(), addr)
-                    })
-                    .collect();
+                let listen_addrs = &peer_addrs[i];
 
                 // Fill out placeholders in the command wrapper for this process.
                 let mut command_wrapper = self.config.command_wrapper.clone();
                 if let Some(parts) = command_wrapper.get_mut(1..) {
                     for part in parts {
-                        *part = interpolate_command(&part[..], &full_id, &listen_addrs);
+                        *part = interpolate_command(&part[..], &full_id, listen_addrs);
                     }
                 }
 
@@ -671,7 +679,10 @@ impl OrchestratorWorker {
                     });
                 }
 
-                let mut args = args(&listen_addrs);
+                let mut args = args(ServiceAssignments {
+                    listen_addrs,
+                    peer_addrs: &peer_addrs,
+                });
                 if disk {
                     if let Some(scratch) = &scratch_dir {
                         args.push(format!("--scratch-directory={}", scratch.display()));
