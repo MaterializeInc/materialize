@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use mz_build_info::BuildInfo;
 use mz_cluster_client::WallclockLagFn;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::ClusterStartupEpoch;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_compute_types::plan::LirId;
@@ -1009,11 +1009,6 @@ where
     }
 
     async fn run(mut self) {
-        self.send(ComputeCommand::CreateTimely {
-            config: TimelyConfig::default(),
-            epoch: ClusterStartupEpoch::new(self.envd_epoch, 0),
-        });
-
         // Send a placeholder instance configuration for the replica task to fill in.
         let dummy_logging_config = Default::default();
         self.send(ComputeCommand::CreateInstance(InstanceConfig {
