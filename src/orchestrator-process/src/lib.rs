@@ -683,6 +683,7 @@ impl OrchestratorWorker {
                     listen_addrs,
                     peer_addrs: &peer_addrs,
                 });
+                args.push(format!("--process={i}"));
                 if disk {
                     if let Some(scratch) = &scratch_dir {
                         args.push(format!("--scratch-directory={}", scratch.display()));
