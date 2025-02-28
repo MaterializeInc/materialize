@@ -19,6 +19,7 @@ lgalloc = "0.5.0"
 mz-cluster-client = { path = "../cluster-client" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
 mz-service = { path = "../service" }
+rand = "0.8.5"
 regex = "1.10.6"
 timely = "0.20.0"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "net"] }
