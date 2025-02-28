@@ -5198,6 +5198,7 @@ dependencies = [
  "mz-cluster-client",
  "mz-ore",
  "mz-service",
+ "rand 0.8.5",
  "regex",
  "timely",
  "tokio",

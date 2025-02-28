@@ -7,6 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Note: This module contains a fallback version of the socket connection protocol. The new
+//! version lives in `communication_v2` and is used by default. The old version can still be
+//! selected through the `enable_create_sockets_v2` dyncfg.
+//!
+//! ----------------------------------------------------------------------------
+//!
 //! Code to spin up communication mesh for a cluster replica.
 //!
 //! The startup protocol is as follows:
@@ -39,7 +45,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use mz_cluster_client::client::ClusterStartupEpoch;
@@ -51,6 +57,8 @@ use timely::communication::allocator::zero_copy::initialize::initialize_networki
 use timely::communication::allocator::{GenericBuilder, PeerBuilder};
 use tracing::{debug, info, warn};
 
+use crate::communication_v2::create_sockets as create_sockets_v2;
+
 /// Creates communication mesh from cluster config
 pub async fn initialize_networking<P>(
     workers: usize,
@@ -59,19 +67,33 @@ pub async fn initialize_networking<P>(
     epoch: ClusterStartupEpoch,
     refill: BytesRefill,
     builder_fn: impl Fn(TcpBuilder<P::Peer>) -> GenericBuilder,
+    use_create_sockets_v2: bool,
 ) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error>
 where
     P: PeerBuilder,
 {
-    info!(
-        process = process,
-        ?addresses,
-        "initializing network for timely instance, with {} processes for epoch number {epoch}",
-        addresses.len()
-    );
-    let sockets = create_sockets(addresses, u64::cast_from(process), epoch)
-        .await
-        .context("failed to set up timely sockets")?;
+    let sockets = if use_create_sockets_v2 {
+        info!(
+            process,
+            ?addresses,
+            "initializing network for timely instance",
+        );
+        loop {
+            match create_sockets_v2(process, &addresses).await {
+                Ok(sockets) => break sockets,
+                Err(error) if error.is_fatal() => bail!("failed to set up Timely sockets: {error}"),
+                Err(error) => info!("creating sockets failed: {error}; retrying"),
+            }
+        }
+    } else {
+        info!(
+            process, ?addresses, %epoch,
+            "initializing network for timely instance (legacy protocol)",
+        );
+        create_sockets(addresses, u64::cast_from(process), epoch)
+            .await
+            .context("failed to set up timely sockets")?
+    };
 
     if sockets
         .iter()
