@@ -22,7 +22,6 @@ use mz_timely_util::containers::{
     columnar_exchange, Col2ValBatcher, Column, ColumnBuilder, ProvidedBuilder,
 };
 use mz_timely_util::replay::MzReplay;
-use timely::communication::Allocate;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::channels::pushers::{Counter, Tee};
