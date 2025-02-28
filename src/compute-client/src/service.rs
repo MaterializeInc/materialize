@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use bytesize::ByteSize;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use futures::future::BoxFuture;
 use mz_expr::row::RowCollection;
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
@@ -83,7 +84,7 @@ pub type ComputeGrpcClient = GrpcClient<ComputeProtoServiceTypes>;
 #[async_trait]
 impl<F, G> ProtoCompute for GrpcServer<F>
 where
-    F: Fn() -> G + Send + Sync + 'static,
+    F: Fn() -> BoxFuture<'static, G> + Send + Sync + 'static,
     G: ComputeClient + 'static,
 {
     type CommandResponseStreamStream = ResponseStream<ProtoComputeResponse>;
