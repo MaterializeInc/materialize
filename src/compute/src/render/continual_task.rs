@@ -464,8 +464,8 @@ where
         };
 
         let collection = compute_state.expect_collection_mut(sink_id);
-        let mut probe = ProbeHandle::default();
-        let to_append = to_append.probe_with(&mut probe);
+        let probe = ProbeHandle::default();
+        let to_append = to_append.probe_with(&probe);
         collection.compute_probe = Some(probe);
         let sink_write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
         collection.sink_write_frontier = Some(Rc::clone(&sink_write_frontier));
@@ -898,11 +898,11 @@ mod tests {
         timely::execute(Config::thread(), |worker| {
             let (mut input, probe, output) = worker.dataflow(|scope| {
                 let (handle, input) = scope.new_input();
-                let mut probe = ProbeHandle::<Timestamp>::new();
+                let probe = ProbeHandle::<Timestamp>::new();
                 let output = input
                     .as_collection()
                     .step_forward("test")
-                    .probe_with(&mut probe)
+                    .probe_with(&probe)
                     .inner
                     .capture();
                 (handle, probe, output)
