@@ -23,10 +23,10 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
-use std::mem;
 use std::num::NonZeroI64;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{mem, str};
 
 use futures::future::BoxFuture;
 use mz_build_info::BuildInfo;
@@ -38,6 +38,7 @@ use mz_compute_client::controller::{
 use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_controller_types::WatchSetId;
+use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
 use mz_ore::id_gen::Gen;
 use mz_ore::instrument;
@@ -200,11 +201,25 @@ pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
     ///
     /// See [`self.install_watch_set`] for a description of watch sets.
     immediate_watch_sets: Vec<WatchSetId>,
+
+    /// Dynamic system configuration.
+    dyncfg: ConfigSet,
+    /// `arrangement_exert_proportionality` value passed to new replicas.
+    arrangement_exert_proportionality: u32,
 }
 
 impl<T: ComputeControllerTimestamp> Controller<T> {
-    pub fn set_arrangement_exert_proportionality(&mut self, value: u32) {
-        self.compute.set_arrangement_exert_proportionality(value);
+    /// Update the controller configuration.
+    pub fn update_configuration(
+        &mut self,
+        arrangement_exert_proportionality: u32,
+        dyncfg_updates: ConfigUpdates,
+    ) {
+        self.arrangement_exert_proportionality = arrangement_exert_proportionality;
+        self.compute
+            .set_arrangement_exert_proportionality(arrangement_exert_proportionality);
+
+        dyncfg_updates.apply(&self.dyncfg);
     }
 
     /// Returns the connection context installed in the controller.
@@ -251,6 +266,8 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             unfulfilled_watch_sets,
             watch_set_id_gen: _,
             immediate_watch_sets,
+            dyncfg: _,
+            arrangement_exert_proportionality,
         } = self;
 
         let compute = compute.dump().await?;
@@ -279,6 +296,10 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             field("readiness", format!("{readiness:?}"))?,
             field("unfulfilled_watch_sets", unfulfilled_watch_sets)?,
             field("immediate_watch_sets", immediate_watch_sets)?,
+            field(
+                "arrangement_exert_proportionality",
+                arrangement_exert_proportionality,
+            )?,
         ]);
         Ok(serde_json::Value::Object(map))
     }
@@ -719,6 +740,8 @@ where
             unfulfilled_watch_sets: BTreeMap::new(),
             watch_set_id_gen: Gen::default(),
             immediate_watch_sets: Vec::new(),
+            dyncfg: mz_dyncfgs::all_dyncfgs(),
+            arrangement_exert_proportionality: 16,
         };
 
         if !this.read_only {
