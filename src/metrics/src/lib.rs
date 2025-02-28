@@ -22,7 +22,6 @@ use std::time::Duration;
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_ore::metrics::MetricsRegistry;
 use tokio::time::Interval;
-use tokio_util::sync::CancellationToken;
 
 pub use dyncfgs::all_dyncfgs;
 
@@ -41,6 +40,10 @@ pub struct Metrics {
 static METRICS: std::sync::Mutex<Option<Metrics>> = std::sync::Mutex::new(None);
 
 /// Register all metrics into the provided registry.
+///
+/// We do not recommend calling this function multiple times. It is safe to call this function,
+/// but it might delete previous metrics. If we ever want to change this, we should
+/// remove the shared static mutex and make this function return a handle to the metrics.
 ///
 /// This function is async, because it needs to be called from a tokio runtime context.
 #[allow(clippy::unused_async)]
@@ -65,24 +68,26 @@ pub async fn register_metrics_into(metrics_registry: &MetricsRegistry, config_se
         &update_duration_metric,
     );
 
-    *METRICS.lock().unwrap() = Some(Metrics {
+    *METRICS.lock().expect("lock poisoned") = Some(Metrics {
         lgalloc,
         rusage,
         config_set,
-    })
+    });
 }
 
 /// Update the configuration of the metrics.
 pub fn update_dyncfg(config_updates: &ConfigUpdates) {
     if let Some(metrics) = METRICS.lock().expect("lock poisoned").as_mut() {
-        config_updates.apply(&metrics.config_set);
-        metrics.apply_dyncfg_updates();
+        metrics.apply_dyncfg_updates(config_updates);
     }
 }
 
 impl Metrics {
     /// Update the dynamic configuration.
-    pub fn apply_dyncfg_updates(&mut self) {
+    pub fn apply_dyncfg_updates(&mut self, config_updates: &ConfigUpdates) {
+        // Update the config set.
+        config_updates.apply(&self.config_set);
+        // Notify tasks about updated configuration.
         self.lgalloc.update_dyncfg(&self.config_set);
         self.rusage.update_dyncfg(&self.config_set);
     }
@@ -93,15 +98,13 @@ impl Metrics {
         interval_config: mz_dyncfg::Config<Duration>,
         update_duration_metric: &mz_ore::metrics::HistogramVec,
     ) -> MetricsTask {
-        let token = CancellationToken::new();
-        let token2 = token.clone();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         // Start disabled.
         let mut interval: Option<Interval> = None;
 
         let update_duration_metric =
-            update_duration_metric.get_delete_on_drop_metric(vec![T::NAME]);
+            update_duration_metric.get_delete_on_drop_metric(&[T::NAME][..]);
 
         let mut metrics = constructor(metrics_registry);
 
@@ -116,7 +119,7 @@ impl Metrics {
         };
 
         let update_interval = |new_interval, interval: &mut Option<Interval>| {
-            tracing::debug!(metrics = T::NAME, ?new_interval, "updating interval");
+            // Zero duration disables ticking.
             if new_interval == Duration::ZERO {
                 *interval = None;
                 return;
@@ -125,6 +128,7 @@ impl Metrics {
             if Some(new_interval) == interval.as_ref().map(Interval::period) {
                 return;
             }
+            tracing::debug!(metrics = T::NAME, ?new_interval, "updating interval");
             let mut new_interval = tokio::time::interval(new_interval);
             new_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             *interval = Some(new_interval);
@@ -136,8 +140,10 @@ impl Metrics {
                     _ = async { interval.as_mut().unwrap().tick().await }, if interval.is_some() => {
                         update_metrics()
                     }
-                    _ = token2.cancelled() => break,
-                    Some(new_interval) = rx.recv() => update_interval(new_interval, &mut interval),
+                    new_interval = rx.recv() => match new_interval {
+                        Some(new_interval) => update_interval(new_interval, &mut interval),
+                        None => break,
+                    }
                 }
             }
         });
@@ -145,7 +151,6 @@ impl Metrics {
         MetricsTask {
             tx,
             interval_config,
-            token,
         }
     }
 }
@@ -164,13 +169,6 @@ pub trait MetricsUpdate: Send + Sync + 'static {
 struct MetricsTask {
     interval_config: mz_dyncfg::Config<Duration>,
     tx: tokio::sync::mpsc::UnboundedSender<Duration>,
-    token: CancellationToken,
-}
-
-impl Drop for MetricsTask {
-    fn drop(&mut self) {
-        self.token.cancel();
-    }
 }
 
 impl MetricsTask {
