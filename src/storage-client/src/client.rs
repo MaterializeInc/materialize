@@ -23,7 +23,6 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use mz_cluster_client::ReplicaId;
-use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
 use mz_ore::assert_none;
 use mz_persist_client::batch::{BatchBuilder, ProtoBatch};
 use mz_persist_client::write::WriteHandle;
@@ -110,12 +109,6 @@ where
 /// Commands related to the ingress and egress of collections.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
-    /// Specifies to the storage server(s) the shape of the timely cluster
-    /// we want created, before other commands are sent.
-    CreateTimely {
-        config: Box<TimelyConfig>,
-        epoch: ClusterStartupEpoch,
-    },
     /// Indicates that the controller has sent all commands reflecting its
     /// initial state.
     InitializationComplete,
@@ -157,8 +150,7 @@ impl<T> StorageCommand<T> {
     pub fn installs_objects(&self) -> bool {
         use StorageCommand::*;
         match self {
-            CreateTimely { .. }
-            | InitializationComplete
+            InitializationComplete
             | AllowWrites
             | UpdateConfiguration(_)
             | AllowCompaction(_, _)
@@ -296,13 +288,8 @@ impl Arbitrary for RunSinkCommand<mz_repr::Timestamp> {
 impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageCommand {
         use proto_storage_command::Kind::*;
-        use proto_storage_command::*;
         ProtoStorageCommand {
             kind: Some(match self {
-                StorageCommand::CreateTimely { config, epoch } => CreateTimely(ProtoCreateTimely {
-                    config: Some(*config.into_proto()),
-                    epoch: Some(epoch.into_proto()),
-                }),
                 StorageCommand::InitializationComplete => InitializationComplete(()),
                 StorageCommand::AllowWrites => AllowWrites(()),
                 StorageCommand::UpdateConfiguration(params) => {
@@ -326,13 +313,7 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
 
     fn from_proto(proto: ProtoStorageCommand) -> Result<Self, TryFromProtoError> {
         use proto_storage_command::Kind::*;
-        use proto_storage_command::*;
         match proto.kind {
-            Some(CreateTimely(ProtoCreateTimely { config, epoch })) => {
-                let config = Box::new(config.into_rust_if_some("ProtoCreateTimely::config")?);
-                let epoch = epoch.into_rust_if_some("ProtoCreateTimely::epoch")?;
-                Ok(StorageCommand::CreateTimely { config, epoch })
-            }
             Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
             Some(AllowWrites(())) => Ok(StorageCommand::AllowWrites),
             Some(UpdateConfiguration(params)) => {
@@ -373,7 +354,6 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
-            // TODO(guswynn): cluster-unification: also test `CreateTimely` here.
             any::<RunIngestionCommand>()
                 .prop_map(Box::new)
                 .prop_map(StorageCommand::RunIngestion)
@@ -810,7 +790,6 @@ where
         //
         // TODO(guswynn): cluster-unification: consolidate this with compute.
         let _ = match command {
-            StorageCommand::CreateTimely { .. } => {}
             StorageCommand::RunIngestion(ingestion) => {
                 self.insert_new_uppers(ingestion.description.collection_ids());
             }
@@ -854,27 +833,9 @@ where
     fn split_command(&mut self, command: StorageCommand<T>) -> Vec<Option<StorageCommand<T>>> {
         self.observe_command(&command);
 
-        match command {
-            StorageCommand::CreateTimely { config, epoch } => {
-                let timely_cmds = config.split_command(self.parts);
-
-                let timely_cmds = timely_cmds
-                    .into_iter()
-                    .map(|config| {
-                        Some(StorageCommand::CreateTimely {
-                            config: Box::new(config),
-                            epoch,
-                        })
-                    })
-                    .collect();
-                timely_cmds
-            }
-            command => {
-                // Fan out to all processes (which will fan out to all workers).
-                // StorageState manages ordering of commands internally.
-                vec![Some(command); self.parts]
-            }
-        }
+        // Fan out to all processes (which will fan out to all workers).
+        // StorageState manages ordering of commands internally.
+        vec![Some(command); self.parts]
     }
 
     fn absorb_response(
@@ -1077,15 +1038,6 @@ impl RustType<ProtoCompaction> for (GlobalId, Antichain<mz_repr::Timestamp>) {
                 .frontier
                 .into_rust_if_some("ProtoCompaction::frontier")?,
         ))
-    }
-}
-
-impl TryIntoTimelyConfig for StorageCommand {
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, ClusterStartupEpoch), Self> {
-        match self {
-            StorageCommand::CreateTimely { config, epoch } => Ok((*config, epoch)),
-            cmd => Err(cmd),
-        }
     }
 }
 

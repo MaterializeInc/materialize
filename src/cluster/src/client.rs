@@ -16,7 +16,7 @@ use std::thread::Thread;
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use differential_dataflow::trace::ExertionLogic;
-use mz_cluster_client::client::{TimelyConfig, TryIntoTimelyConfig};
+use mz_cluster_client::client::TimelyConfig;
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
 use mz_service::local::LocalClient;
 use timely::WorkerConfig;
@@ -149,7 +149,7 @@ where
 #[async_trait]
 pub trait ClusterSpec: Clone + Send + Sync + 'static {
     /// The cluster command type.
-    type Command: fmt::Debug + Send + TryIntoTimelyConfig;
+    type Command: fmt::Debug + Send;
     /// The cluster response type.
     type Response: fmt::Debug + Send;
 

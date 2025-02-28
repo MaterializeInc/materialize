@@ -1080,11 +1080,6 @@ where
     }
 
     async fn run(mut self) {
-        self.send(ComputeCommand::CreateTimely {
-            config: Default::default(),
-            epoch: ClusterStartupEpoch::new(self.envd_epoch, 0),
-        });
-
         // Send a placeholder instance configuration for the replica task to fill in.
         let dummy_instance_config = Default::default();
         self.send(ComputeCommand::CreateInstance(dummy_instance_config));

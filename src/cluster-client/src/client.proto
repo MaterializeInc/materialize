@@ -17,13 +17,3 @@ message ProtoClusterStartupEpoch {
   int64 envd = 1;
   uint64 replica = 2;
 }
-
-message ProtoTimelyConfig {
-  uint64 workers = 1;
-  uint64 process = 2;
-  repeated string addresses = 3;
-  uint32 arrangement_exert_proportionality = 4;
-  bool enable_zero_copy = 5;
-  bool enable_zero_copy_lgalloc = 6;
-  optional uint64 zero_copy_limit = 7;
-}

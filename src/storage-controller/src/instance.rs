@@ -21,7 +21,7 @@ use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
-use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
+use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
@@ -127,7 +127,7 @@ where
         let history = CommandHistory::new(metrics.for_history(), enable_snapshot_frontier);
         let epoch = ClusterStartupEpoch::new(envd_epoch, 0);
 
-        let mut instance = Self {
+        Self {
             workload_class,
             replicas: Default::default(),
             active_ingestions: Default::default(),
@@ -138,14 +138,7 @@ where
             metrics,
             now,
             response_tx: instance_response_tx,
-        };
-
-        instance.send(StorageCommand::CreateTimely {
-            config: Default::default(),
-            epoch,
-        });
-
-        instance
+        }
     }
 
     /// Returns the IDs of all replicas connected to this storage instance.
@@ -161,7 +154,7 @@ where
 
         self.epoch.bump_replica();
         let metrics = self.metrics.for_replica(id);
-        let replica = Replica::new(id, config, self.epoch, metrics, self.response_tx.clone());
+        let replica = Replica::new(id, config, metrics, self.response_tx.clone());
 
         self.replicas.insert(id, replica);
 
@@ -780,7 +773,6 @@ where
     fn new(
         id: ReplicaId,
         config: ReplicaConfig,
-        epoch: ClusterStartupEpoch,
         metrics: ReplicaMetrics,
         response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
     ) -> Self {
@@ -792,7 +784,6 @@ where
             ReplicaTask {
                 replica_id: id,
                 config: config.clone(),
-                epoch,
                 metrics: metrics.clone(),
                 connected: Arc::clone(&connected),
                 command_rx,
@@ -835,8 +826,6 @@ struct ReplicaTask<T> {
     replica_id: ReplicaId,
     /// Replica configuration.
     config: ReplicaConfig,
-    /// The epoch identifying this incarnation of the replica.
-    epoch: ClusterStartupEpoch,
     /// Replica metrics.
     metrics: ReplicaMetrics,
     /// Flag to report successful replica connection.
@@ -924,12 +913,11 @@ where
                 // Command from controller to forward to replica.
                 // `tokio::sync::mpsc::UnboundedReceiver::recv` is documented as cancel safe.
                 command = self.command_rx.recv() => {
-                    let Some(mut command) = command else {
+                    let Some(command) = command else {
                         tracing::debug!(%self.replica_id, "controller is no longer interested in this replica, shutting down message loop");
                         break;
                     };
 
-                    self.specialize_command(&mut command);
                     client.send(command).await?;
                 },
                 // Response from replica to forward to controller.
@@ -948,31 +936,5 @@ where
         }
 
         Ok(())
-    }
-
-    /// Specialize a command for the given replica configuration.
-    ///
-    /// Most [`StorageCommand`]s are independent of the target replica, but some contain
-    /// replica-specific fields that must be adjusted before sending.
-    fn specialize_command(&self, command: &mut StorageCommand<T>) {
-        if let StorageCommand::CreateTimely { config, epoch } = command {
-            **config = TimelyConfig {
-                workers: self.config.location.workers,
-                // Overridden by the storage `PartitionedState` implementation.
-                process: 0,
-                addresses: self.config.location.dataflow_addrs.clone(),
-                // This value is not currently used by storage, so we just choose
-                // some identifiable value.
-                arrangement_exert_proportionality: 1337,
-                // Disable zero-copy by default.
-                // TODO: Bring in line with compute.
-                enable_zero_copy: false,
-                // Do not use lgalloc to back zero-copy memory.
-                enable_zero_copy_lgalloc: false,
-                // No limit; zero-copy is disabled.
-                zero_copy_limit: None,
-            };
-            *epoch = self.epoch;
-        }
     }
 }
