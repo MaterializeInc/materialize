@@ -44,6 +44,9 @@ use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::COMPUTE_REPLICA_EXPIRATION_OFFSET;
 use mz_compute_types::ComputeInstanceId;
+use mz_controller_types::dyncfgs::{
+    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
+};
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
@@ -641,6 +644,11 @@ where
     pub fn update_configuration(&mut self, config_params: ComputeParameters) {
         // Apply dyncfg updates.
         config_params.dyncfg_updates.apply(&self.dyncfg);
+
+        // Update zero-copy settings.
+        self.set_enable_zero_copy(ENABLE_TIMELY_ZERO_COPY.get(&self.dyncfg));
+        self.set_enable_zero_copy_lgalloc(ENABLE_TIMELY_ZERO_COPY_LGALLOC.get(&self.dyncfg));
+        self.set_zero_copy_limit(TIMELY_ZERO_COPY_LIMIT.get(&self.dyncfg));
 
         let instance_workload_classes = self
             .instance_workload_classes

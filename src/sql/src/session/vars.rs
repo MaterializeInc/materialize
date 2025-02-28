@@ -1188,9 +1188,6 @@ impl SystemVars {
             &KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES,
             &REPLICA_STATUS_HISTORY_RETENTION_WINDOW,
             &ARRANGEMENT_EXERT_PROPORTIONALITY,
-            &ENABLE_TIMELY_ZERO_COPY,
-            &ENABLE_TIMELY_ZERO_COPY_LGALLOC,
-            &TIMELY_ZERO_COPY_LIMIT,
             &ENABLE_STORAGE_SHARD_FINALIZATION,
             &ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE,
             &ENABLE_DEFAULT_CONNECTION_VALIDATION,
@@ -2015,18 +2012,6 @@ impl SystemVars {
         *self.expect_value(&ARRANGEMENT_EXERT_PROPORTIONALITY)
     }
 
-    pub fn enable_timely_zero_copy(&self) -> bool {
-        *self.expect_value(&ENABLE_TIMELY_ZERO_COPY)
-    }
-
-    pub fn enable_timely_zero_copy_lgalloc(&self) -> bool {
-        *self.expect_value(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)
-    }
-
-    pub fn timely_zero_copy_limit(&self) -> Option<usize> {
-        *self.expect_value(&TIMELY_ZERO_COPY_LIMIT)
-    }
-
     /// Returns the `enable_storage_shard_finalization` configuration parameter.
     pub fn enable_storage_shard_finalization(&self) -> bool {
         *self.expect_value(&ENABLE_STORAGE_SHARD_FINALIZATION)
@@ -2236,15 +2221,6 @@ impl SystemVars {
     /// commands).
     pub fn is_compute_config_var(&self, name: &str) -> bool {
         name == MAX_RESULT_SIZE.name() || self.is_dyncfg_var(name) || is_tracing_var(name)
-    }
-
-    /// Returns whether the named variable is an initial compute configuration parameter
-    /// (things that go in `TimelyConfig` and cannot be changed at runtime).
-    pub fn is_initial_compute_config_var(&self, name: &str) -> bool {
-        name == ARRANGEMENT_EXERT_PROPORTIONALITY.name()
-            || name == ENABLE_TIMELY_ZERO_COPY.name()
-            || name == ENABLE_TIMELY_ZERO_COPY_LGALLOC.name()
-            || name == TIMELY_ZERO_COPY_LIMIT.name()
     }
 
     /// Returns whether the named variable is a metrics configuration parameter

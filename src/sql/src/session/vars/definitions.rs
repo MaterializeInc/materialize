@@ -1356,27 +1356,6 @@ pub static ARRANGEMENT_EXERT_PROPORTIONALITY: VarDefinition = VarDefinition::new
     false,
 );
 
-pub static ENABLE_TIMELY_ZERO_COPY: VarDefinition = VarDefinition::new(
-    "enable_timely_zero_copy",
-    value!(bool; false),
-    "Enable the zero copy allocator (timely dataflow).",
-    false,
-);
-
-pub static ENABLE_TIMELY_ZERO_COPY_LGALLOC: VarDefinition = VarDefinition::new(
-    "enable_timely_zero_copy_lgalloc",
-    value!(bool; false),
-    "Enable backing the zero copy allocator with lgalloc (timely dataflow).",
-    false,
-);
-
-pub static TIMELY_ZERO_COPY_LIMIT: VarDefinition = VarDefinition::new(
-    "timely_zero_copy_limit",
-    value!(Option<usize>; None),
-    "Optional limit of the zero copy allocator in allocations (timely dataflow).",
-    false,
-);
-
 pub static ENABLE_DEFAULT_CONNECTION_VALIDATION: VarDefinition = VarDefinition::new(
     "enable_default_connection_validation",
     value!(bool; true),

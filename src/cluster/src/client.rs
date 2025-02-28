@@ -346,6 +346,11 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
 }
 
 mod alloc {
+    /// A Timely communication refill function that uses lgalloc.
+    ///
+    /// Returns a handle to lgalloc'ed memory if lgalloc can handle
+    /// the request, otherwise we fall back to a heap allocation. In either case, the handle must
+    /// be dropped to free the memory.
     pub(crate) fn lgalloc_refill(size: usize) -> LgallocHandle {
         match lgalloc::allocate::<u8>(size) {
             Ok((pointer, capacity, handle)) => {
@@ -357,9 +362,13 @@ mod alloc {
                 }
             }
             Err(_) => {
+                // Allocate memory
                 let mut alloc = vec![0_u8; size];
+                // Ensure that the length matches the capacity.
                 alloc.shrink_to_fit();
+                // Get a pointer to the allocated memory.
                 let pointer = std::ptr::NonNull::new(alloc.as_mut_ptr()).unwrap();
+                // Forget the vector to avoid dropping it. We'll free the memory in `drop`.
                 std::mem::forget(alloc);
                 LgallocHandle {
                     handle: None,
@@ -370,9 +379,15 @@ mod alloc {
         }
     }
 
+    /// A handle to memory allocated by lgalloc. This can either be memory allocated by lgalloc or
+    /// memory allocated by Vec. If the handle is set, it's lgalloc memory. If the handle is None,
+    /// it's a regular heap allocation.
     pub(crate) struct LgallocHandle {
+        /// Lgalloc handle, set if the memory was allocated by lgalloc.
         handle: Option<lgalloc::Handle>,
+        /// Pointer to the allocated memory. Always well-aligned, but can be dangling.
         pointer: std::ptr::NonNull<u8>,
+        /// Capacity of the allocated memory in bytes.
         capacity: usize,
     }
 
@@ -393,11 +408,13 @@ mod alloc {
 
     impl Drop for LgallocHandle {
         fn drop(&mut self) {
+            // If we have a handle, it's lgalloc memory. Otherwise, it's a heap allocation.
             if let Some(handle) = self.handle.take() {
                 lgalloc::deallocate(handle);
             } else {
                 unsafe { Vec::from_raw_parts(self.pointer.as_ptr(), 0, self.capacity) };
             }
+            // Update pointer and capacity such that we don't double-free.
             self.pointer = std::ptr::NonNull::dangling();
             self.capacity = 0;
         }
