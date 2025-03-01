@@ -37,6 +37,7 @@ use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 
 mod k8s_resource_dumper;
+mod system_catalog_dumper;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
@@ -51,6 +52,16 @@ pub struct Args {
     k8s_namespaces: Vec<String>,
     #[clap(long = "k8s-dump-secret-values", action = clap::ArgAction::SetTrue)]
     k8s_dump_secret_values: bool,
+    /// If true, the tool will not attempt to port-forward the internal SQL port.
+    #[clap(long = "skip-port-forward", action = clap::ArgAction::SetFalse)]
+    skip_port_forward: bool,
+    /// The internal SQL port environmentd exposes.
+    /// By default, we will attempt to find this port by looking for an environmentd service with a port named "internal sql"
+    #[clap(long = "internal-sql-target-port")]
+    internal_sql_target_port: Option<u16>,
+    /// The port on the local machine that will be forwarded to the internal SQL port.
+    #[clap(long = "internal-sql-local-port")]
+    internal_sql_local_port: Option<u16>,
 }
 
 #[derive(Clone)]
@@ -182,6 +193,14 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
                 k8s_resource_dumper::dump_namespaced_resources(&context, &client, namespace).await;
             }
             k8s_resource_dumper::dump_cluster_resources(&context, &client).await;
+            let _ = system_catalog_dumper::spawn_internal_sql_port_forwarding_process(
+                "materialize-environment".to_string(),
+                "mz79dgogu1bd-environmentd".to_string(),
+                6877,
+                6877,
+                None,
+            )
+            .await;
         }
         Err(e) => {
             eprintln!("Failed to create k8s client: {}", e);
