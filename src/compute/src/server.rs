@@ -40,7 +40,7 @@ use tokio::sync::mpsc;
 use tracing::{info, trace, warn};
 
 use crate::command_channel;
-use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
+use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier, peek_as_log_event};
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
 
 /// Caller-provided configuration for compute.
@@ -643,7 +643,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             for (_, peek) in std::mem::take(&mut compute_state.pending_peeks) {
                 // Log dropping the peek request.
                 if let Some(logger) = compute_state.compute_logger.as_mut() {
-                    logger.log(&peek.as_log_event(false));
+                    logger.log(&peek_as_log_event(peek.peek(), false));
                 }
             }
 

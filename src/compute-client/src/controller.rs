@@ -53,7 +53,8 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Datum, GlobalId, Row, TimestampManipulation};
+use mz_persist_types::PersistLocation;
+use mz_repr::{Datum, GlobalId, RelationType, Row, TimestampManipulation};
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::read_holds::ReadHold;
@@ -150,10 +151,28 @@ impl PeekNotification {
     /// parameters are used to calculate the number of rows in the peek result.
     fn new(peek_response: &PeekResponse, offset: usize, limit: Option<usize>) -> Self {
         match peek_response {
-            PeekResponse::Rows(rows) => Self::Success {
-                rows: u64::cast_from(rows.count(offset, limit)),
-                result_size: u64::cast_from(rows.byte_len()),
-            },
+            PeekResponse::Rows(rows) => {
+                let num_rows = u64::cast_from(rows.count(offset, limit));
+                let result_size = u64::cast_from(rows.byte_len());
+
+                tracing::info!(?num_rows, ?result_size, "inline result");
+                Self::Success {
+                    rows: num_rows,
+                    result_size,
+                }
+            }
+            // WIP: Figure out rows and result_size!
+            // TODO(aljoscha): We know how to get this from Batch/HollowBatch,
+            // but need to do it in adapter which has a PersistClient.
+            PeekResponse::Stashed(stashed_response) => {
+                let rows = stashed_response.num_rows(offset, limit);
+                let result_size = stashed_response.size_bytes();
+                tracing::info!(?rows, ?result_size, "stashed result");
+                Self::Success {
+                    rows: u64::cast_from(rows),
+                    result_size: u64::cast_from(result_size),
+                }
+            }
             PeekResponse::Error(err) => Self::Error(err.clone()),
             PeekResponse::Canceled => Self::Canceled,
         }
@@ -182,6 +201,8 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
     config: ComputeParameters,
     /// Compute configuration to apply to new instances as part of the Timely initialization.
     initial_config: InitialComputeParameters,
+    /// The persist location where we can stash large peek results.
+    peek_stash_persist_location: PersistLocation,
     /// A controller response to be returned on the next call to [`ComputeController::process`].
     stashed_response: Option<ComputeControllerResponse<T>>,
     /// A number that increases on every `environmentd` restart.
@@ -224,6 +245,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         envd_epoch: NonZeroI64,
         read_only: bool,
         metrics_registry: &MetricsRegistry,
+        peek_stash_persist_location: PersistLocation,
         controller_metrics: ControllerMetrics,
         now: NowFn,
         wallclock_lag: WallclockLagFn<T>,
@@ -294,6 +316,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             read_only,
             config: Default::default(),
             initial_config,
+            peek_stash_persist_location,
             stashed_response: None,
             envd_epoch,
             metrics,
@@ -504,6 +527,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             read_only,
             config: _,
             initial_config,
+            peek_stash_persist_location: _,
             stashed_response,
             envd_epoch,
             metrics: _,
@@ -768,6 +792,7 @@ where
                 log_logging: config.logging.log_logging,
                 index_logs: Default::default(),
             },
+            peek_stash_persist_location: self.peek_stash_persist_location.clone(),
             grpc_client: self.config.grpc_client.clone(),
             expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
             initial_config: self.initial_config.clone(),
@@ -921,6 +946,7 @@ where
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
         timestamp: T,
+        intermediate_result_type: RelationType,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         target_replica: Option<ReplicaId>,
@@ -955,6 +981,7 @@ where
                 literal_constraints,
                 uuid,
                 timestamp,
+                intermediate_result_type,
                 finishing,
                 map_filter_project,
                 read_hold,
