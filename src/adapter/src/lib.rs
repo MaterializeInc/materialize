@@ -59,7 +59,7 @@ pub mod telemetry;
 pub mod webhook;
 
 pub use crate::client::{Client, Handle, SessionClient};
-pub use crate::command::{ExecuteResponse, ExecuteResponseKind, RowsFuture, StartupResponse};
+pub use crate::command::{ExecuteResponse, ExecuteResponseKind, StartupResponse};
 pub use crate::coord::ExecuteContext;
 pub use crate::coord::ExecuteContextExtra;
 pub use crate::coord::id_bundle::CollectionIdBundle;

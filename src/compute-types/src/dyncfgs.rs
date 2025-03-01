@@ -236,6 +236,68 @@ pub const ENABLE_ACTIVE_DATAFLOW_CANCELATION: Config<bool> = Config::new(
     "Whether to use `drop_dataflow` to actively cancel compute dataflows.",
 );
 
+/// Whether to enable the peek response stash, for sending back large peek
+/// responses. The response stash will only be used for results that exceed
+/// `compute_peek_response_stash_threshold_bytes`.
+pub const ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
+    "enable_compute_peek_response_stash",
+    false,
+    "Whether to enable the peek response stash, for sending back large peek responses. Will only be used for results that exceed compute_peek_response_stash_threshold_bytes.",
+);
+
+/// The threshold for peek response size above which we should use the peek
+/// response stash. Only used if the peek response stash is enabled _and_ if the
+/// query is "streamable" (roughly: doesn't have an ORDER BY).
+pub const PEEK_RESPONSE_STASH_THRESHOLD_BYTES: Config<usize> = Config::new(
+    "compute_peek_response_stash_threshold_bytes",
+    1024 * 1024 * 300, /* 300mb */
+    "The threshold above which to use the peek response stash, for sending back large peek responses.",
+);
+
+/// The target number of maximum runs in the batches written to the stash.
+///
+/// Setting this reasonably low will make it so batches get consolidated/sorted
+/// concurrently with data being written. Which will in turn make it so that we
+/// have to do less work when reading/consolidating those batches in
+/// `environmentd`.
+pub const PEEK_RESPONSE_STASH_BATCH_MAX_RUNS: Config<usize> = Config::new(
+    "compute_peek_response_stash_batch_max_runs",
+    // The lowest possible setting, do as much work as possible on the
+    // `clusterd` side.
+    2,
+    "The target number of maximum runs in the batches written to the stash.",
+);
+
+/// The target size for batches of rows we read out of the peek stash.
+pub const PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES: Config<usize> = Config::new(
+    "compute_peek_response_stash_read_batch_size_bytes",
+    1024 * 1024 * 100, /* 100mb */
+    "The target size for batches of rows we read out of the peek stash.",
+);
+
+/// The memory budget for consolidating stashed peek responses in
+/// `environmentd`.
+pub const PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES: Config<usize> = Config::new(
+    "compute_peek_response_stash_read_memory_budget_bytes",
+    1024 * 1024 * 64, /* 64mb */
+    "The memory budget for consolidating stashed peek responses in environmentd.",
+);
+
+/// The number of batches to pump from the peek result iterator when stashing peek responses.
+pub const PEEK_STASH_NUM_BATCHES: Config<usize> = Config::new(
+    "compute_peek_stash_num_batches",
+    100,
+    "The number of batches to pump from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
+);
+
+/// The size of each batch, as number of rows, pumped from the peek result
+/// iterator when stashing peek responses.
+pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
+    "compute_peek_stash_batch_size",
+    100000,
+    "The size, as number of rows, of each batch pumped from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -267,4 +329,11 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
         .add(&ENABLE_ACTIVE_DATAFLOW_CANCELATION)
+        .add(&ENABLE_PEEK_RESPONSE_STASH)
+        .add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES)
+        .add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS)
+        .add(&PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES)
+        .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
+        .add(&PEEK_STASH_NUM_BATCHES)
+        .add(&PEEK_STASH_BATCH_SIZE)
 }

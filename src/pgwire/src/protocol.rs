@@ -1522,18 +1522,15 @@ where
                 )
                 .await
             }
-            ExecuteResponse::SendingRows {
-                future: rx,
+            ExecuteResponse::SendingRowsStreaming {
+                rows,
                 instance_id,
                 strategy,
             } => {
-                let row_desc =
-                    row_desc.expect("missing row description for ExecuteResponse::SendingRows");
+                let row_desc = row_desc
+                    .expect("missing row description for ExecuteResponse::SendingRowsStreaming");
 
-                let span = tracing::debug_span!("sending_rows");
-                // let rows = self.row_future_to_stream(&span, rx).await?;
-
-                let rows = futures::stream::once(rx);
+                let span = tracing::debug_span!("sending_rows_streaming");
 
                 self.send_rows(
                     row_desc,
@@ -1723,13 +1720,11 @@ where
                             .retire_execute(ctx_extra, statement_ended_execution_reason);
                         return result;
                     }
-                    ExecuteResponse::SendingRows {
-                        future: rows_rx,
+                    ExecuteResponse::SendingRowsStreaming {
+                        rows,
                         instance_id,
                         strategy,
                     } => {
-                        let span = tracing::debug_span!("sending_rows");
-                        let rows = self.row_future_to_stream(&span, rows_rx).await?;
                         // We don't need to finalize execution here;
                         // it was already done in the
                         // coordinator. Just extract the state and
@@ -1739,7 +1734,7 @@ where
                                 format,
                                 row_desc,
                                 RecordFirstRowStream::new(
-                                    Box::new(UnboundedReceiverStream::new(rows)),
+                                    Box::new(rows),
                                     execute_started,
                                     &self.adapter_client,
                                     Some(instance_id),

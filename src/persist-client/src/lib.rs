@@ -40,7 +40,7 @@ use crate::cfg::PersistConfig;
 use crate::critical::{CriticalReaderId, SinceHandle};
 use crate::error::InvalidUsage;
 use crate::fetch::{BatchFetcher, BatchFetcherConfig};
-use crate::internal::compact::Compactor;
+use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::parse_id;
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{Machine, retry_external};
@@ -563,6 +563,7 @@ impl PersistClient {
         shard_id: ShardId,
         write_schemas: Schemas<K, V>,
         lower: Antichain<T>,
+        max_runs: Option<usize>,
     ) -> BatchBuilder<K, V, T, D>
     where
         K: Debug + Codec,
@@ -570,8 +571,11 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
         D: Semigroup + Ord + Codec64 + Send + Sync,
     {
+        let mut compact_cfg = CompactConfig::new(&self.cfg, shard_id);
+        compact_cfg.batch.max_runs = max_runs;
         WriteHandle::builder_inner(
             &self.cfg,
+            compact_cfg,
             Arc::clone(&self.metrics),
             self.metrics.shards.shard(&shard_id, "peek_stash"),
             &self.metrics.user,
@@ -649,6 +653,7 @@ impl PersistClient {
         read_schemas: Schemas<K, V>,
         batches: Vec<Batch<K, V, T, D>>,
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
+        memory_budget_bytes: usize,
     ) -> Result<Cursor<K, V, T, D, Vec<Batch<K, V, T, D>>>, Since<T>>
     where
         K: Debug + Codec + Ord,
@@ -672,6 +677,7 @@ impl PersistClient {
             &hollow_batches,
             batches,
             should_fetch_part,
+            memory_budget_bytes,
         )
     }
 

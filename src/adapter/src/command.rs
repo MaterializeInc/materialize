@@ -8,13 +8,13 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use derivative::Derivative;
 use enum_kinds::EnumKind;
+use futures::Stream;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_auth::password::Password;
 use mz_compute_types::ComputeInstanceId;
@@ -186,8 +186,6 @@ pub struct Response<T> {
     pub otel_ctx: OpenTelemetryContext,
 }
 
-pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponseUnary> + Send + Sync>>;
-
 /// The response to [`Client::startup`](crate::Client::startup).
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -357,15 +355,15 @@ pub enum ExecuteResponse {
     RevokedPrivilege,
     /// The requested role was revoked.
     RevokedRole,
-    /// Rows will be delivered via the specified future.
-    SendingRows {
+    /// Rows will be delivered via the specified stream.
+    SendingRowsStreaming {
         #[derivative(Debug = "ignore")]
-        future: RowsFuture,
+        rows: Pin<Box<dyn Stream<Item = PeekResponseUnary> + Send + Sync>>,
         instance_id: ComputeInstanceId,
         strategy: StatementExecutionStrategy,
     },
-    /// Like `SendingRows`, but the rows are known to be available
-    /// immediately, and thus the execution is considered ended in the coordinator.
+    /// Rows are known to be available immediately, and thus the execution is
+    /// considered ended in the coordinator.
     SendingRowsImmediate {
         #[derivative(Debug = "ignore")]
         rows: Box<dyn RowIterator + Send + Sync>,
@@ -500,7 +498,6 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::ReassignOwned => Ok(ExecuteResponse::ReassignOwned),
             ExecuteResponseKind::RevokedPrivilege => Ok(ExecuteResponse::RevokedPrivilege),
             ExecuteResponseKind::RevokedRole => Ok(ExecuteResponse::RevokedRole),
-            ExecuteResponseKind::SendingRows => Err(()),
             ExecuteResponseKind::SetVariable => Err(()),
             ExecuteResponseKind::StartedTransaction => Ok(ExecuteResponse::StartedTransaction),
             ExecuteResponseKind::Subscribing => Err(()),
@@ -508,6 +505,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::TransactionRolledBack => Err(()),
             ExecuteResponseKind::Updated => Err(()),
             ExecuteResponseKind::ValidatedConnection => Ok(ExecuteResponse::ValidatedConnection),
+            ExecuteResponseKind::SendingRowsStreaming => Err(()),
             ExecuteResponseKind::SendingRowsImmediate => Err(()),
             ExecuteResponseKind::CreatedIntrospectionSubscribe => {
                 Ok(ExecuteResponse::CreatedIntrospectionSubscribe)
@@ -572,7 +570,7 @@ impl ExecuteResponse {
             ReassignOwned => Some("REASSIGN OWNED".into()),
             RevokedPrivilege => Some("REVOKE".into()),
             RevokedRole => Some("REVOKE ROLE".into()),
-            SendingRows { .. } | SendingRowsImmediate { .. } => None,
+            SendingRowsStreaming { .. } | SendingRowsImmediate { .. } => None,
             SetVariable { reset: true, .. } => Some("RESET".into()),
             SetVariable { reset: false, .. } => Some("SET".into()),
             StartedTransaction { .. } => Some("BEGIN".into()),
@@ -647,13 +645,13 @@ impl ExecuteResponse {
             ExplainPlan | ExplainPushdown | ExplainTimestamp | Select | ShowAllVariables
             | ShowCreate | ShowColumns | ShowVariable | InspectShard | ExplainSinkSchema => &[
                 ExecuteResponseKind::CopyTo,
-                SendingRows,
+                SendingRowsStreaming,
                 SendingRowsImmediate,
             ],
             Execute | ReadThenWrite => &[
                 Deleted,
                 Inserted,
-                SendingRows,
+                SendingRowsStreaming,
                 SendingRowsImmediate,
                 Updated,
             ],
@@ -671,7 +669,7 @@ impl ExecuteResponse {
             }
             PlanKind::Subscribe => &[Subscribing, ExecuteResponseKind::CopyTo],
             StartTransaction => &[StartedTransaction],
-            SideEffectingFunc => &[SendingRows, SendingRowsImmediate],
+            SideEffectingFunc => &[SendingRowsStreaming, SendingRowsImmediate],
             ValidateConnection => &[ExecuteResponseKind::ValidatedConnection],
         }
     }

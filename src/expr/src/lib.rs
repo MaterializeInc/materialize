@@ -46,8 +46,8 @@ pub use relation::{
     AccessStrategy, AggregateExpr, CollectionPlan, ColumnOrder, JoinImplementation,
     JoinInputCharacteristics, LetRecLimit, MirRelationExpr, ProtoAggregateExpr, ProtoAggregateFunc,
     ProtoColumnOrder, ProtoRowSetFinishing, ProtoTableFunc, RECURSION_LIMIT, RowSetFinishing,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, canonicalize, compare_columns,
-    non_nullable_columns,
+    RowSetFinishingIncremental, WindowFrame, WindowFrameBound, WindowFrameUnits, canonicalize,
+    compare_columns, non_nullable_columns,
 };
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{

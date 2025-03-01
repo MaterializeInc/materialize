@@ -56,6 +56,7 @@ pub struct ComputeMetrics {
     // look at.
     timely_step_duration_seconds: HistogramVec,
     persist_peek_seconds: HistogramVec,
+    stashed_peek_seconds: HistogramVec,
     handle_command_duration_seconds: HistogramVec,
 
     // memory usage
@@ -147,6 +148,12 @@ impl ComputeMetrics {
                 var_labels: ["worker_id"],
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             )),
+            stashed_peek_seconds: registry.register(metric!(
+                name: "mz_stashed_peek_seconds",
+                help: "Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).",
+                var_labels: ["worker_id"],
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            )),
             handle_command_duration_seconds: registry.register(metric!(
                 name: "mz_cluster_handle_command_duration_seconds",
                 help: "Time spent in handling commands.",
@@ -190,6 +197,7 @@ impl ComputeMetrics {
             .timely_step_duration_seconds
             .with_label_values(&[&worker]);
         let persist_peek_seconds = self.persist_peek_seconds.with_label_values(&[&worker]);
+        let stashed_peek_seconds = self.stashed_peek_seconds.with_label_values(&[&worker]);
         let handle_command_duration_seconds = CommandMetrics::build(|typ| {
             self.handle_command_duration_seconds
                 .with_label_values(&[&worker, typ])
@@ -211,6 +219,7 @@ impl ComputeMetrics {
             arrangement_maintenance_active_info,
             timely_step_duration_seconds,
             persist_peek_seconds,
+            stashed_peek_seconds,
             handle_command_duration_seconds,
             replica_expiration_timestamp_seconds,
             replica_expiration_remaining_seconds,
@@ -237,6 +246,8 @@ pub struct WorkerMetrics {
     pub(crate) timely_step_duration_seconds: Histogram,
     /// Histogram of persist peek durations.
     pub(crate) persist_peek_seconds: Histogram,
+    /// Histogram of stashed peek durations.
+    pub(crate) stashed_peek_seconds: Histogram,
     /// Histogram of command handling durations.
     pub(crate) handle_command_duration_seconds: CommandMetrics<Histogram>,
     /// The timestamp of replica expiration.

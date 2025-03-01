@@ -127,6 +127,7 @@ use mz_ore::vec::VecExt;
 use mz_ore::{
     assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log, stack,
 };
+use mz_persist_client::PersistClient;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
@@ -1636,6 +1637,10 @@ pub struct Coordinator {
     /// read their catalog as long as needed. In the future we would like this
     /// to be a pTVC, but for now this is sufficient.
     catalog: Arc<Catalog>,
+
+    /// A client for persist. Initially, this is only used for reading stashed
+    /// peek responses out of batches.
+    persist_client: PersistClient,
 
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
@@ -4297,6 +4302,7 @@ pub fn serve(
                     read_only_controllers,
                     buffered_builtin_table_updates: Some(Vec::new()),
                     license_key,
+                    persist_client,
                 };
                 let bootstrap = handle.block_on(async {
                     coord

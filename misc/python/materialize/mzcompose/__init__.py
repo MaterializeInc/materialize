@@ -72,6 +72,7 @@ def get_minimal_system_parameters(
         # -----
         # Others (ordered by name)
         "allow_real_time_recency": "true",
+        "enable_compute_peek_response_stash": "true",
         "enable_0dt_deployment": "true" if zero_downtime else "false",
         "enable_0dt_deployment_panic_after_timeout": "true",
         "enable_0dt_deployment_sources": (
@@ -165,6 +166,13 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "compute_apply_column_demands", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "compute_peek_response_stash_threshold_bytes",
+            # 1 MiB, an in-between value
+            "1048576",
+            # force-enabled, the in-between, and the production value
+            ["0", "1048576", "314572800", "67108864"],
         ),
         VariableSystemParameter(
             "disk_cluster_replicas_default", "true", ["true", "false"]
@@ -510,6 +518,11 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mz_metrics_lgalloc_map_refresh_interval",
     "mz_metrics_lgalloc_refresh_interval",
     "mz_metrics_rusage_refresh_interval",
+    "compute_peek_response_stash_batch_max_runs",
+    "compute_peek_response_stash_read_batch_size_bytes",
+    "compute_peek_response_stash_read_memory_budget_bytes",
+    "compute_peek_stash_num_batches",
+    "compute_peek_stash_batch_size",
 ]
 
 

@@ -37,9 +37,10 @@ use mz_ore::channel::instrumented_unbounded_channel;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
+use mz_persist_types::PersistLocation;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
@@ -63,7 +64,9 @@ use crate::controller::{
 use crate::logging::LogVariant;
 use crate::metrics::IntCounter;
 use crate::metrics::{InstanceMetrics, ReplicaCollectionMetrics, ReplicaMetrics, UIntGauge};
-use crate::protocol::command::{ComputeCommand, ComputeParameters, Peek, PeekTarget};
+use crate::protocol::command::{
+    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
+};
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
@@ -160,6 +163,7 @@ where
         id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
+        peek_stash_persist_location: PersistLocation,
         arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState<T>)>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
@@ -187,6 +191,7 @@ where
             Instance::new(
                 build_info,
                 storage,
+                peek_stash_persist_location,
                 arranged_logs,
                 envd_epoch,
                 metrics,
@@ -289,6 +294,9 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     metrics: InstanceMetrics,
     /// Dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
+
+    /// The persist location where we can stash large peek results.
+    peek_stash_persist_location: PersistLocation,
 
     /// A function that produces the current wallclock time.
     now: NowFn,
@@ -937,6 +945,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let Self {
             build_info: _,
             storage_collections: _,
+            peek_stash_persist_location: _,
             initialized,
             read_only,
             workload_class,
@@ -1018,6 +1027,7 @@ where
     fn new(
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
+        peek_stash_persist_location: PersistLocation,
         arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState<T>)>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
@@ -1053,6 +1063,7 @@ where
         Self {
             build_info,
             storage_collections: storage,
+            peek_stash_persist_location,
             initialized: false,
             read_only: true,
             workload_class: None,
@@ -1085,9 +1096,14 @@ where
             epoch: ClusterStartupEpoch::new(self.envd_epoch, 0),
         });
 
-        // Send a placeholder instance configuration for the replica task to fill in.
-        let dummy_instance_config = Default::default();
-        self.send(ComputeCommand::CreateInstance(dummy_instance_config));
+        let instance_config = InstanceConfig {
+            peek_stash_persist_location: self.peek_stash_persist_location.clone(),
+            // The remaining fields are replica-specific and will be set in `ReplicaTask::specialize_command`.
+            logging: Default::default(),
+            expiration_offset: Default::default(),
+        };
+
+        self.send(ComputeCommand::CreateInstance(Box::new(instance_config)));
 
         loop {
             tokio::select! {
@@ -1397,6 +1413,7 @@ where
                 .unwrap_or_else(|| SharedCollectionState::new(as_of.clone()));
             let write_only = dataflow.sink_exports.contains_key(&export_id);
             let storage_sink = dataflow.persist_sink_ids().any(|id| id == export_id);
+
             self.add_collection(
                 export_id,
                 as_of.clone(),
@@ -1668,6 +1685,7 @@ where
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
         timestamp: T,
+        result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
         mut read_hold: ReadHold<T>,
@@ -1692,6 +1710,7 @@ where
         }
 
         let otel_ctx = OpenTelemetryContext::obtain();
+
         self.peeks.insert(
             uuid,
             PendingPeek {
@@ -1716,6 +1735,7 @@ where
             // tree to forward it on to the compute worker.
             otel_ctx,
             target: peek_target,
+            result_desc,
         };
         self.send(ComputeCommand::Peek(Box::new(peek)));
 
