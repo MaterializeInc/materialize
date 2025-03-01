@@ -229,6 +229,25 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
     "Round observed timestamps to slack.",
 );
 
+/// Whether to force-enable the peek response stash, for sending back large peek
+/// responses. This forces _all_ responses to go through the peek stash, even
+/// ones that would be small enough for a regular inline compute response.
+pub const FORCE_ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
+    "compute_force_enable_peek_response_stash",
+    true,
+    "Whether to force-enable the peek response stash, for sending back large
+    peek responses.",
+);
+
+/// Whether to enable the peek response stash, for sending back large peek
+/// responses. The response stash will only be used for results that exceed
+/// `max_result_size`.
+pub const ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
+    "compute_enable_peek_response_stash",
+    true,
+    "Whether to enable the peek response stash, for sending back large peek responses. Will only be used for results that exceed max_result_size.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -259,4 +278,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
+        .add(&ENABLE_PEEK_RESPONSE_STASH)
+        .add(&FORCE_ENABLE_PEEK_RESPONSE_STASH)
 }

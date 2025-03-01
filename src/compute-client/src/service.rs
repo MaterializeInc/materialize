@@ -35,7 +35,7 @@ use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, ProtoComputeResponse,
-    SubscribeBatch, SubscribeResponse,
+    StashedPeekResponse, SubscribeBatch, SubscribeResponse,
 };
 use crate::service::proto_compute_server::ProtoCompute;
 
@@ -332,6 +332,18 @@ where
                             (PeekResponse::Canceled, _) => PeekResponse::Canceled,
                             (_, PeekResponse::Error(e)) => PeekResponse::Error(e),
                             (PeekResponse::Error(e), _) => PeekResponse::Error(e),
+                            (PeekResponse::Rows(rows), PeekResponse::Stashed(batches))
+                            | (PeekResponse::Stashed(batches), PeekResponse::Rows(rows)) => {
+                                // By default we merge into an empty `PeekResponse::Rows`.
+                                if rows.entries() == 0 {
+                                    PeekResponse::Stashed(batches)
+                                } else {
+                                    mz_ore::soft_panic_or_log!(
+                                        "got both PeekResponse Stashed and Rows"
+                                    );
+                                    PeekResponse::Error("internal error".to_string())
+                                }
+                            }
                             (PeekResponse::Rows(mut rows), PeekResponse::Rows(other)) => {
                                 let total_byte_size =
                                     rows.byte_len().saturating_add(other.byte_len());
@@ -349,6 +361,37 @@ where
                                     rows.merge(&other);
                                     PeekResponse::Rows(rows)
                                 }
+                            }
+                            (PeekResponse::Stashed(batches), PeekResponse::Stashed(other)) => {
+                                // Deconstruct so we don't miss adding new
+                                // fields. We need to be careful about merging
+                                // everything!
+                                let StashedPeekResponse {
+                                    num_rows: self_num_rows,
+                                    relation_desc: self_relation_desc,
+                                    shard_id: self_shard_id,
+                                    batches: mut self_batches,
+                                } = batches;
+                                let StashedPeekResponse {
+                                    num_rows: other_num_rows,
+                                    relation_desc: other_relation_desc,
+                                    shard_id: other_shard_id,
+                                    batches: mut other_batches,
+                                } = other;
+
+                                assert_eq!(self_shard_id, other_shard_id);
+                                assert_eq!(self_relation_desc, other_relation_desc);
+
+                                self_batches.append(&mut other_batches);
+
+                                let merged_response = StashedPeekResponse {
+                                    num_rows: self_num_rows + other_num_rows,
+                                    relation_desc: self_relation_desc,
+                                    shard_id: self_shard_id,
+                                    batches: self_batches,
+                                };
+
+                                PeekResponse::Stashed(merged_response)
                             }
                         };
                     }
