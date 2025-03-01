@@ -15,10 +15,10 @@ PostgreSQL database as the metadata database and Azure Blob Storage for blob
 storage. The tutorial uses [Materialize on Azure Terraform
 modules](https://github.com/MaterializeInc/terraform-azurerm-materialize) to:
 
-- Set up the AWS Kubernetes environment
+- Set up the Azure Kubernetes environment
 - Call
    [terraform-helm-materialize](https://github.com/MaterializeInc/terraform-helm-materialize)
-   module to deploy Materialize Operator and Materialize instances to that EKS
+   module to deploy Materialize Operator and Materialize instances to that AKS
    cluster
 
 {{< warning >}}
@@ -55,8 +55,8 @@ your version of Python, install it.
 
 ### Helm 3.2.0+
 
-If you don't have Helm version 3.2.0+ installed, refer to the [Helm
-documentation](https://helm.sh/docs/intro/install/).
+If you don't have Helm version 3.2.0+ installed, install. For details, see to
+the [Helm documentation](https://helm.sh/docs/intro/install/).
 
 ### jq (Optional)
 
@@ -179,12 +179,12 @@ node instance type, etc.), see the
    `terraform.tfvars.example` file) and specify:
 
    - The prefix for the resources. Prefix has a maximum of 10 characters and
-     contains only alphanumeric characters and dashes.
+     contains only alphanumeric characters; e.g., `mydemo`.
 
    -  The location for the AKS cluster.
 
    ```bash
-   prefix="enter-prefix"  //  maximum 10 characters, containing only alphanumeric characters and dashes; e.g. my-demo
+   prefix="enter-prefix"  //  maximum 10 characters, containing only alphanumeric characters; e.g. mydemo
    location="eastus2"
    ```
 
@@ -194,17 +194,19 @@ node instance type, etc.), see the
     terraform init
     ```
 
-1. Create a terraform plan and review the changes.
+1. Use terraform plan to review the changes to be made.
 
     ```bash
-    terraform plan -out my-plan.tfplan
+    terraform plan
     ```
 
-1. If you are satisfied with the changes, apply the terraform plan.
+1. If you are satisfied with the changes, apply.
 
     ```bash
-    terraform apply my-plan.tfplan
+    terraform apply
     ```
+
+   To approve the changes and apply, enter `yes`.
 
    Upon successful completion, various fields and their values are output:
 
@@ -216,10 +218,22 @@ node instance type, etc.), see the
    aks_cluster = <sensitive>
    connection_strings = <sensitive>
    kube_config = <sensitive>
-   resource_group_name = "my-demo-rg"
+   resource_group_name = "mydemo-rg"
    ```
 
 1. Configure `kubectl` to connect to your cluster:
+
+   - `<cluster_name>`. Your cluster name has the form `<your prefix>-aks`; e.g.,
+     `mz-simple-aks`.
+
+   - `<resource_group_name>`, as specified in the output.
+
+   ```bash
+   az aks get-credentials --resource-group <resource_group_name> --name <cluster_name>
+   ```
+
+   Alternatively, you can use the following command to get the cluster name and
+   resource group name from the Terraform output:
 
    ```bash
    az aks get-credentials --resource-group $(terraform output -raw resource_group_name) --name $(terraform output -json aks_cluster | jq -r '.name')
@@ -245,14 +259,17 @@ node instance type, etc.), see the
 
    ```none
    NAME                                                              READY       STATUS    RESTARTS   AGE
-   pod/materialize-my-demo-materialize-operator-74d8f549d6-lkjjf   1/1         Running   0          36m
+   pod/materialize-mydemo-materialize-operator-74d8f549d6-lkjjf   1/1         Running   0          36m
 
    NAME                                                         READY       UP-TO-DATE   AVAILABLE   AGE
-   deployment.apps/materialize-my-demo-materialize-operator   1/1         1            1           36m
+   deployment.apps/materialize-mydemo-materialize-operator   1/1         1            1           36m
 
    NAME                                                                        DESIRED   CURRENT   READY   AGE
-   replicaset.apps/materialize-my-demo-materialize-operator-74d8f549d6       1         1         1       36m
+   replicaset.apps/materialize-mydemo-materialize-operator-74d8f549d6       1         1         1       36m
     ```
+
+   If you run into an error during deployment, refer to the
+   [Troubleshooting](/installation/troubleshooting/).
 
 1. Once the Materialize operator is deployed and running, you can deploy the
    Materialize instances. To deploy Materialize instances, create a
@@ -276,10 +293,11 @@ node instance type, etc.), see the
    EOF
    ```
 
-1. Create a terraform plan with both `.tfvars` files and review the changes.
+1. Run `terraform plan` with both `.tfvars` files and review the changes to be
+   made.
 
    ```bash
-   terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars -out my-plan.tfplan
+   terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars
    ```
 
    The plan should show the changes to be made, with a summary similar to the
@@ -287,18 +305,15 @@ node instance type, etc.), see the
 
    ```
    Plan: 4 to add, 0 to change, 0 to destroy.
-
-   Saved the plan to: my-plan.tfplan
-
-   To perform exactly these actions, run the following command to apply:
-   terraform apply "my-plan.tfplan"
    ```
 
-1. If you are satisfied with the changes, apply the terraform plan.
+1. If you are satisfied with the changes, apply.
 
-    ```bash
-    terraform apply my-plan.tfplan
-    ```
+   ```bash
+   terraform apply -var-file=terraform.tfvars -var-file=mz_instances.tfvars
+   ```
+
+   To approve the changes and apply, enter `yes`.
 
    Upon successful completion, you should see output with a summary similar to the following:
 
@@ -310,7 +325,7 @@ node instance type, etc.), see the
    aks_cluster = <sensitive>
    connection_strings = <sensitive>
    kube_config = <sensitive>
-   resource_group_name = "my-demo-rg"
+   resource_group_name = "mydemo-rg"
    ```
 
 1. Verify the installation and check the status:
@@ -357,33 +372,12 @@ node instance type, etc.), see the
    job.batch/create-db-demo-db   Complete   1/1           10s        40s
    ```
 
+   If you run into an error during deployment, refer to the
+   [Troubleshooting](/installation/troubleshooting/).
+
 1. Open the Materialize Console in your browser:
 
-   1. From the previous `kubectl` output, find the Materialize console service.
-
-      ```none
-      NAME                           TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
-      service/mzl88mc8f6if-console   ClusterIP   None         <none>        8080/TCP   7s
-      ```
-
-   1. Forward the Materialize Console service to your local machine (substitute
-      your service name for `mzl88mc8f6if-console`):
-
-      ```shell
-      while true;
-      do kubectl port-forward svc/mzl88mc8f6if-console 8080:8080 -n materialize-environment 2>&1 | tee /dev/stderr |
-      grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
-      done;
-      ```
-      {{< note >}}
-      Due to a [known Kubernetes issue](https://github.com/kubernetes/kubernetes/issues/78446),
-      interrupted long-running requests through a standard port-forward cause the port forward to hang. The command above
-      automatically restarts the port forwarding if an error occurs, ensuring a more stable
-      connection. It detects failures by monitoring for "portforward.go" error messages.
-      {{< /note >}}
-
-   1. Open a browser and navigate to
-      [http://localhost:8080](http://localhost:8080). From the Console, you can get started with the Quickstart.
+   {{% self-managed/port-forwarding-handling %}}
 
       {{< tip >}}
 
@@ -391,55 +385,20 @@ node instance type, etc.), see the
 
       {{< /tip >}}
 
-## Troubleshooting
+## Next steps
 
-If you encounter issues:
-
-1. Check operator logs:
-```bash
-kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
-```
-
-2. Check environment logs:
-```bash
-kubectl logs -l app.kubernetes.io/name=environmentd -n materialize-environment
-```
-
-3. Verify the storage configuration:
-```bash
-kubectl get sc
-kubectl get pv
-kubectl get pvc -A
-```
+{{% self-managed/next-steps %}}
 
 ## Cleanup
 
+{{% self-managed/cleanup-cloud %}}
 
-To uninstall the Materialize operator:
-```bash
-helm uninstall materialize-operator -n materialize
-```
+  {{< tip>}}
 
-This will remove the operator but preserve any PVs and data. To completely clean
-up:
+  If the `terraform destroy` command is unable to delete the subnet because it
+  is in use, you can rerun the `terraform destroy` command.
 
-```bash
-kubectl delete namespace materialize
-kubectl delete namespace materialize-environment
-```
-
-In your Terraform directory, run:
-
-```bash
-terraform destroy
-```
-
-When prompted to proceed, type `yes` to confirm the deletion.
-
-{{< tip>}}
-If the `terraform destroy` command is unable to delete the subnet because it is
-in use, you can try rerunning the `terraform destroy` command.
-{{</ tip >}}
+  {{</ tip >}}
 
 ## See also
 

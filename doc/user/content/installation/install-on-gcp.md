@@ -35,17 +35,21 @@ Materialize does not support nor recommend these modules for production use.
 ### Google cloud project
 
 You need a GCP project for which you have a role (such as
-`roles/resourcemanager.projectIamAdmin` or `roles/owner`) that includes
-[permissions to manage access to the
+`roles/resourcemanager.projectIamAdmin` or `roles/owner`) that includes [
+permissions to manage access to the
 project](https://cloud.google.com/iam/docs/granting-changing-revoking-access).
 
-### gcloud CLI (Inititalized)
+### gcloud CLI
 
-- If you do not have gcloud CLI, install. For details, see the [Install the
-  gcloud CLI documentation](https://cloud.google.com/sdk/docs/install).
+If you do not have gcloud CLI, install. For details, see the [Install the gcloud
+CLI documentation](https://cloud.google.com/sdk/docs/install).
 
-- Initialize the gcloud CLI to specify the GCP project you want to use. For
-  details, see the [Install the gcloud CLI documentation](https://cloud.google.com/sdk/docs/install).
+### Google service account
+
+The tutorial assumes the use of a service account. If you do not have a service
+account to use for this tutorial, create a service account. For details, see
+[Create service
+accounts](https://cloud.google.com/iam/docs/service-accounts-create#creating).
 
 ### Terraform
 
@@ -87,7 +91,16 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 1. Open a Terminal window.
 
-1. Enable the following services for your GCP project:
+1. Initialize the gcloud CLI (`gcloud init`) to specify the GCP project you want
+   to use. For details, see the [Initializing the gcloud CLI
+   documentation](https://cloud.google.com/sdk/docs/initializing#initialize_the).
+
+   {{< tip >}}
+   You do not need to configure a default Compute Region and Zone as you will
+   specify the region.
+   {{</ tip >}}
+
+1. Enable the following services for your GCP project, if not already enabled:
 
    ```bash
    gcloud services enable container.googleapis.com        # For creating Kubernetes clusters
@@ -97,22 +110,14 @@ If you want to use `jq` and do not have `jq` installed, install.
    gcloud services enable iamcredentials.googleapis.com     # For security and authentication
    ```
 
-   When finished, you should see output similar to the following:
-
-   ```bash
-   Operation "operations/acf.p2-87743450299-3cfd3269-06b9-48da-bbfd-83ce5f979208" finished successfully.
-   Operation "operations/acat.p2-87743450299-9456bdf0-486f-41b9-9f04-87bae9d31217" finished successfully.
-   Operation "operations/acat.p2-87743450299-83fa25df-e36b-427e-ab98-0067ee6905fe" finished successfully.
-   Operation "operations/acat.p2-87743450299-6298c59f-b6fc-4a7f-9d27-b2e7c7d24648" finished successfully.
-   ```
-
-1. To the account or the service account that will run the Terraform script,
+1. To the service account that will run the Terraform script,
    grant the following IAM roles:
 
    - `roles/editor`
    - `roles/iam.serviceAccountAdmin`
    - `roles/servicenetworking.networksAdmin`
    - `roles/storage.admin`
+   - `roles/container.admin`
 
    1. Enter your GCP project ID.
 
@@ -150,6 +155,10 @@ If you want to use `jq` and do not have `jq` installed, install.
       gcloud projects add-iam-policy-binding $PROJECT_ID \
       --member="serviceAccount:$SERVICE_ACCOUNT" \
       --role="roles/storage.admin"
+
+      gcloud projects add-iam-policy-binding $PROJECT_ID \
+      --member="serviceAccount:$SERVICE_ACCOUNT" \
+      --role="roles/container.admin"
       ```
 
 1. For the service account, authenticate to allow Terraform to
@@ -157,12 +166,17 @@ If you want to use `jq` and do not have `jq` installed, install.
    Provider Configuration
    reference](https://registry.terraform.io/providers/hashicorp/google/latest/docs/guides/provider_reference#authentication).
 
-   For example, to use User Application Default Credentials, you can run the
-   following command:
+   For example, if using [User Application Default
+   Credentials](https://cloud.google.com/sdk/gcloud/reference/auth/application-default),
+   you can run the following command:
 
    ```bash
    gcloud auth application-default login
    ```
+
+   {{< tip >}}
+   If using `GOOGLE_APPLICATION_CREDENTIALS`, use absolute path to your key file.
+   {{</ tip >}}
 
 ## B. Set up GCP Kubernetes environment and install Materialize
 
@@ -221,15 +235,16 @@ node instance type, etc.), see the
 1. Create a `terraform.tfvars` file (you can copy from the
    `terraform.tfvars.example` file) and specify:
 
-   -  Your GCP project ID.
+   - Your GCP project ID.
 
-   -  A prefix (e.g., `mz-simple`) for your resources.
+   - A prefix (e.g., `mz-simple`) for your resources. Prefix has a maximum of
+     10 characters and contains only alphanumeric characters and dashes.
 
-   -  The region for the GKE cluster.
+   - The region for the GKE cluster.
 
    ```bash
    project_id = "enter-your-gcp-project-id"
-   prefix  = "enter-your-prefix" //  e.g., mz-simple
+   prefix  = "enter-your-prefix" //  Maximum of 15 characters, contain lowercase alphanumeric and hyphens only (e.g., mz-simple)
    region = "us-central1"
    ```
 
@@ -239,17 +254,19 @@ node instance type, etc.), see the
     terraform init
     ```
 
-1. Create a terraform plan and review the changes.
+1. Run terraform plan and review the changes to be made.
 
     ```bash
-    terraform plan -out my-plan.tfplan
+    terraform plan
     ```
 
-1. If you are satisfied with the changes, apply the terraform plan.
+1. If you are satisfied with the changes, apply.
 
     ```bash
-    terraform apply my-plan.tfplan
+    terraform apply
     ```
+
+   To approve the changes and apply, enter `yes`.
 
    Upon successful completion, various fields and their values are output:
 
@@ -318,7 +335,10 @@ node instance type, etc.), see the
 
    NAME                                                                        DESIRED   CURRENT   READY   AGE
    replicaset.apps/materialize-mz-simple-materialize-operator-74d8f549d6       1         1         1       36m
-    ```
+   ```
+
+   If you run into an error during deployment, refer to the
+   [Troubleshooting](/installation/troubleshooting/).
 
 1. Once the Materialize operator is deployed and running, you can deploy the
    Materialize instances. To deploy Materialize instances, create a
@@ -342,10 +362,11 @@ node instance type, etc.), see the
    EOF
    ```
 
-1. Create a terraform plan with both `.tfvars` files and review the changes.
+1. Run `terraform plan` with both `.tfvars` files and review the changes to be
+   made.
 
    ```bash
-   terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars -out my-plan.tfplan
+   terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars
    ```
 
    The plan should show the changes to be made, with a summary similar to the
@@ -353,18 +374,15 @@ node instance type, etc.), see the
 
    ```
    Plan: 4 to add, 0 to change, 0 to destroy.
-
-   Saved the plan to: my-plan.tfplan
-
-   To perform exactly these actions, run the following command to apply:
-   terraform apply "my-plan.tfplan"
    ```
 
-1. If you are satisfied with the changes, apply the terraform plan.
+1. If you are satisfied with the changes, apply.
 
     ```bash
-    terraform apply my-plan.tfplan
+    terraform apply -var-file=terraform.tfvars -var-file=mz_instances.tfvars
     ```
+
+   To approve the changes and apply, enter `yes`.
 
    Upon successful completion, you should see output with a summary similar to the following:
 
@@ -425,33 +443,12 @@ node instance type, etc.), see the
    job.batch/create-db-demo-db   Complete   1/1           13s        2m11s
    ```
 
+   If you run into an error during deployment, refer to the
+   [Troubleshooting](/installation/troubleshooting/).
+
 1. Open the Materialize Console in your browser:
 
-   1. From the previous `kubectl` output, find the Materialize console service.
-
-      ```none
-      NAME                           TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
-      service/mzpzk74xji8b-console   ClusterIP   None         <none>        8080/TCP   91s
-      ```
-
-   1. Forward the Materialize Console service to your local machine (substitute
-      your service name for `mzpzk74xji8b-console`):
-
-      ```shell
-      while true;
-      do kubectl port-forward svc/mzpzk74xji8b-console 8080:8080 -n materialize-environment 2>&1 | tee /dev/stderr |
-      grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
-      done;
-      ```
-      {{< note >}}
-      Due to a [known Kubernetes issue](https://github.com/kubernetes/kubernetes/issues/78446),
-      interrupted long-running requests through a standard port-forward cause the port forward to hang. The command above
-      automatically restarts the port forwarding if an error occurs, ensuring a more stable
-      connection. It detects failures by monitoring for "portforward.go" error messages.
-      {{< /note >}}
-
-   1. Open a browser and navigate to
-      [http://localhost:8080](http://localhost:8080). From the Console, you can get started with the Quickstart.
+   {{% self-managed/port-forwarding-handling %}}
 
       {{< tip >}}
 
@@ -459,54 +456,17 @@ node instance type, etc.), see the
 
       {{< /tip >}}
 
-## Troubleshooting
+## Next steps
 
-If you encounter issues:
-
-1. Check operator logs:
-```bash
-kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
-```
-
-2. Check environment logs:
-```bash
-kubectl logs -l app.kubernetes.io/name=environmentd -n materialize-environment
-```
-
-3. Verify the storage configuration:
-```bash
-kubectl get sc
-kubectl get pv
-kubectl get pvc -A
-```
+{{% self-managed/next-steps %}}
 
 ## Cleanup
 
-
-To uninstall the Materialize operator:
-```bash
-helm uninstall materialize-operator -n materialize
-```
-
-This will remove the operator but preserve any PVs and data. To completely clean
-up:
-
-```bash
-kubectl delete namespace materialize
-kubectl delete namespace materialize-environment
-```
-
-In your Terraform directory, run:
-
-```bash
-terraform destroy
-```
-
-When prompted to proceed, type `yes` to confirm the deletion.
+{{% self-managed/cleanup-cloud %}}
 
 ## See also
 
-- [Materialize Operator Configuration](/installation/configuration/)
 - [Troubleshooting](/installation/troubleshooting/)
+- [Materialize Operator Configuration](/installation/configuration/)
 - [Operational guidelines](/installation/operational-guidelines/)
 - [Installation](/installation/)
