@@ -166,10 +166,7 @@ def workflow_clusterd(c: Composition) -> None:
         """
         CREATE CLUSTER c REPLICAS (r1 (
             STORAGECTL ADDRESSES ['clusterd:2100'],
-            STORAGE ADDRESSES ['clusterd:2103'],
-            COMPUTECTL ADDRESSES ['clusterd:2101'],
-            COMPUTE ADDRESSES ['clusterd:2102'],
-            WORKERS 1
+            COMPUTECTL ADDRESSES ['clusterd:2101']
         ))
     """
     )

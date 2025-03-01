@@ -139,6 +139,7 @@ def workflow_source_resumption(c: Composition, parser: WorkflowArgumentParser) -
 
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
+        Clusterd(workers=4),
     ):
         c.up(*(["materialized", "clusterd"] + get_kafka_services(args.redpanda)))
 

@@ -4859,16 +4859,13 @@ fn plan_replica_config(
     let ReplicaOptionExtracted {
         availability_zone,
         billed_as,
-        compute_addresses,
         computectl_addresses,
         disk: disk_in,
         internal,
         introspection_debugging,
         introspection_interval,
         size,
-        storage_addresses,
         storagectl_addresses,
-        workers,
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
@@ -4883,18 +4880,15 @@ fn plan_replica_config(
         availability_zone,
         billed_as,
         storagectl_addresses,
-        storage_addresses,
         computectl_addresses,
-        compute_addresses,
-        workers,
     ) {
         // Common cases we expect end users to hit.
-        (None, _, None, None, None, None, None, None) => {
+        (None, _, None, None, None) => {
             // We don't mention the unmanaged options in the error message
             // because they are only available in unsafe mode.
             sql_bail!("SIZE option must be specified");
         }
-        (Some(size), availability_zone, billed_as, None, None, None, None, None) => {
+        (Some(size), availability_zone, billed_as, None, None) => {
             let disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
             let mut disk = disk_in.unwrap_or(disk_default);
 
@@ -4924,16 +4918,7 @@ fn plan_replica_config(
             })
         }
 
-        (
-            None,
-            None,
-            None,
-            storagectl_addresses,
-            storage_addresses,
-            computectl_addresses,
-            compute_addresses,
-            workers,
-        ) => {
+        (None, None, None, storagectl_addresses, computectl_addresses) => {
             scx.require_feature_flag(&vars::UNSAFE_ENABLE_UNORCHESTRATED_CLUSTER_REPLICAS)?;
 
             // When manually testing Materialize in unsafe mode, it's easy to
@@ -4942,43 +4927,31 @@ fn plan_replica_config(
             let Some(storagectl_addrs) = storagectl_addresses else {
                 sql_bail!("missing STORAGECTL ADDRESSES option");
             };
-            let Some(storage_addrs) = storage_addresses else {
-                sql_bail!("missing STORAGE ADDRESSES option");
-            };
             let Some(computectl_addrs) = computectl_addresses else {
                 sql_bail!("missing COMPUTECTL ADDRESSES option");
             };
-            let Some(compute_addrs) = compute_addresses else {
-                sql_bail!("missing COMPUTE ADDRESSES option");
-            };
-            let workers = workers.unwrap_or(1);
 
-            if computectl_addrs.len() != compute_addrs.len() {
-                sql_bail!("COMPUTECTL ADDRESSES and COMPUTE ADDRESSES must have the same length");
-            }
-            if storagectl_addrs.len() != storage_addrs.len() {
-                sql_bail!("STORAGECTL ADDRESSES and STORAGE ADDRESSES must have the same length");
-            }
             if storagectl_addrs.len() != computectl_addrs.len() {
                 sql_bail!(
                     "COMPUTECTL ADDRESSES and STORAGECTL ADDRESSES must have the same length"
                 );
             }
 
-            if workers == 0 {
-                sql_bail!("WORKERS must be greater than 0");
-            }
-
             if disk_in.is_some() {
                 sql_bail!("DISK can't be specified for unorchestrated clusters");
             }
+
+            // TODO(teskje): remove unused replica options from parsing and planning
+            let compute_addrs = Vec::new();
+            let storage_addrs = Vec::new();
+            let workers = 1;
 
             Ok(ReplicaConfig::Unorchestrated {
                 storagectl_addrs,
                 storage_addrs,
                 computectl_addrs,
                 compute_addrs,
-                workers: workers.into(),
+                workers,
                 compute,
             })
         }

@@ -236,46 +236,64 @@ $ kafka-verify-data format=avro sink=materialize.public.sink1 sort-messages=true
 def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     print(f"+++ Running disruption scenario {disruption.name}")
 
-    c.up("testdrive", persistent=True)
-    c.up("materialized", "clusterd_1_1", "clusterd_1_2", "clusterd_2_1", "clusterd_2_2")
-
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
-    c.sql(
-        """
-        DROP CLUSTER IF EXISTS cluster1 CASCADE;
-        CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-            STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-            COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-            COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
-        ));
-        """
-    )
-
-    c.sql(
-        """
-        DROP CLUSTER IF EXISTS cluster2 CASCADE;
-        CREATE CLUSTER cluster2 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
-            STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
-            COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-            COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
-        ));
-        """
-    )
-
     with c.override(
         Testdrive(
             no_reset=True,
             materialize_params={"cluster": "cluster2"},
             seed=id,
-        )
+        ),
+        Clusterd(
+            name="clusterd_1_1",
+            process_names=["clusterd_1_1", "clusterd_1_2"],
+        ),
+        Clusterd(
+            name="clusterd_1_2",
+            process_names=["clusterd_1_1", "clusterd_1_2"],
+        ),
+        Clusterd(
+            name="clusterd_2_1",
+            process_names=["clusterd_2_1", "clusterd_2_2"],
+        ),
+        Clusterd(
+            name="clusterd_2_2",
+            process_names=["clusterd_2_1", "clusterd_2_2"],
+        ),
     ):
+        c.up("testdrive", persistent=True)
+        c.up(
+            "materialized",
+            "clusterd_1_1",
+            "clusterd_1_2",
+            "clusterd_2_1",
+            "clusterd_2_2",
+        )
+
+        c.sql(
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            """
+            DROP CLUSTER IF EXISTS cluster1 CASCADE;
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
+                COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101']
+            ));
+            """
+        )
+
+        c.sql(
+            """
+            DROP CLUSTER IF EXISTS cluster2 CASCADE;
+            CREATE CLUSTER cluster2 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
+                COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101']
+            ));
+            """
+        )
+
         populate(c)
 
         # Disrupt cluster1 by some means
