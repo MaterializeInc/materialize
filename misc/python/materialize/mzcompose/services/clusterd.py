@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 
 from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_MZ_VOLUMES
 from materialize.mzcompose.service import (
@@ -29,6 +30,8 @@ class Clusterd(Service):
         stop_grace_period: str = "120s",
         scratch_directory: str = "/scratch",
         volumes: list[str] = [],
+        workers: int = 1,
+        process_names: list[str] = [],
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -41,6 +44,17 @@ class Clusterd(Service):
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID
 
         environment += [f"CLUSTERD_ENVIRONMENT_ID={environment_id}"]
+
+        process_names = process_names if process_names else [name]
+        process_index = process_names.index(name)
+        compute_timely_config = timely_config(process_names, 2102, workers, 16)
+        storage_timely_config = timely_config(process_names, 2103, workers, 1337)
+
+        environment += [
+            f"CLUSTERD_PROCESS={process_index}",
+            f"CLUSTERD_COMPUTE_TIMELY_CONFIG={compute_timely_config}",
+            f"CLUSTERD_STORAGE_TIMELY_CONFIG={storage_timely_config}",
+        ]
 
         options = [f"--scratch-directory={scratch_directory}", *options]
 
@@ -74,3 +88,21 @@ class Clusterd(Service):
         )
 
         super().__init__(name=name, config=config)
+
+
+def timely_config(
+    process_names: list[str],
+    port: int,
+    workers: int,
+    arrangement_exert_proportionality: int,
+) -> str:
+    config = {
+        "workers": workers,
+        "process": 0,
+        "addresses": [f"{n}:{port}" for n in process_names],
+        "arrangement_exert_proportionality": arrangement_exert_proportionality,
+        "enable_zero_copy": False,
+        "enable_zero_copy_lgalloc": False,
+        "zero_copy_limit": None,
+    }
+    return json.dumps(config)
