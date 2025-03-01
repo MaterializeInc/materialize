@@ -11,9 +11,7 @@ $ kafka-create-topic topic=topic1
 
 > CREATE CLUSTER c1 REPLICAS (r1 (
         STORAGECTL ADDRESSES ['clusterd1:2100'],
-        STORAGE ADDRESSES ['clusterd1:2103'],
-        COMPUTECTL ADDRESSES ['clusterd1:2101'],
-        COMPUTE ADDRESSES ['clusterd1:2102']
+        COMPUTECTL ADDRESSES ['clusterd1:2101']
     ))
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn
