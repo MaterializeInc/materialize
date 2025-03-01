@@ -957,7 +957,7 @@ impl ResultSender for WebSocket {
                                 }
                             }
                         }
-                        Some(PeekResponseUnary::Batches(_)) => {
+                        Some(PeekResponseUnary::Batches { .. }) => {
                             let msg = "unexpected staged response";
                             let err = Error::Unstructured(anyhow!("{msg}")).into();
                             break (
@@ -1485,9 +1485,11 @@ async fn execute_stmt<S: ResultSender>(
                     );
                     rows
                 }
-                PeekResponseUnary::Batches(_) => {
+                PeekResponseUnary::Batches { .. } => {
                     let msg = "unexpected staged response";
-                    return Ok(SqlResult::err(client, Error::Unstructured(anyhow!("{msg}"))).into());
+                    return Ok(
+                        SqlResult::err(client, Error::Unstructured(anyhow!("{msg}"))).into(),
+                    );
                 }
                 PeekResponseUnary::Error(e) => {
                     return Ok(SqlResult::err(client, Error::Unstructured(anyhow!(e))).into());
@@ -1509,6 +1511,7 @@ async fn execute_stmt<S: ResultSender>(
             &desc.relation_desc.expect("RelationDesc must exist"),
         )
         .into(),
+        ExecuteResponse::SendingRowsStreaming { rows } => todo!(),
         ExecuteResponse::Subscribing {
             rx,
             ctx_extra,

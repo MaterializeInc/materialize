@@ -3668,7 +3668,20 @@ impl RustType<ProtoMutationKind> for MutationKind {
     fn from_proto(proto: ProtoMutationKind) -> Result<Self, TryFromProtoError> {
         match proto.kind {
             Some(proto_mutation_kind::Kind::Insert(())) => Ok(MutationKind::Insert),
-            Some(proto_mutation_kind::Kind::Update(_)) => todo!("update"),
+            Some(proto_mutation_kind::Kind::Update(update)) => {
+                let assignments = update
+                    .assignments
+                    .into_iter()
+                    .map(|a| {
+                        let column = usize::cast_from(a.column);
+                        let expr = a
+                            .expr
+                            .into_rust_if_some("proto_mutation_kind::Assignment::expr")?;
+                        Ok::<_, TryFromProtoError>((column, expr))
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(MutationKind::Update { assignments })
+            }
             Some(proto_mutation_kind::Kind::Delete(())) => Ok(MutationKind::Delete),
             None => Err(TryFromProtoError::missing_field("ProtoMutationKind::kind")),
         }

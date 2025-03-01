@@ -9,6 +9,7 @@
 
 //! A Compute sink for staging data in Persist Batches.
 
+use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -16,13 +17,16 @@ use differential_dataflow::{Collection, Hashable};
 use futures::StreamExt;
 use mz_compute_client::protocol::response::StagedPeekResponse;
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistBatchesConnection};
-use mz_expr::{RowSetFinishing, SafeMfpPlan};
+use mz_expr::MutationKind;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::ProtoBatch;
+use mz_persist_client::Diagnostics;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_row_stash::{StashedRow, StashedRowSchema};
 use mz_storage_operators::oneshot_source::StorageErrorX;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -51,186 +55,282 @@ where
         _ct_times: Option<Collection<G, (), Diff>>,
     ) -> Option<Rc<dyn std::any::Any>> {
         let scope = sinked_collection.scope();
+        let dest_arity = self.collection_meta.relation_desc.arity();
 
-        // A single worker will collect pre-sorted groups and do a merge sort.
-        let num_workers = scope.peers();
-        let aggregator_id =
-            usize::cast_from((self.collection_id, "aggregator").hashed()) % num_workers;
-
+        // Create a closure that each worker can use to respond with its results.
         let response_buffer = Rc::clone(&compute_state.staged_peek_reponse_buffer);
-        let responder = Box::new(move |batches: Result<Option<ProtoBatch>, String>| {
-            let mut borrow = response_buffer.borrow_mut();
-            let batches = match batches.expect("TODO") {
-                None => vec![],
-                Some(batch) => vec![batch],
-            };
-            tracing::warn!(?batches, "staged BATCHES");
-            let response = StagedPeekResponse {
-                staged_batches: batches,
-            };
+        let responder = Box::new(
+            move |appends: Option<ProtoBatch>, returns: Option<ProtoBatch>| {
+                let mut borrow = response_buffer.borrow_mut();
+                let appends = match appends {
+                    None => vec![],
+                    Some(batch) => vec![batch],
+                };
+                tracing::warn!(?appends, ?returns, "staged BATCHES");
+                let response = StagedPeekResponse {
+                    append_batches: appends,
+                    returned_rows: returns,
+                };
 
-            borrow.insert(sink_id, response);
-        });
-
-        // Each worker will collect and sort rows.
-        let (collected_groups, collected_token) = render_collect_operator(
-            &scope,
-            sinked_collection,
-            self.finishing.clone(),
-            self.map_filter_project.clone(),
+                borrow.insert(sink_id, response);
+            },
         );
 
-        // If there is a sort order for the columns we need to do that on a single worker.
-        let need_to_aggregate = !self.finishing.order_by.is_empty();
-
-        let aggregator_id = need_to_aggregate.then_some(aggregator_id);
-        let group_stream = if let Some(aggregator_id) = aggregator_id {
-            collected_groups.exchange(move |_| u64::cast_from(aggregator_id))
-        } else {
-            collected_groups
-        };
-
-        // A single worker will get all of the pre-sorted groups and do a merge sort.
-        //
-        // TODO(parkmycar): Alternatively each worker could sync the data into Persist batches
-        // and use compaction to drive the sorting.
-        let (sorted_row_stream, sorted_row_token) =
-            render_aggregate_operator(&scope, &group_stream, aggregator_id);
-        let sorted_row_stream = sorted_row_stream.map(|data| Ok::<_, StorageErrorX>(data));
-
-        // Stage all of our batches in Persist.
-        let (batches_stream, batches_token) =
-            mz_storage_operators::oneshot_source::render_stage_batches_operator(
-                scope.clone(),
-                self.collection_id,
-                &self.collection_meta,
-                Arc::clone(&compute_state.persist_clients),
-                &sorted_row_stream,
-            );
-
-        mz_storage_operators::oneshot_source::render_completion_operator(
-            scope.clone(),
-            &batches_stream,
-            responder,
-        );
-
-        Some(Rc::new(vec![
-            collected_token,
-            sorted_row_token,
-            batches_token,
-        ]))
-    }
-}
-
-fn render_collect_operator<G>(
-    scope: &G,
-    input: Collection<G, Row, Diff>,
-    finishing: RowSetFinishing,
-    mfp: SafeMfpPlan,
-) -> (TimelyStream<G, Vec<(Row, Diff)>>, PressOnDropButton)
-where
-    G: Scope,
-{
-    let mut builder =
-        AsyncOperatorBuilder::new("PersistBatches-collect".to_string(), scope.clone());
-
-    let (collection_handle, collection_stream) = builder.new_output();
-    let mut input_handle = builder.new_disconnected_input(&input.inner, Pipeline);
-
-    let shutdown = builder.build(move |caps| async move {
-        let [collect_cap] = caps.try_into().unwrap();
-
-        // TODO(parkmycar): Maybe collect the Rows into a BinaryHeap and sort
-        // as we receive them.
-        let mut all_rows = Vec::new();
-
-        // Apply the MFP as we receive a row.
+        // 1. Apply the MFP to our input collection.
+        let mfp = self.map_filter_project.clone();
         let arena = RowArena::new();
         let mut row_builder = Row::default();
         let mut datum_vec = DatumVec::new();
 
-        while let Some(event) = input_handle.next().await {
-            let mut rows = match event {
-                AsyncEvent::Data(_caps, rows) => rows,
-                AsyncEvent::Progress(_) => continue,
+        let mfp_collection = sinked_collection.flat_map(move |row| {
+            let mut borrow = datum_vec.borrow_with(&row);
+            let maybe_row = mfp
+                .evaluate_into(&mut borrow, &arena, &mut row_builder)
+                .expect("TODO");
+            maybe_row
+        });
+
+        // If the output is trivial we can just stream directly into Persist.
+        let can_trivially_stream = self.finishing.is_trivial(dest_arity)
+            && self.mutation_kind == MutationKind::Insert
+            && self.returning.is_empty();
+
+        // 2. Map the results into a stream that we can sink into Persist.
+        let (append_stream, returning_stream) = if can_trivially_stream {
+            (mfp_collection.inner, None)
+        } else {
+            // Consolidate the results so we're working with an easy to reason
+            // about snapshot.
+            let consolidated_collection = mfp_collection.consolidate();
+
+            // Mutate the collection for the corresponding query type.
+            let mutation_kind = self.mutation_kind.clone();
+            let mut datum_vec = DatumVec::new();
+
+            let mutated_stream = consolidated_collection
+                .inner
+                .flat_map(move |(row, ts, diff)| {
+                    match &mutation_kind {
+                        // No-op.
+                        MutationKind::Insert => {
+                            let value = (row, ts, diff);
+                            itertools::Either::Left(std::iter::once(value))
+                        }
+                        MutationKind::Delete => {
+                            let negated = diff.saturating_mul(-1);
+                            let value = (row, ts, negated);
+                            itertools::Either::Left(std::iter::once(value))
+                        }
+                        MutationKind::Update { assignments } => {
+                            if assignments.is_empty() {
+                                // If there are no assignments, then we can pass the row through.
+                                let value = (row, ts, diff);
+                                itertools::Either::Left(std::iter::once(value))
+                            } else {
+                                // Compute the updated row with the assignments.
+                                let arena = RowArena::new();
+                                let new_row = {
+                                    let mut datums = datum_vec.borrow_with(&row);
+                                    for (idx, expr) in assignments {
+                                        let updated = expr.eval(&datums, &arena).expect("TODO");
+                                        datums[*idx] = updated;
+                                    }
+                                    Row::pack_slice(&datums)
+                                };
+
+                                let old_row = (row, ts, diff.saturating_mul(-1));
+                                let new_row = (new_row, ts, diff);
+
+                                itertools::Either::Right([old_row, new_row].into_iter())
+                            }
+                        }
+                    }
+                });
+
+            // Create the stream of rows to return to the user.
+            let returning_exprs = self.returning.clone();
+            let mut datum_vec = DatumVec::new();
+
+            let returning_stream = if !self.returning.is_empty() {
+                let stream = mutated_stream.flat_map(move |(row, _ts, diff)| {
+                    // Filter out retractions from UPDATEs or DELETEs.
+                    if diff < 1 {
+                        return None;
+                    }
+
+                    // Generate the returned Row by running each expression.
+                    let mut returning_row = Row::default();
+                    let mut packer = returning_row.packer();
+                    let datums = datum_vec.borrow_with(&row);
+                    let arena = RowArena::default();
+
+                    for expr in &returning_exprs {
+                        let datum = expr.eval(&datums[..], &arena).expect("TODO");
+                        packer.push(datum);
+                    }
+
+                    let diff = usize::try_from(diff).expect("known to be > 0");
+                    let diff = NonZeroUsize::try_from(diff).expect("known to be > 1");
+
+                    Some((returning_row, diff))
+                });
+
+                Some(stream)
+            } else {
+                None
             };
 
-            for (row, diff) in rows.drain(..).map(|(row, _ts, diff)| (row, diff)) {
-                let mut borrow = datum_vec.borrow_with(&row);
-                let maybe_row = mfp
-                    .evaluate_into(&mut borrow, &arena, &mut row_builder)
-                    .expect("TODO");
-                assert!(diff > 0, "got negative diff!");
+            (mutated_stream, returning_stream)
+        };
 
-                if let Some(row) = maybe_row {
-                    all_rows.push((row, diff));
-                }
-            }
+        // 3. Stage all of our batches in Persist.
+        let row_stream = append_stream.map(|(row, _ts, diff)| Ok((SourceData(Ok(row)), diff)));
+        let persist_diagnostics = Diagnostics {
+            shard_name: self.collection_id.to_string(),
+            handle_purpose: "PersitBatchesConnection".to_string(),
+        };
+        let (appends_stream, appends_token) =
+            mz_storage_operators::oneshot_source::render_stage_batches_operator(
+                scope.clone(),
+                self.collection_meta.persist_location.clone(),
+                self.collection_meta.data_shard,
+                Arc::clone(&compute_state.persist_clients),
+                persist_diagnostics,
+                &row_stream,
+                self.collection_meta.relation_desc.clone(),
+            );
+
+        // 3a. Also stage our returned Rows into Persist for environmentd to
+        // stream back to the client.
+        let (returning_stream, returning_button) = if let Some(returning_stream) = returning_stream
+        {
+            let num_workers = scope.peers();
+            let returns_worker =
+                usize::cast_from((self.collection_id, "returns").hashed()) % num_workers;
+
+            // Exchange all the records to a single worker so we stage all of
+            // the Rows into a single Batch.
+            let returning_stream = returning_stream
+                .exchange(move |_| u64::cast_from(returns_worker))
+                .map(|(row, diff)| {
+                    let diff = i64::try_from(diff.get()).expect("TODO");
+                    Ok((StashedRow::from(row), diff))
+                });
+            let persist_diagnostics = Diagnostics {
+                shard_name: "staged_peek_response".to_string(),
+                handle_purpose: "Staged Peek Response".to_string(),
+            };
+
+            // Stash all of our Rows into the "stashed rows shard".
+            let (stream, button) =
+                mz_storage_operators::oneshot_source::render_stage_batches_operator(
+                    scope.clone(),
+                    self.collection_meta.persist_location.clone(),
+                    self.stashed_rows_shard,
+                    Arc::clone(&compute_state.persist_clients),
+                    persist_diagnostics,
+                    &returning_stream,
+                    StashedRowSchema,
+                );
+
+            (Some(stream), Some(button))
+        } else {
+            (None, None)
+        };
+
+        // 4. Report our result.
+        render_completion_operator(
+            scope.clone(),
+            &appends_stream,
+            returning_stream.as_ref(),
+            responder,
+        );
+
+        let mut buttons = vec![appends_token];
+        if let Some(button) = returning_button {
+            buttons.push(button);
         }
 
-        // Sort our rows, if required.
-        if !finishing.order_by.is_empty() {
-            let mut l_datum_vec = DatumVec::new();
-            let mut r_datum_vec = DatumVec::new();
-
-            all_rows.sort_by(|left, right| {
-                let left_datums = l_datum_vec.borrow_with(&left.0);
-                let right_datums = r_datum_vec.borrow_with(&right.0);
-                mz_expr::compare_columns(&finishing.order_by, &left_datums, &right_datums, || {
-                    left.0.cmp(&right.0)
-                })
-            });
-        }
-
-        collection_handle.give(&collect_cap, all_rows);
-    });
-
-    (collection_stream, shutdown.press_on_drop())
+        Some(Rc::new(buttons))
+    }
 }
 
-fn render_aggregate_operator<G>(
-    scope: &G,
-    input: &TimelyStream<G, Vec<(Row, Diff)>>,
-    aggregator_id: Option<usize>,
-) -> (TimelyStream<G, (Row, Diff)>, PressOnDropButton)
-where
+/// Render an operator that given a stream of [`ProtoBatch`]es will call our `worker_callback` to
+/// report the results upstream.
+pub fn render_completion_operator<G, F>(
+    scope: G,
+    appends_batches: &TimelyStream<G, Result<ProtoBatch, StorageErrorX>>,
+    returned_rows: Option<&TimelyStream<G, Result<ProtoBatch, StorageErrorX>>>,
+    worker_callback: F,
+) where
     G: Scope,
+    F: FnOnce(Option<ProtoBatch>, Option<ProtoBatch>) -> () + 'static,
 {
     let mut builder =
-        AsyncOperatorBuilder::new("PersistBatches-aggregate".to_string(), scope.clone());
+        AsyncOperatorBuilder::new("PersistBatches-completion".to_string(), scope.clone());
 
-    let (sorted_handle, sorted_stream) = builder.new_output();
-    let mut input_groups = builder.new_input_for(&input, Pipeline, &sorted_handle);
+    let mut appends_batches_input = builder.new_disconnected_input(appends_batches, Pipeline);
+    let returned_rows_input = returned_rows.map(|r| builder.new_disconnected_input(r, Pipeline));
 
-    // Only a single worker should receive row groups to merge together.
-    let should_receive_data = if let Some(aggregator_id) = aggregator_id {
-        scope.index() == aggregator_id
-    } else {
-        true
-    };
+    builder.build(move |_| async move {
+        let (appends, returns) = async move {
+            let mut maybe_append_batch: Option<ProtoBatch> = None;
+            let mut maybe_returned_rows: Option<ProtoBatch> = None;
 
-    let shutdown = builder.build(move |caps| async move {
-        let [aggregate_cap] = caps.try_into().unwrap();
+            while let Some(event) = appends_batches_input.next().await {
+                if let AsyncEvent::Data(_cap, results) = event {
+                    let [result] = results
+                        .try_into()
+                        .expect("only 1 event on the result stream");
 
-        let mut all_groups = Vec::new();
-        while let Some(event) = input_groups.next().await {
-            let mut groups = match event {
-                AsyncEvent::Data(_caps, groups) => groups,
-                AsyncEvent::Progress(_) => continue,
-            };
-            all_groups.extend(groups.drain(..));
-        }
+                    // TODO(cf2): Lift this restriction.
+                    if maybe_append_batch.is_some() {
+                        panic!("expected only one batch!");
+                    }
 
-        if should_receive_data {
-            // TODO(parkmycar): Merge sort these rows.
-            let all_rows = all_groups.into_iter().flatten();
-            for row in all_rows {
-                sorted_handle.give(&aggregate_cap, row);
+                    maybe_append_batch = match result {
+                        Ok(batch) => Some(batch),
+                        Err(err) => {
+                            tracing::error!(?err, "appends, OHHH NOO");
+                            None
+                        }
+                    }
+                }
             }
-        } else {
-            assert!(all_groups.is_empty(), "non-primary worker received data!");
-        }
-    });
 
-    (sorted_stream, shutdown.press_on_drop())
+            if let Some(mut input) = returned_rows_input {
+                while let Some(event) = input.next().await {
+                    if let AsyncEvent::Data(_cap, results) = event {
+                        let [result] = results
+                            .try_into()
+                            .expect("only 1 event on the result stream");
+                        if maybe_returned_rows.is_some() {
+                            panic!("expected only one batch!");
+                        }
+
+                        maybe_returned_rows = match result {
+                            Ok(batch) => {
+                                let len = batch.batch.as_ref().map(|b| b.len).unwrap_or(0);
+                                if len == 0 {
+                                    None
+                                } else {
+                                    Some(batch)
+                                }
+                            }
+                            Err(err) => {
+                                tracing::error!(?err, "appends, OHHH NOO");
+                                None
+                            }
+                        }
+                    }
+                }
+            }
+
+            (maybe_append_batch, maybe_returned_rows)
+        }
+        .await;
+
+        // Report to the caller of our final status.
+        worker_callback(appends, returns);
+    });
 }

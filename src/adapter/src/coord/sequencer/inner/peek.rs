@@ -313,6 +313,7 @@ impl Coordinator {
                         collection_id,
                         from_desc,
                         mutation_kind,
+                        returning,
                     }) => {
                         let (_, sink_id) = self.allocate_transient_id();
                         let collection_meta = self
@@ -325,6 +326,7 @@ impl Coordinator {
                             collection_meta,
                             from_desc: from_desc.clone(),
                             mutation_kind: mutation_kind.clone(),
+                            returning: returning.clone(),
                         }
                     }
                     SelectOutput::CopyTo(_) => unreachable!("handled elsewhere"),

@@ -22,7 +22,8 @@ use mz_expr::{
 };
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
-use mz_repr::{GlobalId, RelationDesc, RelationType, Timestamp};
+use mz_repr::{Diff, GlobalId, RelationDesc, RelationType, Timestamp};
+use mz_row_stash::StashedRowHandle;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
@@ -85,6 +86,8 @@ pub enum PeekOutput {
         from_desc: RelationDesc,
         /// Kind of read-then-write plan we're executing, e.g. `UPDATE`.
         mutation_kind: MutationKind,
+        /// Expressions that determine whether or not a row should be returned.
+        returning: Vec<MirScalarExpr>,
     },
 }
 
@@ -324,6 +327,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                     collection_meta,
                     from_desc,
                     mutation_kind,
+                    returning,
                 },
             ) => {
                 // TODO(parkmycar): We need to plan an MFP that can fill in
@@ -333,6 +337,11 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                     .map_err(OptimizerError::Internal)?
                     .into_nontemporal()
                     .map_err(|_e| OptimizerError::UnsafeMfpPlan)?;
+                // TODO(parkmycar): Move this into a method on Catalog.
+                let stashed_rows_shard = StashedRowHandle::<Timestamp, Diff>::shard_id(
+                    self.catalog.config().environment_id.organization_id(),
+                );
+
                 let sink_desc = ComputeSinkDesc {
                     from_desc: from_desc.clone(),
                     from: self.select_id,
@@ -343,6 +352,8 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
                         literal_constraints: None,
                         map_filter_project,
                         mutation_kind: mutation_kind.clone(),
+                        returning: returning.clone(),
+                        stashed_rows_shard,
                     }),
                     with_snapshot: true,
                     up_to: Default::default(),

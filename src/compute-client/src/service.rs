@@ -358,8 +358,17 @@ where
                                 }
                             }
                             (PeekResponse::Staged(mut batches), PeekResponse::Staged(other)) => {
-                                batches.staged_batches.extend(other.staged_batches);
-                                PeekResponse::Staged(batches)
+                                batches.append_batches.extend(other.append_batches);
+                                match (&mut batches.returned_rows, other.returned_rows) {
+                                    (Some(_), Some(_)) => PeekResponse::Error(
+                                        "found more than one returned rows batch".to_string(),
+                                    ),
+                                    (dest @ None, batch @ Some(_)) => {
+                                        *dest = batch;
+                                        PeekResponse::Staged(batches)
+                                    }
+                                    (Some(_), None) | (None, None) => PeekResponse::Staged(batches),
+                                }
                             }
                         };
                     }

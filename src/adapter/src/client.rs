@@ -388,7 +388,7 @@ Issue a SQL query to get started. Need help?
         {
             (ExecuteResponse::SendingRows { future, .. }, _) => match future.await {
                 PeekResponseUnary::Rows(rows) => Ok(rows),
-                PeekResponseUnary::Batches(_) => bail!("unexpected staged result"),
+                PeekResponseUnary::Batches { .. } => bail!("unexpected staged result"),
                 PeekResponseUnary::Canceled => bail!("query canceled"),
                 PeekResponseUnary::Error(e) => bail!(e),
             },

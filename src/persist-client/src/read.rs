@@ -31,7 +31,9 @@ use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::columnar::{ColumnDecoder, Schema};
 use mz_persist_types::{Codec, Codec64};
+use mz_proto::{IntoRustIfSome, ProtoType};
 use proptest_derive::Arbitrary;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -39,7 +41,10 @@ use tokio::runtime::Handle;
 use tracing::{debug_span, warn, Instrument};
 use uuid::Uuid;
 
-use crate::batch::{BLOB_TARGET_SIZE, STRUCTURED_ORDER, STRUCTURED_ORDER_UNTIL_SHARD};
+use crate::batch::{
+    Batch, ProtoBatch, BATCH_DELETE_ENABLED, BLOB_TARGET_SIZE, STRUCTURED_ORDER,
+    STRUCTURED_ORDER_UNTIL_SHARD,
+};
 use crate::cfg::{RetryParameters, COMPACTION_MEMORY_BOUND_BYTES};
 use crate::fetch::{fetch_leased_part, FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart};
 use crate::internal::encoding::Schemas;
@@ -849,6 +854,126 @@ where
         self.listen(Antichain::from_elem(as_of))
             .await
             .expect("cannot serve requested as_of")
+    }
+
+    /// Streams the contents of the provided [`ProtoBatch`].
+    ///
+    /// After the stream has completed data behind the [`ProtoBatch`] will be
+    /// deleted.
+    pub async fn consume(
+        &mut self,
+        batch: ProtoBatch,
+    ) -> impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)> + 'static {
+        // Keep around a clone of the Batch so we can clean it up.
+        let drop_batch = self.batch_from_transmittable_batch(batch.clone());
+
+        let batch = self
+            .batch_from_transmittable_batch(batch)
+            .into_hollow_batch();
+
+        let blob = Arc::clone(&self.blob);
+        let metrics = Arc::clone(&self.metrics);
+        let snapshot_metrics = self.metrics.read.snapshot.clone();
+        let shard_metrics = Arc::clone(&self.machine.applier.shard_metrics);
+        let reader_id = self.reader_id.clone();
+        let schemas = self.read_schemas.clone();
+        let mut schema_cache = self.schema_cache.clone();
+        let persist_cfg = self.cfg.clone();
+
+        let parts: Vec<_> = self
+            .lease_batch_parts(batch, FetchBatchFilter::None)
+            .collect()
+            .await;
+
+        async_stream::stream! {
+            // Stream out all of the data from this Batch.
+            for part in parts {
+                let mut fetched_part = fetch_leased_part(
+                    &persist_cfg,
+                    &part,
+                    blob.as_ref(),
+                    Arc::clone(&metrics),
+                    &snapshot_metrics,
+                    &shard_metrics,
+                    &reader_id,
+                    schemas.clone(),
+                    &mut schema_cache,
+                )
+                .await;
+
+                while let Some(next) = fetched_part.next() {
+                    yield next;
+                }
+            }
+
+            // Delete the data!
+            drop_batch.delete().await;
+        }
+    }
+
+    /// Generates a [Self::snapshot], and streams out all of the updates
+    /// it contains in bounded memory.
+    ///
+    /// The output is not consolidated.
+    // pub async fn snapshot_and_stream(
+    //     &mut self,
+    //     as_of: Antichain<T>,
+    // ) -> Result<impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+    //     let snap = self.snapshot(as_of).await?;
+
+    //     let blob = Arc::clone(&self.blob);
+    //     let metrics = Arc::clone(&self.metrics);
+    //     let snapshot_metrics = self.metrics.read.snapshot.clone();
+    //     let shard_metrics = Arc::clone(&self.machine.applier.shard_metrics);
+    //     let reader_id = self.reader_id.clone();
+    //     let schemas = self.read_schemas.clone();
+    //     let mut schema_cache = self.schema_cache.clone();
+    //     let persist_cfg = self.cfg.clone();
+    //     let stream = async_stream::stream! {
+    //         for part in snap {
+    //             let mut fetched_part = fetch_leased_part(
+    //                 &persist_cfg,
+    //                 &part,
+    //                 blob.as_ref(),
+    //                 Arc::clone(&metrics),
+    //                 &snapshot_metrics,
+    //                 &shard_metrics,
+    //                 &reader_id,
+    //                 schemas.clone(),
+    //                 &mut schema_cache,
+    //             )
+    //             .await;
+
+    //             while let Some(next) = fetched_part.next() {
+    //                 yield next;
+    //             }
+    //         }
+    //     };
+
+    //     Ok(stream)
+    // }
+
+    fn batch_from_transmittable_batch(&self, batch: ProtoBatch) -> Batch<K, V, T, D> {
+        let shard_id: ShardId = batch
+            .shard_id
+            .into_rust()
+            .expect("valid transmittable batch");
+        assert_eq!(shard_id, self.machine.shard_id());
+
+        let ret = Batch {
+            batch_delete_enabled: BATCH_DELETE_ENABLED.get(&self.cfg),
+            metrics: Arc::clone(&self.metrics),
+            shard_metrics: Arc::clone(&self.machine.applier.shard_metrics),
+            version: Version::parse(&batch.version).expect("valid transmittable batch"),
+            batch: batch
+                .batch
+                .into_rust_if_some("ProtoBatch::batch")
+                .expect("valid transmittable batch"),
+            blob: Arc::clone(&self.blob),
+            _phantom: std::marker::PhantomData,
+        };
+        assert_eq!(ret.shard_id(), self.machine.shard_id());
+        ret
     }
 }
 

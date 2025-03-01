@@ -163,6 +163,14 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
                         execution_strategy: Some(StatementExecutionStrategy::Constant),
                     }
                 }
+                ExecuteResponse::SendingRowsStreaming { .. } => {
+                    // TODO(parkmycar).
+                    StatementEndedExecutionReason::Success {
+                        result_size: Some(0),
+                        rows_returned: Some(0),
+                        execution_strategy: Some(StatementExecutionStrategy::Constant),
+                    }
+                }
                 ExecuteResponse::SendingRows { .. } => {
                     panic!("SELECTs terminate on peek finalization, not here.")
                 }
@@ -194,6 +202,14 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
                 StatementEndedExecutionReason::Success {
                     result_size: Some(u64::cast_from(result_size)),
                     rows_returned: Some(u64::cast_from(rows.count())),
+                    execution_strategy: Some(StatementExecutionStrategy::Constant),
+                }
+            }
+            ExecuteResponse::SendingRowsStreaming { .. } => {
+                // TODO(parkmycar).
+                StatementEndedExecutionReason::Success {
+                    result_size: Some(0),
+                    rows_returned: Some(0),
                     execution_strategy: Some(StatementExecutionStrategy::Constant),
                 }
             }
