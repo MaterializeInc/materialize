@@ -14,10 +14,7 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 > CREATE CLUSTER compute REPLICAS (
     r1 (
       STORAGECTL ADDRESSES ['clusterd1:2100'],
-      COMPUTECTL ADDRESSES ['clusterd1:2101'],
-      STORAGE ADDRESSES ['clusterd1:2102'],
-      COMPUTE ADDRESSES ['clusterd1:2103'],
-      WORKERS 1
+      COMPUTECTL ADDRESSES ['clusterd1:2101']
     )
   )
 
