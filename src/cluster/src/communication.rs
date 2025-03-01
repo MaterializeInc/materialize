@@ -82,14 +82,14 @@ use anyhow::{bail, Context};
 use futures::TryFutureExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
-use timely::communication::allocator::zero_copy::allocator::TcpBuilder;
-use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
 use mz_ore::retry::Retry;
 use regex::Regex;
+use timely::communication::allocator::zero_copy::allocator::TcpBuilder;
+use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::{GenericBuilder, PeerBuilder};
-use tracing::{info, warn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tracing::{info, warn};
 
 /// Creates communication mesh from cluster config
 pub async fn initialize_networking<P>(
