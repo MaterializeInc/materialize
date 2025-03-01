@@ -9,9 +9,10 @@
 
 //! Types for oneshot sources.
 
+use mz_expr::SafeMfpPlan;
 use mz_pgcopy::CopyCsvFormatParams;
 use mz_proto::{IntoRustIfSome, RustType};
-use mz_repr::CatalogItemId;
+use mz_repr::{CatalogItemId, RelationDesc};
 use mz_timely_util::builder_async::PressOnDropButton;
 
 use serde::{Deserialize, Serialize};
@@ -41,6 +42,7 @@ pub struct OneshotIngestionRequest {
     pub source: ContentSource,
     pub format: ContentFormat,
     pub filter: ContentFilter,
+    pub shape: ContentShape,
 }
 
 impl RustType<ProtoOneshotIngestionRequest> for OneshotIngestionRequest {
@@ -49,6 +51,7 @@ impl RustType<ProtoOneshotIngestionRequest> for OneshotIngestionRequest {
             source: Some(self.source.into_proto()),
             format: Some(self.format.into_proto()),
             filter: Some(self.filter.into_proto()),
+            shape: Some(self.shape.into_proto()),
         }
     }
 
@@ -64,11 +67,15 @@ impl RustType<ProtoOneshotIngestionRequest> for OneshotIngestionRequest {
         let filter = proto
             .filter
             .into_rust_if_some("ProtoOneshotIngestionRequest::filter")?;
+        let shape = proto
+            .shape
+            .into_rust_if_some("ProtoOneshotIngestionRequest::shape")?;
 
         Ok(OneshotIngestionRequest {
             source,
             format,
             filter,
+            shape,
         })
     }
 }
@@ -204,5 +211,34 @@ impl RustType<proto_oneshot_ingestion_request::Filter> for ContentFilter {
                 Ok(ContentFilter::Pattern(pattern.pattern))
             }
         }
+    }
+}
+
+/// Shape of the data we are copying into Materialize.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ContentShape {
+    /// Describes the shape of the data we are copying from.
+    pub source_desc: RelationDesc,
+    /// An MFP to transform the data to match the destination table.
+    pub source_mfp: SafeMfpPlan,
+}
+
+impl RustType<ProtoContentShape> for ContentShape {
+    fn into_proto(&self) -> ProtoContentShape {
+        ProtoContentShape {
+            source_desc: Some(self.source_desc.into_proto()),
+            source_mfp: Some(self.source_mfp.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoContentShape) -> Result<Self, mz_proto::TryFromProtoError> {
+        Ok(ContentShape {
+            source_desc: proto
+                .source_desc
+                .into_rust_if_some("ProtoContentShape::source_desc")?,
+            source_mfp: proto
+                .source_mfp
+                .into_rust_if_some("ProtoContentShape::source_mfp")?,
+        })
     }
 }
