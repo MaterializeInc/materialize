@@ -910,6 +910,7 @@ impl<'a> Parser<'a> {
                 | Expr::HomogenizingFunction { .. }
                 | Expr::NullIf { .. }
                 | Expr::Subquery { .. }
+                | Expr::Parameter(..)
         ) {
             Ok(Expr::Cast {
                 expr: Box::new(Expr::Nested(Box::new(expr))),
