@@ -32,6 +32,7 @@ mz-ore = { path = "../ore", features = ["async", "flatcontainer", "process", "tr
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
+mz-row-stash = { path = "../row-stash" }
 mz-service = { path = "../service" }
 mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }

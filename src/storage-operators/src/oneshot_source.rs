@@ -74,6 +74,7 @@ use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
@@ -195,14 +196,20 @@ where
     // Parse chunks of records into Rows.
     let (rows_stream, decode_token) =
         render_decode_chunk(scope.clone(), format.clone(), &records_stream);
-    let diffs_stream = rows_stream.map_ok(|row| (row, 1));
+    let diffs_stream = rows_stream.map_ok(|row| (SourceData(Ok(row)), 1));
     // Stage the Rows in Persist.
+    let persist_diagnostics = Diagnostics {
+        shard_name: collection_id.to_string(),
+        handle_purpose: "CopyFrom::stage_batches".to_string(),
+    };
     let (batch_stream, batch_token) = render_stage_batches_operator(
         scope.clone(),
-        collection_id,
-        &collection_meta,
+        collection_meta.persist_location,
+        collection_meta.data_shard,
         persist_clients,
+        persist_diagnostics,
         &diffs_stream,
+        collection_meta.relation_desc.clone(),
     );
 
     // Collect all results together and notify the upstream of whether or not we succeeded.
@@ -483,29 +490,28 @@ where
 
 /// Render an operator that given a stream of [`Row`]s will stage them in Persist and return a
 /// stream of [`ProtoBatch`]es that can later be linked into a shard.
-pub fn render_stage_batches_operator<G>(
+pub fn render_stage_batches_operator<G, D>(
     scope: G,
-    collection_id: GlobalId,
-    collection_meta: &CollectionMetadata,
+    persist_location: PersistLocation,
+    persist_shard: ShardId,
     persist_clients: Arc<PersistClientCache>,
-    rows_stream: &TimelyStream<G, Result<(Row, Diff), StorageErrorX>>,
+    persist_diagnostics: Diagnostics,
+    data_stream: &TimelyStream<G, Result<(D, Diff), StorageErrorX>>,
+    data_schema: D::Schema,
 ) -> (
     TimelyStream<G, Result<ProtoBatch, StorageErrorX>>,
     PressOnDropButton,
 )
 where
     G: Scope,
+    D: mz_persist_types::Codec + Debug,
 {
-    let persist_location = collection_meta.persist_location.clone();
-    let shard_id = collection_meta.data_shard;
-    let collection_desc = collection_meta.relation_desc.clone();
-
     let mut builder =
         AsyncOperatorBuilder::new("CopyFrom-stage_batches".to_string(), scope.clone());
 
     let (proto_batch_handle, proto_batch_stream) =
         builder.new_output::<CapacityContainerBuilder<_>>();
-    let mut rows_handle = builder.new_input_for(rows_stream, Pipeline, &proto_batch_handle);
+    let mut rows_handle = builder.new_input_for(data_stream, Pipeline, &proto_batch_handle);
 
     let shutdown = builder.build(move |caps| async move {
         let [proto_batch_cap] = caps.try_into().unwrap();
@@ -515,14 +521,10 @@ where
             .open(persist_location)
             .await
             .expect("failed to open Persist client");
-        let persist_diagnostics = Diagnostics {
-            shard_name: collection_id.to_string(),
-            handle_purpose: "CopyFrom::stage_batches".to_string(),
-        };
         let write_handle = persist_client
-            .open_writer::<SourceData, (), mz_repr::Timestamp, Diff>(
-                shard_id,
-                Arc::new(collection_desc),
+            .open_writer::<D, (), mz_repr::Timestamp, Diff>(
+                persist_shard,
+                Arc::new(data_schema),
                 Arc::new(UnitSchema),
                 persist_diagnostics,
             )
@@ -546,8 +548,7 @@ where
             for maybe_row in row_batch {
                 match maybe_row {
                     // Happy path, add the Row to our batch!
-                    Ok((row, diff)) => {
-                        let data = SourceData(Ok(row));
+                    Ok((data, diff)) => {
                         batch_builder
                             .add(&data, &(), &lower, &diff)
                             .await

@@ -59,7 +59,8 @@ message ProtoFrontiersResponse {
 }
 
 message ProtoStagedPeekResponse {
-  repeated mz_persist_client.batch.ProtoBatch staged_batches = 1;
+  repeated mz_persist_client.batch.ProtoBatch append_batches = 1;
+  mz_persist_client.batch.ProtoBatch returned_rows = 2;
 }
 
 message ProtoPeekResponse {
@@ -100,9 +101,7 @@ message ProtoSubscribeBatch {
     }
   }
 
-  message ProtoSubscribeUpdates {
-    repeated ProtoUpdate updates = 1;
-  }
+  message ProtoSubscribeUpdates { repeated ProtoUpdate updates = 1; }
 
   mz_repr.antichain.ProtoU64Antichain lower = 1;
   mz_repr.antichain.ProtoU64Antichain upper = 2;
@@ -111,9 +110,7 @@ message ProtoSubscribeBatch {
 }
 
 message ProtoStatusResponse {
-  oneof kind {
-    ProtoOperatorHydrationStatus operator_hydration = 1;
-  }
+  oneof kind { ProtoOperatorHydrationStatus operator_hydration = 1; }
 }
 
 message ProtoOperatorHydrationStatus {

@@ -878,6 +878,10 @@ pub struct ReadThenWriteFormat {
     pub from_desc: RelationDesc,
     /// Kind of mutation we're making for this read-then-write query.
     pub mutation_kind: mz_expr::MutationKind,
+    /// Expressions used to evaluate if a given row should be returned.
+    ///
+    /// These expressions should not contain any temporal dependencies.
+    pub returning: Vec<MirScalarExpr>,
 }
 
 #[derive(Debug)]

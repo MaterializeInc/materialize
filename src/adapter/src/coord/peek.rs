@@ -74,7 +74,12 @@ pub(crate) struct PendingPeek {
 #[derive(Debug)]
 pub enum PeekResponseUnary {
     Rows(Box<dyn RowIterator + Send + Sync>),
-    Batches(Vec<ProtoBatch>),
+    Batches {
+        /// Batches that should be appended to a shard.
+        append_batches: Vec<ProtoBatch>,
+        /// Rows to be returned to a user.
+        returned_rows: Option<ProtoBatch>,
+    },
     Error(String),
     Canceled,
 }
@@ -672,9 +677,10 @@ impl crate::coord::Coordinator {
                         Err(e) => PeekResponseUnary::Error(e),
                     }
                 }
-                PeekResponse::Staged(response) => {
-                    PeekResponseUnary::Batches(response.staged_batches)
-                }
+                PeekResponse::Staged(response) => PeekResponseUnary::Batches {
+                    append_batches: response.append_batches,
+                    returned_rows: response.returned_rows,
+                },
                 PeekResponse::Canceled => PeekResponseUnary::Canceled,
                 PeekResponse::Error(e) => PeekResponseUnary::Error(e),
             },

@@ -248,6 +248,7 @@ pub(crate) enum FetchBatchFilter<T> {
     Compaction {
         since: Antichain<T>,
     },
+    None,
 }
 
 impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
@@ -283,6 +284,7 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
                 t.advance_by(since.borrow());
                 true
             }
+            FetchBatchFilter::None => true,
         }
     }
 }
@@ -300,6 +302,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoFetchBatchFilter> for FetchBatchFilte
                 })
             }
             FetchBatchFilter::Compaction { .. } => unreachable!("not serialized"),
+            FetchBatchFilter::None => unreachable!("None not serialized"),
         };
         ProtoFetchBatchFilter { kind: Some(kind) }
     }
@@ -568,7 +571,9 @@ where
     pub fn maybe_optimize(&mut self, cfg: &ConfigSet, project: &ProjectionPushdown) {
         let as_of = match &self.filter {
             FetchBatchFilter::Snapshot { as_of } => as_of,
-            FetchBatchFilter::Listen { .. } | FetchBatchFilter::Compaction { .. } => return,
+            FetchBatchFilter::Listen { .. }
+            | FetchBatchFilter::Compaction { .. }
+            | FetchBatchFilter::None => return,
         };
         let faked_part = project.try_optimize_ignored_data_fetch(
             cfg,

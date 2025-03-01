@@ -382,20 +382,24 @@ impl Arbitrary for PeekResponse {
 /// Response from a Peek whose results have been staged into Persist.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StagedPeekResponse {
-    /// Results of a peek that are staged in Persist.
-    pub staged_batches: Vec<ProtoBatch>,
+    /// Results of a Peek that should be appended to a shard.
+    pub append_batches: Vec<ProtoBatch>,
+    /// Results from a Peek that should be returned to the user.
+    pub returned_rows: Option<ProtoBatch>,
 }
 
 impl RustType<ProtoStagedPeekResponse> for StagedPeekResponse {
     fn into_proto(&self) -> ProtoStagedPeekResponse {
         ProtoStagedPeekResponse {
-            staged_batches: self.staged_batches.clone(),
+            append_batches: self.append_batches.clone(),
+            returned_rows: self.returned_rows.clone(),
         }
     }
 
     fn from_proto(proto: ProtoStagedPeekResponse) -> Result<Self, TryFromProtoError> {
         Ok(StagedPeekResponse {
-            staged_batches: proto.staged_batches,
+            append_batches: proto.append_batches,
+            returned_rows: proto.returned_rows,
         })
     }
 }

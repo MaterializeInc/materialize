@@ -10,6 +10,7 @@
 //! Types for describing dataflow sinks.
 
 use mz_expr::{MirScalarExpr, MutationKind, RowSetFinishing, SafeMfpPlan};
+use mz_persist_types::ShardId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Row, Timestamp};
@@ -357,6 +358,25 @@ pub struct PersistBatchesConnection {
     pub map_filter_project: SafeMfpPlan,
     /// Kind of mutation we're making for the collection.
     pub mutation_kind: MutationKind,
+    /// Expressions that determine whether or not a row should be returned to the user.
+    pub returning: Vec<MirScalarExpr>,
+    /// ID for the 'staged rows' shard that can be used for an `RETURNING` rows.
+    pub stashed_rows_shard: ShardId,
+}
+
+impl PersistBatchesConnection {
+    /// Returns if the output is trivial and thus can be streamed directly into
+    /// Persist.
+    ///
+    /// For example, `INSERT INTO <t1> SELECT * FROM <t2>` can stream the
+    /// results directly into batches for `t1`.
+    pub fn is_trivial_output(&self) -> bool {
+        let dest_arity = self.collection_meta.relation_desc.arity();
+
+        self.finishing.is_trivial(dest_arity)
+            && matches!(self.mutation_kind, MutationKind::Insert)
+            && self.returning.is_empty()
+    }
 }
 
 impl RustType<ProtoPersistBatchesSinkConnection> for PersistBatchesConnection {
@@ -372,6 +392,8 @@ impl RustType<ProtoPersistBatchesSinkConnection> for PersistBatchesConnection {
             literal_constraints,
             map_filter_project: Some(self.map_filter_project.into_proto()),
             mutation_kind: Some(self.mutation_kind.into_proto()),
+            returning: self.returning.into_proto(),
+            stashed_rows_shard: self.stashed_rows_shard.into_proto(),
         }
     }
 
@@ -396,6 +418,8 @@ impl RustType<ProtoPersistBatchesSinkConnection> for PersistBatchesConnection {
             mutation_kind: proto
                 .mutation_kind
                 .into_rust_if_some("ProtoPersistBatchesSinkConnection::mutation_kind")?,
+            returning: proto.returning.into_rust()?,
+            stashed_rows_shard: proto.stashed_rows_shard.into_rust()?,
         })
     }
 }

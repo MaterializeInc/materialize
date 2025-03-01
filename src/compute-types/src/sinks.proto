@@ -15,6 +15,7 @@ package mz_compute_types.sinks;
 
 import "expr/src/linear.proto";
 import "expr/src/relation.proto";
+import "expr/src/scalar.proto";
 import "google/protobuf/empty.proto";
 import "repr/src/antichain.proto";
 import "repr/src/catalog_item_id.proto";
@@ -70,6 +71,8 @@ message ProtoPersistBatchesSinkConnection {
   ProtoLiteralConstraints literal_constraints = 4;
   mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 5;
   mz_expr.relation.ProtoMutationKind mutation_kind = 6;
+  repeated mz_expr.scalar.ProtoMirScalarExpr returning = 7;
+  string stashed_rows_shard = 8;
 }
 
 message ProtoLiteralConstraints {
