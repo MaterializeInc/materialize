@@ -1511,6 +1511,19 @@ SELECT (my_json::uuid)[my_index] FROM fake_table
 =>
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Subscript { expr: Nested(Cast { expr: Identifier([Ident("my_json")]), data_type: Other { name: Name(UnresolvedItemName([Ident("uuid")])), typ_mod: [] } }), positions: [SubscriptPosition { start: Some(Identifier([Ident("my_index")])), end: None, explicit_slice: false }] }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("fake_table")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
+# Casts are always printed as Postgres-style casts, that is, with `::`. When going from `CAST` to `::`, we have to avoid
+# the daner of `::` binding to just part of the expression that was originally being cast. E.g. rewriting
+# CAST(a + b AS integer)
+# to
+# a + b::integer
+# without adding a parenthesis would be bad.
+parse-statement
+SELECT CAST(a + b AS integer) FROM fake_table;
+----
+SELECT (a + b)::int4 FROM fake_table
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Cast { expr: Nested(Op { op: Op { namespace: None, op: "+" }, expr1: Identifier([Ident("a")]), expr2: Some(Identifier([Ident("b")])) }), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }, alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("fake_table")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
 # Map subqueries
 parse-statement
 SELECT MAP[]

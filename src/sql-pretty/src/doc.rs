@@ -596,22 +596,7 @@ pub fn doc_expr<T: AstInfo>(v: &Expr<T>) -> RcDoc {
             bracket_doc(RcDoc::text("CASE"), doc, RcDoc::text("END"), RcDoc::line())
         }
         Expr::Cast { expr, data_type } => {
-            // See AstDisplay for Expr for an explanation of this.
-            let needs_wrap = !matches!(
-                **expr,
-                Expr::Nested(_)
-                    | Expr::Value(_)
-                    | Expr::Cast { .. }
-                    | Expr::Function { .. }
-                    | Expr::Identifier { .. }
-                    | Expr::Collate { .. }
-                    | Expr::HomogenizingFunction { .. }
-                    | Expr::NullIf { .. }
-            );
-            let mut doc = doc_expr(expr);
-            if needs_wrap {
-                doc = bracket("(", doc, ")");
-            }
+            let doc = doc_expr(expr);
             RcDoc::concat([doc, RcDoc::text(format!("::{}", data_type.to_ast_string()))])
         }
         Expr::Nested(ast) => bracket("(", doc_expr(ast), ")"),
