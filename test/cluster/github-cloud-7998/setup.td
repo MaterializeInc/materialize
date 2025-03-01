@@ -15,8 +15,8 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
     r1 (
       STORAGECTL ADDRESSES ['clusterd1:2100'],
       COMPUTECTL ADDRESSES ['clusterd1:2101'],
-      STORAGE ADDRESSES ['clusterd1:2102'],
-      COMPUTE ADDRESSES ['clusterd1:2103'],
+      STORAGE ADDRESSES ['clusterd1:2103'],
+      COMPUTE ADDRESSES ['clusterd1:2102'],
       WORKERS 1
     )
   )
