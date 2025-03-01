@@ -1534,6 +1534,56 @@ SELECT round(1.5678, (SELECT n FROM nums)::int4)
 =>
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Function(Function { name: Name(UnresolvedItemName([Ident("round")])), args: Args { args: [Value(Number("1.5678")), Cast { expr: Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("n")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("nums")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }], order_by: [] }, filter: None, over: None, distinct: false }), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
+# Prepared statement parameter handling in casts. (Note: some extra wrapping parens here are currently not removed.)
+parse-statement
+select $2::int as col
+----
+SELECT $2::int4 AS col
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Cast { expr: Parameter(2), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }, alias: Some(Ident("col")) }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+select CAST($2 AS int) as col
+----
+SELECT $2::int4 AS col
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Cast { expr: Parameter(2), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }, alias: Some(Ident("col")) }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+select $1 + ($2)::int as col
+----
+SELECT $1 + ($2)::int4 AS col
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Op { op: Op { namespace: None, op: "+" }, expr1: Parameter(1), expr2: Some(Cast { expr: Nested(Parameter(2)), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }) }, alias: Some(Ident("col")) }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+select $1 + $2::int as col
+----
+SELECT $1 + $2::int4 AS col
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Op { op: Op { namespace: None, op: "+" }, expr1: Parameter(1), expr2: Some(Cast { expr: Parameter(2), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }) }, alias: Some(Ident("col")) }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+select ($1 + $2)::int as col
+----
+SELECT ($1 + $2)::int4 AS col
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Cast { expr: Nested(Op { op: Op { namespace: None, op: "+" }, expr1: Parameter(1), expr2: Some(Parameter(2)) }), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }, alias: Some(Ident("col")) }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+select ((($1)))::int as col
+----
+SELECT ((($1)))::int4 AS col
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Cast { expr: Nested(Nested(Nested(Parameter(1)))), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }, alias: Some(Ident("col")) }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+select ((($1 + $2)))::int as col
+----
+SELECT ((($1 + $2)))::int4 AS col
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Cast { expr: Nested(Nested(Nested(Op { op: Op { namespace: None, op: "+" }, expr1: Parameter(1), expr2: Some(Parameter(2)) }))), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] } }, alias: Some(Ident("col")) }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
 # Map subqueries
 parse-statement
 SELECT MAP[]
