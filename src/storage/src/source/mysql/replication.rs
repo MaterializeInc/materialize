@@ -484,7 +484,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
 /// Produces the replication stream from the MySQL server. This will return all transactions
 /// whose GTIDs were not present in the GTID UUIDs referenced in the `resume_uppper` partitions.
-async fn raw_stream<'a>(
+async fn raw_stream(
     config: &RawSourceCreationConfig,
     mut conn: MySqlConn,
     resume_upper: &Antichain<GtidPartition>,

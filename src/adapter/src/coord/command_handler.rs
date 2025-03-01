@@ -1098,7 +1098,7 @@ impl Coordinator {
     ///
     /// (Note that the chosen timestamp won't be the same timestamp as the system table inserts,
     /// unfortunately.)
-    async fn resolve_mz_now_for_create_materialized_view<'a>(
+    async fn resolve_mz_now_for_create_materialized_view(
         &mut self,
         cmvs: &CreateMaterializedViewStatement<Aug>,
         resolved_ids: &ResolvedIds,
