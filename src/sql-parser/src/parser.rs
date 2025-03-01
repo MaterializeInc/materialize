@@ -909,6 +909,7 @@ impl<'a> Parser<'a> {
                 | Expr::Collate { .. }
                 | Expr::HomogenizingFunction { .. }
                 | Expr::NullIf { .. }
+                | Expr::Subquery { .. }
         ) {
             Ok(Expr::Cast {
                 expr: Box::new(Expr::Nested(Box::new(expr))),
