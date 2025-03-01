@@ -862,6 +862,7 @@ impl Coordinator {
             plan: peek_plan,
             determination: determination.clone(),
             conn_id: conn_id.clone(),
+            intermediate_result_type: typ,
             source_arity,
             source_ids,
         };

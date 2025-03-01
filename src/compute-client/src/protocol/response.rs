@@ -15,8 +15,10 @@ use mz_compute_types::plan::LirId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::batch::ProtoBatch;
+use mz_persist_types::ShardId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError, any_uuid};
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::{BoxedStrategy, Just, Strategy, Union};
@@ -324,6 +326,8 @@ impl Arbitrary for FrontiersResponse {
 pub enum PeekResponse {
     /// Returned rows of a successful peek.
     Rows(RowCollection),
+    /// Results of the peek were stashed in persist batches.
+    Stashed(StashedPeekResponse),
     /// Error of an unsuccessful peek.
     Error(String),
     /// The peek was canceled.
@@ -336,6 +340,7 @@ impl RustType<ProtoPeekResponse> for PeekResponse {
         ProtoPeekResponse {
             kind: Some(match self {
                 PeekResponse::Rows(rows) => Rows(rows.into_proto()),
+                PeekResponse::Stashed(stashed) => Stashed(stashed.into_proto()),
                 PeekResponse::Error(err) => proto_peek_response::Kind::Error(err.clone()),
                 PeekResponse::Canceled => Canceled(()),
             }),
@@ -346,6 +351,7 @@ impl RustType<ProtoPeekResponse> for PeekResponse {
         use proto_peek_response::Kind::*;
         match proto.kind {
             Some(Rows(rows)) => Ok(PeekResponse::Rows(rows.into_rust()?)),
+            Some(Stashed(stashed)) => Ok(PeekResponse::Stashed(stashed.into_rust()?)),
             Some(proto_peek_response::Kind::Error(err)) => Ok(PeekResponse::Error(err)),
             Some(Canceled(())) => Ok(PeekResponse::Canceled),
             None => Err(TryFromProtoError::missing_field("ProtoPeekResponse::kind")),
@@ -371,6 +377,88 @@ impl Arbitrary for PeekResponse {
             ".*".prop_map(PeekResponse::Error).boxed(),
             Just(PeekResponse::Canceled).boxed(),
         ])
+    }
+}
+
+/// Response from a peek whose results have been stashed into persist.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StashedPeekResponse {
+    /// The number of rows represented by this response. This is the sum of the
+    /// diff values of the contained rows.
+    pub num_rows: u64,
+    /// The sum of the encoded sizes of all batches in this response.
+    pub encoded_size_bytes: usize,
+    /// [RelationDesc] for the rows in these stashed batches of results.
+    pub relation_desc: RelationDesc,
+    /// The [ShardId] under which result batches have been stashed.
+    pub shard_id: ShardId,
+    /// Batches of Rows, must be combined with reponses from other workers and
+    /// consolidated before sending back via a client.
+    pub batches: Vec<ProtoBatch>,
+    /// Rows that have not been uploaded to the stash, because their total size
+    /// did not go above the threshold for using the peek stash.
+    ///
+    /// We will have a mix of stashed responses and inline responses because the
+    /// result sizes across different workers can and will vary.
+    pub inline_rows: RowCollection,
+}
+
+impl StashedPeekResponse {
+    /// Total count of [`Row`]s represented by this collection, considering a
+    /// possible `OFFSET` and `LIMIT`.
+    pub fn num_rows(&self, offset: usize, limit: Option<usize>) -> usize {
+        let num_stashed_rows: usize = usize::cast_from(self.num_rows);
+        let num_inline_rows = self.inline_rows.count(offset, limit);
+        let mut num_rows = num_stashed_rows + num_inline_rows;
+
+        // Consider a possible OFFSET.
+        num_rows = num_rows.saturating_sub(offset);
+
+        // Consider a possible LIMIT.
+        if let Some(limit) = limit {
+            num_rows = std::cmp::min(limit, num_rows);
+        }
+
+        num_rows
+    }
+
+    /// The size in bytes of the encoded rows in this result.
+    pub fn size_bytes(&self) -> usize {
+        let inline_size = self.inline_rows.byte_len();
+
+        self.encoded_size_bytes + inline_size
+    }
+}
+
+impl RustType<ProtoStashedPeekResponse> for StashedPeekResponse {
+    fn into_proto(&self) -> ProtoStashedPeekResponse {
+        ProtoStashedPeekResponse {
+            relation_desc: Some(self.relation_desc.into_proto()),
+            shard_id: self.shard_id.into_proto(),
+            batches: self.batches.clone(),
+            num_rows: self.num_rows.into_proto(),
+            encoded_size_bytes: self.encoded_size_bytes.into_proto(),
+            inline_rows: Some(self.inline_rows.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoStashedPeekResponse) -> Result<Self, TryFromProtoError> {
+        let shard_id: ShardId = proto
+            .shard_id
+            .into_rust()
+            .expect("valid transmittable shard_id");
+        Ok(StashedPeekResponse {
+            relation_desc: proto
+                .relation_desc
+                .into_rust_if_some("ProtoStashedPeekResponse::relation_desc")?,
+            shard_id,
+            batches: proto.batches,
+            num_rows: proto.num_rows,
+            encoded_size_bytes: usize::cast_from(proto.encoded_size_bytes),
+            inline_rows: proto
+                .inline_rows
+                .into_rust_if_some("ProtoStashedPeekResponse::inline_rows")?,
+        })
     }
 }
 
@@ -662,7 +750,7 @@ mod tests {
     /// Test to ensure the size of the `ComputeResponse` enum doesn't regress.
     #[mz_ore::test]
     fn test_compute_response_size() {
-        assert_eq!(std::mem::size_of::<ComputeResponse>(), 120);
+        assert_eq!(std::mem::size_of::<ComputeResponse>(), 240);
     }
 
     proptest! {
