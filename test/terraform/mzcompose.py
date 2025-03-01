@@ -133,6 +133,7 @@ def get_tag(tag: str) -> str:
 
 
 def mz_self_managed_debug(env: dict[str, str] | None = None) -> None:
+    print("-- Running self-managed-debug")
     run_ignore_error(
         [
             "cargo",
