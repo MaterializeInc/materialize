@@ -869,7 +869,7 @@ impl<T: Ord> Ord for HollowBatch<T> {
 }
 
 impl<T: Timestamp + Codec64 + Sync> HollowBatch<T> {
-    pub fn part_stream<'a>(
+    pub(crate) fn part_stream<'a>(
         &'a self,
         shard_id: ShardId,
         blob: &'a dyn Blob,
@@ -973,11 +973,11 @@ impl<T> HollowBatch<T> {
         self.parts.iter().map(|x| x.inline_bytes()).sum()
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.parts.is_empty()
     }
 
-    pub fn part_count(&self) -> usize {
+    pub(crate) fn part_count(&self) -> usize {
         self.parts.len()
     }
 
