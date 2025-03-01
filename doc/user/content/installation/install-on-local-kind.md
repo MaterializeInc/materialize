@@ -39,13 +39,14 @@ Install [`kind`](https://kind.sigs.k8s.io/docs/user/quick-start/).
 
 Install [`Docker`](https://docs.docker.com/get-started/get-docker/).
 
-#### Resource requirements
+#### Docker resource requirements
+
 {{% self-managed/local-resource-requirements %}}
 
 ### Helm 3.2.0+
 
-If you don't have Helm version 3.2.0+ installed, refer to the [Helm
-documentation](https://helm.sh/docs/intro/install/).
+If you don't have Helm version 3.2.0+ installed, install. For details, see the
+[Helm documentation](https://helm.sh/docs/intro/install/).
 
 ### `kubectl`
 
@@ -59,7 +60,16 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
 1. Start Docker if it is not already running.
 
+   {{% self-managed/local-resource-requirements %}}
+
 1. Open a Terminal window.
+
+1. Create a working directory and go to the directory.
+
+   ```shell
+   mkdir my-local-mz
+   cd my-local-mz
+   ```
 
 1. Create a kind cluster.
 
@@ -70,20 +80,13 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 1. Add labels `materialize.cloud/disk=true` and `workload=materialize-instance`
    to the `kind` node (in this example, the `kind-control-plane` node).
 
-   Get all nodes and their labels:
-
-   ```shell
-   kubectl get nodes --show-labels
-   ```
-
-   Add the labels to the node  (in this example, `kind-control-plane`):
-
    ```shell
    kubectl label node kind-control-plane materialize.cloud/disk=true
    kubectl label node kind-control-plane workload=materialize-instance
    ```
 
-   Verify that the labels were successfully applied by running the following command again:
+   Verify that the labels were successfully applied by running the following
+   command:
 
    ```shell
    kubectl get nodes --show-labels
@@ -274,46 +277,25 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
 1. Open the Materialize Console in your browser:
 
-   1. From the previous `kubectl` output, find the Materialize Console service.
+   {{% self-managed/port-forwarding-handling %}}
 
-      ```none
-      NAME                           TYPE        CLUSTER-IP   EXTERNAL-IP    PORT(S)    AGE
-      service/mz32bsnzerqo-console   ClusterIP   None         <none>        8080 TCP   5s
-      ```
+      {{< tip >}}
 
-   1. Forward the Materialize Console service to your local machine (substitute
-      your service name for `mz32bsnzerqo-console`):
+      {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
 
-      ```shell
-      while true;
-      do kubectl port-forward svc/mz32bsnzerqo-console 8080:8080 -n materialize-environment 2>&1 | tee /dev/stderr |
-      grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
-      done;
-      ```
+      {{< /tip >}}
 
-      {{< annotation type="Kubernetes issue 78446" >}}
+## Next steps
 
-      Due to a [known Kubernetes
-      issue](https://github.com/kubernetes/kubernetes/issues/78446), interrupted
-      long-running requests through a standard port-forward cause the port
-      forward to hang, and the Console will display **"We're having trouble
-      reaching your environment."** error message. The command above
-      automatically restarts the port forwarding if an error occurs, ensuring a
-      more stable connection. It detects failures by monitoring for
-      "portforward.go" error messages. You can refresh the Console page to
-      reconnect.
+{{% self-managed/next-steps %}}
 
-      {{< /annotation>}}
+## Clean up
 
-   1. Open a browser to
-      [http://localhost:8080](http://localhost:8080).
+To delete the whole local deployment (including Materialize instances and data):
 
-
-   {{< tip >}}
-
-   {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
-
-   {{< /tip >}}
+```bash
+kind delete cluster
+```
 
 ## See also
 

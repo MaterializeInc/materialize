@@ -46,13 +46,8 @@ Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terr
 
 ### AWS CLI
 
-If you do not have the AWS CLI installed,
-
-- Install the AWS CLI. For details, see the [AWS
-  documentation](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html).
-
-- Configure with your AWS credentials. For details, see the [AWS
-  documentation](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html).
+If you do not have the AWS CLI installed, install. For details, see the [AWS
+documentation](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html).
 
 ### kubectl
 
@@ -62,7 +57,7 @@ for details.
 
 ### Helm 3.2.0+
 
-If you do not have Helm 3.2.0+, install. See the [Helm
+If you do not have Helm 3.2.0+, install. For details, see the [Helm
 documentation](https://helm.sh/docs/intro/install/).
 
 ## Set up AWS Kubernetes environment and install Materialize
@@ -100,6 +95,9 @@ node instance type, etc.), see the
 {{< /tip >}}
 
 1. Open a Terminal window.
+
+1. Configure AWS CLI with your AWS credentials. For details, see the [AWS
+   documentation](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html).
 
 {{% self-managed/versions/step-clone-aws-terraform-repo %}}
 
@@ -143,17 +141,19 @@ node instance type, etc.), see the
     terraform init
     ```
 
-1. Create a terraform plan and review the changes.
+1. Use terraform plan to review the changes to be made.
 
     ```bash
-    terraform plan -out my-plan.tfplan
+    terraform plan
     ```
 
-1. If you are satisfied with the changes, apply the terraform plan.
+1. If you are satisfied with the changes, apply.
 
-    ```bash
-    terraform apply my-plan.tfplan
-    ```
+   ```bash
+   terraform apply
+   ```
+
+   To approve the changes and apply, enter `yes`.
 
    <a name="terraform-output"></a>
    Upon successful completion, various fields and their values are output:
@@ -180,9 +180,8 @@ node instance type, etc.), see the
 
 1. Configure `kubectl` to connect to your EKS cluster, replacing:
 
-   - `<your-eks-cluster-name>` with the name of your EKS cluster.
-
-     - Your cluster name has the form `{namespace}-{environment}-eks`; e.g.,
+   - `<your-eks-cluster-name>` with the name of your EKS cluster. Your cluster
+       name has the form `{namespace}-{environment}-eks`; e.g.,
        `my-demo-dev-eks`.
 
    - `<your-region>` with the region of your EKS cluster. The
@@ -246,10 +245,11 @@ node instance type, etc.), see the
    EOF
    ```
 
-1. Create a terraform plan with both `.tfvars` files and review the changes.
+1. Run `terraform plan` with both `.tfvars` files and review the changes to be
+   made.
 
    ```bash
-   terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars -out my-plan.tfplan
+   terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars
    ```
 
    The plan should show the changes to be made, with a summary similar to the
@@ -257,18 +257,15 @@ node instance type, etc.), see the
 
    ```
    Plan: 4 to add, 0 to change, 0 to destroy.
-
-   Saved the plan to: my-plan.tfplan
-
-   To perform exactly these actions, run the following command to apply:
-   terraform apply "my-plan.tfplan"
    ```
 
-1. If you are satisfied with the changes, apply the terraform plan.
+1. If you are satisfied with the changes, apply.
 
-    ```bash
-    terraform apply my-plan.tfplan
-    ```
+   ```bash
+   terraform apply -var-file=terraform.tfvars -var-file=mz_instances.tfvars
+   ```
+
+   To approve the changes and apply, enter `yes`.
 
    Upon successful completion, you should see output with a summary similar to
    the following:
@@ -333,33 +330,12 @@ node instance type, etc.), see the
    job.batch/create-db-demo-db   Complete   1/1           11s        33s
    ```
 
+   If you run into an error during deployment, refer to the
+   [Troubleshooting](/installation/troubleshooting/).
+
 1. Open the Materialize Console in your browser:
 
-   1. From the previous `kubectl` output, find the Materialize console service.
-
-      ```none
-      NAME                           TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
-      service/mzutd2fbabf5-console   ClusterIP   None         <none>        8080/TCP   4s
-      ```
-
-   1. Forward the Materialize Console service to your local machine (substitute
-      your service name for `mzutd2fbabf5-console`):
-
-      ```shell
-      while true;
-      do kubectl port-forward service/mzutd2fbabf5-console 8080:8080 -n materialize-environment 2>&1 | tee /dev/stderr |
-      grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
-      done;
-      ```
-      {{< note >}}
-      Due to a [known Kubernetes issue](https://github.com/kubernetes/kubernetes/issues/78446),
-      interrupted long-running requests through a standard port-forward cause the port forward to hang. The command above
-      automatically restarts the port forwarding if an error occurs, ensuring a more stable
-      connection. It detects failures by monitoring for "portforward.go" error messages.
-      {{< /note >}}
-
-   1. Open a browser and navigate to
-      [http://localhost:8080](http://localhost:8080). From the Console, you can get started with the Quickstart.
+   {{% self-managed/port-forwarding-handling %}}
 
       {{< tip >}}
 
@@ -367,58 +343,22 @@ node instance type, etc.), see the
 
       {{< /tip >}}
 
-## Troubleshooting
+## Next steps
 
-If you encounter issues:
-
-1. Check operator logs:
-```bash
-kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
-```
-
-2. Check environment logs:
-```bash
-kubectl logs -l app.kubernetes.io/name=environmentd -n materialize-environment
-```
-
-3. Verify the storage configuration:
-```bash
-kubectl get sc
-kubectl get pv
-kubectl get pvc -A
-```
-
-See also [Troubleshooting](/self-hosted/troubleshooting).
+{{% self-managed/next-steps %}}
 
 ## Cleanup
 
-To uninstall the Materialize operator:
-```bash
-helm uninstall materialize-operator -n materialize
-```
+{{% self-managed/cleanup-cloud %}}
 
-This will remove the operator but preserve any PVs and data. To completely clean
-up:
+  {{< tip >}}
 
-```bash
-kubectl delete namespace materialize
-kubectl delete namespace materialize-environment
-```
+  To delete your S3 bucket, you may need to empty the S3 bucket
+  first. If the `terraform destroy` command is unable to delete the S3 bucket
+  and does not progress beyond "Still destroying...", empty the S3 bucket first
+  and rerun the `terraform destroy` command.
 
-In your Terraform directory, run:
-
-```bash
-terraform destroy
-```
-
-When prompted, type `yes` to confirm the deletion.
-
-{{< tip>}}
-To delete your S3 bucket, you may need to empty the S3 bucket first.
-If the `terraform destroy` command is unable to delete the S3 bucket and does
-not progress beyond "Still destroying...", empty the S3 bucket first and rerun
-bucket first and rerun the `terraform destroy` command.
-{{</ tip >}}
+  {{</ tip >}}
 
 ## See also
 

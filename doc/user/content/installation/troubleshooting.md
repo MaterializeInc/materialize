@@ -20,11 +20,21 @@ kubectl -n materialize get all
 
 If you encounter issues with the Materialize operator,
 
-- Check the operator logs:
+- Check the operator logs, using the label selector:
 
   ```shell
   kubectl -n materialize logs -l app.kubernetes.io/name=materialize-operator
   ```
+
+- Check the log of a specific object (pod/deployment/etc) running in
+  your namespace:
+
+  ```shell
+  kubectl -n materialize logs <type>/<name>
+  ```
+
+  In case of a container restart, to get the logs for previous instance, include
+  the `--previous` flag.
 
 - Check the events for the operator pod:
 
@@ -43,17 +53,27 @@ If you encounter issues with the Materialize operator,
 
 ### Materialize deployment
 
-To check the status of your Materialize deployment, run:
+- To check the status of your Materialize deployment, run:
 
-```shell
-kubectl  -n materialize-environment get all
-```
+  ```shell
+  kubectl  -n materialize-environment get all
+  ```
 
-To describe an object, you can use `kubectl describe`:
+- To check the log of a specific object (pod/deployment/etc) running in your
+  namespace:
 
-```shell
-kubectl -n materialize-environment describe <type>/<name>
-```
+  ```shell
+  kubectl -n materialize-environment logs <type>/<name>
+  ```
+
+  In case of a container restart, to get the logs for previous instance, include
+  the `--previous` flag.
+
+- To describe an object, you can use `kubectl describe`:
+
+  ```shell
+  kubectl -n materialize-environment describe <type>/<name>
+  ```
 
 For additional `kubectl` commands, see [kubectl Quick reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
