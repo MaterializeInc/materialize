@@ -17,6 +17,7 @@ itertools = "0.12.1"
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["tracing", "metrics"] }
+mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-storage-types = { path = "../storage-types" }

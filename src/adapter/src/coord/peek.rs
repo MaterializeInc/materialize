@@ -36,6 +36,7 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{StrExt, separated};
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::batch::ProtoBatch;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
 use mz_repr::{Diff, GlobalId, IntoRowIterator, RelationType, Row, RowIterator, preserves_order};
@@ -72,6 +73,10 @@ pub(crate) struct PendingPeek {
 #[derive(Debug)]
 pub enum PeekResponseUnary {
     Rows(Box<dyn RowIterator + Send + Sync>),
+    Batches {
+        /// Rows to be returned to a user.
+        returned_rows: ProtoBatch,
+    },
     Error(String),
     Canceled,
 }
@@ -738,6 +743,10 @@ impl crate::coord::Coordinator {
                         Err(e) => PeekResponseUnary::Error(e),
                     }
                 }
+                PeekResponse::Stashed(response) => PeekResponseUnary::Batches {
+                    // WIP: Make this non-optional!
+                    returned_rows: response.returned_rows.expect("missing rows"),
+                },
                 PeekResponse::Canceled => PeekResponseUnary::Canceled,
                 PeekResponse::Error(e) => PeekResponseUnary::Error(e),
             },

@@ -327,6 +327,18 @@ where
                             (PeekResponse::Canceled, _) => PeekResponse::Canceled,
                             (_, PeekResponse::Error(e)) => PeekResponse::Error(e),
                             (PeekResponse::Error(e), _) => PeekResponse::Error(e),
+                            (PeekResponse::Rows(rows), PeekResponse::Stashed(batches))
+                            | (PeekResponse::Stashed(batches), PeekResponse::Rows(rows)) => {
+                                // By default we merge into an empty `PeekResponse::Rows`.
+                                if rows.entries() == 0 {
+                                    PeekResponse::Stashed(batches)
+                                } else {
+                                    mz_ore::soft_panic_or_log!(
+                                        "got both PeekResponse Stashed and Rows"
+                                    );
+                                    PeekResponse::Error("internal error".to_string())
+                                }
+                            }
                             (PeekResponse::Rows(mut rows), PeekResponse::Rows(other)) => {
                                 let total_byte_size =
                                     rows.byte_len().saturating_add(other.byte_len());
@@ -343,6 +355,20 @@ where
                                 } else {
                                     rows.merge(&other);
                                     PeekResponse::Rows(rows)
+                                }
+                            }
+                            (PeekResponse::Stashed(mut batches), PeekResponse::Stashed(other)) => {
+                                match (&mut batches.returned_rows, other.returned_rows) {
+                                    (Some(_), Some(_)) => PeekResponse::Error(
+                                        "found more than one returned rows batch".to_string(),
+                                    ),
+                                    (dest @ None, batch @ Some(_)) => {
+                                        *dest = batch;
+                                        PeekResponse::Stashed(batches)
+                                    }
+                                    (Some(_), None) | (None, None) => {
+                                        PeekResponse::Stashed(batches)
+                                    }
                                 }
                             }
                         };

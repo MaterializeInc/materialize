@@ -16,48 +16,35 @@ load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 package(default_visibility = ["//visibility:public"])
 
 rust_library(
-    name = "mz_compute",
+    name = "mz_row_stash",
     srcs = glob(["src/**/*.rs"]),
     aliases = aliases(
         normal = True,
         proc_macro = True,
     ),
     compile_data = [],
-    crate_features = ["default"],
+    crate_features = [],
     data = [],
     lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
-    rustc_flags = ["-Copt-level=3"],
+    rustc_flags = [],
     version = "0.0.0",
     deps = [
-        "//src/cluster:mz_cluster",
-        "//src/compute-client:mz_compute_client",
-        "//src/compute-types:mz_compute_types",
-        "//src/dyncfg:mz_dyncfg",
-        "//src/dyncfgs:mz_dyncfgs",
-        "//src/expr:mz_expr",
-        "//src/metrics:mz_metrics",
         "//src/ore:mz_ore",
         "//src/persist-client:mz_persist_client",
         "//src/persist-types:mz_persist_types",
         "//src/repr:mz_repr",
-        "//src/row-stash:mz_row_stash",
-        "//src/service:mz_service",
-        "//src/storage-operators:mz_storage_operators",
-        "//src/storage-types:mz_storage_types",
-        "//src/timely-util:mz_timely_util",
-        "//src/txn-wal:mz_txn_wal",
     ] + all_crate_deps(normal = True),
 )
 
 alias(
-    name = "compute",
-    actual = "mz_compute",
+    name = "row-stash",
+    actual = "mz_row_stash",
 )
 
 rust_test(
-    name = "mz_compute_lib_tests",
+    name = "mz_row_stash_lib_tests",
     size = "medium",
     aliases = aliases(
         normal = True,
@@ -66,8 +53,8 @@ rust_test(
         proc_macro_dev = True,
     ),
     compile_data = [],
-    crate = ":mz_compute",
-    crate_features = ["default"],
+    crate = ":mz_row_stash",
+    crate_features = [],
     data = [],
     env = {},
     lint_config = ":lints",
@@ -79,23 +66,10 @@ rust_test(
     rustc_flags = [],
     version = "0.0.0",
     deps = [
-        "//src/cluster:mz_cluster",
-        "//src/compute-client:mz_compute_client",
-        "//src/compute-types:mz_compute_types",
-        "//src/dyncfg:mz_dyncfg",
-        "//src/dyncfgs:mz_dyncfgs",
-        "//src/expr:mz_expr",
-        "//src/metrics:mz_metrics",
         "//src/ore:mz_ore",
         "//src/persist-client:mz_persist_client",
         "//src/persist-types:mz_persist_types",
         "//src/repr:mz_repr",
-        "//src/row-stash:mz_row_stash",
-        "//src/service:mz_service",
-        "//src/storage-operators:mz_storage_operators",
-        "//src/storage-types:mz_storage_types",
-        "//src/timely-util:mz_timely_util",
-        "//src/txn-wal:mz_txn_wal",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -103,26 +77,13 @@ rust_test(
 )
 
 rust_doc_test(
-    name = "mz_compute_doc_test",
-    crate = ":mz_compute",
+    name = "mz_row_stash_doc_test",
+    crate = ":mz_row_stash",
     deps = [
-        "//src/cluster:mz_cluster",
-        "//src/compute-client:mz_compute_client",
-        "//src/compute-types:mz_compute_types",
-        "//src/dyncfg:mz_dyncfg",
-        "//src/dyncfgs:mz_dyncfgs",
-        "//src/expr:mz_expr",
-        "//src/metrics:mz_metrics",
         "//src/ore:mz_ore",
         "//src/persist-client:mz_persist_client",
         "//src/persist-types:mz_persist_types",
         "//src/repr:mz_repr",
-        "//src/row-stash:mz_row_stash",
-        "//src/service:mz_service",
-        "//src/storage-operators:mz_storage_operators",
-        "//src/storage-types:mz_storage_types",
-        "//src/timely-util:mz_timely_util",
-        "//src/txn-wal:mz_txn_wal",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,

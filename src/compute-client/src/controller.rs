@@ -154,6 +154,11 @@ impl PeekNotification {
                 rows: u64::cast_from(rows.count(offset, limit)),
                 result_size: u64::cast_from(rows.byte_len()),
             },
+            // WIP: Figure out rows and result_size!
+            PeekResponse::Stashed(_batches) => Self::Success {
+                rows: 1,
+                result_size: 1,
+            },
             PeekResponse::Error(err) => Self::Error(err.clone()),
             PeekResponse::Canceled => Self::Canceled,
         }

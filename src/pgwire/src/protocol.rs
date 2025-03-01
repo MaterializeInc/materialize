@@ -15,6 +15,7 @@ use std::time::Instant;
 use std::{iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
+use futures::StreamExt;
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::izip;
 use mz_adapter::client::RecordFirstRowStream;
@@ -38,8 +39,8 @@ use mz_pgwire_common::{
 };
 use mz_repr::user::InternalUserMetadata;
 use mz_repr::{
-    CatalogItemId, ColumnIndex, Datum, RelationDesc, RelationType, RowArena, RowIterator, RowRef,
-    ScalarType,
+    CatalogItemId, ColumnIndex, Datum, IntoRowIterator, RelationDesc, RelationType, RowArena,
+    RowIterator, RowRef, ScalarType,
 };
 use mz_server_core::TlsMode;
 use mz_sql::ast::display::AstDisplay;
@@ -1517,6 +1518,33 @@ where
                 )
                 .await
             }
+            ExecuteResponse::SendingRowsStreaming { rows } => {
+                let row_desc = row_desc
+                    .expect("missing row description for ExecuteResponse::SendingRowsStreaming");
+
+                let span = tracing::debug_span!("sending_rows_streaming");
+                let peek_response_stream =
+                    rows.map(|row| PeekResponseUnary::Rows(Box::new(row.into_row_iter())));
+
+                self.send_rows(
+                    row_desc,
+                    portal_name,
+                    InProgressRows::new(RecordFirstRowStream::new(
+                        Box::new(peek_response_stream),
+                        execute_started,
+                        &self.adapter_client,
+                        None,
+                        None,
+                    )),
+                    max_rows,
+                    get_response,
+                    fetch_portal_name,
+                    timeout,
+                )
+                .instrument(span)
+                .await
+                .map(|(state, _)| state)
+            }
             ExecuteResponse::SendingRows {
                 future: rx,
                 instance_id,
@@ -1933,6 +1961,7 @@ where
                     batch = rows.remaining.recv() => match batch {
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
+                        Some(PeekResponseUnary::Batches { .. }) => FetchResult::Error("unexpected stashed result".to_string()),
                         Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
                     },
@@ -2118,6 +2147,19 @@ where
                             ))
                             .await.map(|state| (state, SendRowsEndedReason::Canceled));
                     }
+                    Some(PeekResponseUnary::Batches { .. }) => {
+                         let msg = "unexpected stashed response";
+                         let err = self
+                             .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, msg))
+                             .await
+                             .map(|state| {
+                                 let reason = SendRowsEndedReason::Errored {
+                                     error: msg.to_string(),
+                                 };
+                                 (state, reason)
+                             });
+                         return err
+                     }
                     Some(PeekResponseUnary::Rows(mut rows)) => {
                         count += rows.count();
                         while let Some(row) = rows.next() {

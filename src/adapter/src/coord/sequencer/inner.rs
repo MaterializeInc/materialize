@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::FuturesOrdered;
-use futures::{Future, future};
+use futures::{Future, StreamExt, future};
 use itertools::Itertools;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
@@ -47,6 +47,7 @@ use mz_repr::{
     CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationVersion,
     RelationVersionSelector, Row, RowArena, RowIterator, Timestamp,
 };
+use mz_row_stash::StashedRowHandle;
 use mz_sql::ast::AlterSourceAddSubsourceOption;
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
@@ -83,10 +84,10 @@ use mz_sql_parser::ast::{
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
-use mz_storage_types::AlterCompatible;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::stats::RelationPartStats;
+use mz_storage_types::{AlterCompatible, StorageDiff};
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
@@ -94,6 +95,7 @@ use smallvec::SmallVec;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use tokio::sync::{oneshot, watch};
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Instrument, Span, info, warn};
 
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
@@ -3002,6 +3004,7 @@ impl Coordinator {
             session,
             Default::default(),
         );
+
         self.sequence_peek(
             peek_ctx,
             plan::SelectPlan {
@@ -3020,6 +3023,11 @@ impl Coordinator {
         let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
         let catalog = self.owned_catalog();
         let max_result_size = self.catalog().system_config().max_result_size();
+
+        let organization_id = self.catalog.config().environment_id.organization_id();
+        let mut stashed_rows_handle: StashedRowHandle<Timestamp, StorageDiff> =
+            StashedRowHandle::new(&self.persist_client, organization_id).await;
+
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
             let (peek_response, session) = match peek_rx.await {
                 Ok(Response {
@@ -3116,6 +3124,36 @@ impl Coordinator {
                     match tokio::time::timeout(timeout_dur, batch).await {
                         Ok(res) => match res {
                             PeekResponseUnary::Rows(rows) => make_diffs(rows),
+                            PeekResponseUnary::Batches { returned_rows } => {
+                                // WIP: Do we need this?
+                                let _ = ctx.session_mut().take_transaction_timestamp_context();
+
+                                let rows = stashed_rows_handle.consume(returned_rows).await;
+                                let rows_expanded = rows.flat_map(|result| {
+                                    let (row, diff) = result.expect("wrote error?");
+                                    let diff = usize::try_from(diff).expect("TODO");
+                                    futures::stream::repeat(row).take(diff)
+                                });
+
+                                // TODO(parkmycar): These shenanigans are because the
+                                // returned Row Stream needs to implement Sync.
+                                let (tx, rx) = tokio::sync::mpsc::channel(256);
+                                mz_ore::task::spawn(|| "TODO", async move {
+                                    let mut rows_expanded = std::pin::pin!(rows_expanded);
+                                    while let Some(row) = rows_expanded.next().await {
+                                        let result = tx.send(row).await;
+                                        if result.is_err() {
+                                            tracing::error!("receiver went away");
+                                            return;
+                                        }
+                                    }
+                                });
+
+                                ctx.retire(Ok(ExecuteResponse::SendingRowsStreaming {
+                                    rows: Box::pin(ReceiverStream::new(rx)),
+                                }));
+                                return;
+                            }
                             PeekResponseUnary::Canceled => Err(AdapterError::Canceled),
                             PeekResponseUnary::Error(e) => {
                                 Err(AdapterError::Unstructured(anyhow!(e)))

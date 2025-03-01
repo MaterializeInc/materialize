@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use derivative::Derivative;
 use enum_kinds::EnumKind;
+use futures::Stream;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_auth::password::Password;
 use mz_compute_types::ComputeInstanceId;
@@ -23,7 +24,7 @@ use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnIndex, RowIterator};
+use mz_repr::{CatalogItemId, ColumnIndex, Row, RowIterator};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
@@ -370,6 +371,10 @@ pub enum ExecuteResponse {
         #[derivative(Debug = "ignore")]
         rows: Box<dyn RowIterator + Send + Sync>,
     },
+    SendingRowsStreaming {
+        #[derivative(Debug = "ignore")]
+        rows: Pin<Box<dyn Stream<Item = Row> + Send + Sync>>,
+    },
     /// The specified variable was set to a new value.
     SetVariable {
         name: String,
@@ -509,6 +514,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::Updated => Err(()),
             ExecuteResponseKind::ValidatedConnection => Ok(ExecuteResponse::ValidatedConnection),
             ExecuteResponseKind::SendingRowsImmediate => Err(()),
+            ExecuteResponseKind::SendingRowsStreaming => Err(()),
             ExecuteResponseKind::CreatedIntrospectionSubscribe => {
                 Ok(ExecuteResponse::CreatedIntrospectionSubscribe)
             }
@@ -572,7 +578,7 @@ impl ExecuteResponse {
             ReassignOwned => Some("REASSIGN OWNED".into()),
             RevokedPrivilege => Some("REVOKE".into()),
             RevokedRole => Some("REVOKE ROLE".into()),
-            SendingRows { .. } | SendingRowsImmediate { .. } => None,
+            SendingRows { .. } | SendingRowsImmediate { .. } | SendingRowsStreaming { .. } => None,
             SetVariable { reset: true, .. } => Some("RESET".into()),
             SetVariable { reset: false, .. } => Some("SET".into()),
             StartedTransaction { .. } => Some("BEGIN".into()),
@@ -649,18 +655,20 @@ impl ExecuteResponse {
                 ExecuteResponseKind::CopyTo,
                 SendingRows,
                 SendingRowsImmediate,
+                SendingRowsStreaming,
             ],
             Execute | ReadThenWrite => &[
                 Deleted,
                 Inserted,
                 SendingRows,
                 SendingRowsImmediate,
+                SendingRowsStreaming,
                 Updated,
             ],
             PlanKind::Fetch => &[ExecuteResponseKind::Fetch],
             GrantPrivileges => &[GrantedPrivilege],
             GrantRole => &[GrantedRole],
-            Insert => &[Inserted, SendingRowsImmediate],
+            Insert => &[Inserted, SendingRowsImmediate, SendingRowsStreaming],
             PlanKind::Prepare => &[ExecuteResponseKind::Prepare],
             PlanKind::Raise => &[ExecuteResponseKind::Raised],
             PlanKind::ReassignOwned => &[ExecuteResponseKind::ReassignOwned],
@@ -671,7 +679,7 @@ impl ExecuteResponse {
             }
             PlanKind::Subscribe => &[Subscribing, ExecuteResponseKind::CopyTo],
             StartTransaction => &[StartedTransaction],
-            SideEffectingFunc => &[SendingRows, SendingRowsImmediate],
+            SideEffectingFunc => &[SendingRows, SendingRowsImmediate, SendingRowsStreaming],
             ValidateConnection => &[ExecuteResponseKind::ValidatedConnection],
         }
     }
