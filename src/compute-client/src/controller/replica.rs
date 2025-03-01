@@ -21,6 +21,7 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
 use mz_ore::retry::{Retry, RetryState};
 use mz_ore::task::AbortOnDropHandle;
+use mz_persist_types::PersistLocation;
 use mz_service::client::GenericClient;
 use mz_service::params::GrpcClientParameters;
 use tokio::select;
@@ -45,6 +46,8 @@ type Client<T> = SequentialHydration<T>;
 pub(super) struct ReplicaConfig {
     pub location: ClusterReplicaLocation,
     pub logging: LoggingConfig,
+    /// The persist location where we can stash large peek results.
+    pub peek_stash_persist_location: PersistLocation,
     pub grpc_client: GrpcClientParameters,
     /// The offset to use for replica expiration, if any.
     pub expiration_offset: Option<Duration>,
@@ -297,6 +300,8 @@ where
                 if ENABLE_COMPUTE_REPLICA_EXPIRATION.get(&self.dyncfg) {
                     config.expiration_offset = self.config.expiration_offset;
                 }
+                config.peek_stash_persist_location =
+                    self.config.peek_stash_persist_location.clone();
             }
             _ => {}
         }

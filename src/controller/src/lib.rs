@@ -670,7 +670,7 @@ where
 
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,
-            config.persist_location,
+            config.persist_location.clone(),
             config.persist_clients,
             config.now.clone(),
             wallclock_lag_fn.clone(),
@@ -692,6 +692,7 @@ where
             envd_epoch,
             read_only,
             &config.metrics_registry,
+            config.persist_location,
             controller_metrics,
             config.now.clone(),
             wallclock_lag_fn,

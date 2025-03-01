@@ -9,7 +9,8 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroI64, NonZeroU64, NonZeroUsize};
+use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -26,9 +27,10 @@ use mz_compute_client::protocol::command::{
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
-    StatusResponse, SubscribeResponse,
+    StashedPeekResponse, StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dyncfgs::{ENABLE_PEEK_RESPONSE_STASH, PEEK_RESPONSE_STASH_THRESHOLD_BYTES};
 use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
@@ -40,13 +42,14 @@ use mz_ore::metrics::UIntGauge;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_persist_client::Diagnostics;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
+use mz_persist_client::{Diagnostics, Schemas};
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
@@ -61,17 +64,20 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::scheduling::Scheduler;
 use timely::worker::Worker as TimelyWorker;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{oneshot, watch};
 use tracing::{Level, debug, error, info, span, warn};
 use uuid::Uuid;
 
-use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::arrangement::manager::{PaddedTrace, TraceBundle, TraceManager};
+use crate::compute_state::peek_result_iterator::PeekResultIterator;
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
+use crate::typedefs::RowRowAgent;
 
 mod peek_result_iterator;
 
@@ -105,6 +111,11 @@ pub struct ComputeState {
     pub copy_to_response_buffer: Rc<RefCell<Vec<(GlobalId, CopyToResponse)>>>,
     /// Peek commands that are awaiting fulfillment.
     pub pending_peeks: BTreeMap<Uuid, PendingPeek>,
+    /// Peek responses that we are stashing in persist. We do this
+    /// asynchronously and send back a handle to the batch in the PeekResponse.
+    pub pending_peek_responses: BTreeMap<Uuid, StashPeekResponse>,
+    /// The persist location where we can stash large peek results.
+    pub peek_stash_persist_location: Option<PersistLocation>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub compute_logger: Option<logging::compute::Logger>,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
@@ -207,6 +218,8 @@ impl ComputeState {
             subscribe_response_buffer: Default::default(),
             copy_to_response_buffer: Default::default(),
             pending_peeks: Default::default(),
+            pending_peek_responses: Default::default(),
+            peek_stash_persist_location: None,
             compute_logger: None,
             persist_clients,
             txns_ctx,
@@ -438,6 +451,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
 
         self.initialize_logging(config.logging);
+
+        self.compute_state.peek_stash_persist_location = Some(config.peek_stash_persist_location);
     }
 
     fn handle_update_configuration(&mut self, params: ComputeParameters) {
@@ -616,7 +631,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         // Log the receipt of the peek.
         if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-            logger.log(&pending.as_log_event(true));
+            logger.log(&peek_as_log_event(pending.peek(), true));
         }
 
         self.process_peek(&mut Antichain::new(), pending);
@@ -624,7 +639,11 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
     fn handle_cancel_peek(&mut self, uuid: Uuid) {
         if let Some(peek) = self.compute_state.pending_peeks.remove(&uuid) {
-            self.send_peek_response(peek, PeekResponse::Canceled);
+            self.send_peek_response(peek.peek(), PeekResponse::Canceled);
+        }
+        if let Some(stash_task) = self.compute_state.pending_peek_responses.remove(&uuid) {
+            // Explicitly drop the task to abort it.
+            drop(stash_task);
         }
     }
 
@@ -870,7 +889,43 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     fn process_peek(&mut self, upper: &mut Antichain<Timestamp>, mut peek: PendingPeek) {
         let response = match &mut peek {
             PendingPeek::Index(peek) => {
-                peek.seek_fulfillment(upper, self.compute_state.max_result_size)
+                let peek_stash_eligible = peek
+                    .peek
+                    .finishing
+                    .is_streamable(peek.peek.result_desc.arity());
+
+                let peek_stash_enabled =
+                    ENABLE_PEEK_RESPONSE_STASH.get(&self.compute_state.worker_config);
+
+                let peek_stash_threshold_bytes =
+                    PEEK_RESPONSE_STASH_THRESHOLD_BYTES.get(&self.compute_state.worker_config);
+
+                match peek.seek_fulfillment(
+                    upper,
+                    self.compute_state.max_result_size,
+                    peek_stash_enabled && peek_stash_eligible,
+                    peek_stash_threshold_bytes,
+                ) {
+                    ControlFlow::Continue(result) => Some(result),
+                    ControlFlow::Break(PeekStatus::NotReady) => None,
+                    ControlFlow::Break(PeekStatus::UsePeekStash) => {
+                        let _span = span!(parent: &peek.span, Level::DEBUG, "process_stashed_peek")
+                            .entered();
+                        let stash_task = StashPeekResponse::start_upload(
+                            Arc::clone(&self.compute_state.persist_clients),
+                            self.compute_state
+                                .peek_stash_persist_location
+                                .as_ref()
+                                .expect("missing persist location for peek responses"),
+                            peek.peek.clone(),
+                            peek.trace_bundle.clone(),
+                        );
+                        self.compute_state
+                            .pending_peek_responses
+                            .insert(peek.peek.uuid, stash_task);
+                        return;
+                    }
+                }
             }
             PendingPeek::Persist(peek) => peek.result.try_recv().ok().map(|(result, duration)| {
                 self.compute_state
@@ -882,8 +937,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         };
 
         if let Some(response) = response {
-            let _span = span!(parent: peek.span(), Level::DEBUG, "process_peek").entered();
-            self.send_peek_response(peek, response)
+            let _span = span!(parent: peek.span(), Level::DEBUG, "process_peek_response").entered();
+            self.send_peek_response(peek.peek(), response)
         } else {
             let uuid = peek.peek().uuid;
             self.compute_state.pending_peeks.insert(uuid, peek);
@@ -897,6 +952,28 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         for (_uuid, peek) in pending_peeks {
             self.process_peek(&mut upper, peek);
         }
+
+        let pending_peeks_response = std::mem::take(&mut self.compute_state.pending_peek_responses);
+        for (uuid, mut peek_response) in pending_peeks_response {
+            // WIP: Make configurable via dyncfg?
+            let num_batches = 100;
+            let batch_size = 1000;
+            peek_response.pump_rows(num_batches, batch_size);
+
+            if let Ok((response, duration)) = peek_response.result.try_recv() {
+                // let _span =
+                //     span!(parent: peek_response.span, Level::DEBUG, "send_peek_response").entered();
+
+                // WIP: Metrics! We want a histogram that logs duration.
+                tracing::debug!(?peek_response.peek, ?duration, "finished stashing peek response in persist");
+
+                self.send_peek_response(&peek_response.peek, response);
+            } else {
+                self.compute_state
+                    .pending_peek_responses
+                    .insert(uuid, peek_response);
+            }
+        }
     }
 
     /// Sends a response for this peek's resolution to the coordinator.
@@ -904,11 +981,13 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     /// Note that this function takes ownership of the `PendingPeek`, which is
     /// meant to prevent multiple responses to the same peek.
     #[mz_ore::instrument(level = "debug")]
-    fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
-        let log_event = peek.as_log_event(false);
+    fn send_peek_response(&mut self, peek: &Peek, response: PeekResponse) {
+        tracing::trace!(?response, "sending peek response");
+
+        let log_event = peek_as_log_event(peek, false);
         // Respond with the response.
         self.send_compute_response(ComputeResponse::PeekResponse(
-            peek.peek().uuid,
+            peek.uuid,
             response,
             OpenTelemetryContext::obtain(),
         ));
@@ -1042,21 +1121,20 @@ pub enum PendingPeek {
     Persist(PersistPeek),
 }
 
-impl PendingPeek {
-    /// Produces a corresponding log event.
-    pub fn as_log_event(&self, installed: bool) -> ComputeEvent {
-        let peek = self.peek();
-        let (id, peek_type) = match &peek.target {
-            PeekTarget::Index { id } => (id, logging::compute::PeekType::Index),
-            PeekTarget::Persist { id, .. } => (id, logging::compute::PeekType::Persist),
-        };
-        ComputeEvent::Peek(PeekEvent {
-            peek: logging::compute::Peek::new(*id, peek.timestamp, peek.uuid),
-            peek_type,
-            installed,
-        })
-    }
+/// Produces a corresponding log event.
+pub fn peek_as_log_event(peek: &Peek, installed: bool) -> ComputeEvent {
+    let (id, peek_type) = match &peek.target {
+        PeekTarget::Index { id } => (id, logging::compute::PeekType::Index),
+        PeekTarget::Persist { id, .. } => (id, logging::compute::PeekType::Persist),
+    };
+    ComputeEvent::Peek(PeekEvent {
+        peek: logging::compute::Peek::new(*id, peek.timestamp, peek.uuid),
+        peek_type,
+        installed,
+    })
+}
 
+impl PendingPeek {
     fn index(peek: Peek, mut trace_bundle: TraceBundle) -> Self {
         let empty_frontier = Antichain::new();
         let timestamp_frontier = Antichain::from_elem(peek.timestamp);
@@ -1331,14 +1409,16 @@ impl IndexPeek {
         &mut self,
         upper: &mut Antichain<Timestamp>,
         max_result_size: u64,
-    ) -> Option<PeekResponse> {
+        peek_stash_eligible: bool,
+        peek_stash_threshold_bytes: usize,
+    ) -> ControlFlow<PeekStatus, PeekResponse> {
         self.trace_bundle.oks_mut().read_upper(upper);
         if upper.less_equal(&self.peek.timestamp) {
-            return None;
+            return ControlFlow::Break(PeekStatus::NotReady);
         }
         self.trace_bundle.errs_mut().read_upper(upper);
         if upper.less_equal(&self.peek.timestamp) {
-            return None;
+            return ControlFlow::Break(PeekStatus::NotReady);
         }
 
         let read_frontier = self.trace_bundle.compaction_frontier();
@@ -1348,21 +1428,27 @@ impl IndexPeek {
                 read_frontier.elements(),
                 self.peek.timestamp,
             );
-            return Some(PeekResponse::Error(error));
+            return ControlFlow::Continue(PeekResponse::Error(error));
         }
 
-        let response = match self.collect_finished_data(max_result_size) {
+        let response = match self.collect_finished_data(
+            max_result_size,
+            peek_stash_eligible,
+            peek_stash_threshold_bytes,
+        )? {
             Ok(rows) => PeekResponse::Rows(RowCollection::new(rows, &self.peek.finishing.order_by)),
             Err(text) => PeekResponse::Error(text),
         };
-        Some(response)
+        ControlFlow::Continue(response)
     }
 
     /// Collects data for a known-complete peek from the ok stream.
     fn collect_finished_data(
         &mut self,
         max_result_size: u64,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+        peek_stash_eligible: bool,
+        peek_stash_threshold_bytes: usize,
+    ) -> ControlFlow<PeekStatus, Result<Vec<(Row, NonZeroUsize)>, String>> {
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
         let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
@@ -1379,19 +1465,24 @@ impl IndexPeek {
                     target = %self.peek.target.id(), diff = %copies, %error,
                     "index peek encountered negative multiplicities in error trace",
                 );
-                return Err(format!(
-                    "Invalid data in source errors, \
-                     saw retractions ({}) for row that does not exist: {}",
+                return ControlFlow::Continue(Err(format!(
+                    "Invalid data in source errors, saw retractions ({}) for row that does not exist: {}",
                     -copies, error,
-                ));
+                )));
             }
             if copies.is_positive() {
-                return Err(cursor.key(&storage).to_string());
+                return ControlFlow::Continue(Err(cursor.key(&storage).to_string()));
             }
             cursor.step_key(&storage);
         }
 
-        Self::collect_ok_finished_data(&mut self.peek, self.trace_bundle.oks_mut(), max_result_size)
+        Self::collect_ok_finished_data(
+            &mut self.peek,
+            self.trace_bundle.oks_mut(),
+            max_result_size,
+            peek_stash_eligible,
+            peek_stash_threshold_bytes,
+        )
     }
 
     /// Collects data for a known-complete peek from the ok stream.
@@ -1399,7 +1490,9 @@ impl IndexPeek {
         peek: &mut Peek<Timestamp>,
         oks_handle: &mut Tr,
         max_result_size: u64,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String>
+        peek_stash_eligible: bool,
+        peek_stash_threshold_bytes: usize,
+    ) -> ControlFlow<PeekStatus, Result<Vec<(Row, NonZeroUsize)>, String>>
     where
         for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
         for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = Row> + Eq,
@@ -1435,18 +1528,26 @@ impl IndexPeek {
         let mut r_datum_vec = DatumVec::new();
 
         while let Some(row) = peek_iterator.next() {
-            let (row, copies) = row?;
+            let row = match row {
+                Ok(row) => row,
+                Err(err) => return ControlFlow::Continue(Err(err)),
+            };
+            let (row, copies) = row;
             let copies: NonZeroUsize = NonZeroUsize::try_from(copies).expect("fits into usize");
 
             total_size = total_size
                 .saturating_add(row.byte_len())
                 .saturating_add(count_byte_size);
+            if peek_stash_eligible && total_size > peek_stash_threshold_bytes {
+                return ControlFlow::Break(PeekStatus::UsePeekStash);
+            }
             if total_size > max_result_size {
-                return Err(format!(
+                return ControlFlow::Continue(Err(format!(
                     "result exceeds max size of {}",
                     ByteSize::b(u64::cast_from(max_result_size))
-                ));
+                )));
             }
+
             results.push((row, copies));
 
             // If we hold many more than `max_results` records, we can thin down
@@ -1458,7 +1559,7 @@ impl IndexPeek {
                 if results.len() >= 2 * max_results {
                     if peek.finishing.order_by.is_empty() {
                         results.truncate(max_results);
-                        return Ok(results);
+                        return ControlFlow::Continue(Ok(results));
                     } else {
                         // We can sort `results` and then truncate to `max_results`.
                         // This has an effect similar to a priority queue, without
@@ -1489,7 +1590,230 @@ impl IndexPeek {
             }
         }
 
-        Ok(results)
+        ControlFlow::Continue(Ok(results))
+    }
+}
+
+/// For keeping track of the state of pending or ready peeks, and managing
+/// control flow.
+enum PeekStatus {
+    /// The frontiers of objects are not yet advanced enough, peek is still
+    /// pending.
+    NotReady,
+    /// The result size is above the configured threshold and the peek is
+    /// eligible for using the peek result stash.
+    UsePeekStash,
+}
+
+/// An async task that stashes a peek response in persist and yield a handle to
+/// the batch in a [PeekResponse::Stashed].
+///
+/// Note that `PeekResponseTask` intentionally does not implement or derive
+/// `Clone`, as each `PeekResponseTask` is meant to be dropped after it's
+/// done or no longer needed.
+pub struct StashPeekResponse {
+    peek: Peek,
+    /// Iterator for the results. The worker thread has to continually pump
+    /// results from this to the `rows_tx` channel.
+    peek_iterator: Option<PeekResultIterator<PaddedTrace<RowRowAgent<Timestamp, Diff>>>>,
+    /// We can't give a PeekResultIterator to our async upload task because the
+    /// underlying trace reader is not Send/Sync. So we need to use a channel to
+    /// send result rows from the worker thread to the async background task.
+    rows_tx: Option<tokio::sync::mpsc::Sender<Result<Vec<(Row, NonZeroI64)>, String>>>,
+    /// When the async task is busy it cannot work of rows, and we don't want to
+    /// use an unbounded channel. We stash rows that we cannot send and retry
+    /// later.
+    stashed_rows: Option<Result<Vec<(Row, NonZeroI64)>, String>>,
+    /// The result of the background task, eventually.
+    result: oneshot::Receiver<(PeekResponse, Duration)>,
+    /// A background task that's responsible for producing the peek results.
+    /// If we're no longer interested in the results, we abort the task.
+    _abort_handle: AbortOnDropHandle<()>,
+}
+
+impl StashPeekResponse {
+    fn start_upload(
+        persist_clients: Arc<PersistClientCache>,
+        persist_location: &PersistLocation,
+        peek: Peek,
+        mut trace_bundle: TraceBundle,
+    ) -> Self {
+        let (rows_tx, rows_rx) = tokio::sync::mpsc::channel(10);
+        let (result_tx, result_rx) = oneshot::channel::<(PeekResponse, Duration)>();
+
+        let persist_clients = Arc::clone(&persist_clients);
+        let persist_location = persist_location.clone();
+
+        let peek_uuid = peek.uuid;
+        let relation_desc = peek.result_desc.clone();
+
+        let oks_handle = trace_bundle.oks_mut();
+
+        let peek_iterator = peek_result_iterator::PeekResultIterator::new(
+            peek.target.id().clone(),
+            peek.map_filter_project.clone(),
+            peek.timestamp,
+            peek.literal_constraints.clone(),
+            oks_handle,
+        );
+
+        let task_handle = mz_ore::task::spawn(|| "compute::stash_peek_response", async move {
+            let start = Instant::now();
+
+            let result = Self::do_upload(
+                &persist_clients,
+                persist_location,
+                peek.uuid,
+                relation_desc,
+                rows_rx,
+            )
+            .await;
+
+            let result = match result {
+                Ok(peek_response) => peek_response,
+                Err(e) => PeekResponse::Error(e.to_string()),
+            };
+            match result_tx.send((result, start.elapsed())) {
+                Ok(()) => {}
+                Err((_result, elapsed)) => {
+                    debug!(duration = ?elapsed, "dropping result for cancelled peek {}", peek_uuid)
+                }
+            }
+        });
+
+        Self {
+            peek,
+            peek_iterator: Some(peek_iterator),
+            rows_tx: Some(rows_tx),
+            stashed_rows: None,
+            result: result_rx,
+            _abort_handle: task_handle.abort_on_drop(),
+        }
+    }
+
+    async fn do_upload(
+        persist_clients: &PersistClientCache,
+        persist_location: PersistLocation,
+        peek_uuid: Uuid,
+        relation_desc: RelationDesc,
+        mut rows_rx: tokio::sync::mpsc::Receiver<Result<Vec<(Row, NonZeroI64)>, String>>,
+    ) -> Result<PeekResponse, String> {
+        let client = persist_clients
+            .open(persist_location)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let shard_id = format!("s{}", peek_uuid);
+        let shard_id = ShardId::try_from(shard_id).expect("can parse");
+        let write_schemas: Schemas<SourceData, ()> = Schemas {
+            id: None,
+            key: Arc::new(relation_desc.clone()),
+            val: Arc::new(UnitSchema),
+        };
+
+        let result_ts = Timestamp::default();
+        let lower = Antichain::from_elem(result_ts);
+        let upper = Antichain::from_elem(result_ts.step_forward());
+
+        // We have to use SourceData, which is a wrapper around a Result<Row,
+        // DataflowError>, because the bare columnar Row encoder doesn't support
+        // encoding rows with zero columns.
+        //
+        // TODO: We _could_ work around the above by teaching the bare columnar
+        // Row encoder about zero-column rows.
+        let mut batch_builder = client
+            .batch_builder::<SourceData, (), Timestamp, i64>(shard_id, write_schemas, lower)
+            .await;
+
+        let mut num_rows: u64 = 0;
+
+        loop {
+            let row = rows_rx.recv().await;
+            match row {
+                Some(Ok(rows)) => {
+                    assert!(
+                        rows.len() > 0,
+                        "the contract is that we only get non-empty batches"
+                    );
+
+                    for (row, diff) in rows {
+                        num_rows +=
+                            u64::from(NonZeroU64::try_from(diff).expect("diff fits into u64"));
+                        let diff: i64 = diff.into();
+
+                        batch_builder
+                            .add(&SourceData(Ok(row)), &(), &Timestamp::default(), &diff)
+                            .await
+                            .expect("invalid usage");
+                    }
+                }
+                Some(Err(err)) => return Ok(PeekResponse::Error(err)),
+                None => {
+                    break;
+                }
+            }
+        }
+
+        let batch = batch_builder.finish(upper).await.expect("invalid usage");
+
+        let stashed_response = StashedPeekResponse {
+            num_rows: u64::cast_from(num_rows),
+            encoded_size_bytes: batch.encoded_size_bytes(),
+            relation_desc,
+            shard_id,
+            batches: vec![batch.into_transmittable_batch()],
+            inline_rows: RowCollection::new(vec![], &[]),
+        };
+        let result = PeekResponse::Stashed(stashed_response);
+        Ok(result)
+    }
+
+    /// Pumps rows from the [PeekResultIterator] to the async task, via our
+    /// `rows_tx`. Will pump at most `batch_size` rows in one batch, and at most
+    /// the given `num_batches` batches.
+    fn pump_rows(&mut self, mut num_batches: usize, batch_size: usize) {
+        while self.peek_iterator.is_some() || self.stashed_rows.is_some() {
+            let rows = if let Some(rows) = self.stashed_rows.take() {
+                Some(rows)
+            } else {
+                match self.peek_iterator.as_mut() {
+                    Some(row_iter) => {
+                        let rows: Result<Vec<_>, _> = row_iter.take(batch_size).collect();
+                        let rows = rows.map(|rows| if rows.is_empty() { None } else { Some(rows) });
+                        rows.transpose()
+                    }
+                    None => None,
+                }
+            };
+
+            if let Some(rows) = rows {
+                match self
+                    .rows_tx
+                    .as_mut()
+                    .expect("missing rows_tx")
+                    .try_send(rows)
+                {
+                    Ok(_) => {
+                        // All good!
+                    }
+                    Err(TrySendError::Full(rows)) => {
+                        // Need to stash the row and try again later
+                        let prev = self.stashed_rows.replace(rows);
+                        assert!(prev.is_none());
+                    }
+                    _ => {}
+                }
+            } else {
+                // We are done, yank our iterator and the row_tx.
+                self.peek_iterator.take();
+                self.rows_tx.take();
+            }
+
+            num_batches -= 1;
+            if num_batches == 0 {
+                break;
+            }
+        }
     }
 }
 

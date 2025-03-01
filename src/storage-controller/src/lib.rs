@@ -332,6 +332,10 @@ where
         &self.config
     }
 
+    fn persist_location(&self) -> PersistLocation {
+        self.persist_location.clone()
+    }
+
     fn collection_metadata(
         &self,
         id: GlobalId,
