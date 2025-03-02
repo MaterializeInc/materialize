@@ -15,7 +15,7 @@ access your query history.
 
 ![Image of the Environment Overview](/images/console/console-environment-overview.png "Environment overview")
 
-The **Monitoring** section contains the following screens:
+The **Monitoring** section contains the following panels:
 
 | Feature | Description |
 |---------|-------------|
