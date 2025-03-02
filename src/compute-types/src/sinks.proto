@@ -13,12 +13,16 @@ syntax = "proto3";
 
 package mz_compute_types.sinks;
 
+import "expr/src/linear.proto";
+import "expr/src/relation.proto";
+import "expr/src/scalar.proto";
 import "google/protobuf/empty.proto";
 import "repr/src/antichain.proto";
 import "repr/src/catalog_item_id.proto";
 import "repr/src/global_id.proto";
 import "repr/src/refresh_schedule.proto";
 import "repr/src/relation_and_scalar.proto";
+import "repr/src/row.proto";
 import "storage-types/src/connections/aws.proto";
 import "storage-types/src/controller.proto";
 import "storage-types/src/sinks.proto";
@@ -39,6 +43,7 @@ message ProtoComputeSinkConnection {
     ProtoMaterializedViewSinkConnection materialized_view = 2;
     ProtoCopyToS3OneshotSinkConnection copy_to_s3_oneshot = 3;
     ProtoContinualTaskConnection continual_task = 4;
+    ProtoPersistBatchesSinkConnection persist_batches = 5;
   }
 }
 
@@ -57,4 +62,19 @@ message ProtoCopyToS3OneshotSinkConnection {
   mz_storage_types.connections.aws.ProtoAwsConnection aws_connection = 2;
   mz_repr.catalog_item_id.ProtoCatalogItemId connection_id = 3;
   uint64 output_batch_count = 4;
+}
+
+message ProtoPersistBatchesSinkConnection {
+  mz_repr.global_id.ProtoGlobalId collection_id = 1;
+  mz_storage_types.controller.ProtoCollectionMetadata collection_metadata = 2;
+  mz_expr.relation.ProtoRowSetFinishing finishing = 3;
+  ProtoLiteralConstraints literal_constraints = 4;
+  mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 5;
+  mz_expr.relation.ProtoMutationKind mutation_kind = 6;
+  repeated mz_expr.scalar.ProtoMirScalarExpr returning = 7;
+  string stashed_rows_shard = 8;
+}
+
+message ProtoLiteralConstraints {
+  repeated mz_repr.row.ProtoRow rows = 1;
 }

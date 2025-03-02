@@ -9,9 +9,11 @@
 
 //! Types for describing dataflow sinks.
 
+use mz_expr::{MirScalarExpr, MutationKind, RowSetFinishing, SafeMfpPlan};
+use mz_persist_types::ShardId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::S3UploadInfo;
@@ -163,6 +165,8 @@ pub enum ComputeSinkConnection<S: 'static = ()> {
     ContinualTask(ContinualTaskConnection<S>),
     /// A compute sink to do a oneshot copy to s3.
     CopyToS3Oneshot(CopyToS3OneshotSinkConnection),
+    /// Stage Rows in Persist Batches for eventual linking into a shard.
+    PersistBatches(PersistBatchesConnection),
 }
 
 impl<S> ComputeSinkConnection<S> {
@@ -173,6 +177,7 @@ impl<S> ComputeSinkConnection<S> {
             ComputeSinkConnection::MaterializedView(_) => "materialized_view",
             ComputeSinkConnection::ContinualTask(_) => "continual_task",
             ComputeSinkConnection::CopyToS3Oneshot(_) => "copy_to_s3_oneshot",
+            ComputeSinkConnection::PersistBatches(_) => "persist_batches",
         }
     }
 
@@ -201,6 +206,9 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
                 ComputeSinkConnection::CopyToS3Oneshot(s3) => {
                     Kind::CopyToS3Oneshot(s3.into_proto())
                 }
+                ComputeSinkConnection::PersistBatches(persist_batches) => {
+                    Kind::PersistBatches(persist_batches.into_proto())
+                }
             }),
         }
     }
@@ -219,6 +227,9 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
                 ComputeSinkConnection::ContinualTask(continual_task.into_rust()?)
             }
             Kind::CopyToS3Oneshot(s3) => ComputeSinkConnection::CopyToS3Oneshot(s3.into_rust()?),
+            Kind::PersistBatches(persist_batches) => {
+                ComputeSinkConnection::PersistBatches(persist_batches.into_rust()?)
+            }
         })
     }
 }
@@ -328,6 +339,87 @@ impl RustType<ProtoContinualTaskConnection> for ContinualTaskConnection<Collecti
             storage_metadata: proto
                 .storage_metadata
                 .into_rust_if_some("ProtoContinualTaskConnection::output_metadata")?,
+        })
+    }
+}
+
+/// Information specific to staging the results of a Peek into Persist Batches.
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PersistBatchesConnection {
+    /// The collection these batches will eventually be linked into.
+    pub collection_id: GlobalId,
+    /// Metadata about the collection we're syncing results into.
+    pub collection_meta: CollectionMetadata,
+    /// Instructions for finishing a query, e.g. `LIMIT` and `ORDER BY`.
+    pub finishing: RowSetFinishing,
+    /// Datums the result set needs to match against.
+    pub literal_constraints: Option<Vec<Row>>,
+    /// Final MFP to apply to the result set.
+    pub map_filter_project: SafeMfpPlan,
+    /// Kind of mutation we're making for the collection.
+    pub mutation_kind: MutationKind,
+    /// Expressions that determine whether or not a row should be returned to the user.
+    pub returning: Vec<MirScalarExpr>,
+    /// ID for the 'staged rows' shard that can be used for an `RETURNING` rows.
+    pub stashed_rows_shard: ShardId,
+}
+
+impl PersistBatchesConnection {
+    /// Returns if the output is trivial and thus can be streamed directly into
+    /// Persist.
+    ///
+    /// For example, `INSERT INTO <t1> SELECT * FROM <t2>` can stream the
+    /// results directly into batches for `t1`.
+    pub fn is_trivial_output(&self) -> bool {
+        let dest_arity = self.collection_meta.relation_desc.arity();
+
+        self.finishing.is_trivial(dest_arity)
+            && matches!(self.mutation_kind, MutationKind::Insert)
+            && self.returning.is_empty()
+    }
+}
+
+impl RustType<ProtoPersistBatchesSinkConnection> for PersistBatchesConnection {
+    fn into_proto(&self) -> ProtoPersistBatchesSinkConnection {
+        let literal_constraints = self.literal_constraints.as_ref().map(|constraints| {
+            let rows = constraints.into_proto();
+            ProtoLiteralConstraints { rows }
+        });
+        ProtoPersistBatchesSinkConnection {
+            collection_id: Some(self.collection_id.into_proto()),
+            collection_metadata: Some(self.collection_meta.into_proto()),
+            finishing: Some(self.finishing.into_proto()),
+            literal_constraints,
+            map_filter_project: Some(self.map_filter_project.into_proto()),
+            mutation_kind: Some(self.mutation_kind.into_proto()),
+            returning: self.returning.into_proto(),
+            stashed_rows_shard: self.stashed_rows_shard.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoPersistBatchesSinkConnection) -> Result<Self, TryFromProtoError> {
+        Ok(PersistBatchesConnection {
+            collection_id: proto
+                .collection_id
+                .into_rust_if_some("ProtoPersistBatchesSinkConnection::collection_id")?,
+            collection_meta: proto
+                .collection_metadata
+                .into_rust_if_some("ProtoPersistBatchesSinkConnection::collection_metadata")?,
+            finishing: proto
+                .finishing
+                .into_rust_if_some("ProtoPersistBatchesSinkConnection::finishing")?,
+            literal_constraints: proto
+                .literal_constraints
+                .map(|proto| proto.rows.into_rust())
+                .transpose()?,
+            map_filter_project: proto
+                .map_filter_project
+                .into_rust_if_some("ProtoPersistBatchesSinkConnection::map_filter_project")?,
+            mutation_kind: proto
+                .mutation_kind
+                .into_rust_if_some("ProtoPersistBatchesSinkConnection::mutation_kind")?,
+            returning: proto.returning.into_rust()?,
+            stashed_rows_shard: proto.stashed_rows_shard.into_rust()?,
         })
     }
 }

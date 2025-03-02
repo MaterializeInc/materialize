@@ -26,8 +26,8 @@ use mz_sql::ast::{ExplainStage, Statement};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_catalog::memory::objects::CatalogItem;
-use mz_sql::plan::QueryWhen;
-use mz_sql::plan::{self, HirScalarExpr};
+use mz_sql::plan::{self, HirScalarExpr, ReadThenWriteFormat};
+use mz_sql::plan::{QueryWhen, SelectOutput};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::EmptyStatisticsOracle;
 use tokio::sync::oneshot;
@@ -54,6 +54,7 @@ use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
 use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+use crate::optimize::peek::PeekOutput;
 use crate::optimize::{self, Optimize};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
@@ -300,15 +301,44 @@ impl Coordinator {
                     .instance_snapshot(cluster.id())
                     .expect("compute instance does not exist");
                 let (_, view_id) = self.allocate_transient_id();
-                let (_, index_id) = self.allocate_transient_id();
+
+                let output = match &plan.output {
+                    SelectOutput::Rows => {
+                        let (_, index_id) = self.allocate_transient_id();
+                        PeekOutput::Index {
+                            transient_id: index_id,
+                        }
+                    }
+                    SelectOutput::ReadThenWrite(ReadThenWriteFormat {
+                        collection_id,
+                        from_desc,
+                        mutation_kind,
+                        returning,
+                    }) => {
+                        let (_, sink_id) = self.allocate_transient_id();
+                        let collection_meta = self
+                            .controller
+                            .storage
+                            .collection_metadata(*collection_id)?;
+                        PeekOutput::ReadThenWrite {
+                            sink_id,
+                            collection_id: *collection_id,
+                            collection_meta,
+                            from_desc: from_desc.clone(),
+                            mutation_kind: mutation_kind.clone(),
+                            returning: returning.clone(),
+                        }
+                    }
+                    SelectOutput::CopyTo(_) => unreachable!("handled elsewhere"),
+                };
 
                 // Build an optimizer for this SELECT.
                 Either::Left(optimize::peek::Optimizer::new(
                     Arc::clone(&catalog),
                     compute_instance,
                     plan.finishing.clone(),
+                    output,
                     view_id,
-                    index_id,
                     optimizer_config,
                     self.optimizer_metrics(),
                 ))
@@ -621,7 +651,7 @@ impl Coordinator {
                             session,
                             timestamp_context,
                             view_id: optimizer.select_id(),
-                            index_id: optimizer.index_id(),
+                            output: optimizer.output().clone(),
                             enable_re_optimize,
                         }).map(Box::new);
                             match explain_ctx {
@@ -867,7 +897,10 @@ impl Coordinator {
 
         if let Some(transient_index_id) = match &planned_peek.plan {
             peek::PeekPlan::FastPath(_) => None,
-            peek::PeekPlan::SlowPath(PeekDataflowPlan { id, .. }) => Some(id),
+            peek::PeekPlan::SlowPath(PeekDataflowPlan { output, .. }) => match output {
+                PeekOutput::Index { transient_id } => Some(transient_id),
+                PeekOutput::ReadThenWrite { .. } => None,
+            },
         } {
             if let Some(statement_logging_id) = ctx.extra.contents() {
                 self.set_transient_index_id(statement_logging_id, *transient_index_id);
@@ -940,9 +973,9 @@ impl Coordinator {
                 .add_notice(AdapterNotice::QueryTimestamp { explanation });
         }
 
-        let resp = match plan.copy_to {
-            None => resp,
-            Some(format) => ExecuteResponse::CopyTo {
+        let resp = match plan.output {
+            SelectOutput::Rows | SelectOutput::ReadThenWrite { .. } => resp,
+            SelectOutput::CopyTo(format) => ExecuteResponse::CopyTo {
                 format,
                 resp: Box::new(resp),
             },

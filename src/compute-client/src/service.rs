@@ -327,6 +327,18 @@ where
                             (PeekResponse::Canceled, _) => PeekResponse::Canceled,
                             (_, PeekResponse::Error(e)) => PeekResponse::Error(e),
                             (PeekResponse::Error(e), _) => PeekResponse::Error(e),
+                            (PeekResponse::Rows(rows), PeekResponse::Staged(batches))
+                            | (PeekResponse::Staged(batches), PeekResponse::Rows(rows)) => {
+                                // By default we merge into an empty `PeekResponse::Rows`.
+                                if rows.entries() == 0 {
+                                    PeekResponse::Staged(batches)
+                                } else {
+                                    mz_ore::soft_panic_or_log!(
+                                        "got both PeekResponse Staged and Rows"
+                                    );
+                                    PeekResponse::Error("internal error".to_string())
+                                }
+                            }
                             (PeekResponse::Rows(mut rows), PeekResponse::Rows(other)) => {
                                 let total_byte_size =
                                     rows.byte_len().saturating_add(other.byte_len());
@@ -343,6 +355,19 @@ where
                                 } else {
                                     rows.merge(&other);
                                     PeekResponse::Rows(rows)
+                                }
+                            }
+                            (PeekResponse::Staged(mut batches), PeekResponse::Staged(other)) => {
+                                batches.append_batches.extend(other.append_batches);
+                                match (&mut batches.returned_rows, other.returned_rows) {
+                                    (Some(_), Some(_)) => PeekResponse::Error(
+                                        "found more than one returned rows batch".to_string(),
+                                    ),
+                                    (dest @ None, batch @ Some(_)) => {
+                                        *dest = batch;
+                                        PeekResponse::Staged(batches)
+                                    }
+                                    (Some(_), None) | (None, None) => PeekResponse::Staged(batches),
                                 }
                             }
                         };

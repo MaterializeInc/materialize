@@ -126,7 +126,9 @@ use mz_ore::{
     assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log, stack,
 };
 use mz_persist_client::batch::ProtoBatch;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
+use mz_persist_client::PersistClient;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::optimize::OptimizerFeatures;
@@ -1629,6 +1631,8 @@ pub struct Coordinator {
     /// read their catalog as long as needed. In the future we would like this
     /// to be a pTVC, but for now this is sufficient.
     catalog: Arc<Catalog>,
+    /// TODO
+    persist_client: PersistClient,
 
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
@@ -4261,6 +4265,7 @@ pub fn serve(
                     cluster_replica_statuses: ClusterReplicaStatuses::new(),
                     read_only_controllers,
                     buffered_builtin_table_updates: Some(Vec::new()),
+                    persist_client,
                 };
                 let bootstrap = handle.block_on(async {
                     coord

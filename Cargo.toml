@@ -111,7 +111,7 @@ members = [
     "test/metabase/smoketest",
     "test/test-util",
     "src/regexp",
-    "misc/bazel/cargo-gazelle",
+    "misc/bazel/cargo-gazelle", "src/row-stash",
 ]
 
 # We make all members of the workspace default members, *except* for a few
