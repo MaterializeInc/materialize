@@ -58,7 +58,7 @@ num-traits = "0.2.15"
 num_enum = "0.7.3"
 ordered-float = { version = "4.6.0", features = ["serde"] }
 postgres-protocol = { version = "0.6.5" }
-prost = { version = "0.13.4", features = ["no-recursion-limit"] }
+prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 regex = "1.10.6"
 ryu = "1.0.12"
 serde = { version = "1.0.218", features = ["derive"] }
