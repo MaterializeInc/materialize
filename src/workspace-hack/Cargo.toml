@@ -290,7 +290,7 @@ zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays",
 zstd-sys = { version = "2.0.13", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
-camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
+camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
@@ -299,7 +299,7 @@ ring = { version = "0.17.7", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
-camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
+camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
@@ -308,7 +308,7 @@ ring = { version = "0.17.7", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 
 [target.x86_64-apple-darwin.dependencies]
-camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
+camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
@@ -317,7 +317,7 @@ rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "proce
 security-framework = { version = "2.10.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
-camino = { version = "1.1.7", default-features = false, features = ["serde1"] }
+camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
