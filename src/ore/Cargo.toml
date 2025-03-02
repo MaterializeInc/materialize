@@ -99,7 +99,7 @@ anyhow = { version = "1.0.95" }
 criterion = { version = "0.5.1", features = ["async_tokio"] }
 mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
-scopeguard = "1.1.0"
+scopeguard = "1.2.0"
 serde_json = "1.0.125"
 tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.2"

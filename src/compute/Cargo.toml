@@ -38,7 +38,7 @@ mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
 prometheus = { version = "0.13.3", default-features = false }
-scopeguard = "1.1.0"
+scopeguard = "1.2.0"
 serde = { version = "1.0.218", features = ["derive"] }
 smallvec = { version = "1.10.0", features = ["serde", "union"] }
 timely = "0.19.0"
