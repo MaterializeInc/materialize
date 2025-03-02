@@ -1738,15 +1738,15 @@ service_names = [
     "balancerd",
     "frontegg-mock",
     "clusterd_1_1_1",
+    "clusterd_1_1_2",
     "clusterd_1_2_1",
+    "clusterd_1_2_2",
     "clusterd_2_1_1",
-    "clusterd_2_2_1",
-    "clusterd_3_1_1",
-    "clusterd_3_2_1",
+    "clusterd_2_1_2",
 ]
 
 
-def setup(c: Composition, workers: int) -> None:
+def setup(c: Composition) -> None:
     c.up(*service_names)
 
     c.sql(
@@ -1756,32 +1756,23 @@ def setup(c: Composition, workers: int) -> None:
     )
 
     c.sql(
-        f"""
+        """
         DROP CLUSTER quickstart cascade;
         CREATE CLUSTER quickstart REPLICAS (
             replica1 (
-                STORAGECTL ADDRESSES ['clusterd_1_1_1:2100', 'clusterd_1_2_1:2100'],
-                STORAGE ADDRESSES ['clusterd_1_1_1:2103', 'clusterd_1_2_1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_1_1_1:2101', 'clusterd_1_2_1:2101'],
-                COMPUTE ADDRESSES ['clusterd_1_1_1:2102', 'clusterd_1_2_1:2102'],
-                WORKERS {workers}
+                STORAGECTL ADDRESSES ['clusterd_1_1_1:2100', 'clusterd_1_1_2:2100'],
+                COMPUTECTL ADDRESSES ['clusterd_1_1_1:2101', 'clusterd_1_1_2:2101']
             ),
             replica2 (
-                STORAGECTL ADDRESSES ['clusterd_2_1_1:2100', 'clusterd_2_2_1:2100'],
-                STORAGE ADDRESSES ['clusterd_2_1_1:2103', 'clusterd_2_2_1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_2_1_1:2101', 'clusterd_2_2_1:2101'],
-                COMPUTE ADDRESSES ['clusterd_2_1_1:2102', 'clusterd_2_2_1:2102'],
-                WORKERS {workers}
+                STORAGECTL ADDRESSES ['clusterd_1_2_1:2100', 'clusterd_1_2_2:2100'],
+                COMPUTECTL ADDRESSES ['clusterd_1_2_1:2101', 'clusterd_1_2_2:2101']
             )
         );
         DROP CLUSTER IF EXISTS single_replica_cluster CASCADE;
         CREATE CLUSTER single_replica_cluster REPLICAS (
             replica1 (
-                STORAGECTL ADDRESSES ['clusterd_3_1_1:2100', 'clusterd_3_2_1:2100'],
-                STORAGE ADDRESSES ['clusterd_3_1_1:2103', 'clusterd_3_2_1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_3_1_1:2101', 'clusterd_3_2_1:2101'],
-                COMPUTE ADDRESSES ['clusterd_3_1_1:2102', 'clusterd_3_2_1:2102'],
-                WORKERS {workers}
+                STORAGECTL ADDRESSES ['clusterd_2_1_1:2100', 'clusterd_2_1_2:2100'],
+                COMPUTECTL ADDRESSES ['clusterd_2_1_1:2101', 'clusterd_2_1_2:2101']
             )
         );
         GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
@@ -1877,15 +1868,51 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
     if not scenarios:
         return
 
-    setup(c, args.workers)
+    with c.override(
+        Clusterd(
+            name="clusterd_1_1_1",
+            workers=args.workers,
+            process_names=["clusterd_1_1_1", "clusterd_1_1_2"],
+        ),
+        Clusterd(
+            name="clusterd_1_1_2",
+            workers=args.workers,
+            process_names=["clusterd_1_1_1", "clusterd_1_1_2"],
+        ),
+        Clusterd(
+            name="clusterd_1_2_1",
+            workers=args.workers,
+            process_names=["clusterd_1_2_1", "clusterd_1_2_2"],
+        ),
+        Clusterd(
+            name="clusterd_1_2_2",
+            workers=args.workers,
+            process_names=["clusterd_1_2_1", "clusterd_1_2_2"],
+        ),
+        Clusterd(
+            name="clusterd_2_1_1",
+            workers=args.workers,
+            process_names=["clusterd_2_1_1", "clusterd_2_1_2"],
+        ),
+        Clusterd(
+            name="clusterd_2_1_2",
+            workers=args.workers,
+            process_names=["clusterd_2_1_1", "clusterd_2_1_2"],
+        ),
+    ):
+        run_scenarios(c, scenarios, args.find_limit)
 
+
+def run_scenarios(c: Composition, scenarios: list[type[Generator]], find_limit: bool):
     c.up("testdrive", persistent=True)
+
+    setup(c)
 
     failures: list[TestFailureDetails] = []
     stats: dict[tuple[type[Generator], int], Statistics] = {}
 
     for scenario in scenarios:
-        if args.find_limit:
+        if find_limit:
             good_count = None
             bad_count = None
             while True:
@@ -1918,7 +1945,7 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
                             traceback.print_exc()
                             print("Retrying in a minute...")
                             time.sleep(60)
-                    setup(c, args.workers)
+                    setup(c)
 
                     bad_count = scenario.COUNT
                     previous_count = scenario.COUNT
@@ -1946,7 +1973,7 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
                             password=app_password(ADMIN_USER),
                         ) as cur:
                             start_time = time.time()
-                            cur.execute(scenario.EXPLAIN)
+                            cur.execute(scenario.EXPLAIN)  # type: ignore
                             explain_wallclock = time.time() - start_time
                             explain_wallclock_str = (
                                 f", explain took {explain_wallclock:.2f} s"
@@ -1987,7 +2014,7 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
                     )
                 )
 
-    if args.find_limit:
+    if find_limit:
         upload_results_to_test_analytics(c, stats, not failures)
 
     if failures:
@@ -2043,12 +2070,23 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
     )
 
     # Construct the requied Clusterd instances and peer them into clusters
-    nodes = []
+    node_names = []
+    node_overrides = []
     for cluster_id in range(1, args.clusters + 1):
         for replica_id in range(1, args.replicas + 1):
-            for node_id in range(1, args.nodes + 1):
-                node_name = f"clusterd_{cluster_id}_{replica_id}_{node_id}"
-                nodes.append(node_name)
+            names = [
+                f"clusterd_{cluster_id}_{replica_id}_{i}"
+                for i in range(1, args.nodes + 1)
+            ]
+            for node_name in names:
+                node_names.append(node_name)
+                node_overrides.append(
+                    Clusterd(
+                        name=node_name,
+                        workers=args.workers,
+                        process_names=names,
+                    )
+                )
 
     with c.override(
         Testdrive(
@@ -2056,9 +2094,10 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
             materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
             materialize_use_https=True,
             no_reset=True,
-        )
+        ),
+        *node_overrides,
     ):
-        c.up(*nodes)
+        c.up(*node_names)
 
         # Increase resource limits
         c.testdrive(
@@ -2110,13 +2149,9 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                 replica_definitions.append(
                     f"{replica_name} (STORAGECTL ADDRESSES ["
                     + ", ".join(f"'{n}:2100'" for n in nodes)
-                    + "], STORAGE ADDRESSES ["
-                    + ", ".join(f"'{n}:2103'" for n in nodes)
                     + "], COMPUTECTL ADDRESSES ["
                     + ", ".join(f"'{n}:2101'" for n in nodes)
-                    + "], COMPUTE ADDRESSES ["
-                    + ", ".join(f"'{n}:2102'" for n in nodes)
-                    + f"], WORKERS {args.workers})"
+                    + "])"
                 )
 
             c.sql(
