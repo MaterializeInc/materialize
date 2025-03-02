@@ -211,7 +211,6 @@ wrappers = [
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "mysql_common",
-    "native-tls",
     "prometheus",
     "proptest",
     "rayon-core",
