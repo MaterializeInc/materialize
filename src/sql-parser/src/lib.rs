@@ -94,6 +94,17 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
                         );
                     }
                 }
+
+                // Also check that the redacted version of the statement can be reparsed. This is
+                // important so that we are still able to pretty-print redacted statements, which
+                // helps during debugging.
+                let redacted = stmt.to_ast_string_redacted();
+                let res = parser::parse_statements(&redacted);
+                assert!(
+                    res.is_ok(),
+                    "redacted statement could not be reparsed: {res:?}\noriginal:\n{stmt}\nredacted:\n{redacted}"
+                );
+
                 if tc.args.contains_key("roundtrip") {
                     format!("{}\n", stmt)
                 } else {

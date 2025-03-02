@@ -321,34 +321,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 }
             }
             Expr::Cast { expr, data_type } => {
-                // We are potentially rewriting an expression like
-                //     CAST(<expr> OP <expr> AS <type>)
-                // to
-                //     <expr> OP <expr>::<type>
-                // which could incorrectly change the meaning of the expression
-                // as the `::` binds tightly. To be safe, we wrap the inner
-                // expression in parentheses
-                //    (<expr> OP <expr>)::<type>
-                // unless the inner expression is of a type that we know is
-                // safe to follow with a `::` to without wrapping.
-                let needs_wrap = !matches!(
-                    **expr,
-                    Expr::Nested(_)
-                        | Expr::Value(_)
-                        | Expr::Cast { .. }
-                        | Expr::Function { .. }
-                        | Expr::Identifier { .. }
-                        | Expr::Collate { .. }
-                        | Expr::HomogenizingFunction { .. }
-                        | Expr::NullIf { .. }
-                );
-                if needs_wrap {
-                    f.write_str('(');
-                }
                 f.write_node(&expr);
-                if needs_wrap {
-                    f.write_str(')');
-                }
                 f.write_str("::");
                 f.write_node(data_type);
             }
