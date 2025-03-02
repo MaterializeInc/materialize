@@ -33,7 +33,6 @@ aws-smithy-types = { version = "1.2.13", default-features = false, features = ["
 axum = { version = "0.7.5", features = ["ws"] }
 axum-core = { version = "0.4.3", default-features = false, features = ["tracing"] }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
-bstr = { version = "0.2.14" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.4.0", features = ["serde"] }
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "wasmbind"] }
@@ -122,7 +121,7 @@ semver = { version = "1.0.23", features = ["serde"] }
 serde = { version = "1.0.218", features = ["alloc", "derive", "rc"] }
 serde_json = { version = "1.0.127", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
 sha2 = { version = "0.10.6", features = ["asm"] }
-similar = { version = "2.2.1", features = ["inline", "unicode"] }
+similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.13.2", default-features = false, features = ["const_new", "serde", "union"] }
 socket2 = { version = "0.5.7", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
@@ -168,7 +167,6 @@ aws-smithy-types = { version = "1.2.13", default-features = false, features = ["
 axum = { version = "0.7.5", features = ["ws"] }
 axum-core = { version = "0.4.3", default-features = false, features = ["tracing"] }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
-bstr = { version = "0.2.14" }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.4.0", features = ["serde"] }
 cc = { version = "1.1.28", default-features = false, features = ["parallel"] }
@@ -259,7 +257,7 @@ semver = { version = "1.0.23", features = ["serde"] }
 serde = { version = "1.0.218", features = ["alloc", "derive", "rc"] }
 serde_json = { version = "1.0.127", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
 sha2 = { version = "0.10.6", features = ["asm"] }
-similar = { version = "2.2.1", features = ["inline", "unicode"] }
+similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.13.2", default-features = false, features = ["const_new", "serde", "union"] }
 socket2 = { version = "0.5.7", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
