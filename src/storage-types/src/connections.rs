@@ -1744,6 +1744,9 @@ pub struct MySqlConnection<C: ConnectionAccess = InlinedConnection> {
     pub tls_root_cert: Option<StringOrSecret>,
     /// An optional TLS client certificate for authentication.
     pub tls_identity: Option<TlsIdentity>,
+    /// Reference to the AWS connection information to be used for IAM authenitcation and
+    /// assuming AWS roles.
+    pub aws_connection: Option<AwsConnectionReference<C>>,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<MySqlConnection, R>
@@ -1759,6 +1762,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlConnection, R>
             tls_mode,
             tls_root_cert,
             tls_identity,
+            aws_connection,
         } = self;
 
         MySqlConnection {
@@ -1766,10 +1770,11 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlConnection, R>
             port,
             user,
             password,
-            tunnel: tunnel.into_inline_connection(r),
+            tunnel: tunnel.into_inline_connection(&r),
             tls_mode,
             tls_root_cert,
             tls_identity,
+            aws_connection: aws_connection.map(|aws| aws.into_inline_connection(&r)),
         }
     }
 }
@@ -1893,6 +1898,20 @@ impl MySqlConnection<InlinedConnection> {
             }
         };
 
+        let aws_config = match self.aws_connection.as_ref() {
+            None => None,
+            Some(aws_ref) => Some(
+                aws_ref
+                    .connection
+                    .load_sdk_config(
+                        &storage_configuration.connection_context,
+                        aws_ref.connection_id,
+                        in_task,
+                    )
+                    .await?,
+            ),
+        };
+
         Ok(mz_mysql_util::Config::new(
             opts,
             tunnel,
@@ -1902,6 +1921,7 @@ impl MySqlConnection<InlinedConnection> {
                 .parameters
                 .mysql_source_timeouts
                 .clone(),
+            aws_config,
         )?)
     }
 
@@ -1940,6 +1960,7 @@ impl RustType<ProtoMySqlConnection> for MySqlConnection {
             tls_root_cert: self.tls_root_cert.into_proto(),
             tls_identity: self.tls_identity.into_proto(),
             tunnel: Some(self.tunnel.into_proto()),
+            aws_connection: self.aws_connection.into_proto(),
         }
     }
 
@@ -1955,6 +1976,7 @@ impl RustType<ProtoMySqlConnection> for MySqlConnection {
             tls_mode: proto.tls_mode.into_rust()?,
             tls_root_cert: proto.tls_root_cert.into_rust()?,
             tls_identity: proto.tls_identity.into_rust()?,
+            aws_connection: proto.aws_connection.into_rust()?,
         })
     }
 }
@@ -1971,6 +1993,7 @@ impl<C: ConnectionAccess> AlterCompatible for MySqlConnection<C> {
             tls_mode: _,
             tls_root_cert: _,
             tls_identity: _,
+            aws_connection: _,
         } = self;
 
         let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];

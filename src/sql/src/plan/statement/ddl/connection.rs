@@ -163,6 +163,7 @@ pub(super) fn validate_options_per_connection_type(
             SslKey,
             SslMode,
             User,
+            AwsConnection,
         ],
         CreateConnectionType::SqlServer => &[
             AwsPrivatelink,
@@ -370,6 +371,7 @@ impl ConnectionOptionExtracted {
                 if matches!(connection_type, CreateConnectionType::Yugabyte) {
                     scx.require_feature_flag(&vars::ENABLE_YUGABYTE_CONNECTION)?;
                 }
+
                 let cert = self.ssl_certificate;
                 let key = self.ssl_key.map(|secret| secret.into());
                 let tls_identity = match (cert, key) {
@@ -455,6 +457,13 @@ impl ConnectionOptionExtracted {
                 }
             }
             CreateConnectionType::MySql => {
+                let aws_connection = get_aws_connection_reference(scx, &self)?;
+                if aws_connection.is_some() && self.password.is_some() {
+                    sql_bail!(
+                        "invalid CONNECTION: AWS IAM authentication is not supported with password"
+                    );
+                }
+
                 let cert = self.ssl_certificate;
                 let key = self.ssl_key.map(|secret| secret.into());
                 let tls_identity = match (cert, key) {
@@ -472,7 +481,12 @@ impl ConnectionOptionExtracted {
                     .as_ref()
                     .map(|m| m.as_str())
                 {
-                    None | Some("DISABLED") => MySqlSslMode::Disabled,
+                    None | Some("DISABLED") => {
+                        if aws_connection.is_some() {
+                            sql_bail!("invalid CONNECTION: AWS IAM authentication requires SSL to be enabled")
+                        }
+                        MySqlSslMode::Disabled
+                    }
                     // "preferred" intentionally omitted because it has dubious security
                     // properties.
                     Some("REQUIRED") | Some("REQUIRE") => MySqlSslMode::Required,
@@ -504,6 +518,7 @@ impl ConnectionOptionExtracted {
                     user: self
                         .user
                         .ok_or_else(|| sql_err!("USER option is required"))?,
+                    aws_connection,
                 })
             }
             CreateConnectionType::SqlServer => {
@@ -616,6 +631,25 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
     }
 }
 
+fn get_aws_connection_reference(
+    scx: &StatementContext,
+    conn_options: &ConnectionOptionExtracted,
+) -> Result<Option<AwsConnectionReference<ReferencedConnection>>, PlanError> {
+    let Some(aws_connection_id) = conn_options.aws_connection else {
+        return Ok(None);
+    };
+
+    let id = CatalogItemId::from(aws_connection_id);
+    let item = scx.catalog.get_item(&id);
+    Ok(match item.connection()? {
+        Connection::Aws(_) => Some(AwsConnectionReference {
+            connection_id: id,
+            connection: id,
+        }),
+        _ => sql_bail!("{} is not an AWS connection", item.name().item),
+    })
+}
+
 fn plan_kafka_security(
     scx: &StatementContext,
     v: &ConnectionOptionExtracted,
@@ -697,18 +731,9 @@ fn plan_kafka_security(
     let sasl = match security_protocol {
         SecurityProtocol::SaslPlaintext | SecurityProtocol::SaslSsl => {
             outstanding.remove(&ConnectionOptionName::AwsConnection);
-            match &v.aws_connection {
-                Some(id) => {
+            match get_aws_connection_reference(scx, v)? {
+                Some(aws) => {
                     scx.require_feature_flag(&ENABLE_AWS_MSK_IAM_AUTH)?;
-                    let id = CatalogItemId::from(id);
-                    let item = scx.catalog.get_item(&id);
-                    let aws = match item.connection()? {
-                        Connection::Aws(_) => AwsConnectionReference {
-                            connection_id: id,
-                            connection: id,
-                        },
-                        _ => sql_bail!("{} is not an AWS connection", item.name().item),
-                    };
                     Some(KafkaSaslConfig {
                         mechanism: "OAUTHBEARER".into(),
                         username: "".into(),
