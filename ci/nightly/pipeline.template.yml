@@ -710,7 +710,7 @@ steps:
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
-        parallelism: 2
+        parallelism: 4
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -737,7 +737,7 @@ steps:
         depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
-        parallelism: 2
+        parallelism: 4
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
