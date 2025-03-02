@@ -122,7 +122,7 @@ ws-text
 {"queries": [{"query": "select $1::int", "params": []}]}
 ----
 {"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
-{"type":"Error","payload":{"message":"request supplied 0 parameters, but SELECT ($1)::int4 requires 1","code":"XX000"}}
+{"type":"Error","payload":{"message":"request supplied 0 parameters, but SELECT $1::int4 requires 1","code":"XX000"}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text

@@ -1777,7 +1777,7 @@ impl CatalogItem {
         new_schema_name: &str,
     ) -> Result<CatalogItem, (String, String)> {
         let do_rewrite = |create_sql: String| -> Result<String, (String, String)> {
-            let mut create_stmt = mz_sql::parse::parse(&create_sql)
+            let mut create_stmt = mz_sql::parse::parse(&create_sql, true)
                 .expect("invalid create sql persisted to catalog")
                 .into_element()
                 .ast;
@@ -1859,7 +1859,7 @@ impl CatalogItem {
         rename_self: bool,
     ) -> Result<CatalogItem, String> {
         let do_rewrite = |create_sql: String| -> Result<String, String> {
-            let mut create_stmt = mz_sql::parse::parse(&create_sql)
+            let mut create_stmt = mz_sql::parse::parse(&create_sql, true)
                 .expect("invalid create sql persisted to catalog")
                 .into_element()
                 .ast;
@@ -2053,7 +2053,7 @@ impl CatalogItem {
         let Some(create_sql) = create_sql else {
             return Err(());
         };
-        let mut ast = mz_sql_parser::parser::parse_statements(create_sql)
+        let mut ast = mz_sql_parser::parser::parse_statements(create_sql, true)
             .expect("non-system items must be parseable")
             .into_element()
             .ast;
