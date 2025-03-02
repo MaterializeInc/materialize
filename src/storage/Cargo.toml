@@ -98,7 +98,7 @@ humantime = "2.1.0"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 itertools = "0.12.1"
-tempfile = "3.14.0"
+tempfile = "3.17.1"
 tokio = { version = "1.38.0", features = ["test-util"] }
 
 [features]
