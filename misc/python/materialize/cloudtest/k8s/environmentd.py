@@ -8,10 +8,14 @@
 # by the Apache License, Version 2.0.
 
 import json
+import logging
 import operator
 import urllib.parse
 from collections.abc import Callable
+from typing import Any
 
+import pg8000
+import sqlparse
 from kubernetes.client import (
     V1Container,
     V1ContainerPort,
@@ -33,6 +37,7 @@ from kubernetes.client import (
     V1Toleration,
     V1VolumeMount,
 )
+from pg8000 import Connection, Cursor
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
@@ -43,6 +48,8 @@ from materialize.mzcompose import (
     cluster_replica_size_map,
     get_default_system_parameters,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 class EnvironmentdService(K8sService):
@@ -401,3 +408,111 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
     def _meets_maximum_version(self, version: str) -> bool:
         return self._meets_version(version=version, operator=operator.le, default=False)
+
+
+# TODO: Do we even need this?
+class EnvironmentdAliasService(K8sService):
+    """Make environmentd available as 'environmentd' when using EnvironmentdHelmChart"""
+
+    def __init__(self, namespace: str = DEFAULT_K8S_NAMESPACE) -> None:
+        super().__init__(namespace)
+        self.service = V1Service(
+            api_version="v1",
+            kind="Service",
+            metadata=V1ObjectMeta(name="environmentd"),
+            spec=V1ServiceSpec(
+                type="ExternalName",
+                external_name=f"environmentd-TODO.{namespace}.svc.cluster.local",
+            ),
+        )
+
+
+class EnvironmentdHelmChart:
+    def __init__(self, tag: str) -> None:
+        system_parameters = get_default_system_parameters()
+
+        if self.log_filter:
+            system_parameters["log_filter"] = self.log_filter
+        if self._meets_maximum_version("0.63.99"):
+            system_parameters["enable_managed_clusters"] = "true"
+
+        system_parameters["upsert_rocksdb_auto_spill_to_disk"] = "false"
+
+        system_parameters_string = (
+            ";".join([f"{key}={value}" for key, value in system_parameters.items()]),
+        )
+
+        self.definitions = [
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {"name": "materialize-backend"},
+                "stringData": {
+                    "metadata_backend_url": "postgres://root@cockroach.default.svc.cluster.local:26257",
+                    "persist_backend_url": "s3://minio:minio123@persist?endpoint=http%3A%2F%2Fminio-service.default.svc.cluster.local%3A9000&region=minio",
+                },
+            },
+            {
+                "apiVersion": "materialize.cloud/v1alpha1",
+                "kind": "Materialize",
+                "metadata": {"name": "12345678-1234-1234-1234-123456789012"},
+                "spec": {
+                    "environmentdImageRef": f"materialize/environmentd:{tag}",
+                    "requestRollout": "22222222-2222-2222-2222-222222222222",
+                    "forceRollout": "33333333-3333-3333-3333-333333333333",
+                    "inPlaceRollout": False,
+                    "backendSecretName": "materialize-backend",
+                    "environmentdExtraArgs": [
+                        "--orchestrator-kubernetes-ephemeral-volume-class=standard",
+                        f"--system-parameter-default={system_parameters_string}",
+                    ],
+                },
+            },
+        ]
+
+    def sql_conn(
+        self,
+        port: str | None = None,
+        user: str = "materialize",
+    ) -> Connection:
+        """Get a connection to run SQL queries against the service"""
+        return pg8000.connect(
+            host="localhost",
+            port=6877 if port == "internal" else 6875,
+            user=user,
+        )
+
+    def sql_cursor(
+        self,
+        port: str | None = None,
+        user: str = "materialize",
+        autocommit: bool = True,
+    ) -> Cursor:
+        """Get a cursor to run SQL queries against the service"""
+        conn = self.sql_conn(port=port, user=user)
+        conn.autocommit = autocommit
+        return conn.cursor()
+
+    def sql(
+        self,
+        sql: str,
+        port: str | None = None,
+        user: str = "materialize",
+    ) -> None:
+        """Run a batch of SQL statements against the service."""
+        with self.sql_cursor(port=port, user=user) as cursor:
+            for statement in sqlparse.split(sql):
+                LOGGER.info(f"> {statement}")
+                cursor.execute(statement)
+
+    def sql_query(
+        self,
+        sql: str,
+        port: str | None = None,
+        user: str = "materialize",
+    ) -> Any:
+        """Execute a SQL query against the service and return results."""
+        with self.sql_cursor(port=port, user=user) as cursor:
+            LOGGER.info(f"> {sql}")
+            cursor.execute(sql)
+            return cursor.fetchall()
