@@ -629,10 +629,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
             InternalStorageCommand::CreateIngestionDataflow {
                 id: ingestion_id,
-                ingestion_description,
+                mut ingestion_description,
                 as_of,
-                resume_uppers,
-                source_resume_uppers,
+                mut resume_uppers,
+                mut source_resume_uppers,
             } => {
                 info!(
                     ?as_of,
@@ -642,7 +642,21 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.timely_worker.peers(),
                 );
 
+                // We initialize statistics before we prune finished exports. We
+                // still want to export statistics for these, plus the rendering
+                // machinery will get confused if there are not at least
+                // statistics for the "main" source.
                 for (export_id, export) in ingestion_description.source_exports.iter() {
+                    info!(
+                        worker = %self.timely_worker.index(),
+                        num_workers = %self.timely_worker.peers(),
+                        %ingestion_id,
+                        %export_id,
+                        ?as_of,
+                        ?resume_uppers,
+                        "rendering ingestion export",
+                    );
+
                     let resume_upper = resume_uppers[export_id].clone();
                     self.storage_state.aggregated_statistics.initialize_source(
                         *export_id,
@@ -660,6 +674,20 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         },
                     );
                 }
+
+                let finished_exports: BTreeSet<GlobalId> = resume_uppers
+                    .iter()
+                    .filter(|(_, frontier)| frontier.is_empty())
+                    .map(|(id, _)| *id)
+                    .collect();
+
+                tracing::info!("finished_exports: {:?}", finished_exports);
+
+                resume_uppers.retain(|id, _| !finished_exports.contains(id));
+                source_resume_uppers.retain(|id, _| !finished_exports.contains(id));
+                ingestion_description
+                    .source_exports
+                    .retain(|id, _| !finished_exports.contains(id));
 
                 for id in ingestion_description.collection_ids() {
                     // If there is already a shared upper, we re-use it, to make
@@ -1204,6 +1232,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
         );
 
         for id in stale_objects {
+            if id.is_user() {
+                tracing::info!(%id, "dropping STALE collection");
+            }
             self.storage_state.drop_collection(id);
         }
         for id in stale_oneshot_ingestions {
@@ -1294,6 +1325,7 @@ impl StorageState {
 
                     // Initialize shared frontier reporting.
                     for id in description.collection_ids() {
+                        tracing::info!(%id, "initializing frontier tracking for ingestion/export");
                         self.reported_frontiers
                             .entry(id)
                             .or_insert(Antichain::from_elem(mz_repr::Timestamp::minimum()));
@@ -1360,6 +1392,9 @@ impl StorageState {
             }
             StorageCommand::AllowCompaction(list) => {
                 for (id, frontier) in list {
+                    if id.is_user() && frontier.is_empty() {
+                        tracing::info!(%id, "final AllowCompaction");
+                    }
                     match self.exports.get_mut(&id) {
                         Some(export_description) => {
                             // Update our knowledge of the `as_of`, in case we need to internally
@@ -1370,7 +1405,10 @@ impl StorageState {
                         // exports
                         None if self.reported_frontiers.contains_key(&id) => (),
                         None => {
-                            soft_panic_or_log!("AllowCompaction command for non-existent {id}");
+                            tracing::error!(%id, "final AllowCompaction doesn't match anything");
+                            soft_panic_or_log!(
+                                "AllowCompaction command for non-existent {id}: {frontier:?}"
+                            );
                             continue;
                         }
                     }
@@ -1397,6 +1435,9 @@ impl StorageState {
         //
         // If this object still has its frontiers reported, we will notify the
         // client envd of the drop.
+        if id.is_user() {
+            tracing::info!(%id, "dropping collection");
+        }
         if self.reported_frontiers.remove(&id).is_some() {
             // The only actions left are internal cleanup, so we can commit to
             // the client that these objects have been dropped.

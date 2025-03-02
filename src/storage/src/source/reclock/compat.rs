@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use futures::stream::LocalBoxStream;
 use futures::StreamExt;
+use mz_ore::soft_panic_or_log;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::error::UpperMismatch;
@@ -119,6 +120,31 @@ where
         // Allow manually simulating the scenario where the since of the remap
         // shard has advanced too far.
         fail_point!("invalid_remap_as_of");
+
+        if since.is_empty() {
+            // This can happen when, say, a source is being dropped but we on
+            // the cluster are busy and notice that only later. In those cases
+            // it can happen that we still try to render an ingestion that is
+            // not valid anymore and where the shards it uses are not valid to
+            // use anymore.
+            //
+            // This is a rare race condition and something that is expected to
+            // happen every now and then. It's not a bug in the current way of
+            // how things work.
+            tracing::info!(
+                source_id = %id,
+                %worker_id,
+                "since of remap shard is the empty antichain, suspending...");
+
+            // We wait 5 hours to give the commands a chance to arrive at this
+            // replica and for it to drop our dataflow.
+            tokio::time::sleep(Duration::from_secs(5 * 60 * 60)).await;
+
+            // If we're still here after 5 hours, something has gone wrong and
+            // we complain.
+            soft_panic_or_log!("since of remap shard is the empty antichain, source_id = {id}, worker_id = {worker_id}");
+        }
+
         if !PartialOrder::less_equal(since, &as_of) {
             anyhow::bail!(
                 "invalid as_of: as_of({as_of:?}) < since({since:?}), \
