@@ -168,7 +168,7 @@ axum-core = { version = "0.4.3", default-features = false, features = ["tracing"
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.4.0", features = ["serde"] }
-cc = { version = "1.1.28", default-features = false, features = ["parallel"] }
+cc = { version = "1.2.16", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "wasmbind"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
@@ -291,7 +291,7 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-featu
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
-ring = { version = "0.17.7", features = ["std"] }
+ring = { version = "0.17.11", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
@@ -300,7 +300,7 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-featu
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
-ring = { version = "0.17.7", features = ["std"] }
+ring = { version = "0.17.11", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 
 [target.x86_64-apple-darwin.dependencies]
@@ -308,7 +308,7 @@ camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
-ring = { version = "0.17.7", features = ["std"] }
+ring = { version = "0.17.11", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
 
@@ -317,7 +317,7 @@ camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
-ring = { version = "0.17.7", features = ["std"] }
+ring = { version = "0.17.11", features = ["std"] }
 rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "process", "termios", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
 
