@@ -124,7 +124,7 @@ serde_json = { version = "1.0.127", features = ["alloc", "arbitrary_precision", 
 sha2 = { version = "0.10.6", features = ["asm"] }
 similar = { version = "2.2.1", features = ["inline", "unicode"] }
 smallvec = { version = "1.13.2", default-features = false, features = ["const_new", "serde", "union"] }
-socket2 = { version = "0.5.7", default-features = false, features = ["all"] }
+socket2 = { version = "0.5.8", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.98", features = ["extra-traits", "full", "visit", "visit-mut"] }
@@ -261,7 +261,7 @@ serde_json = { version = "1.0.127", features = ["alloc", "arbitrary_precision", 
 sha2 = { version = "0.10.6", features = ["asm"] }
 similar = { version = "2.2.1", features = ["inline", "unicode"] }
 smallvec = { version = "1.13.2", default-features = false, features = ["const_new", "serde", "union"] }
-socket2 = { version = "0.5.7", default-features = false, features = ["all"] }
+socket2 = { version = "0.5.8", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.98", features = ["extra-traits", "full", "visit", "visit-mut"] }
