@@ -57,6 +57,7 @@ mz-pgwire-common = { path = "../pgwire-common" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing"] }
+mz-row-stash = { path = "../row-stash" }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
 mz-segment = { path = "../segment" }
@@ -85,6 +86,7 @@ static_assertions = "1.1"
 timely = "0.19.0"
 tokio = { version = "1.38.0", features = ["rt", "time"] }
 tokio-postgres = { version = "0.7.8" }
+tokio-stream = "0.1.17"
 tracing = "0.1.37"
 tracing-core = "0.1.30"
 tracing-opentelemetry = { version = "0.25.0" }

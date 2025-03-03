@@ -153,6 +153,10 @@ impl PeekNotification {
                 rows: u64::cast_from(rows.count(offset, limit)),
                 result_size: u64::cast_from(rows.byte_len()),
             },
+            PeekResponse::Staged(_batches) => Self::Success {
+                rows: 1,
+                result_size: 1,
+            },
             PeekResponse::Error(err) => Self::Error(err.clone()),
             PeekResponse::Canceled => Self::Canceled,
         }
@@ -911,6 +915,7 @@ where
         // Validation: peek target
         let read_hold = match &peek_target {
             PeekTarget::Index { id } => instance.acquire_read_hold(*id)?,
+            PeekTarget::Sinked { select_id } => instance.acquire_read_hold(*select_id)?,
             PeekTarget::Persist { id, .. } => self
                 .storage_collections
                 .acquire_read_holds(vec![*id])?

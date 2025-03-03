@@ -15,6 +15,7 @@ package mz_compute_client.protocol.response;
 
 import "expr/src/row/collection.proto";
 import "google/protobuf/empty.proto";
+import "persist-client/src/batch.proto";
 import "proto/src/proto.proto";
 import "repr/src/antichain.proto";
 import "repr/src/global_id.proto";
@@ -57,9 +58,15 @@ message ProtoFrontiersResponse {
   mz_repr.antichain.ProtoU64Antichain output_frontier = 3;
 }
 
+message ProtoStagedPeekResponse {
+  repeated mz_persist_client.batch.ProtoBatch append_batches = 1;
+  mz_persist_client.batch.ProtoBatch returned_rows = 2;
+}
+
 message ProtoPeekResponse {
   oneof kind {
     mz_expr.row.collection.ProtoRowCollection rows = 1;
+    ProtoStagedPeekResponse staged = 4;
     string error = 2;
     google.protobuf.Empty canceled = 3;
   }
@@ -94,9 +101,7 @@ message ProtoSubscribeBatch {
     }
   }
 
-  message ProtoSubscribeUpdates {
-    repeated ProtoUpdate updates = 1;
-  }
+  message ProtoSubscribeUpdates { repeated ProtoUpdate updates = 1; }
 
   mz_repr.antichain.ProtoU64Antichain lower = 1;
   mz_repr.antichain.ProtoU64Antichain upper = 2;
@@ -105,9 +110,7 @@ message ProtoSubscribeBatch {
 }
 
 message ProtoStatusResponse {
-  oneof kind {
-    ProtoOperatorHydrationStatus operator_hydration = 1;
-  }
+  oneof kind { ProtoOperatorHydrationStatus operator_hydration = 1; }
 }
 
 message ProtoOperatorHydrationStatus {

@@ -4678,6 +4678,7 @@ dependencies = [
  "mz-proto",
  "mz-repr",
  "mz-rocksdb-types",
+ "mz-row-stash",
  "mz-secrets",
  "mz-segment",
  "mz-service",
@@ -4706,6 +4707,7 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-postgres",
+ "tokio-stream",
  "tracing",
  "tracing-core",
  "tracing-opentelemetry",
@@ -5212,6 +5214,7 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-types",
  "mz-repr",
+ "mz-row-stash",
  "mz-service",
  "mz-storage-operators",
  "mz-storage-types",
@@ -5289,6 +5292,7 @@ dependencies = [
  "mz-dyncfg",
  "mz-expr",
  "mz-ore",
+ "mz-persist-types",
  "mz-proto",
  "mz-repr",
  "mz-storage-types",
@@ -6696,6 +6700,25 @@ dependencies = [
  "tonic-build",
  "uncased",
  "workspace-hack",
+]
+
+[[package]]
+name = "mz-row-stash"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "bytes",
+ "differential-dataflow",
+ "futures",
+ "mz-ore",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-repr",
+ "sha2",
+ "timely",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

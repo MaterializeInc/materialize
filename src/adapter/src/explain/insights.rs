@@ -29,6 +29,7 @@ use serde::Serialize;
 use crate::catalog::Catalog;
 use crate::coord::peek::{FastPathPlan, PeekPlan};
 use crate::optimize::dataflows::ComputeInstanceSnapshot;
+use crate::optimize::peek::PeekOutput;
 use crate::optimize::{self, Optimize, OptimizerConfig, OptimizerError};
 use crate::session::SessionMeta;
 use crate::TimestampContext;
@@ -51,7 +52,7 @@ pub struct PlanInsightsContext {
     pub session: SessionMeta,
     pub timestamp_context: TimestampContext<Timestamp>,
     pub view_id: GlobalId,
-    pub index_id: GlobalId,
+    pub output: PeekOutput,
     pub enable_re_optimize: bool,
 }
 
@@ -102,8 +103,8 @@ impl PlanInsights {
                     Arc::clone(&ctx.catalog),
                     compute_instance,
                     finishing,
+                    ctx.output.clone(),
                     ctx.view_id,
-                    ctx.index_id,
                     ctx.optimizer_config.clone(),
                     ctx.metrics.clone(),
                 );

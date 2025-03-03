@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::FuturesOrdered;
-use futures::{future, Future};
+use futures::{future, Future, StreamExt};
 use itertools::Itertools;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
@@ -47,6 +47,7 @@ use mz_repr::{
     CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationVersion,
     RelationVersionSelector, Row, RowArena, RowIterator, Timestamp,
 };
+use mz_row_stash::StashedRowHandle;
 use mz_sql::ast::AlterSourceAddSubsourceOption;
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
@@ -58,8 +59,11 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
-use mz_sql::plan::{ConnectionDetails, NetworkPolicyRule, StatementContext};
+use mz_sql::plan::{
+    ConnectionDetails, NetworkPolicyRule, ReadThenWriteFormat, SelectOutput, StatementContext,
+};
 use mz_sql::pure::{generate_subsource_statements, PurifiedSourceExport};
+use mz_storage_client::client::TableData;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::GenericSourceConnection;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -94,6 +98,7 @@ use smallvec::SmallVec;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use tokio::sync::{oneshot, watch};
+use tokio_stream::wrappers::{ReceiverStream, UnboundedReceiverStream};
 use tracing::{info, warn, Instrument, Span};
 
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
@@ -2871,16 +2876,18 @@ impl Coordinator {
         } = plan;
 
         // Read then writes can be queued, so re-verify the id exists.
-        let desc = match self.catalog().try_get_entry(&id) {
+        let (desc, collection_id) = match self.catalog().try_get_entry(&id) {
             Some(table) => {
                 let full_name = self
                     .catalog()
                     .resolve_full_name(table.name(), Some(ctx.session().conn_id()));
                 // Inserts always occur at the latest version of the table.
-                table
+                let gid = table.latest_global_id();
+                let desc = table
                     .desc_latest(&full_name)
                     .expect("desc called on table")
-                    .into_owned()
+                    .into_owned();
+                (desc, gid)
             }
             None => {
                 ctx.retire(Err(AdapterError::Catalog(
@@ -2993,6 +3000,30 @@ impl Coordinator {
             session,
             Default::default(),
         );
+
+        let style = ExprPrepStyle::OneShot {
+            logical_time: EvalTime::NotAvailable,
+            session: peek_ctx.session(),
+            catalog_state: self.catalog().state(),
+        };
+        for expr in assignments.values_mut() {
+            return_if_err!(prep_scalar_expr(expr, style.clone()), peek_ctx);
+        }
+        let mutation_kind = match kind {
+            MutationKind::Insert => mz_expr::MutationKind::Insert,
+            MutationKind::Update => mz_expr::MutationKind::Update {
+                assignments: assignments.clone(),
+            },
+            MutationKind::Delete => mz_expr::MutationKind::Delete,
+        };
+        let output = SelectOutput::ReadThenWrite(ReadThenWriteFormat {
+            collection_id,
+            mutation_kind,
+            // TODO(parkmycar): This is wrong.
+            from_desc: desc.clone(),
+            returning: returning.clone(),
+        });
+
         self.sequence_peek(
             peek_ctx,
             plan::SelectPlan {
@@ -3000,7 +3031,7 @@ impl Coordinator {
                 source: selection,
                 when: QueryWhen::FreshestTableWrite,
                 finishing,
-                copy_to: None,
+                output,
             },
             TargetCluster::Active,
             None,
@@ -3011,6 +3042,11 @@ impl Coordinator {
         let strict_serializable_reads_tx = self.strict_serializable_reads_tx.clone();
         let catalog = self.owned_catalog();
         let max_result_size = self.catalog().system_config().max_result_size();
+
+        let organization_id = self.catalog.config().environment_id.organization_id();
+        let mut stashed_rows_handle: StashedRowHandle<Timestamp, Diff> =
+            StashedRowHandle::new(&self.persist_client, organization_id).await;
+
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
             let (peek_response, session) = match peek_rx.await {
                 Ok(Response {
@@ -3107,6 +3143,70 @@ impl Coordinator {
                     match tokio::time::timeout(timeout_dur, batch).await {
                         Ok(res) => match res {
                             PeekResponseUnary::Rows(rows) => make_diffs(rows),
+                            PeekResponseUnary::Batches {
+                                append_batches,
+                                returned_rows,
+                            } => {
+                                let _ = ctx.session_mut().take_transaction_timestamp_context();
+                                // TODO(parkmycar): This needs to be majorly refactored.
+                                let row_count: i64 = append_batches
+                                    .iter()
+                                    .filter_map(|b| b.batch.as_ref())
+                                    .flat_map(|b| &b.parts)
+                                    .filter_map(|p| p.diffs_sum)
+                                    .sum();
+                                let row_count = u64::try_from(row_count.abs())
+                                    .expect("inserted a negative amount of rows?");
+
+                                let stage_write =
+                                    ctx.session_mut()
+                                        .add_transaction_ops(TransactionOps::Writes(vec![
+                                            WriteOp {
+                                                id,
+                                                rows: TableData::Batches(append_batches.into()),
+                                            },
+                                        ]));
+                                if let Err(err) = stage_write {
+                                    ctx.retire(Err(err));
+                                } else {
+                                    match returned_rows {
+                                        Some(returned_rows) => {
+                                            let rows =
+                                                stashed_rows_handle.consume(returned_rows).await;
+                                            let rows_expanded = rows.flat_map(|result| {
+                                                let (row, diff) = result.expect("wrote error?");
+                                                let diff = usize::try_from(diff).expect("TODO");
+                                                futures::stream::repeat(row).take(diff)
+                                            });
+
+                                            // TODO(parkmycar): These shenanigans are because the
+                                            // returned Row Stream needs to implement Sync.
+                                            let (tx, rx) = tokio::sync::mpsc::channel(256);
+                                            mz_ore::task::spawn(|| "TODO", async move {
+                                                let mut rows_expanded =
+                                                    std::pin::pin!(rows_expanded);
+                                                while let Some(row) = rows_expanded.next().await {
+                                                    let result = tx.send(row).await;
+                                                    if result.is_err() {
+                                                        tracing::error!("receiver went away");
+                                                        return;
+                                                    }
+                                                }
+                                            });
+
+                                            ctx.retire(Ok(ExecuteResponse::SendingRowsStreaming {
+                                                rows: Box::pin(ReceiverStream::new(rx)),
+                                            }))
+                                        }
+                                        None => {
+                                            ctx.retire(Ok(ExecuteResponse::Inserted(
+                                                usize::cast_from(row_count),
+                                            )));
+                                        }
+                                    }
+                                }
+                                return;
+                            }
                             PeekResponseUnary::Canceled => Err(AdapterError::Canceled),
                             PeekResponseUnary::Error(e) => {
                                 Err(AdapterError::Unstructured(anyhow!(e)))
