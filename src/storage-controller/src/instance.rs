@@ -56,6 +56,8 @@ pub(crate) struct Instance<T> {
     /// list of running ingestions is quite a bit more convenient in the
     /// implementation of `StorageController::active_ingestions`.
     active_ingestions: BTreeSet<GlobalId>,
+    /// TMP: above, but for sinks.
+    active_exports: BTreeSet<GlobalId>,
     /// The command history, used to replay past commands when introducing new replicas or
     /// reconnecting to existing replicas.
     history: CommandHistory<T>,
@@ -91,6 +93,7 @@ where
         let mut instance = Self {
             replicas: Default::default(),
             active_ingestions: BTreeSet::new(),
+            active_exports: BTreeSet::new(),
             history,
             epoch,
             metrics,
@@ -151,6 +154,7 @@ where
             .collect();
 
         for id in failed_replicas {
+            tracing::info!(replica_id = %id, "rehydrating failed replica");
             let replica = self.replicas.remove(&id).expect("must exist");
             self.add_replica(id, replica.config);
         }
@@ -204,12 +208,26 @@ where
             StorageCommand::RunIngestions(ingestions) => {
                 for ingestion in ingestions {
                     self.active_ingestions.insert(ingestion.id);
+                    for export_id in ingestion.description.source_exports.keys() {
+                        self.active_exports.insert(*export_id);
+                    }
+                }
+            }
+            StorageCommand::RunSinks(sinks) => {
+                for sink in sinks {
+                    self.active_exports.insert(sink.id);
                 }
             }
             StorageCommand::AllowCompaction(policies) => {
                 for (id, frontier) in policies {
+                    if !self.active_ingestions.contains(&id) && !self.active_exports.contains(&id) {
+                        tracing::error!(%id, ?frontier, "AllowCompaction for unknown object");
+                    }
                     if frontier.is_empty() {
                         self.active_ingestions.remove(id);
+                    }
+                    if frontier.is_empty() {
+                        self.active_exports.remove(id);
                     }
                 }
             }
