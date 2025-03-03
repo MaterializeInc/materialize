@@ -54,7 +54,7 @@ digest = { version = "0.10.6", features = ["mac", "std"] }
 either = { version = "1.8.0" }
 event-listener = { version = "5.4.0" }
 event-listener-strategy = { version = "0.5.2" }
-flate2 = { version = "1.0.32", features = ["zlib"] }
+flate2 = { version = "1.1.0", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
@@ -190,7 +190,7 @@ digest = { version = "0.10.6", features = ["mac", "std"] }
 either = { version = "1.8.0" }
 event-listener = { version = "5.4.0" }
 event-listener-strategy = { version = "0.5.2" }
-flate2 = { version = "1.0.32", features = ["zlib"] }
+flate2 = { version = "1.1.0", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
