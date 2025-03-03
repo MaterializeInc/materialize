@@ -368,8 +368,8 @@ async fn main() {
         arg_vars.insert(name.to_string(), val.to_string());
     }
 
-    let cluster_replica_sizes: ClusterReplicaSizeMap =
-        serde_json::from_str(&args.cluster_replica_sizes)
+    let cluster_replica_sizes =
+        ClusterReplicaSizeMap::parse_from_str(&args.cluster_replica_sizes, false)
             .unwrap_or_else(|e| die!("testdrive: failed to parse replica size map: {}", e));
 
     let materialize_catalog_config = if args.validate_catalog_store {
