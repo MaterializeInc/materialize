@@ -3565,7 +3565,7 @@ dependencies = [
  "http-body 1.0.0",
  "hyper 1.4.1",
  "pin-project-lite",
- "socket2 0.5.7",
+ "socket2 0.5.8",
  "tokio",
  "tower",
  "tower-service",
@@ -4525,7 +4525,7 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_json",
- "socket2 0.5.7",
+ "socket2 0.5.8",
  "thiserror 2.0.11",
  "tokio",
  "tokio-native-tls",
@@ -5637,7 +5637,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "socket2 0.5.7",
+ "socket2 0.5.8",
  "thiserror 2.0.11",
  "tokio",
  "tokio-postgres",
@@ -6758,7 +6758,7 @@ dependencies = [
  "openssl",
  "proxy-header",
  "scopeguard",
- "socket2 0.5.7",
+ "socket2 0.5.8",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -10085,9 +10085,9 @@ dependencies = [
 
 [[package]]
 name = "socket2"
-version = "0.5.7"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce305eb0b4296696835b71df73eb912e0f1ffd2556a501fcede6e0c50349191c"
+checksum = "c970269d99b64e60ec3bd6ad27270092a5394c4e309314b18ae3fe575695fbe8"
 dependencies = [
  "libc",
  "windows-sys 0.52.0",
@@ -10680,7 +10680,7 @@ dependencies = [
  "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2 0.5.7",
+ "socket2 0.5.8",
  "tokio-macros",
  "tracing",
  "windows-sys 0.52.0",
@@ -10769,7 +10769,7 @@ dependencies = [
  "postgres-types",
  "rand 0.8.5",
  "serde",
- "socket2 0.5.7",
+ "socket2 0.5.8",
  "tokio",
  "tokio-util",
  "whoami",
@@ -10906,7 +10906,7 @@ dependencies = [
  "percent-encoding",
  "pin-project",
  "prost",
- "socket2 0.5.7",
+ "socket2 0.5.8",
  "tokio",
  "tokio-stream",
  "tower",
@@ -12023,7 +12023,7 @@ dependencies = [
  "sha2",
  "similar",
  "smallvec",
- "socket2 0.5.7",
+ "socket2 0.5.8",
  "subtle",
  "syn 1.0.107",
  "syn 2.0.98",
