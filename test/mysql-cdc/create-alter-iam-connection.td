@@ -17,7 +17,8 @@
 > CREATE CONNECTION mysql_conn TO MYSQL (
     HOST mysql,
     USER root,
-    PASSWORD SECRET mysqlpass
+    AWS CONNECTION aws_conn,
+    SSL MODE required
   ) WITH (VALIDATE false);
 
 > SELECT name, type from mz_connections WHERE id LIKE 'u%'
@@ -25,13 +26,13 @@ aws_conn aws
 mysql_conn mysql
 
 > SHOW CREATE CONNECTION mysql_conn
-materialize.public.mysql_conn   "CREATE CONNECTION \"materialize\".\"public\".\"mysql_conn\" TO MYSQL (HOST = \"mysql\", PASSWORD = SECRET \"materialize\".\"public\".\"mysqlpass\", USER = \"root\")"
+materialize.public.mysql_conn   "CREATE CONNECTION \"materialize\".\"public\".\"mysql_conn\" TO MYSQL (AWS CONNECTION = \"materialize\".\"public\".\"aws_conn\", HOST = \"mysql\", SSL MODE = \"required\", USER = \"root\")"
 
 
-! ALTER CONNECTION mysql_conn SET (AWS CONNECTION aws_conn);
+! ALTER CONNECTION mysql_conn SET (PASSWORD SECRET mysqlpass);
 contains:IAM authentication is not supported with password
 
-! ALTER CONNECTION mysql_conn DROP (PASSWORD), SET (AWS CONNECTION aws_conn);
+! ALTER CONNECTION mysql_conn DROP (SSL MODE);
 contains:IAM authentication requires SSL to be enabled
 
 > DROP CONNECTION mysql_conn;
