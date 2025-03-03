@@ -153,6 +153,7 @@ where
             .collect();
 
         for id in failed_replicas {
+            tracing::info!(replica_id = %id, "rehydrating failed replica");
             let replica = self.replicas.remove(&id).expect("must exist");
             self.add_replica(id, replica.config);
         }
