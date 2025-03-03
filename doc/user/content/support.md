@@ -1,6 +1,6 @@
 ---
 title: "Support"
-description: "How to get support for Materialize"
+description: "How to get support for Self-managed Materialize"
 menu:
   main:
     parent: 'about'
@@ -9,14 +9,17 @@ menu:
 
 ## Getting help
 
-### Trials
+### Self-managed Materialize (Community Edition)
 
-If you run into a snag or need support during the trial period, join the [Materialize Slack community](https://materialize.com/s/chat) or [open a discussion](https://github.com/MaterializeInc/materialize/discussions). Slack is the best place to get timely help from Materialize employees and other users!
+For the Community Edition, join the [Materialize Slack
+community](https://materialize.com/s/chat) or [open a
+discussion](https://github.com/MaterializeInc/materialize/discussions). Slack is
+the best place to get timely help from Materialize employees and other users!
 
-### Customers
+### Self-managed Materialize (Enterprise Edition)
 
-If you're a paying customer, you can access Materialize support via a shared
-channel within your company's Slack or Microsoft Teams workspace.
+If you're an Enterprise customer, you can access Materialize support via a
+shared channel within your company's Slack or Microsoft Teams workspace.
 
 To file a support ticket:
 
@@ -85,10 +88,6 @@ ticket:
     alt="Instructions for filing a support ticket"
     style="box-shadow: 0 0 10px #333; border-radius: 3px;">
 </div>
-
-## Checking service status
-
-Check the current status of our services on the [status page](https://status.materialize.com), where we announce both planned and unplanned maintenance windows. You can also use the [status page API](https://status.materialize.com/api) to programmatically access the information on the status page.
 
 ## Requesting a feature
 
