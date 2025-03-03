@@ -361,7 +361,7 @@ steps:
         label: "Checks + multiple backups/restores"
         depends_on: build-aarch64
         timeout_in_minutes: 180
-        parallelism: 3
+        parallelism: 4
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
