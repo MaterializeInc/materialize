@@ -115,11 +115,13 @@ skip = [
     { name = "memmap2", version = "0.5.4" },
 
     { name = "wasi", version = "0.9.0+wasi-snapshot-preview1" },
+    { name = "wasi", version = "0.11.0+wasi-snapshot-preview1" },
     { name = "async-channel", version = "1.9.0" },
     { name = "event-listener", version = "2.5.3" },
     { name = "fastrand", version = "1.9.0" },
     { name = "futures-lite", version = "1.13.0" },
     { name = "getrandom", version = "0.1.16" },
+    { name = "getrandom", version = "0.2.10" },
     { name = "rand", version = "0.7.3" },
     { name = "rand_chacha", version = "0.2.2" },
     { name = "rand_core", version = "0.5.1" },
