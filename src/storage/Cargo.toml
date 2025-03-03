@@ -51,7 +51,6 @@ mz-pgcopy = { path = "../pgcopy" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-rocksdb = { path = "../rocksdb" }
-mz-service = { path = "../service" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-storage-client = { path = "../storage-client" }

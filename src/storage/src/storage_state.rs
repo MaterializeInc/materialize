@@ -90,7 +90,6 @@ use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{GlobalId, Timestamp};
 use mz_rocksdb::config::SharedWriteBufferManager;
-use mz_service::local::LocalActivator;
 use mz_storage_client::client::{
     RunIngestionCommand, StatusUpdate, StorageCommand, StorageResponse,
 };
@@ -137,11 +136,7 @@ pub struct Worker<'w, A: Allocate> {
     pub timely_worker: &'w mut TimelyWorker<A>,
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
-    pub client_rx: crossbeam_channel::Receiver<(
-        CommandReceiver,
-        ResponseSender,
-        mpsc::UnboundedSender<LocalActivator>,
-    )>,
+    pub client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
 }
@@ -150,11 +145,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Creates new `Worker` state from the given components.
     pub fn new(
         timely_worker: &'w mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
-            CommandReceiver,
-            ResponseSender,
-            mpsc::UnboundedSender<LocalActivator>,
-        )>,
+        client_rx: crossbeam_channel::Receiver<(CommandReceiver, ResponseSender)>,
         metrics: StorageMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
@@ -201,9 +192,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // part of the per-worker state, and must be treated as such, meaning
         // they must survive between invocations of `run_client`.
 
-        // TODO(aljoscha): This `Activatable` business seems brittle, but that's
+        // TODO(aljoscha): This thread unparking business seems brittle, but that's
         // also how the command channel works currently. We can wrap it inside a
-        // struct that holds both a channel and an `Activatable`, but I don't
+        // struct that holds both a channel and a `Thread`, but I don't
         // think that would help too much.
         let async_worker = async_storage_worker::AsyncStorageWorker::new(
             thread::current(),
@@ -406,20 +397,8 @@ impl StorageInstanceContext {
 impl<'w, A: Allocate> Worker<'w, A> {
     /// Waits for client connections and runs them to completion.
     pub fn run(&mut self) {
-        let mut shutdown = false;
-        while !shutdown {
-            match self.client_rx.recv() {
-                Ok((rx, tx, activator_tx)) => {
-                    let activator = LocalActivator::new(thread::current());
-                    // This might fail if the client has already shut down, which is fine.
-                    // `run_client` knows how to handle a disconnected client.
-                    let _ = activator_tx.send(activator);
-                    self.run_client(rx, tx)
-                }
-                Err(_) => {
-                    shutdown = true;
-                }
-            }
+        while let Ok((rx, tx)) = self.client_rx.recv() {
+            self.run_client(rx, tx);
         }
     }
 
