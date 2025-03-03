@@ -18,7 +18,7 @@ openssl = { version = "0.10.48", features = ["vendored"] }
 rand = "0.8.5"
 futures = "0.3.25"
 itertools = "0.12.1"
-scopeguard = "1.1.0"
+scopeguard = "1.2.0"
 serde = { version = "1.0.218", features = ["derive"] }
 serde_json = { version = "1.0.125" }
 ssh-key = { version = "0.4.3" }
