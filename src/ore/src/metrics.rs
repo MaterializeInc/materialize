@@ -801,30 +801,33 @@ pub fn register_runtime_metrics(
         global_queue_depth,
         "The number of tasks currently scheduled in the runtime's global queue."
     );
-    register!(
-        num_blocking_threads,
-        "The number of additional threads spawned by the runtime."
-    );
-    register!(
-        num_idle_blocking_threads,
-        "The number of idle threads which have spawned by the runtime for spawn_blocking calls."
-    );
-    register!(
-        spawned_tasks_count,
-        "The number of tasks spawned in this runtime since it was created."
-    );
-    register!(
-        remote_schedule_count,
-        "The number of tasks scheduled from outside of the runtime."
-    );
-    register!(
-        budget_forced_yield_count,
-        "The number of times that tasks have been forced to yield back to the scheduler after exhausting their task budgets."
-    );
-    register!(
-        blocking_queue_depth,
-        "The number of tasks currently scheduled in the blocking thread pool, spawned using spawn_blocking."
-    );
+    #[cfg(tokio_unstable)]
+    {
+        register!(
+            num_blocking_threads,
+            "The number of additional threads spawned by the runtime."
+        );
+        register!(
+            num_idle_blocking_threads,
+            "The number of idle threads which have spawned by the runtime for spawn_blocking calls."
+        );
+        register!(
+            spawned_tasks_count,
+            "The number of tasks spawned in this runtime since it was created."
+        );
+        register!(
+            remote_schedule_count,
+            "The number of tasks scheduled from outside of the runtime."
+        );
+        register!(
+            budget_forced_yield_count,
+            "The number of times that tasks have been forced to yield back to the scheduler after exhausting their task budgets."
+        );
+        register!(
+            blocking_queue_depth,
+            "The number of tasks currently scheduled in the blocking thread pool, spawned using spawn_blocking."
+        );
+    }
 }
 
 #[cfg(test)]
