@@ -77,7 +77,7 @@ fn main() {
         .extern_path(".mz_persist", "::mz_persist")
         .extern_path(".mz_persist_types", "::mz_persist_types")
         .extern_path(".mz_proto", "::mz_proto")
-        .compile_with_config(
+        .compile_protos_with_config(
             config,
             &[
                 "persist-client/src/batch.proto",

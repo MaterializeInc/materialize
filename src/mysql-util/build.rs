@@ -23,7 +23,7 @@ fn main() {
         // broad, but it's better.
         .emit_rerun_if_changed(false)
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
-        .compile_with_config(
+        .compile_protos_with_config(
             config,
             &["mysql-util/src/desc.proto"],
             &[PathBuf::from(".."), mz_build_tools::protoc_include()],
