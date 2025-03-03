@@ -258,8 +258,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             secrets,
             cluster_replica_sizes,
         } => {
-            let cluster_replica_sizes: ClusterReplicaSizeMap =
-                serde_json::from_str(&cluster_replica_sizes).context("parsing replica size map")?;
+            let cluster_replica_sizes =
+                ClusterReplicaSizeMap::parse_from_str(&cluster_replica_sizes, false)
+                    .context("parsing replica size map")?;
             upgrade_check(
                 args,
                 openable_state,

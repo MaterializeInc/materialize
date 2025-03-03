@@ -111,6 +111,7 @@ use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, Proces
 use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::{OfflineReason, ServiceProcessMetrics};
 use mz_ore::cast::{CastFrom, CastInto, CastLossy};
 use mz_ore::channel::trigger::Trigger;
@@ -1032,6 +1033,7 @@ pub struct Config {
     pub caught_up_trigger: Option<Trigger>,
 
     pub helm_chart_version: Option<String>,
+    pub license_key: ValidatedLicenseKey,
 }
 
 /// Soft-state metadata about a compute replica
@@ -1789,6 +1791,8 @@ pub struct Coordinator {
     /// `None` when we transition out of read-only mode and write out any
     /// buffered updates.
     buffered_builtin_table_updates: Option<Vec<BuiltinTableUpdate>>,
+
+    license_key: ValidatedLicenseKey,
 }
 
 impl Coordinator {
@@ -3924,6 +3928,7 @@ pub fn serve(
         enable_0dt_deployment,
         caught_up_trigger: clusters_caught_up_trigger,
         helm_chart_version,
+        license_key,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -4264,6 +4269,7 @@ pub fn serve(
                     cluster_replica_statuses: ClusterReplicaStatuses::new(),
                     read_only_controllers,
                     buffered_builtin_table_updates: Some(Vec::new()),
+                    license_key,
                 };
                 let bootstrap = handle.block_on(async {
                     coord
