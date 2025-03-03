@@ -67,7 +67,7 @@ uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-base64 = "0.13.1"
+base64 = "0.22.0"
 insta = "1.41"
 mz-build-tools = { path = "../build-tools", default-features = false }
 
