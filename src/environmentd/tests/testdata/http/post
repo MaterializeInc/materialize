@@ -324,7 +324,7 @@ http
 {"queries":[{"query":"select $1+$2::int as col","params":["1"]}]}
 ----
 200 OK
-{"results":[{"error":{"message":"request supplied 1 parameters, but SELECT $1 + ($2)::int4 AS col requires 2","code":"XX000"},"notices":[]}]}
+{"results":[{"error":{"message":"request supplied 1 parameters, but SELECT $1 + $2::int4 AS col requires 2","code":"XX000"},"notices":[]}]}
 
 # NaN
 http
