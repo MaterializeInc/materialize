@@ -74,7 +74,7 @@ regex = { version = "1.10.6" }
 rocksdb = { version = "0.22.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
 seahash = "4"
 serde = { version = "1.0.218", features = ["derive"] }
-serde_json = { version = "1.0.125" }
+serde_json = { version = "1.0.139" }
 serde_bytes = { version = "0.11.15" }
 sha2 = "0.10.6"
 timely = "0.19.0"

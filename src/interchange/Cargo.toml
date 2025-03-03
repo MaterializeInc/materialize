@@ -32,7 +32,7 @@ ordered-float = { version = "4.6.0", features = ["serde"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 prost-reflect = "0.14.6"
 seahash = "4"
-serde_json = "1.0.125"
+serde_json = "1.0.139"
 timely = "0.19.0"
 tokio = { version = "1.38.0", features = ["macros", "net", "rt", "rt-multi-thread", "time"] }
 tracing = "0.1.37"

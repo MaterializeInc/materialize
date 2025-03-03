@@ -33,7 +33,7 @@ proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 fancy-regex = "0.14.0"
 regex = "1.10.6"
 serde = { version = "1.0.218", features = ["derive"] }
-serde_json = { version = "1.0.125" }
+serde_json = { version = "1.0.139" }
 thiserror = "2.0.11"
 tracing = "0.1.37"
 uuid = { version = "1.7.0", features = ["v4"] }
