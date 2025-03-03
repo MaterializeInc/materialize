@@ -106,7 +106,6 @@ impl Keyword {
     /// Reports whether this keyword requires quoting when used as a column
     /// alias.
     ///
-    ///
     /// Note that this rule is only applies when the column alias is "bare";
     /// i.e., when the column alias is not preceded by `AS`.
     ///
