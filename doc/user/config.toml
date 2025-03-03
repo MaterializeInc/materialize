@@ -198,12 +198,6 @@ name = "About"
 weight = 70
 
 [[menu.main]]
-name = "Security overview"
-parent = "about"
-url = "https://materialize.com/security-overview"
-weight = 25
-
-[[menu.main]]
 name = "Responsible disclosure policy"
 parent = "about"
 url = "https://materialize.com/securitydisclosure"
