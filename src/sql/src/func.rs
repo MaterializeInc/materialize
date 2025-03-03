@@ -424,7 +424,7 @@ fn sql_impl_table_func_inner(
     sql: &'static str,
     feature_flag: Option<&'static vars::FeatureFlag>,
 ) -> Operation<TableFuncPlan> {
-    let query = match mz_sql_parser::parser::parse_statements(sql)
+    let query = match mz_sql_parser::parser::parse_statements(sql, true)
         .expect("static function definition failed to parse")
         .expect_element(|| "static function definition must have exactly one statement")
         .ast

@@ -42,7 +42,9 @@ where
     let mut updated_items = BTreeMap::new();
 
     for mut item in tx.get_items() {
-        let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
+        let mut stmt = mz_sql::parse::parse(&item.create_sql, true)?
+            .into_element()
+            .ast;
         f(tx, item.id, &mut stmt)?;
 
         item.create_sql = stmt.to_ast_string_stable();
@@ -69,7 +71,9 @@ where
     let mut updated_items = BTreeMap::new();
     let items = tx.get_items();
     for mut item in items {
-        let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
+        let mut stmt = mz_sql::parse::parse(&item.create_sql, true)?
+            .into_element()
+            .ast;
 
         f(tx, &cat, item.id, &mut stmt)?;
 
@@ -255,7 +259,9 @@ fn ast_rewrite_sources_to_tables(
     let items_with_statements = tx
         .get_items()
         .map(|item| {
-            let stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
+            let stmt = mz_sql::parse::parse(&item.create_sql, true)?
+                .into_element()
+                .ast;
             Ok((item, stmt))
         })
         .collect::<Result<Vec<_>, anyhow::Error>>()?;

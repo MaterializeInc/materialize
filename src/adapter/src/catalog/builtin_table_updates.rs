@@ -861,7 +861,7 @@ impl CatalogState {
         table: &Table,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let redacted = table.create_sql.as_ref().map(|create_sql| {
-            mz_sql::parse::parse(create_sql)
+            mz_sql::parse::parse(create_sql, true)
                 .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", create_sql))
                 .into_element()
                 .ast
@@ -924,7 +924,7 @@ impl CatalogState {
         create_sql: Option<&String>,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let redacted = create_sql.map(|create_sql| {
-            let create_stmt = mz_sql::parse::parse(create_sql)
+            let create_stmt = mz_sql::parse::parse(create_sql, true)
                 .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", create_sql))
                 .into_element()
                 .ast;
@@ -1067,7 +1067,7 @@ impl CatalogState {
         connection: &Connection,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let create_stmt = mz_sql::parse::parse(&connection.create_sql)
+        let create_stmt = mz_sql::parse::parse(&connection.create_sql, true)
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", connection.create_sql))
             .into_element()
             .ast;
@@ -1279,7 +1279,7 @@ impl CatalogState {
         view: &View,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let create_stmt = mz_sql::parse::parse(&view.create_sql)
+        let create_stmt = mz_sql::parse::parse(&view.create_sql, true)
             .unwrap_or_else(|e| {
                 panic!(
                     "create_sql cannot be invalid: `{}` --- error: `{}`",
@@ -1326,7 +1326,7 @@ impl CatalogState {
         mview: &MaterializedView,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let create_stmt = mz_sql::parse::parse(&mview.create_sql)
+        let create_stmt = mz_sql::parse::parse(&mview.create_sql, true)
             .unwrap_or_else(|e| {
                 panic!(
                     "create_sql cannot be invalid: `{}` --- error: `{}`",
@@ -1437,7 +1437,7 @@ impl CatalogState {
         ct: &ContinualTask,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let create_stmt = mz_sql::parse::parse(&ct.create_sql)
+        let create_stmt = mz_sql::parse::parse(&ct.create_sql, true)
             .unwrap_or_else(|e| {
                 panic!(
                     "create_sql cannot be invalid: `{}` --- error: `{}`",
@@ -1510,7 +1510,7 @@ impl CatalogState {
             }
         };
 
-        let create_stmt = mz_sql::parse::parse(&sink.create_sql)
+        let create_stmt = mz_sql::parse::parse(&sink.create_sql, true)
             .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", sink.create_sql))
             .into_element()
             .ast;
@@ -1558,7 +1558,7 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut updates = vec![];
 
-        let create_stmt = mz_sql::parse::parse(&index.create_sql)
+        let create_stmt = mz_sql::parse::parse(&index.create_sql, true)
             .unwrap_or_else(|e| {
                 panic!(
                     "create_sql cannot be invalid: `{}` --- error: `{}`",
@@ -1643,7 +1643,7 @@ impl CatalogState {
         let mut out = vec![];
 
         let redacted = typ.create_sql.as_ref().map(|create_sql| {
-            mz_sql::parse::parse(create_sql)
+            mz_sql::parse::parse(create_sql, true)
                 .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", create_sql))
                 .into_element()
                 .ast
