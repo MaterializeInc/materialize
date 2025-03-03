@@ -988,9 +988,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
 
         for command in &mut commands {
             match command {
-                StorageCommand::CreateTimely { .. } => {
-                    panic!("CreateTimely must be captured before")
-                }
                 StorageCommand::AllowCompaction(sinces) => {
                     info!(%worker_id, ?sinces, "reconcile: received AllowCompaction command");
 
@@ -1057,9 +1054,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // description.
         for command in commands.iter_mut().rev() {
             match command {
-                StorageCommand::CreateTimely { .. } => {
-                    panic!("CreateTimely must be captured before")
-                }
                 StorageCommand::RunIngestions(ingestions) => {
                     ingestions.retain_mut(|ingestion| {
                         // Subsources can be dropped independently of their
@@ -1265,7 +1259,6 @@ impl StorageState {
     /// commands to the `internal_cmd_tx`.
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
-            StorageCommand::CreateTimely { .. } => panic!("CreateTimely must be captured before"),
             StorageCommand::InitializationComplete => (),
             StorageCommand::AllowWrites => {
                 self.read_only_tx
