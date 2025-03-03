@@ -31,7 +31,7 @@ os_info = "3.10.0"
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
-prost = { version = "0.13.4", features = ["no-recursion-limit"] }
+prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 semver = "1.0.16"
 serde = { version = "1.0.218", features = ["derive"] }
 sysinfo = "0.29.11"
