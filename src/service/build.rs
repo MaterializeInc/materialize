@@ -21,6 +21,6 @@ fn main() {
         // broad, but it's better.
         .emit_rerun_if_changed(false)
         .extern_path(".mz_proto", "::mz_proto")
-        .compile_with_config(config, &["service/src/params.proto"], &[".."])
+        .compile_protos_with_config(config, &["service/src/params.proto"], &[".."])
         .unwrap_or_else(|e| panic!("{e}"))
 }

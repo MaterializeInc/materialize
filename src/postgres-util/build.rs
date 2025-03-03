@@ -22,7 +22,7 @@ fn main() {
         // is to re-run if any file in the crate changes; that's still a bit too
         // broad, but it's better.
         .emit_rerun_if_changed(false)
-        .compile_with_config(
+        .compile_protos_with_config(
             config,
             &[
                 "postgres-util/src/desc.proto",

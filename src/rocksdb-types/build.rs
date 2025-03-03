@@ -23,7 +23,7 @@ fn main() {
         // broad, but it's better.
         .emit_rerun_if_changed(false)
         .extern_path(".mz_proto", "::mz_proto")
-        .compile_with_config(
+        .compile_protos_with_config(
             config,
             &["rocksdb-types/src/config.proto"],
             &[PathBuf::from(".."), mz_build_tools::protoc_include()],

@@ -45,7 +45,7 @@ fn main() {
         .extern_path(".mz_storage_types", "::mz_storage_types")
         .extern_path(".mz_tracing", "::mz_tracing")
         .extern_path(".mz_service", "::mz_service")
-        .compile_with_config(
+        .compile_protos_with_config(
             config,
             &[
                 "compute-types/src/dataflows.proto",

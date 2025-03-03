@@ -20,6 +20,6 @@ fn main() {
         // is to re-run if any file in the crate changes; that's still a bit too
         // broad, but it's better.
         .emit_rerun_if_changed(false)
-        .compile_with_config(config, &["tracing/src/params.proto"], &[".."])
+        .compile_protos_with_config(config, &["tracing/src/params.proto"], &[".."])
         .unwrap_or_else(|e| panic!("{e}"))
 }
