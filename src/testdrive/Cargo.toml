@@ -52,7 +52,7 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-sql-server-util = { path = "../sql-server-util" }
 mz-storage-types = { path = "../storage-types" }
 mz-tls-util = { path = "../tls-util" }
-parquet = { version = "53.3.0", default-features = false, features = ["arrow"] }
+parquet = { version = "54.2.1", default-features = false, features = ["arrow"] }
 postgres_array = { version = "0.11.0" }
 postgres-protocol = { version = "0.6.5" }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
