@@ -92,6 +92,8 @@ pub struct StateConfig {
     pub enable_0dt_deployment: bool,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
+    /// max_credit_consumption_rate override from the license key
+    pub max_credit_consumption_rate: Option<f64>,
 }
 
 #[derive(Debug)]

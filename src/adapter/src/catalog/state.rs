@@ -296,7 +296,7 @@ impl CatalogState {
             },
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             availability_zones: Default::default(),
-            system_configuration: Default::default(),
+            system_configuration: SystemVars::for_tests(),
             egress_addresses: Default::default(),
             aws_principal_context: Default::default(),
             aws_privatelink_availability_zones: Default::default(),

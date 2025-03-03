@@ -5494,6 +5494,7 @@ dependencies = [
  "mz-frontegg-mock",
  "mz-http-util",
  "mz-interchange",
+ "mz-license-keys",
  "mz-metrics",
  "mz-npm",
  "mz-orchestrator",

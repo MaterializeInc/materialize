@@ -1051,6 +1051,8 @@ pub enum NetworkPolicyError {
 pub struct SystemVars {
     /// Allows "unsafe" parameters to be set.
     allow_unsafe: bool,
+    /// max_credit_consumption_rate set by the license key.
+    max_credit_consumption_rate: Option<f64>,
     /// Set of all [`SystemVar`]s.
     vars: BTreeMap<&'static UncasedStr, SystemVar>,
     /// External components interested in when a [`SystemVar`] gets updated.
@@ -1061,12 +1063,6 @@ pub struct SystemVars {
     /// the controllers. This is so we can explicitly control and reason about when changes to config
     /// values are propagated to the rest of the system.
     dyncfgs: ConfigSet,
-}
-
-impl Default for SystemVars {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl SystemVars {
@@ -1101,7 +1097,7 @@ impl SystemVars {
             .collect()
         });
 
-    pub fn new() -> Self {
+    pub fn new(max_credit_consumption_rate: Option<f64>) -> Self {
         let system_vars = vec![
             &MAX_KAFKA_CONNECTIONS,
             &MAX_POSTGRES_CONNECTIONS,
@@ -1268,7 +1264,7 @@ impl SystemVars {
             })
             .collect();
 
-        let vars: BTreeMap<_, _> = system_vars
+        let mut vars: BTreeMap<_, _> = system_vars
             .into_iter()
             // Include all of our feature flags.
             .chain(definitions::FEATURE_FLAGS.iter().copied())
@@ -1280,14 +1276,26 @@ impl SystemVars {
             .map(|var| (var.name, SystemVar::new(var)))
             .collect();
 
+        if let Some(rate) = max_credit_consumption_rate {
+            vars.get_mut(MAX_CREDIT_CONSUMPTION_RATE.name)
+                .unwrap()
+                .set_default(VarInput::Flat(&rate.to_string()))
+                .unwrap();
+        }
+
         let vars = SystemVars {
             vars,
             callbacks: BTreeMap::new(),
             allow_unsafe: false,
             dyncfgs,
+            max_credit_consumption_rate,
         };
 
         vars
+    }
+
+    pub fn for_tests() -> Self {
+        Self::new(None)
     }
 
     pub fn dyncfgs(&self) -> &ConfigSet {
@@ -1327,6 +1335,17 @@ impl SystemVars {
             .expect("provided var type should matched stored var")
     }
 
+    fn check_read_only(&self, name: &str) -> Result<(), VarError> {
+        if UncasedStr::new(name) == MAX_CREDIT_CONSUMPTION_RATE.name()
+            && self.max_credit_consumption_rate.is_some()
+        {
+            return Err(VarError::ReadOnlyParameter(
+                MAX_CREDIT_CONSUMPTION_RATE.name.as_str(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Reset all the values to their defaults (preserving
     /// defaults from `VarMut::set_default).
     pub fn reset_all(&mut self) {
@@ -1348,7 +1367,12 @@ impl SystemVars {
     /// values on disk. Compared to [`SystemVars::iter`], this should omit vars
     /// that shouldn't be synced by SystemParameterFrontend.
     pub fn iter_synced(&self) -> impl Iterator<Item = &dyn Var> {
-        self.iter().filter(|v| v.name() != ENABLE_LAUNCHDARKLY.name)
+        self.iter().filter(|v| {
+            if self.check_read_only(v.name()).is_err() {
+                return false;
+            }
+            v.name() != ENABLE_LAUNCHDARKLY.name
+        })
     }
 
     /// Returns an iterator over the configuration parameters that can be overriden per-Session.
@@ -1361,6 +1385,9 @@ impl SystemVars {
 
     /// Returns whether or not this parameter can be modified by a superuser.
     pub fn user_modifiable(&self, name: &str) -> bool {
+        if self.check_read_only(name).is_err() {
+            return false;
+        }
         Self::SESSION_VARS.contains_key(UncasedStr::new(name))
             || name == ENABLE_RBAC_CHECKS.name()
             || name == NETWORK_POLICY.name()
@@ -1436,6 +1463,7 @@ impl SystemVars {
     /// 2. If `input` does not represent a valid [`SystemVars`] value for
     ///    `name`.
     pub fn set(&mut self, name: &str, input: VarInput) -> Result<bool, VarError> {
+        self.check_read_only(name)?;
         let result = self
             .vars
             .get_mut(UncasedStr::new(name))
@@ -1480,6 +1508,7 @@ impl SystemVars {
     /// be visible because of other settings or users. Before or after accessing
     /// this method, you should call `Var::visible`.
     pub fn set_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
+        self.check_read_only(name)?;
         let result = self
             .vars
             .get_mut(UncasedStr::new(name))

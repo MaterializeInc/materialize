@@ -493,7 +493,7 @@ pub static MAX_REPLICAS_PER_CLUSTER: VarDefinition = VarDefinition::new(
 
 pub static MAX_CREDIT_CONSUMPTION_RATE: VarDefinition = VarDefinition::new_lazy(
     "max_credit_consumption_rate",
-    lazy_value!(Numeric; || 1024.into()),
+    lazy_value!(Numeric; || 24.into()),
     "The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use (Materialize).",
     true,
 )

@@ -1032,6 +1032,7 @@ pub struct Config {
     pub caught_up_trigger: Option<Trigger>,
 
     pub helm_chart_version: Option<String>,
+    pub max_credit_consumption_rate: Option<f64>,
 }
 
 /// Soft-state metadata about a compute replica
@@ -3921,6 +3922,7 @@ pub fn serve(
         enable_0dt_deployment,
         caught_up_trigger: clusters_caught_up_trigger,
         helm_chart_version,
+        max_credit_consumption_rate,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -4068,6 +4070,7 @@ pub fn serve(
                 enable_expression_cache_override: None,
                 enable_0dt_deployment,
                 helm_chart_version,
+                max_credit_consumption_rate,
             },
         })
         .await?;
@@ -4444,7 +4447,9 @@ pub async fn load_remote_system_parameters(
         //       LaunchDarkly configuration, for when LaunchDarkly comes
         //       back online.
         //    6. Reboot environmentd.
-        let mut params = SynchronizedParameters::new(SystemVars::default());
+        let mut params = SynchronizedParameters::new(SystemVars::new(
+            system_parameter_sync_config.max_credit_consumption_rate,
+        ));
         let frontend_sync = async {
             let frontend = SystemParameterFrontend::from(&system_parameter_sync_config).await?;
             frontend.pull(&mut params);

@@ -124,7 +124,8 @@ impl Catalog {
                 );
         }
 
-        let mut system_configuration = SystemVars::new().set_unsafe(config.unsafe_mode);
+        let mut system_configuration =
+            SystemVars::new(config.max_credit_consumption_rate).set_unsafe(config.unsafe_mode);
         if config.all_features {
             system_configuration.enable_all_feature_flags_by_default();
         }

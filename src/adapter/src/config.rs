@@ -43,6 +43,8 @@ pub struct SystemParameterSyncConfig {
     /// to use when populating the [SynchronizedParameters]
     /// instance in [SystemParameterFrontend::pull].
     ld_key_map: BTreeMap<String, String>,
+    /// max_credit_consumption_rate override from the license key.
+    pub max_credit_consumption_rate: Option<f64>,
 }
 
 impl SystemParameterSyncConfig {
@@ -54,6 +56,7 @@ impl SystemParameterSyncConfig {
         now_fn: NowFn,
         ld_sdk_key: String,
         ld_key_map: BTreeMap<String, String>,
+        max_credit_consumption_rate: Option<f64>,
     ) -> Self {
         Self {
             env_id,
@@ -62,6 +65,7 @@ impl SystemParameterSyncConfig {
             now_fn,
             ld_sdk_key,
             ld_key_map,
+            max_credit_consumption_rate,
         }
     }
 }

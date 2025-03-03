@@ -77,6 +77,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
 use crate::environmentd::sys;
+use crate::license_keys::LicenseKeyConfig;
 use crate::{CatalogConfig, Listeners, ListenersConfig, BUILD_INFO};
 
 static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
@@ -598,6 +599,9 @@ pub struct Args {
         value_delimiter = ';'
     )]
     system_parameter_default: Vec<KeyValueArg<String, String>>,
+    /// File containing a valid Materialize license key.
+    #[clap(long, env = "LICENSE_KEY")]
+    license_key: Option<String>,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -680,6 +684,17 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     // handled to our liking ASAP.
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
+
+    let license_key_config = if let Some(license_key) = args.license_key {
+        let license_key_text = std::fs::read_to_string(&license_key)?;
+        let license_key = mz_license_keys::validate(
+            &license_key_text,
+            &args.environment_id.organization_id().to_string(),
+        )?;
+        license_key.into()
+    } else {
+        LicenseKeyConfig::default()
+    };
 
     // Configure testing options.
     if let Some(fingerprint_whitespace) = args.unsafe_builtin_table_fingerprint_whitespace {
@@ -1117,6 +1132,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
                 helm_chart_version: args.helm_chart_version.clone(),
+                license_key_config,
                 // AWS options.
                 aws_account_id: args.aws_account_id,
                 aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,

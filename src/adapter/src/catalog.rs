@@ -731,6 +731,7 @@ impl Catalog {
                 enable_expression_cache_override,
                 enable_0dt_deployment: true,
                 helm_chart_version: None,
+                max_credit_consumption_rate: None,
             },
         })
         .await?;
@@ -2505,7 +2506,7 @@ mod tests {
             session
                 .vars_mut()
                 .set(
-                    &SystemVars::new(),
+                    &SystemVars::for_tests(),
                     "search_path",
                     VarInput::Flat(mz_repr::namespaces::PG_CATALOG_SCHEMA),
                     false,
@@ -2537,7 +2538,7 @@ mod tests {
             session
                 .vars_mut()
                 .set(
-                    &SystemVars::new(),
+                    &SystemVars::for_tests(),
                     "search_path",
                     VarInput::Flat(mz_repr::namespaces::MZ_CATALOG_SCHEMA),
                     false,
@@ -2569,7 +2570,7 @@ mod tests {
             session
                 .vars_mut()
                 .set(
-                    &SystemVars::new(),
+                    &SystemVars::for_tests(),
                     "search_path",
                     VarInput::Flat(mz_repr::namespaces::MZ_TEMP_SCHEMA),
                     false,
