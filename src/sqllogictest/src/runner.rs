@@ -51,6 +51,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
 use mz_environmentd::CatalogConfig;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cast::{CastFrom, ReinterpretCast};
@@ -1126,6 +1127,7 @@ impl<'a> RunnerInner<'a> {
             internal_console_redirect_url: None,
             tls_reload_certs: mz_server_core::cert_reload_never_reload(),
             helm_chart_version: None,
+            license_key: ValidatedLicenseKey::for_tests(),
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned

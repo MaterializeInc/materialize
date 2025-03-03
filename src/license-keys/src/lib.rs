@@ -33,11 +33,40 @@ pub enum ExpirationBehavior {
     Disable,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ValidatedLicenseKey {
     pub max_credit_consumption_rate: f64,
     pub allow_credit_consumption_override: bool,
     pub expiration_behavior: ExpirationBehavior,
+}
+
+impl ValidatedLicenseKey {
+    pub fn for_tests() -> Self {
+        Self {
+            max_credit_consumption_rate: 999999.0,
+            allow_credit_consumption_override: true,
+            expiration_behavior: ExpirationBehavior::Warn,
+        }
+    }
+
+    pub fn max_credit_consumption_rate(&self) -> Option<f64> {
+        if self.allow_credit_consumption_override {
+            None
+        } else {
+            Some(self.max_credit_consumption_rate)
+        }
+    }
+}
+
+impl Default for ValidatedLicenseKey {
+    fn default() -> Self {
+        // this is used for the emulator if no license key is provided
+        Self {
+            max_credit_consumption_rate: 24.0,
+            allow_credit_consumption_override: false,
+            expiration_behavior: ExpirationBehavior::Disable,
+        }
+    }
 }
 
 pub fn validate(license_key: &str, environment_id: &str) -> anyhow::Result<ValidatedLicenseKey> {
