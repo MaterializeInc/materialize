@@ -1202,6 +1202,9 @@ class AlterSinkPgSource(Check):
                 > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_pg';
                 true
 
+                # Still needs to sleep some before the sink is updated
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
+
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO pg_table2 VALUES (2);
                 """,
@@ -1223,6 +1226,9 @@ class AlterSinkPgSource(Check):
 
                 > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_pg';
                 true
+
+                # Still needs to sleep some before the sink is updated
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO pg_table3 VALUES (3);
