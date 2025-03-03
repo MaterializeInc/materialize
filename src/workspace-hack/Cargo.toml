@@ -69,7 +69,7 @@ hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.4.1", features = ["cl
 hyper-util = { version = "0.1.6", features = ["client-legacy", "server-auto", "service"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.41.1", features = ["json"] }
-k8s-openapi = { version = "0.22.0", default-features = false, features = ["schemars", "v1_29"] }
+k8s-openapi = { version = "0.22.0", default-features = false, features = ["schemars", "v1_30"] }
 kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.92.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.92.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
@@ -203,7 +203,7 @@ hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.4.1", features = ["cl
 hyper-util = { version = "0.1.6", features = ["client-legacy", "server-auto", "service"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.41.1", features = ["json"] }
-k8s-openapi = { version = "0.22.0", default-features = false, features = ["schemars", "v1_29"] }
+k8s-openapi = { version = "0.22.0", default-features = false, features = ["schemars", "v1_30"] }
 kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.92.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.92.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
