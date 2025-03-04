@@ -38,6 +38,7 @@ pub struct ValidatedLicenseKey {
     pub max_credit_consumption_rate: f64,
     pub allow_credit_consumption_override: bool,
     pub expiration_behavior: ExpirationBehavior,
+    pub expired: bool,
 }
 
 impl ValidatedLicenseKey {
@@ -46,11 +47,19 @@ impl ValidatedLicenseKey {
             max_credit_consumption_rate: 999999.0,
             allow_credit_consumption_override: true,
             expiration_behavior: ExpirationBehavior::Warn,
+            expired: false,
         }
     }
 
     pub fn max_credit_consumption_rate(&self) -> Option<f64> {
-        if self.allow_credit_consumption_override {
+        if self.expired
+            && matches!(
+                self.expiration_behavior,
+                ExpirationBehavior::DisableClusterCreation | ExpirationBehavior::Disable
+            )
+        {
+            Some(0.0)
+        } else if self.allow_credit_consumption_override {
             None
         } else {
             Some(self.max_credit_consumption_rate)
@@ -65,6 +74,7 @@ impl Default for ValidatedLicenseKey {
             max_credit_consumption_rate: 24.0,
             allow_credit_consumption_override: false,
             expiration_behavior: ExpirationBehavior::Disable,
+            expired: false,
         }
     }
 }
@@ -147,11 +157,20 @@ fn validate_with_pubkey_v1(
     validation.validate_nbf = true;
     validation.validate_aud = true;
 
-    let jwt: TokenData<Payload> = jsonwebtoken::decode(
-        license_key,
-        &DecodingKey::from_rsa_pem(pubkey_pem.as_bytes())?,
-        &validation,
-    )?;
+    let key = DecodingKey::from_rsa_pem(pubkey_pem.as_bytes())?;
+
+    let (jwt, expired): (TokenData<Payload>, _) =
+        jsonwebtoken::decode(license_key, &key, &validation).map_or_else(
+            |e| {
+                if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::ExpiredSignature) {
+                    validation.validate_exp = false;
+                    Ok((jsonwebtoken::decode(license_key, &key, &validation)?, true))
+                } else {
+                    Err::<_, anyhow::Error>(e.into())
+                }
+            },
+            |jwt| Ok((jwt, false)),
+        )?;
 
     if jwt.header.typ.as_deref() != Some("JWT") {
         bail!("invalid jwt header type");
@@ -169,6 +188,7 @@ fn validate_with_pubkey_v1(
         max_credit_consumption_rate: jwt.claims.max_credit_consumption_rate,
         allow_credit_consumption_override: jwt.claims.allow_credit_consumption_override,
         expiration_behavior: jwt.claims.expiration_behavior,
+        expired,
     })
 }
 
