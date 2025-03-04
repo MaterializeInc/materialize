@@ -22,22 +22,25 @@ $ set-from-sql var=load_id
 SELECT id FROM mz_sources WHERE name = 'counter'
 
 > SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${load_id}' ORDER BY occurred_at DESC LIMIT 1;
-"<TIMESTAMP> UTC" ${load_id} paused <null> "{\"hints\":[\"There is currently no replica running this source\"]}"
+"<TIMESTAMP> UTC" ${load_id} paused <null> "{\"hints\":[\"There is currently no replica running this source\"]}" <null>
 
 > ALTER CLUSTER c SET (REPLICATION FACTOR 1)
 
+$ set-from-sql var=replica_id
+SELECT r.id FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id  WHERE c.name = 'c'
+
 > SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${load_id}' ORDER BY occurred_at DESC LIMIT 3;
-"<TIMESTAMP> UTC" ${load_id} running <null> <null>
-"<TIMESTAMP> UTC" ${load_id} starting <null> <null>
-"<TIMESTAMP> UTC" ${load_id} paused <null> "{\"hints\":[\"There is currently no replica running this source\"]}"
+"<TIMESTAMP> UTC" ${load_id} running <null> <null> ${replica_id}
+"<TIMESTAMP> UTC" ${load_id} starting <null> <null> ${replica_id}
+"<TIMESTAMP> UTC" ${load_id} paused <null> "{\"hints\":[\"There is currently no replica running this source\"]}" <null>
 
 > ALTER CLUSTER c SET (REPLICATION FACTOR 0)
 
 > SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${load_id}' ORDER BY occurred_at DESC LIMIT 4;
-"<TIMESTAMP> UTC" ${load_id} paused <null> "{\"hints\":[\"There is currently no replica running this source\"]}"
-"<TIMESTAMP> UTC" ${load_id} running <null> <null>
-"<TIMESTAMP> UTC" ${load_id} starting <null> <null>
-"<TIMESTAMP> UTC" ${load_id} paused <null> "{\"hints\":[\"There is currently no replica running this source\"]}"
+"<TIMESTAMP> UTC" ${load_id} paused <null> "{\"hints\":[\"The replica running this source has been dropped\"]}"  ${replica_id}
+"<TIMESTAMP> UTC" ${load_id} running <null> <null> ${replica_id}
+"<TIMESTAMP> UTC" ${load_id} starting <null> <null> ${replica_id}
+"<TIMESTAMP> UTC" ${load_id} paused <null> "{\"hints\":[\"There is currently no replica running this source\"]}" <null>
 
 > DROP CLUSTER c CASCADE
 
@@ -73,9 +76,15 @@ $ kafka-create-topic topic=status-history
 $ set-from-sql var=source_id
 SELECT id FROM mz_sources WHERE name = 'kafka_source'
 
+$ set-from-sql var=source_replica_id
+SELECT r.id FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id  WHERE c.name = 'kafka_source_cluster'
+
+$ set-from-sql var=sink_replica_id
+SELECT r.id FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id  WHERE c.name = 'kafka_sink_cluster'
+
 > SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${source_id}' ORDER BY occurred_at DESC LIMIT 2;
-"<TIMESTAMP> UTC" ${source_id} running <null> <null>
-"<TIMESTAMP> UTC" ${source_id} starting <null> <null>
+"<TIMESTAMP> UTC" ${source_id} running <null> <null> ${source_replica_id}
+"<TIMESTAMP> UTC" ${source_id} starting <null> <null> ${source_replica_id}
 
 > SELECT * FROM mz_internal.mz_source_statuses WHERE id = '${source_id}';
 "${source_id}" kafka_source kafka "<TIMESTAMP> UTC" running <null> <null>
@@ -87,7 +96,7 @@ SELECT id FROM mz_sinks WHERE name = 'kafka_sink'
 # Additionally it can happen that both 'starting' and 'running' are reported on the same millisecond
 # so we filter out any other statuses.
 > SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' AND status = 'starting' ORDER BY occurred_at ASC LIMIT 1;
-"<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
+"<TIMESTAMP> UTC" ${sink_id} starting <null> <null> ${sink_replica_id}
 
 $ kafka-ingest format=bytes topic=status-history
 a
@@ -108,15 +117,15 @@ $ kafka-verify-data format=avro sink=materialize.public.kafka_sink sort-messages
 {"before": null, "after": {"row":{"text": "d"}}}
 
 > SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' ORDER BY occurred_at DESC LIMIT 2;
-"<TIMESTAMP> UTC" ${sink_id} running <null> <null>
-"<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
+"<TIMESTAMP> UTC" ${sink_id} running <null> <null> ${sink_replica_id}
+"<TIMESTAMP> UTC" ${sink_id} starting <null> <null> ${sink_replica_id}
 
 > SELECT * FROM mz_internal.mz_sink_statuses WHERE id = '${sink_id}';
 "${sink_id}" kafka_sink kafka "<TIMESTAMP> UTC" running <null> <null>
 
 > SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${source_id}' ORDER BY occurred_at DESC LIMIT 2;
-"<TIMESTAMP> UTC" ${source_id} starting <null> <null>
-"<TIMESTAMP> UTC" ${source_id} running <null> <null>
+"<TIMESTAMP> UTC" ${source_id} starting <null> <null> ${source_replica_id}
+"<TIMESTAMP> UTC" ${source_id} running <null> <null> ${source_replica_id}
 
 > SELECT * FROM mz_internal.mz_source_statuses WHERE id = '${source_id}';
 "${source_id}" kafka_source kafka "<TIMESTAMP> UTC" running <null> <null>
@@ -145,13 +154,19 @@ SELECT id FROM mz_sources WHERE name = 'kafka_source_2'
 $ set-from-sql var=sink_id_2
 SELECT id FROM mz_sinks WHERE name = 'kafka_sink_2'
 
+$ set-from-sql var=source_2_replica_id
+SELECT r.id FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id  WHERE c.name = 'kafka_source_2_cluster'
+
+$ set-from-sql var=sink_2_replica_id
+SELECT r.id FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id  WHERE c.name = 'kafka_sink_2_cluster'
+
 > SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id_2}' ORDER BY occurred_at DESC LIMIT 2;
-"<TIMESTAMP> UTC" ${sink_id_2} starting <null> <null>
-"<TIMESTAMP> UTC" ${sink_id_2} running <null> <null>
+"<TIMESTAMP> UTC" ${sink_id_2} starting <null> <null> ${sink_2_replica_id}
+"<TIMESTAMP> UTC" ${sink_id_2} running <null> <null> ${sink_2_replica_id}
 
 > SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${source_id_2}' ORDER BY occurred_at DESC LIMIT 2;
-"<TIMESTAMP> UTC" ${source_id_2} running <null> <null>
-"<TIMESTAMP> UTC" ${source_id_2} starting <null> <null>
+"<TIMESTAMP> UTC" ${source_id_2} running <null> <null> ${source_2_replica_id}
+"<TIMESTAMP> UTC" ${source_id_2} starting <null> <null> ${source_2_replica_id}
 
 > SELECT * FROM mz_internal.mz_sink_statuses WHERE id IN ('${sink_id}', '${sink_id_2}') ORDER BY id;
 "${sink_id}" kafka_sink kafka "<TIMESTAMP> UTC" running <null> <null>
@@ -166,13 +181,13 @@ SELECT id FROM mz_sinks WHERE name = 'kafka_sink_2'
 > DROP SINK kafka_sink
 
 > SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' ORDER BY occurred_at DESC LIMIT 3;
-"<TIMESTAMP> UTC" ${sink_id} dropped <null> <null>
-"<TIMESTAMP> UTC" ${sink_id} running <null> <null>
-"<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
+"<TIMESTAMP> UTC" ${sink_id} dropped <null> <null> <null>
+"<TIMESTAMP> UTC" ${sink_id} running <null> <null> ${sink_replica_id}
+"<TIMESTAMP> UTC" ${sink_id} starting <null> <null> ${sink_replica_id}
 
 > DROP SOURCE kafka_source CASCADE
 
 > SELECT * FROM mz_internal.mz_source_status_history WHERE source_id = '${source_id}' ORDER BY occurred_at DESC LIMIT 3;
-"<TIMESTAMP> UTC" ${source_id} dropped <null> <null>
-"<TIMESTAMP> UTC" ${source_id} running <null> <null>
-"<TIMESTAMP> UTC" ${source_id} starting <null> <null>
+"<TIMESTAMP> UTC" ${source_id} dropped <null> <null> <null>
+"<TIMESTAMP> UTC" ${source_id} running <null> <null> ${source_replica_id}
+"<TIMESTAMP> UTC" ${source_id} starting <null> <null> ${source_replica_id}
