@@ -37,6 +37,7 @@ use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 
 mod k8s_resource_dumper;
+mod system_catalog_dumper;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
@@ -51,6 +52,17 @@ pub struct Args {
     k8s_namespaces: Vec<String>,
     #[clap(long = "k8s-dump-secret-values", action = clap::ArgAction::SetTrue)]
     k8s_dump_secret_values: bool,
+    /// If true, the tool will not attempt to port-forward the SQL port.
+    #[clap(long = "skip-port-forward", action = clap::ArgAction::SetTrue)]
+    skip_port_forward: bool,
+    /// The SQL port we want to port-forward to.
+    /// By default, we will attempt to find this port by looking for an environmentd service with a port named "internal sql"
+    #[clap(long = "sql-target-port")]
+    sql_target_port: Option<i32>,
+    /// The port on the local machine that will be forwarded to sql-target-port.
+    /// By default, this will be the same as the target port.
+    #[clap(long = "sql-local-port")]
+    sql_local_port: Option<i32>,
 }
 
 #[derive(Clone)]
@@ -176,18 +188,37 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         ),
     ]);
 
-    match create_k8s_client(context.args.k8s_context.clone()).await {
-        Ok(client) => {
-            for namespace in context.args.k8s_namespaces.clone() {
-                k8s_resource_dumper::dump_namespaced_resources(&context, &client, namespace).await;
-            }
-            k8s_resource_dumper::dump_cluster_resources(&context, &client).await;
-        }
+    let client = match create_k8s_client(context.args.k8s_context.clone()).await {
+        Ok(client) => client,
         Err(e) => {
             eprintln!("Failed to create k8s client: {}", e);
+            return Err(e);
         }
     };
 
+    for namespace in context.args.k8s_namespaces.clone() {
+        k8s_resource_dumper::dump_namespaced_resources(&context, &client, namespace).await;
+    }
+    k8s_resource_dumper::dump_cluster_resources(&context, &client).await;
+
+    let _port_forward_handle;
+    if !context.args.skip_port_forward {
+        // Find the namespace, service name, local port, and target port.
+        let port_forwarding_info =
+            system_catalog_dumper::get_sql_port_forwarding_info(&client, &context.args).await?;
+
+        _port_forward_handle = system_catalog_dumper::spawn_sql_port_forwarding_process(
+            &port_forwarding_info,
+            context.args.k8s_context.clone(),
+        );
+        // There may be a delay between when the port forwarding process starts and when it's ready to use.
+        // We wait a few seconds to ensure that port forwarding is ready.
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+
+    // TODO: Use the forwarded port to dump the system catalog.
+
+    // Wait for all the describe processes to finish.
     join_all(describe_handles).await;
 
     // TODO: Compress files to ZIP
