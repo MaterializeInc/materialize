@@ -135,7 +135,6 @@ def get_default_system_parameters(
         "persist_batch_max_run_len": "4",
         "persist_catalog_force_compaction_fuel": "1024",
         "persist_catalog_force_compaction_wait": "1s",
-        "persist_claim_unclaimed_compactions": "true",
         "persist_encoding_enable_dictionary": "true",
         "persist_fast_path_limit": "1000",
         "persist_inline_writes_single_max_bytes": "4096",
