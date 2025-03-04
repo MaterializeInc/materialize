@@ -5207,3 +5207,35 @@ def workflow_test_constant_sink(c: Composition) -> None:
                 """
             )
         )
+
+
+def workflow_out_of_disk(c: Composition) -> None:
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            volumes=["sourcedata_512Mb:/mzdata", "tmp:/share/tmp", "scratch:/scratch"],
+        ),
+    ):
+        c.up("testdrive", persistent=True)
+        c.up("materialized", "clusterd1", "zookeeper", "kafka", "schema-registry")
+
+        c.testdrive(
+            dedent(
+                """
+                > CREATE CLUSTER test REPLICAS (
+                    test (
+                        STORAGECTL ADDRESSES ['clusterd1:2100'],
+                        STORAGE ADDRESSES ['clusterd1:2103'],
+                        COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                        COMPUTE ADDRESSES ['clusterd1:2102'],
+                        WORKERS 1
+                    )
+                  );
+
+                > CREATE MATERIALIZED VIEW const IN CLUSTER test AS SELECT 1
+                """
+            )
+        )
