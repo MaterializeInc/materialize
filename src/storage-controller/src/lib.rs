@@ -2120,8 +2120,8 @@ where
                     }
                 }
             }
-            Some((_replica_id, StorageResponse::StatusUpdates(updates))) => {
-                for status_update in updates.iter() {
+            Some((replica_id, StorageResponse::StatusUpdates(mut updates))) => {
+                for status_update in &mut updates {
                     // NOTE(aljoscha): We sniff out the hydration status for
                     // ingestions from status updates. This is the easiest we
                     // can do right now, without going deeper into changing the
@@ -2137,7 +2137,6 @@ where
                     //
                     // I wouldn't say it's ideal, but it's workable until we
                     // find something better.
-
                     match status_update.status {
                         Status::Running => {
                             let collection = self.collections.get_mut(&status_update.id);
@@ -2165,6 +2164,11 @@ where
                             }
                         }
                         _ => (),
+                    }
+
+                    // Set replica_id in the status update if available
+                    if let Some(id) = replica_id {
+                        status_update.replica_id = Some(id);
                     }
                 }
                 self.record_status_updates(updates);
