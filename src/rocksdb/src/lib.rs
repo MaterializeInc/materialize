@@ -343,7 +343,7 @@ where
     /// `metrics` is a set of metric types that this type will keep
     /// up to date. `enc_opts` is the `bincode` options used to
     /// serialize and deserialize the keys and values.
-    pub async fn new<M, O, IM, F>(
+    pub fn new<M, O, IM, F>(
         instance_path: &Path,
         options: InstanceOptions<O, V, F>,
         tuning_config: RocksDBConfig,

@@ -321,7 +321,6 @@ where
                     rocksdb_shared_metrics,
                     rocksdb_instance_metrics,
                 )
-                .await
                 .unwrap(),
             )
         };
