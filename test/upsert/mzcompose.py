@@ -283,6 +283,75 @@ def workflow_rehydration(c: Composition) -> None:
         c.run_testdrive_files("rehydration/04-reset.td")
 
 
+def workflow_initialization_failure(c: Composition) -> None:
+    """Test creating sources in a remote clusterd process."""
+
+    dependencies = [
+        "materialized",
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+        "clusterd1",
+    ]
+
+    # too small for rocksdb
+    c.compose["volumes"]["upsert_vol"] = {
+        "driver_opts": {
+            "device": "tmpfs",
+            "type": "tmpfs",
+            "o": "size=5m",
+        }
+    }
+
+    with c.override(
+        Materialized(
+            options=[
+                "--orchestrator-process-scratch-directory=/scratch",
+            ],
+            additional_system_parameter_defaults={
+                "storage_statistics_collection_interval": "1000",
+                "storage_statistics_interval": "2000",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+                "disk_cluster_replicas_default": "true",
+                "enable_disk_cluster_replicas": "true",
+                "upsert_rocksdb_auto_spill_to_disk": "true",
+                "upsert_rocksdb_auto_spill_threshold_bytes": "250",
+                # Force backpressure to be enabled.
+                "storage_dataflow_max_inflight_bytes": "1",
+                "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
+                "storage_dataflow_max_inflight_bytes_disk_only": "false",
+                "storage_dataflow_delay_sources_past_rehydration": "true",
+                # Enabling shrinking buffers
+                "upsert_rocksdb_shrink_allocated_buffers_by_ratio": "4",
+                "storage_shrink_upsert_unused_buffers_by_ratio": "4",
+            },
+            environment_extra=materialized_environment_extra,
+        ),
+        Clusterd(
+            name="clusterd1",
+            volumes=[
+                "mzdata:/mzdata",
+                "tmp:/share/tmp",
+                "upsert_vol:/scratch",
+            ],
+            options=[
+                "--announce-memory-limit=1048376000",  # 1GiB
+            ],
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up(*dependencies)
+        c.run_testdrive_files("rocksdb_ood/01-setup.td")
+        c.run_testdrive_files("rocksdb_ood/02-source-setup.td")
+
+        c.kill("materialized")
+        c.kill("clusterd1")
+        c.up("materialized")
+        c.up("clusterd1")
+
+        c.run_testdrive_files("rocksdb_ood/03-after-rehydration.td")
+
+
 def workflow_failpoint(c: Composition) -> None:
     """Test behaviour when upsert state errors"""
 
