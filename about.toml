@@ -13,6 +13,7 @@ accepted = [
     "MPL-2.0",
     "OpenSSL",
     "Zlib",
+    "Unicode-3.0",
     "Unicode-DFS-2016",
 ]
 private = { ignore = true }
