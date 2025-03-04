@@ -227,18 +227,6 @@ impl ComputeState {
         }
     }
 
-    /// Return whether a collection with the given ID exists.
-    pub fn collection_exists(&self, id: GlobalId) -> bool {
-        self.collections.contains_key(&id)
-    }
-
-    /// Return a reference to the identified collection.
-    ///
-    /// Panics if the collection doesn't exist.
-    pub fn expect_collection(&self, id: GlobalId) -> &CollectionState {
-        self.collections.get(&id).expect("collection must exist")
-    }
-
     /// Return a mutable reference to the identified collection.
     ///
     /// Panics if the collection doesn't exist.
