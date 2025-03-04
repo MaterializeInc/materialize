@@ -129,6 +129,28 @@ class Composition:
             "services": {},
         }
 
+        # Add default volumes
+        self.compose.setdefault("volumes", {}).update(
+            {
+                "mzdata": None,
+                "pgdata": None,
+                "mysqldata": None,
+                # Used for certain pg-cdc scenarios. The memory will not be
+                # allocated for compositions that do not require this volume.
+                "sourcedata_512Mb": {
+                    "driver_opts": {
+                        "device": "tmpfs",
+                        "type": "tmpfs",
+                        "o": "size=512m",
+                    }
+                },
+                "mydata": None,
+                "tmp": None,
+                "secrets": None,
+                "scratch": None,
+            }
+        )
+
         # Load the mzcompose.py file, if one exists
         mzcompose_py = self.path / "mzcompose.py"
         if mzcompose_py.exists():
@@ -154,27 +176,10 @@ class Composition:
                     raise UIError(f"service {name!r} specified more than once")
                 self.compose["services"][name] = python_service.config
 
-        # Add default volumes
-        self.compose.setdefault("volumes", {}).update(
-            {
-                "mzdata": None,
-                "pgdata": None,
-                "mysqldata": None,
-                # Used for certain pg-cdc scenarios. The memory will not be
-                # allocated for compositions that do not require this volume.
-                "sourcedata_512Mb": {
-                    "driver_opts": {
-                        "device": "tmpfs",
-                        "type": "tmpfs",
-                        "o": "size=512m",
-                    }
-                },
-                "mydata": None,
-                "tmp": None,
-                "secrets": None,
-                "scratch": None,
-            }
-        )
+            for volume_name, volume_def in getattr(module, "VOLUMES", {}).items():
+                if volume_name in self.compose["volumes"]:
+                    raise UIError(f"volue {volume_name!r} specified more than once")
+                self.compose["volumes"][volume_name] = volume_def
 
         # The CLI driver will handle acquiring these dependencies.
         if munge_services:

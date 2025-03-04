@@ -49,11 +49,20 @@ SERVICES = [
         default_replication_factor=2,
     ),
     Testdrive(),
-    Clusterd(
-        name="clusterd1",
-    ),
+    Clusterd(name="clusterd1"),
     Redpanda(),
 ]
+
+# a really small scratch volume, which can result in OOD when using upsert
+VOLUMES = {
+    "tiny_scratch": {
+        "driver_opts": {
+            "device": "tmpfs",
+            "type": "tmpfs",
+            "o": "size=4m",
+        }
+    }
+}
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -283,8 +292,8 @@ def workflow_rehydration(c: Composition) -> None:
         c.run_testdrive_files("rehydration/04-reset.td")
 
 
-def workflow_initialization_failure(c: Composition) -> None:
-    """Test creating sources in a remote clusterd process."""
+def workflow_out_of_disk(c: Composition) -> None:
+    """Test rocksdb OOD"""
 
     dependencies = [
         "materialized",
@@ -293,15 +302,6 @@ def workflow_initialization_failure(c: Composition) -> None:
         "schema-registry",
         "clusterd1",
     ]
-
-    # too small for rocksdb
-    c.compose["volumes"]["upsert_vol"] = {
-        "driver_opts": {
-            "device": "tmpfs",
-            "type": "tmpfs",
-            "o": "size=5m",
-        }
-    }
 
     with c.override(
         Materialized(
@@ -332,7 +332,7 @@ def workflow_initialization_failure(c: Composition) -> None:
             volumes=[
                 "mzdata:/mzdata",
                 "tmp:/share/tmp",
-                "upsert_vol:/scratch",
+                "tiny_scratch:/scratch",
             ],
             options=[
                 "--announce-memory-limit=1048376000",  # 1GiB
@@ -340,6 +340,7 @@ def workflow_initialization_failure(c: Composition) -> None:
         ),
         Testdrive(no_reset=True),
     ):
+        c.down(destroy_volumes=True)
         c.up(*dependencies)
         c.run_testdrive_files("rocksdb_ood/01-setup.td")
         c.run_testdrive_files("rocksdb_ood/02-source-setup.td")
