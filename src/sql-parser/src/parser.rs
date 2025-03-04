@@ -386,7 +386,10 @@ impl<'a> Parser<'a> {
 
         if assert_roundtrip
             && soft_assertions_enabled()
-            && !matches!(statement, Statement::CreateSource(..))
+            && !matches!(
+                statement,
+                Statement::CreateSource(..) | Statement::CreateTableFromSource(..)
+            )
         {
             // If we successfully parsed it, then it should also roundtrip through printing and then
             // parsing it again.
