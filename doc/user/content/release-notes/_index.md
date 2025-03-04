@@ -8,7 +8,7 @@ menu:
     identifier: "release-notes"
 ---
 
-## v25.1.1 (Upcoming)
+## **Upcoming**
 
 {{% self-managed/self-managed-details %}}
 
@@ -17,3 +17,14 @@ menu:
 As part of the Self-managed Materialize, Materialize provides:
 
 {{% self-managed/versions/self-managed-products %}}
+
+## Self-managed versioning and lifecycle
+
+Self-managed Materialize uses a calendar versioning (calver) scheme of the form
+`vYY.R.PP` where:
+
+- `YY` indicates the year.
+- `R` indicates major release.
+- `PP` indicates the patch number.
+
+For Self-managed Materialize, Materialize supports the latest 2 major releases.
