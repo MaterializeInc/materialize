@@ -172,6 +172,7 @@ where
                 "There is currently no replica running this {object_type}"
             )]),
             namespaced_errors: Default::default(),
+            replica_id: None,
         };
 
         self.history.reduce();

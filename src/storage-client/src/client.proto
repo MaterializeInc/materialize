@@ -131,6 +131,7 @@ message ProtoStorageResponse {
     optional string error = 4;
     repeated string hints = 5;
     map<string, string> namespaced_errors = 6;
+    optional string replica_id = 7;
   }
 
   message ProtoStatusUpdates {

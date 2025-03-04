@@ -1782,6 +1782,7 @@ mod tests {
             error: Some(error_message.to_string()),
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: Default::default(),
+            replica_id: None,
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
@@ -1826,6 +1827,7 @@ mod tests {
             error: Some(error_message.to_string()),
             hints: Default::default(),
             namespaced_errors: Default::default(),
+            replica_id: None,
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
@@ -1854,6 +1856,7 @@ mod tests {
             error: None,
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: Default::default(),
+            replica_id: None,
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
@@ -1898,6 +1901,7 @@ mod tests {
             error: Some(error_message.to_string()),
             hints: Default::default(),
             namespaced_errors: BTreeMap::from([("thing".to_string(), "error".to_string())]),
+            replica_id: None,
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
@@ -1943,6 +1947,7 @@ mod tests {
             error: Some(error_message.to_string()),
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: BTreeMap::from([("thing".to_string(), "error".to_string())]),
+            replica_id: None,
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {

@@ -112,6 +112,7 @@ pub static MZ_SOURCE_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("error", ScalarType::String.nullable(true))
         .with_column("details", ScalarType::Jsonb.nullable(true))
+        .with_column("replica_id", ScalarType::String.nullable(true))
         .finish()
 });
 
@@ -125,6 +126,7 @@ pub static MZ_SINK_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|
         .with_column("status", ScalarType::String.nullable(false))
         .with_column("error", ScalarType::String.nullable(true))
         .with_column("details", ScalarType::Jsonb.nullable(true))
+        .with_column("replica_id", ScalarType::String.nullable(true))
         .finish()
 });
 

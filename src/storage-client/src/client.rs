@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::{ClusterStartupEpoch, TimelyConfig, TryIntoTimelyConfig};
+use mz_cluster_client::ReplicaId;
 use mz_ore::assert_none;
 use mz_persist_client::batch::{BatchBuilder, ProtoBatch};
 use mz_persist_client::write::WriteHandle;
@@ -484,6 +485,7 @@ pub struct StatusUpdate {
     pub error: Option<String>,
     pub hints: BTreeSet<String>,
     pub namespaced_errors: BTreeMap<String, String>,
+    pub replica_id: Option<ReplicaId>,
 }
 
 impl StatusUpdate {
@@ -499,6 +501,7 @@ impl StatusUpdate {
             error: None,
             hints: Default::default(),
             namespaced_errors: Default::default(),
+            replica_id: None,
         }
     }
 }
@@ -537,6 +540,11 @@ impl From<StatusUpdate> for Row {
             });
         } else {
             packer.push(Datum::Null);
+        }
+
+        match update.replica_id {
+            Some(id) => packer.push(Datum::String(&id.to_string())),
+            None => packer.push(Datum::Null),
         }
 
         row
@@ -585,6 +593,7 @@ impl RustType<proto_storage_response::ProtoStatusUpdate> for StatusUpdate {
             error: self.error.clone(),
             hints: self.hints.iter().cloned().collect(),
             namespaced_errors: self.namespaced_errors.clone(),
+            replica_id: self.replica_id.map(|id| id.to_string().into_proto()),
         }
     }
 
@@ -602,6 +611,9 @@ impl RustType<proto_storage_response::ProtoStatusUpdate> for StatusUpdate {
             error: proto.error,
             hints: proto.hints.into_iter().collect(),
             namespaced_errors: proto.namespaced_errors,
+            replica_id: proto
+                .replica_id
+                .map(|replica_id: String| replica_id.parse().expect("must be a valid replica id")),
         })
     }
 }
