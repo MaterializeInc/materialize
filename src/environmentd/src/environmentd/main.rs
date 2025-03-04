@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, env, iter, thread};
 
 use anyhow::{bail, Context};
+use bytesize::ByteSize;
 use clap::{ArgAction, Parser, ValueEnum};
 use fail::FailScenario;
 use http::header::HeaderValue;
@@ -43,7 +44,7 @@ use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::{Authenticator, FronteggCliArgs};
-use mz_orchestrator::Orchestrator;
+use mz_orchestrator::{MemoryLimit, Orchestrator};
 use mz_orchestrator_kubernetes::{
     KubernetesImagePullPolicy, KubernetesOrchestrator, KubernetesOrchestratorConfig,
 };
@@ -64,6 +65,7 @@ use mz_persist_client::rpc::{
     MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
 };
 use mz_persist_client::PersistLocation;
+use mz_repr::adt::numeric::Numeric;
 use mz_secrets::SecretsController;
 use mz_server_core::TlsCliArgs;
 use mz_service::emit_boot_diagnostics;
@@ -72,7 +74,7 @@ use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tracing::{error, info, info_span, Instrument};
+use tracing::{error, info, info_span, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
@@ -1046,8 +1048,19 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         },
     };
 
-    let cluster_replica_sizes: ClusterReplicaSizeMap =
+    let mut cluster_replica_sizes: ClusterReplicaSizeMap =
         serde_json::from_str(&args.cluster_replica_sizes).context("parsing replica size map")?;
+    if !license_key_config.allow_credit_consumption_override {
+        for (name, replica) in cluster_replica_sizes.0.iter_mut() {
+            let memory_limit = replica.memory_limit.get_or_insert_with(|| {
+                warn!("No memory limit found in cluster definition for {name}, defaulting to 4GiB");
+                MemoryLimit(ByteSize::gib(4))
+            });
+            replica.credits_per_hour = Numeric::from(
+                (memory_limit.0 * replica.scale * u64::try_from(replica.workers).unwrap()).0,
+            ) / Numeric::from(1024 * 1024 * 1024);
+        }
+    }
 
     emit_boot_diagnostics!(&BUILD_INFO);
     sys::adjust_rlimits();
