@@ -685,12 +685,17 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
 
-    let license_key_config = if let Some(license_key) = args.license_key {
-        let license_key_text = std::fs::read_to_string(&license_key)?;
+    let license_key_config = if let Some(license_key_file) = args.license_key {
+        let license_key_text = std::fs::read_to_string(&license_key_file)?;
         let license_key = mz_license_keys::validate(
             &license_key_text,
             &args.environment_id.organization_id().to_string(),
         )?;
+        // expired license key should not be a hard error, to avoid
+        // disrupting existing live infrastructure
+        if license_key.expired {
+            error!("The license key provided at {license_key_file} is expired! Please contact Materialize for assistance.");
+        }
         license_key.into()
     } else {
         LicenseKeyConfig::default()

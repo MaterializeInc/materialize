@@ -29,6 +29,7 @@ pub struct ValidatedLicenseKey {
     pub organization_id: String,
     pub max_credit_consumption_rate: f64,
     pub allow_credit_consumption_override: bool,
+    pub expired: bool,
 }
 
 pub fn validate(license_key: &str, environment_id: &str) -> anyhow::Result<ValidatedLicenseKey> {
@@ -108,11 +109,20 @@ fn validate_with_pubkey_v1(
     validation.validate_nbf = true;
     validation.validate_aud = true;
 
-    let jwt: TokenData<Payload> = jsonwebtoken::decode(
-        license_key,
-        &DecodingKey::from_rsa_pem(pubkey_pem.as_bytes())?,
-        &validation,
-    )?;
+    let key = DecodingKey::from_rsa_pem(pubkey_pem.as_bytes())?;
+
+    let (jwt, expired): (TokenData<Payload>, _) =
+        jsonwebtoken::decode(license_key, &key, &validation).map_or_else(
+            |e| {
+                if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::ExpiredSignature) {
+                    validation.validate_exp = false;
+                    Ok((jsonwebtoken::decode(license_key, &key, &validation)?, true))
+                } else {
+                    Err::<_, anyhow::Error>(e.into())
+                }
+            },
+            |jwt| Ok((jwt, false)),
+        )?;
 
     if jwt.header.typ.as_deref() != Some("JWT") {
         bail!("invalid jwt header type");
@@ -130,6 +140,7 @@ fn validate_with_pubkey_v1(
         organization_id: jwt.claims.sub,
         max_credit_consumption_rate: jwt.claims.max_credit_consumption_rate,
         allow_credit_consumption_override: jwt.claims.allow_credit_consumption_override,
+        expired,
     })
 }
 
