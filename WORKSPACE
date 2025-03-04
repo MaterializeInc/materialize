@@ -556,6 +556,8 @@ crates_repository(
         "miniz_oxide": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
         "object": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
         "rustc-demangle": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
+        "timely": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
+        "differential-dataflow": [crate.annotation(rustc_flags = ["-Copt-level=3"])],
     },
     cargo_config = "//:.cargo/config.toml",
     cargo_lockfile = "//:Cargo.lock",

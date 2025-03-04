@@ -28,7 +28,7 @@ rust_library(
     lint_config = ":lints",
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
-    rustc_flags = [],
+    rustc_flags = ["-Copt-level=3"],
     version = "0.0.0",
     deps = [
         "//src/cluster:mz_cluster",
