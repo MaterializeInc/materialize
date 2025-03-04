@@ -19,7 +19,6 @@
 use std::convert::AsRef;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::Instant;
 
 use itertools::Itertools;
@@ -591,9 +590,6 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
         // We require that cleanup of the DB succeeds. Otherwise, we could open a DB with old,
         // incorrect data. Because of races with dataflow shutdown, we retry a few times here.
         // 1s with a 2x backoff is ~30s after 5 tries.
-        //
-        // TODO(guswynn): remove this when we can wait on dataflow cleanup asynchronously in
-        // the controller.
         let retry = mz_ore::retry::Retry::default()
             .max_tries(options.cleanup_tries)
             // Large DB's could take multiple seconds to run.
