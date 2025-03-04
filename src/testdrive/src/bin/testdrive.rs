@@ -22,6 +22,7 @@ use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::ClusterReplicaSizeMap;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
 use mz_ore::url::SensitiveUrl;
@@ -279,6 +280,9 @@ struct Args {
     /// A map from size name to resource allocations for cluster replicas.
     #[clap(long, env = "CLUSTER_REPLICA_SIZES")]
     cluster_replica_sizes: String,
+    /// String containing a valid Materialize license key.
+    #[clap(long, env = "CI_LICENSE_KEY")]
+    ci_license_key: Option<String>,
 }
 
 #[tokio::main]
@@ -289,6 +293,15 @@ async fn main() {
         .with_env_filter(EnvFilter::from(args.log_filter))
         .with_writer(io::stdout)
         .init();
+
+    let license_key = if let Some(license_key_text) = args.ci_license_key {
+        let license_key =
+            mz_license_keys::validate(&license_key_text, "00000000-0000-0000-000000000000")
+                .expect("failed to validate license key file");
+        license_key
+    } else {
+        ValidatedLicenseKey::default()
+    };
 
     let (aws_config, aws_account) = match args.aws_region {
         Some(region) => {
@@ -368,9 +381,11 @@ async fn main() {
         arg_vars.insert(name.to_string(), val.to_string());
     }
 
-    let cluster_replica_sizes =
-        ClusterReplicaSizeMap::parse_from_str(&args.cluster_replica_sizes, false)
-            .unwrap_or_else(|e| die!("testdrive: failed to parse replica size map: {}", e));
+    let cluster_replica_sizes = ClusterReplicaSizeMap::parse_from_str(
+        &args.cluster_replica_sizes,
+        !license_key.allow_credit_consumption_override,
+    )
+    .unwrap_or_else(|e| die!("testdrive: failed to parse replica size map: {}", e));
 
     let materialize_catalog_config = if args.validate_catalog_store {
         Some(CatalogConfig {

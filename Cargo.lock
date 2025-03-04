@@ -7485,6 +7485,7 @@ dependencies = [
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
+ "mz-license-keys",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
