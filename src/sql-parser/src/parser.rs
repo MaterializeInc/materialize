@@ -571,32 +571,54 @@ impl<'a> Parser<'a> {
                 Ok(Expr::Value(self.parse_value()?))
             }
             Token::Keyword(ARRAY) => self.parse_array(),
-            Token::Keyword(LIST) => self.parse_list(),
-            Token::Keyword(MAP) => self.parse_map(),
+            Token::Keyword(LIST)
+                if self.peek_token() == Some(Token::LBracket)
+                    || self.peek_token() == Some(Token::LParen) =>
+            {
+                self.parse_list()
+            }
+            Token::Keyword(MAP)
+                if self.peek_token() == Some(Token::LBracket)
+                    || self.peek_token() == Some(Token::LParen) =>
+            {
+                self.parse_map()
+            }
             Token::Keyword(CASE) => self.parse_case_expr(),
             Token::Keyword(CAST) => self.parse_cast_expr(),
-            Token::Keyword(COALESCE) => {
+            Token::Keyword(COALESCE) if self.peek_token() == Some(Token::LParen) => {
                 self.parse_homogenizing_function(HomogenizingFunction::Coalesce)
             }
-            Token::Keyword(GREATEST) => {
+            Token::Keyword(GREATEST) if self.peek_token() == Some(Token::LParen) => {
                 self.parse_homogenizing_function(HomogenizingFunction::Greatest)
             }
-            Token::Keyword(LEAST) => self.parse_homogenizing_function(HomogenizingFunction::Least),
-            Token::Keyword(NULLIF) => self.parse_nullif_expr(),
-            Token::Keyword(EXISTS) => self.parse_exists_expr(),
-            Token::Keyword(EXTRACT) => self.parse_extract_expr(),
+            Token::Keyword(LEAST) if self.peek_token() == Some(Token::LParen) => {
+                self.parse_homogenizing_function(HomogenizingFunction::Least)
+            }
+            Token::Keyword(NULLIF) if self.peek_token() == Some(Token::LParen) => {
+                self.parse_nullif_expr()
+            }
+            Token::Keyword(EXISTS) if self.peek_token() == Some(Token::LParen) => {
+                self.parse_exists_expr()
+            }
+            Token::Keyword(EXTRACT) if self.peek_token() == Some(Token::LParen) => {
+                self.parse_extract_expr()
+            }
             Token::Keyword(NOT) => Ok(Expr::Not {
                 expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
             }),
             Token::Keyword(ROW) if self.peek_token() == Some(Token::LParen) => {
                 self.parse_row_expr()
             }
-            Token::Keyword(TRIM) => self.parse_trim_expr(),
+            Token::Keyword(TRIM) if self.peek_token() == Some(Token::LParen) => {
+                self.parse_trim_expr()
+            }
             Token::Keyword(POSITION) if self.peek_token() == Some(Token::LParen) => {
                 self.parse_position_expr()
             }
             Token::Keyword(NORMALIZE) => self.parse_normalize_expr(),
-            Token::Keyword(SUBSTRING) => self.parse_substring_expr(),
+            Token::Keyword(SUBSTRING) if self.peek_token() == Some(Token::LParen) => {
+                self.parse_substring_expr()
+            }
             Token::Keyword(kw) if kw.is_always_reserved() => {
                 return Err(self.error(
                     self.peek_prev_pos(),
