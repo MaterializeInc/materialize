@@ -6,6 +6,7 @@ aliases:
 menu:
   main:
     parent: "installation"
+    identifier: "install-on-aws"
 ---
 
 {{% self-managed/materialize-components-sentence %}}
