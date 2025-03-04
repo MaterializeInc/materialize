@@ -288,6 +288,7 @@ impl HealthOperator for DefaultWriter {
             } else {
                 BTreeMap::new()
             },
+            replica_id: None,
         });
     }
 
