@@ -125,30 +125,33 @@ def get_default_system_parameters(
         "enable_worker_core_affinity": "true",
         "kafka_default_metadata_fetch_interval": "1s",
         "mysql_offset_known_interval": "1s",
-        "persist_record_schema_id": (
-            "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
-        ),
         "force_source_table_syntax": "true" if force_source_table_syntax else "false",
-        "persist_batch_columnar_format": "both_v2",
+        "persist_batch_columnar_format": (
+            "structured" if version > MzVersion.parse_mz("v0.135.0-dev") else "both_v2"
+        ),
         "persist_batch_delete_enabled": "true",
         "persist_batch_structured_order": "true",
         "persist_batch_structured_key_lower_len": "256",
         "persist_batch_max_run_len": "4",
         "persist_catalog_force_compaction_fuel": "1024",
         "persist_catalog_force_compaction_wait": "1s",
+        "persist_encoding_enable_dictionary": "true",
         "persist_fast_path_limit": "1000",
         "persist_inline_writes_single_max_bytes": "4096",
         "persist_inline_writes_total_max_bytes": "1048576",
         "persist_pubsub_client_enabled": "true",
         "persist_pubsub_push_diff_enabled": "true",
         "persist_record_compactions": "true",
+        "persist_record_schema_id": (
+            "true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"
+        ),
         # 16 MiB - large enough to avoid a big perf hit, small enough to get more coverage...
         "persist_blob_target_size": "16777216",
         "persist_stats_audit_percent": "100",
         "persist_use_critical_since_catalog": "true",
         "persist_use_critical_since_snapshot": "false" if zero_downtime else "true",
         "persist_use_critical_since_source": "false" if zero_downtime else "true",
-        "persist_part_decode_format": "row_with_validate",
+        "persist_part_decode_format": "arrow",
         "persist_blob_cache_scale_with_threads": "true",
         "pg_offset_known_interval": "1s",
         "statement_logging_default_sample_rate": "0.01",

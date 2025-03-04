@@ -223,9 +223,6 @@ def test_upgrade_from_version(
         f"+++ Testing {'0dt upgrade' if zero_downtime else 'regular upgrade'} from Materialize {from_version} to current_source."
     )
 
-    system_parameter_defaults = get_default_system_parameters(
-        zero_downtime=zero_downtime,
-    )
     deploy_generation = 0
 
     # If we are testing vX.Y.Z, the glob should include all patch versions 0 to Z
@@ -254,13 +251,18 @@ def test_upgrade_from_version(
     mz_service = "materialized"
 
     if from_version != "current_source":
+        version = MzVersion.parse_mz(from_version)
+        system_parameter_defaults = get_default_system_parameters(
+            version=version,
+            zero_downtime=zero_downtime,
+        )
         mz_from = Materialized(
             name=mz_service,
             image=f"materialize/materialized:{from_version}",
             options=[
                 opt
                 for start_version, opt in mz_options.items()
-                if MzVersion.parse_mz(from_version) >= start_version
+                if version >= start_version
             ],
             volumes_extra=["secrets:/share/secrets"],
             external_metadata_store=True,
@@ -273,6 +275,10 @@ def test_upgrade_from_version(
         with c.override(mz_from):
             c.up(mz_service)
     else:
+        system_parameter_defaults = get_default_system_parameters(
+            version=MzVersion.parse_cargo(),
+            zero_downtime=zero_downtime,
+        )
         mz_from = Materialized(
             name=mz_service,
             options=list(mz_options.values()),
@@ -314,6 +320,11 @@ def test_upgrade_from_version(
                 continue
             if version >= MzVersion.parse_cargo():
                 continue
+
+            system_parameter_defaults = get_default_system_parameters(
+                version=version,
+                zero_downtime=zero_downtime,
+            )
 
             print(
                 f"'{'0dt-' if zero_downtime else ''}Upgrading to in-between version {version}"
