@@ -10,7 +10,6 @@
 //! Implementation of the storage controller trait.
 
 use std::any::Any;
-use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Display};
 use std::num::NonZeroI64;
@@ -109,17 +108,6 @@ mod statistics;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-struct PendingCompactionCommand<T> {
-    /// [`GlobalId`] of the collection we want to compact.
-    id: GlobalId,
-    /// [`Antichain`] representing the requested read frontier.
-    read_frontier: Antichain<T>,
-    /// Cluster associated with this collection, if any.
-    cluster_id: Option<StorageInstanceId>,
-}
-
-#[derive(Derivative)]
-#[derivative(Debug)]
 struct PendingOneshotIngestion {
     /// Callback used to provide results of the ingestion.
     #[derivative(Debug = "ignore")]
@@ -162,15 +150,22 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// This is to prevent the re-binding of identifiers to other descriptions.
     pub(crate) collections: BTreeMap<GlobalId, CollectionState<T>>,
 
+    /// Map from IDs of objects that have been dropped to replicas we are still
+    /// expecting DroppedId messages from. This is cleared out once all replicas
+    /// have responded.
+    ///
+    /// We use this only to catch problems in the protocol between controller
+    /// and replicas, for example we can differentiate between late messages for
+    /// objects that have already been dropped and unexpected (read erroneous)
+    /// messages from the replica.
+    dropped_objects: BTreeMap<GlobalId, BTreeSet<ReplicaId>>,
+
     /// Write handle for table shards.
     pub(crate) persist_table_worker: persist_handles::PersistTableWriteWorker<T>,
     /// A shared TxnsCache running in a task and communicated with over a channel.
     txns_read: TxnsRead<T>,
     txns_metrics: Arc<TxnMetrics>,
-    stashed_response: Option<StorageResponse<T>>,
-    /// Compaction commands to send during the next call to
-    /// `StorageController::process`.
-    pending_compaction_commands: Vec<PendingCompactionCommand<T>>,
+    stashed_response: Option<(Option<ReplicaId>, StorageResponse<T>)>,
     /// Channel for sending table handle drops.
     #[derivative(Debug = "ignore")]
     pending_table_handle_drops_tx: mpsc::UnboundedSender<GlobalId>,
@@ -239,9 +234,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     maintenance_scheduled: bool,
 
     /// Shared transmit channel for replicas to send responses.
-    instance_response_tx: mpsc::UnboundedSender<StorageResponse<T>>,
+    instance_response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
     /// Receive end for replica responses.
-    instance_response_rx: mpsc::UnboundedReceiver<StorageResponse<T>>,
+    instance_response_rx: mpsc::UnboundedReceiver<(Option<ReplicaId>, StorageResponse<T>)>,
 
     /// Background task run at startup to warm persist state.
     persist_warm_task: Option<AbortOnDropHandle<Box<dyn Debug + Send>>>,
@@ -492,10 +487,25 @@ where
             grpc_client: self.config.parameters.grpc_client.clone(),
         };
         for id in instance.active_ingestions() {
-            self.collections
-                .get_mut(id)
-                .expect("instance contains unknown ingestion")
-                .active_copies += 1;
+            let ingestion_state = self
+                .collections
+                .get(id)
+                .expect("instance contains unknown ingestion");
+
+            let ingestion_description = match &ingestion_state.data_source {
+                DataSource::Ingestion(ingestion_description) => ingestion_description.clone(),
+                _ => panic!(
+                    "unexpected data source for ingestion: {:?}",
+                    ingestion_state.data_source
+                ),
+            };
+
+            for id in ingestion_description.collection_ids() {
+                let collection = self.collections.get_mut(&id).expect("missing collection");
+
+                // Track which replicas this ingestion is running on.
+                collection.active_replicas.insert(replica_id);
+            }
         }
         instance.add_replica(replica_id, config);
     }
@@ -510,7 +520,15 @@ where
             self.collections
                 .get_mut(id)
                 .expect("instance contains unknown ingestion")
-                .active_copies -= 1;
+                .active_replicas
+                .remove(&replica_id);
+
+            if let Some(active_replicas) = self.dropped_objects.get_mut(id) {
+                active_replicas.remove(&replica_id);
+                if active_replicas.is_empty() {
+                    self.dropped_objects.remove(id);
+                }
+            }
         }
         instance.drop_replica(replica_id);
     }
@@ -1004,9 +1022,10 @@ where
                 data_source,
                 collection_metadata: metadata,
                 extra_state,
-                // Default to 1, which is good for tables and webhooks. For
-                // ingestions, this will be updated in run_ingestion.
-                active_copies: 1,
+                // Default to empty as tables and webhooks don't run on
+                // replicas.  For ingestions, this will be updated in
+                // run_ingestion.
+                active_replicas: BTreeSet::new(),
                 wallclock_lag_max: Default::default(),
                 wallclock_lag_metrics,
             };
@@ -1282,7 +1301,7 @@ where
         expected_version: RelationVersion,
         register_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        let (data_shard, active_copies) = {
+        let (data_shard, active_replicas) = {
             let Controller {
                 collections,
                 storage_collections,
@@ -1307,9 +1326,9 @@ where
                 .await?;
 
             let data_shard = existing.collection_metadata.data_shard.clone();
-            let active_copies = existing.active_copies;
+            let active_replicas = existing.active_replicas.clone();
 
-            (data_shard, active_copies)
+            (data_shard, active_replicas)
         };
 
         let persist_client = self
@@ -1342,7 +1361,7 @@ where
             data_source: collection_desc.data_source.clone(),
             collection_metadata: collection_meta,
             extra_state: CollectionStateExtra::None,
-            active_copies,
+            active_replicas,
             wallclock_lag_max: Default::default(),
             wallclock_lag_metrics,
         };
@@ -1716,8 +1735,17 @@ where
         storage_metadata: &StorageMetadata,
         ids: Vec<GlobalId>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
+        // Keep track of which ingestions we have to execute still, and which we
+        // have to change because of dropped subsources.
         let mut ingestions_to_execute = BTreeSet::new();
         let mut ingestions_to_drop = BTreeSet::new();
+        let mut source_statistics_to_drop = Vec::new();
+
+        // Ingestions (and their exports) are also collections, but we keep
+        // track of non-ingestion collections separately, because they have
+        // slightly different cleanup logic below.
+        let mut collections_to_drop = Vec::new();
+
         for id in ids.iter() {
             let metadata = storage_metadata.get_collection_shard::<T>(*id);
             mz_ore::soft_assert_or_log!(
@@ -1730,27 +1758,23 @@ where
 
             if let Some(collection_state) = collection_state {
                 match collection_state.data_source {
-                    // Webhooks and tables are dropped differently from
-                    // ingestions and other collections.
-                    //
-                    // We can immediately compact them, because they don't
-                    // interact with clusterd.
-                    DataSource::Webhook | DataSource::Table { primary: None } => {
-                        let pending_compaction_command = PendingCompactionCommand {
-                            id: *id,
-                            read_frontier: Antichain::new(),
-                            cluster_id: None,
-                        };
+                    DataSource::Webhook => {
+                        // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
+                        // could probably use some love and maybe get merged together?
+                        let fut = self.collection_manager.unregister_collection(*id);
+                        mz_ore::task::spawn(|| format!("storage-webhook-cleanup-{id}"), fut);
 
-                        tracing::debug!(?pending_compaction_command, "pushing pending compaction");
-
-                        self.pending_compaction_commands
-                            .push(pending_compaction_command);
+                        collections_to_drop.push(*id);
+                        source_statistics_to_drop.push(*id);
+                    }
+                    DataSource::Table { primary: None } => {
+                        collections_to_drop.push(*id);
                     }
                     // Tables that are not the primary collection do not need Persist compaction applied.
                     DataSource::Table { primary: Some(_) } => (),
                     DataSource::Ingestion(_) => {
-                        ingestions_to_drop.insert(id);
+                        ingestions_to_drop.insert(*id);
+                        source_statistics_to_drop.push(*id);
                     }
                     DataSource::IngestionExport { ingestion_id, .. } => {
                         // If we are dropping source exports, we need to modify the
@@ -1785,9 +1809,13 @@ where
                         // Ingestion exports also have ReadHolds that we need to
                         // downgrade, and much of their drop machinery is the
                         // same as for the "main" ingestion.
-                        ingestions_to_drop.insert(id);
+                        ingestions_to_drop.insert(*id);
+                        source_statistics_to_drop.push(*id);
                     }
-                    DataSource::Other | DataSource::Introspection(_) | DataSource::Progress => (),
+                    DataSource::Progress => {
+                        collections_to_drop.push(*id);
+                    }
+                    DataSource::Other | DataSource::Introspection(_) => (),
                     DataSource::Sink { .. } => {}
                 }
             }
@@ -1807,7 +1835,7 @@ where
         // to the storage dependencies.
         let ingestion_policies = ingestions_to_drop
             .iter()
-            .map(|id| (**id, ReadPolicy::ValidFrom(Antichain::new())))
+            .map(|id| (*id, ReadPolicy::ValidFrom(Antichain::new())))
             .collect();
 
         tracing::debug!(
@@ -1815,6 +1843,51 @@ where
             "dropping sources by setting read hold policies"
         );
         self.set_hold_policies(ingestion_policies);
+
+        // Delete all collection->shard mappings
+        let shards_to_update: BTreeSet<_> = ingestions_to_drop
+            .iter()
+            .chain(collections_to_drop.iter())
+            .cloned()
+            .collect();
+        self.append_shard_mappings(shards_to_update.into_iter(), -1);
+
+        let status_now = mz_ore::now::to_datetime((self.now)());
+        let mut status_updates = vec![];
+        for id in ingestions_to_drop.iter() {
+            status_updates.push(StatusUpdate::new(*id, status_now, Status::Dropped));
+        }
+
+        if !self.read_only {
+            self.append_status_introspection_updates(
+                IntrospectionType::SourceStatusHistory,
+                status_updates,
+            );
+        }
+
+        {
+            let mut source_statistics = self.source_statistics.lock().expect("poisoned");
+            for id in source_statistics_to_drop {
+                source_statistics.source_statistics.remove(&id);
+                source_statistics.webhook_statistics.remove(&id);
+            }
+        }
+
+        // Remove collection state
+        for id in ingestions_to_drop.iter().chain(collections_to_drop.iter()) {
+            tracing::info!(%id, "dropping collection state");
+            let collection = self
+                .collections
+                .remove(id)
+                .expect("list populated after checking that self.collections contains it");
+
+            // Record which replicas were running a collection, so that we can
+            // match DroppedId messages against them and eventually remove state
+            // from self.dropped_objects
+            if !collection.active_replicas.is_empty() {
+                self.dropped_objects.insert(*id, collection.active_replicas);
+            }
+        }
 
         // Also let StorageCollections know!
         self.storage_collections
@@ -1837,10 +1910,10 @@ where
     fn drop_sinks_unvalidated(
         &mut self,
         storage_metadata: &StorageMetadata,
-        mut identifiers: Vec<GlobalId>,
+        mut sinks_to_drop: Vec<GlobalId>,
     ) {
         // Ignore exports that have already been removed.
-        identifiers.retain(|id| self.export(*id).is_ok());
+        sinks_to_drop.retain(|id| self.export(*id).is_ok());
 
         // TODO: ideally we'd advance the write frontier ourselves here, but this function's
         // not yet marked async.
@@ -1848,7 +1921,7 @@ where
         // We don't explicitly remove read capabilities! Downgrading the
         // frontier of the source to `[]` (the empty Antichain), will propagate
         // to the storage dependencies.
-        let drop_policy = identifiers
+        let drop_policy = sinks_to_drop
             .iter()
             .map(|id| (*id, ReadPolicy::ValidFrom(Antichain::new())))
             .collect();
@@ -1859,9 +1932,47 @@ where
         );
         self.set_hold_policies(drop_policy);
 
+        // Record the drop status for all sink drops.
+        //
+        // We also delete the items' statistics objects.
+        //
+        // The locks are held for a short time, only while we do some removals from a map.
+
+        let status_now = mz_ore::now::to_datetime((self.now)());
+
+        // Record the drop status for all pending sink drops.
+        let mut status_updates = vec![];
+        {
+            let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
+            for id in sinks_to_drop.iter() {
+                status_updates.push(StatusUpdate::new(*id, status_now, Status::Dropped));
+                sink_statistics.remove(id);
+            }
+        }
+
+        if !self.read_only {
+            self.append_status_introspection_updates(
+                IntrospectionType::SinkStatusHistory,
+                status_updates,
+            );
+        }
+
+        // Remove collection/export state
+        for id in sinks_to_drop.iter() {
+            tracing::info!(%id, "dropping export state");
+            let collection = self
+                .collections
+                .remove(id)
+                .expect("list populated after checking that self.collections contains it");
+            // Record how many replicas were running an export, so that we can
+            // match `DroppedId` messages against it and eventually remove state
+            // from `self.dropped_objects`.
+            self.dropped_objects.insert(*id, collection.active_replicas);
+        }
+
         // Also let StorageCollections know!
         self.storage_collections
-            .drop_collections_unvalidated(storage_metadata, identifiers);
+            .drop_collections_unvalidated(storage_metadata, sinks_to_drop);
     }
 
     #[instrument(level = "debug")]
@@ -1920,9 +2031,6 @@ where
     }
 
     async fn ready(&mut self) {
-        if self.pending_compaction_commands.len() > 0 {
-            return;
-        }
         if self.maintenance_scheduled {
             return;
         }
@@ -1967,23 +2075,22 @@ where
         let mut updated_frontiers = None;
         match self.stashed_response.take() {
             None => (),
-            Some(StorageResponse::FrontierUppers(updates)) => {
+            Some((_replica_id, StorageResponse::FrontierUppers(updates))) => {
                 self.update_write_frontiers(&updates);
                 updated_frontiers = Some(Response::FrontierUpdates(updates));
             }
-            Some(StorageResponse::DroppedId(id)) => {
-                tracing::debug!("DroppedId for collection {id}");
-
-                if let Entry::Occupied(mut entry) = self.collections.entry(id) {
-                    entry.get_mut().active_copies -= 1;
-                    if entry.get().active_copies == 0 {
-                        entry.remove();
+            Some((replica_id, StorageResponse::DroppedId(id))) => {
+                let replica_id = replica_id.expect("DroppedId from unknown replica");
+                if let Some(remaining_replicas) = self.dropped_objects.get_mut(&id) {
+                    remaining_replicas.remove(&replica_id);
+                    if remaining_replicas.is_empty() {
+                        self.dropped_objects.remove(&id);
                     }
-                    // Nothing to do, we already dropped read holds in
-                    // `drop_sources_unvalidated`.
+                } else {
+                    soft_panic_or_log!("unexpected DroppedId for {id}");
                 }
             }
-            Some(StorageResponse::StatisticsUpdates(source_stats, sink_stats)) => {
+            Some((_replica_id, StorageResponse::StatisticsUpdates(source_stats, sink_stats))) => {
                 // Note we only hold the locks while moving some plain-old-data around here.
                 //
                 // We just write the whole object, as the update from storage represents the
@@ -2012,7 +2119,7 @@ where
                     }
                 }
             }
-            Some(StorageResponse::StatusUpdates(updates)) => {
+            Some((_replica_id, StorageResponse::StatusUpdates(updates))) => {
                 for status_update in updates.iter() {
                     // NOTE(aljoscha): We sniff out the hydration status for
                     // ingestions from status updates. This is the easiest we
@@ -2061,7 +2168,7 @@ where
                 }
                 self.record_status_updates(updates);
             }
-            Some(StorageResponse::StagedBatches(batches)) => {
+            Some((_replica_id, StorageResponse::StagedBatches(batches))) => {
                 for (ingestion_id, batches) in batches {
                     match self.pending_oneshot_ingestions.remove(&ingestion_id) {
                         Some(pending) => {
@@ -2083,19 +2190,6 @@ where
             }
         }
 
-        // IDs of sources that were dropped whose statuses should be updated.
-        let mut pending_source_drops = vec![];
-
-        // IDs of all collections that were dropped whose shard mappings should be deleted.
-        let mut pending_collection_drops = vec![];
-
-        // IDs of sinks that were dropped whose statuses should be updated (and statistics
-        // cleared).
-        let mut pending_sink_drops = vec![];
-
-        // IDs of sources (and subsources) whose statistics should be cleared.
-        let mut source_statistics_to_drop = vec![];
-
         // Process dropped tables in a single batch.
         let mut dropped_table_ids = Vec::new();
         while let Ok(dropped_id) = self.pending_table_handle_drops_rx.try_recv() {
@@ -2103,140 +2197,6 @@ where
         }
         if !dropped_table_ids.is_empty() {
             self.drop_sources(storage_metadata, dropped_table_ids)?;
-        }
-
-        // TODO(aljoscha): We could consolidate these before sending to
-        // instances, but this seems fine for now.
-        for compaction_command in self.pending_compaction_commands.drain(..) {
-            let PendingCompactionCommand {
-                id,
-                read_frontier,
-                cluster_id,
-            } = compaction_command;
-
-            // TODO(petrosagg): make this a strict check
-            // TODO(aljoscha): What's up with this TODO?
-            // Note that while collections are dropped, the `client` may already
-            // be cleared out, before we do this post-processing!
-            let instance = cluster_id.and_then(|cluster_id| self.instances.get_mut(&cluster_id));
-
-            if read_frontier.is_empty() {
-                if let Some(collection) = self.collections.get(&id) {
-                    if instance.is_some() {
-                        match collection.extra_state {
-                            CollectionStateExtra::Ingestion(_) => {
-                                pending_source_drops.push(id);
-                            }
-                            CollectionStateExtra::None => {
-                                // Nothing to do
-                            }
-                            CollectionStateExtra::Export(_) => {
-                                pending_sink_drops.push(id);
-                            }
-                        }
-                    } else {
-                        match collection.data_source {
-                            DataSource::Table { .. } => {
-                                pending_collection_drops.push(id);
-                            }
-                            DataSource::Webhook => {
-                                pending_collection_drops.push(id);
-                                // TODO(parkmycar): The Collection Manager and PersistMonotonicWriter
-                                // could probably use some love and maybe get merged together?
-                                let fut = self.collection_manager.unregister_collection(id);
-                                mz_ore::task::spawn(
-                                    || format!("storage-webhook-cleanup-{id}"),
-                                    fut,
-                                );
-                            }
-                            DataSource::Ingestion(_) => (),
-                            DataSource::IngestionExport { .. } => (),
-                            DataSource::Introspection(_) => (),
-                            DataSource::Progress => (),
-                            DataSource::Other => (),
-                            DataSource::Sink { .. } => (),
-                        }
-                    }
-                } else if instance.is_none() {
-                    tracing::info!("Compaction command for id {id}, but we don't have a client.");
-                } else {
-                    soft_panic_or_log!("Reference to absent collection {id}");
-                };
-            }
-
-            // Sources can have subsources, which don't have associated clusters, which
-            // is why this operates differently than sinks.
-            if read_frontier.is_empty() {
-                source_statistics_to_drop.push(id);
-            }
-
-            // Note that while collections are dropped, the `client` may already
-            // be cleared out, before we do this post-processing!
-            if let Some(client) = instance {
-                client.send(StorageCommand::AllowCompaction(vec![(
-                    id,
-                    read_frontier.clone(),
-                )]));
-            }
-        }
-
-        // Delete all collection->shard mappings, making sure to de-duplicate.
-        let shards_to_update: BTreeSet<_> = pending_source_drops
-            .iter()
-            .chain(pending_collection_drops.iter())
-            .cloned()
-            .collect();
-        self.append_shard_mappings(shards_to_update.into_iter(), -1);
-
-        for id in pending_collection_drops {
-            self.collections
-                .remove(&id)
-                .expect("list populated after checking that self.collections contains it");
-        }
-
-        // Record the drop status for all pending source and sink drops.
-        //
-        // We also delete the items' statistics objects.
-        //
-        // The locks are held for a short time, only while we do some hash map removals.
-
-        let status_now = mz_ore::now::to_datetime((self.now)());
-
-        let mut dropped_sources = vec![];
-        for id in pending_source_drops.drain(..) {
-            dropped_sources.push(StatusUpdate::new(id, status_now, Status::Dropped));
-        }
-
-        if !self.read_only {
-            self.append_status_introspection_updates(
-                IntrospectionType::SourceStatusHistory,
-                dropped_sources,
-            );
-        }
-
-        {
-            let mut source_statistics = self.source_statistics.lock().expect("poisoned");
-            for id in source_statistics_to_drop {
-                source_statistics.source_statistics.remove(&id);
-                source_statistics.webhook_statistics.remove(&id);
-            }
-        }
-
-        // Record the drop status for all pending sink drops.
-        let mut dropped_sinks = vec![];
-        {
-            let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
-            for id in pending_sink_drops.drain(..) {
-                dropped_sinks.push(StatusUpdate::new(id, status_now, Status::Dropped));
-                sink_statistics.remove(&id);
-            }
-        }
-
-        if !self.read_only {
-            self.append_status_introspection_updates(
-                IntrospectionType::SinkStatusHistory,
-                dropped_sinks,
-            );
         }
 
         Ok(updated_frontiers)
@@ -2514,11 +2474,11 @@ where
         Self {
             build_info,
             collections: BTreeMap::default(),
+            dropped_objects: Default::default(),
             persist_table_worker,
             txns_read,
             txns_metrics,
             stashed_response: None,
-            pending_compaction_commands: vec![],
             pending_table_handle_drops_tx,
             pending_table_handle_drops_rx,
             pending_oneshot_ingestions: BTreeMap::default(),
@@ -2640,18 +2600,11 @@ where
                 if !update.is_empty() {
                     read_capability_changes.insert(*id, update);
                 }
-            } else if self.storage_collections.check_exists(*id).is_ok() {
-                // StorageCollections is handling it!
+            } else if self.dropped_objects.contains_key(id) {
+                // We dropped an object but might still get updates from cluster
+                // side, before it notices the drop. This is expected and fine.
             } else {
-                // TODO: This can happen because subsources report back an upper
-                // but we don't store them in our `ingestions` field, _nor_ do
-                // we acquire read holds for them. Also because we don't get
-                // `DroppedId` messages for them, so we wouldn't know when to
-                // clean up read holds.
-                info!(
-                    "Reference to absent collection {id}, new_upper={:?}",
-                    new_upper
-                );
+                soft_panic_or_log!("spurious upper update for {id}: {new_upper:?}");
             }
         }
 
@@ -2725,10 +2678,7 @@ where
         }
 
         // Translate our net compute actions into `AllowCompaction` commands and
-        // downgrade persist sinces. The actual downgrades are performed by a Tokio
-        // task asynchronously.
-        let mut worker_compaction_commands = BTreeMap::default();
-
+        // downgrade persist sinces.
         for (key, (mut changes, frontier, cluster_id)) in collections_net {
             if !changes.is_empty() {
                 if key.is_user() {
@@ -2760,19 +2710,17 @@ where
                         .expect("we only advance the frontier");
                 }
 
-                worker_compaction_commands.insert(key, (frontier.clone(), cluster_id));
+                // Send AllowCompaction command directly to the instance
+                if let Some(instance) = self.instances.get_mut(&cluster_id) {
+                    instance.send(StorageCommand::AllowCompaction(vec![(
+                        key,
+                        frontier.clone(),
+                    )]));
+                } else {
+                    soft_panic_or_log!(
+                        "missing instance client for cluster {cluster_id} while we still have outstanding AllowCompaction command {frontier:?} for {key}");
+                }
             }
-        }
-
-        for (id, (read_frontier, cluster_id)) in worker_compaction_commands {
-            // Acquiring a client for a storage instance requires await, so we
-            // instead stash these for later and process when we can.
-            self.pending_compaction_commands
-                .push(PendingCompactionCommand {
-                    id,
-                    read_frontier,
-                    cluster_id: Some(cluster_id),
-                });
         }
     }
 
@@ -3121,7 +3069,7 @@ where
                 details,
                 data_config,
             },
-        ) in ingestion_description.source_exports
+        ) in ingestion_description.source_exports.clone()
         {
             let export_storage_metadata = self.collection(export_id)?.collection_metadata.clone();
             source_exports.insert(
@@ -3140,7 +3088,7 @@ where
             // the associated ingestion
             ingestion_metadata: collection.collection_metadata.clone(),
             // The rest of the fields are identical
-            desc: ingestion_description.desc,
+            desc: ingestion_description.desc.clone(),
             instance_id: ingestion_description.instance_id,
             remap_collection_id: ingestion_description.remap_collection_id,
         };
@@ -3155,12 +3103,15 @@ where
                 ingestion_id: id,
             })?;
 
-        let collection = self
-            .collections
-            .get_mut(&id)
-            .ok_or(StorageError::IdentifierMissing(id))?;
-        // This collection will run in as many copies as there are replicas
-        collection.active_copies = instance.replica_count();
+        for id in ingestion_description.collection_ids() {
+            let collection = self
+                .collections
+                .get_mut(&id)
+                .ok_or(StorageError::IdentifierMissing(id))?;
+
+            // Track which replicas this ingestion is running on.
+            collection.active_replicas = instance.replica_ids().collect();
+        }
 
         let augmented_ingestion = RunIngestionCommand { id, description };
         instance.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
@@ -3229,6 +3180,14 @@ where
                 storage_instance_id,
                 export_id: id,
             })?;
+
+        let collection = self
+            .collections
+            .get_mut(&id)
+            .ok_or(StorageError::IdentifierMissing(id))?;
+
+        // Track which replicas this export is running on.
+        collection.active_replicas = instance.replica_ids().collect();
 
         instance.send(StorageCommand::RunSinks(vec![cmd]));
 
@@ -3503,9 +3462,10 @@ struct CollectionState<T: TimelyTimestamp> {
 
     pub extra_state: CollectionStateExtra<T>,
 
-    /// A counter for the number of replicas this collection is running on. This is used to track
-    /// the number of DroppedIds responses we expect to receive before dropping the tracked state.
-    active_copies: usize,
+    /// Tracks the replicas this collection is running on. This is used to track
+    /// the DroppedIds responses we expect to receive before dropping the tracked
+    /// state.
+    active_replicas: BTreeSet<ReplicaId>,
 
     /// Maximum frontier wallclock lag since the last introspection update.
     wallclock_lag_max: Duration,
