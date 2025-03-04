@@ -152,7 +152,8 @@ database_objects = [
             > CREATE MATERIALIZED VIEW obj AS SELECT generate_series::text , REPEAT('x', 1024) FROM generate_series(1, 1024)
             """
         ),
-        expected_size=1024 * 1024,
+        # Dictionary encoding in Persist greatly reduces the size of repeated characters.
+        expected_size=1024 * 10,
     ),
     # If a materialized view returns a small number of rows,
     # it should not require storage proportional to its input
