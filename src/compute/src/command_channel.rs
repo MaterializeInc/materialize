@@ -186,6 +186,7 @@ fn split_command(
                     initial_storage_as_of: dataflow.initial_storage_as_of.clone(),
                     refresh_schedule: dataflow.refresh_schedule.clone(),
                     time_dependence: dataflow.time_dependence.clone(),
+                    heap_size_limit: dataflow.heap_size_limit.clone(),
                 })
                 .map(ComputeCommand::CreateDataflow);
             Either::Left(commands)

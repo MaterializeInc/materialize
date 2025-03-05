@@ -186,7 +186,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let (addresses, operator_to_dataflow) = addresses.bifurcate::<CapacityContainerBuilder<Vec<_>>>("addresses", |data, output| {
+        let (addresses, operator_to_dataflow) = addresses.bifurcate::<CapacityContainerBuilder<Vec<_>>, _>("addresses", |data, output| {
             output.give_iterator(IntoIterator::into_iter(data).map(|((op, addr), time, diff)| {
                 ((*op, addr[0]), *time, *diff)
             }));

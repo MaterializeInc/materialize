@@ -180,7 +180,7 @@ pub(crate) struct ComputeState {
     /// The interval for rounding logging timestamps.
     logging_interval: Duration,
 
-    /// The handles to inject updates for logging dataflows.
+    /// The handles to inject updates for logging dataflows. Only available if logging is enabled.
     pub logging_handles: Option<LoggingHandles>,
     /// Shared set of collections exceeding their heap size limit.
     pub dataflows_exceeding_heap_size_limit: Rc<RefCell<BTreeSet<usize>>>,
@@ -500,7 +500,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 expiration_datetime = ?dataflow_expiration.as_option().map(|t| mz_ore::now::to_datetime(t.into())),
                 plan_until = ?dataflow.until.elements(),
                 until = ?until.elements(),
-                memory_limit = ?dataflow.memory_limit,
+                heap_size_limit = ?dataflow.heap_size_limit,
                 "creating dataflow",
             );
         } else {
@@ -514,7 +514,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 expiration_datetime = ?dataflow_expiration.as_option().map(|t| mz_ore::now::to_datetime(t.into())),
                 plan_until = ?dataflow.until.elements(),
                 until = ?until.elements(),
-                memory_limit = ?dataflow.memory_limit,
+                heap_size_limit = ?dataflow.heap_size_limit,
                 "creating dataflow",
             );
         };
@@ -563,9 +563,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 .insert(id, Rc::clone(&suspension_token));
         }
 
-        if let (Some(limit), true) = (dataflow.memory_limit, dataflow.is_transient()) {
+        if let (Some(limit), true) = (dataflow.heap_size_limit, dataflow.is_transient()) {
             for id in dataflow.export_ids() {
-                // TODO: Make configurable.
                 self.handle_set_heap_size_limit(id, Some(limit));
             }
         }
@@ -601,6 +600,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
+    /// Handles an update to a heap memory limit for a collection.
     fn handle_set_heap_size_limit(&mut self, id: GlobalId, limit: Option<u64>) {
         let collection = self
             .compute_state
@@ -614,18 +614,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             let handle = &mut handles.heap_size_limits_handle;
             let time = *handle.time();
             if let Some(old_limit) = old_limit {
-                handle.send((
-                    (collection.dataflow_id, old_limit),
-                    time,
-                    -Diff::try_from(old_limit).expect("must fit"),
-                ));
+                handle.send(((collection.dataflow_id, old_limit), time, -1));
             }
             if let Some(limit) = limit {
-                handle.send((
-                    (collection.dataflow_id, limit),
-                    time,
-                    Diff::try_from(limit).expect("must fit"),
-                ));
+                handle.send(((collection.dataflow_id, limit), time, 1));
             }
         }
     }
@@ -705,11 +697,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         ) {
             let handle = &mut handle.heap_size_limits_handle;
             let time = *handle.time();
-            handle.send((
-                (collection.dataflow_id, limit),
-                time,
-                -Diff::try_from(limit).expect("must fit"),
-            ));
+            handle.send(((collection.dataflow_id, limit), time, -1));
         }
     }
 
@@ -1025,13 +1013,16 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
+    /// Process reported limit violations.
+    ///
+    /// Reports any dataflows that have exceeded their heap size limit to the controller.
     pub fn process_limits(&self) {
-        for dataflow_id in std::mem::take(
-            &mut *self
-                .compute_state
-                .dataflows_exceeding_heap_size_limit
-                .borrow_mut(),
-        ) {
+        let mut borrow = self
+            .compute_state
+            .dataflows_exceeding_heap_size_limit
+            .borrow_mut();
+        for dataflow_id in std::mem::take(&mut *borrow) {
+            // We don't have a mapping of dataflow ID to global ID, so scan instead.
             for (&collection_id, state) in self.compute_state.collections.iter() {
                 if state.dataflow_id == dataflow_id {
                     let status = DataflowLimitStatus { collection_id };
@@ -1043,13 +1034,19 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
+    /// Advance handles to logging dataflows.
+    ///
+    /// Advances the handles based on the current system time.
     pub fn advance_handles(&mut self) {
-        let interval_ms = std::cmp::max(1, self.compute_state.logging_interval.as_millis());
-        let interval_ms = u64::try_from(interval_ms).expect("must fit");
-        let now = mz_ore::now::SYSTEM_TIME();
-        let time_ms = ((now / interval_ms) + 1) * interval_ms;
-        let new_time_ms: Timestamp = time_ms.try_into().expect("must fit");
         if let Some(handles) = self.compute_state.logging_handles.as_mut() {
+            // We try to tick time rounded to the logging interval.
+            let interval_ms = std::cmp::max(1, self.compute_state.logging_interval.as_millis());
+            let interval_ms = u64::try_from(interval_ms).expect("must fit");
+            // TODO: Is it correct to use the system time?
+            let now = mz_ore::now::SYSTEM_TIME();
+            let time_ms = ((now / interval_ms) + 1) * interval_ms;
+            let new_time_ms: Timestamp = time_ms.try_into().expect("must fit");
+
             handles.advance_to(new_time_ms);
         }
     }

@@ -854,7 +854,7 @@ impl Coordinator {
         let source_arity = typ.arity();
 
         if let peek::PeekPlan::SlowPath(PeekDataflowPlan { desc, .. }) = &mut peek_plan {
-            desc.memory_limit = max_query_heap_size;
+            desc.heap_size_limit = max_query_heap_size;
         }
 
         self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);

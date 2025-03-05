@@ -1103,7 +1103,7 @@ mod tests {
             refresh_schedule: Default::default(),
             debug_name: Default::default(),
             time_dependence: None,
-            memory_limit: None,
+            heap_size_limit: None,
         }
     }
 

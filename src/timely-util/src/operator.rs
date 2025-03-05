@@ -942,26 +942,30 @@ mod bifurcate {
 
     use crate::containers::ProvidedBuilder;
 
+    /// Extension trait for [`StreamCore`].
     pub trait Bifurcate<G: Scope, C>: Sized {
-        fn bifurcate<CB: ContainerBuilder>(
-            &self,
-            name: &str,
-            logic: impl FnMut(
+        /// Bifurcates the stream into two streams. The logic provided will be applied to each
+        /// input container, and has the opportunity to push data into the provided session for
+        /// the second output while modifying the container if it chooses to. The container
+        /// will then be pushed into the first output stream.
+        fn bifurcate<CB, F>(&self, name: &str, logic: F) -> (Self, StreamCore<G, CB::Container>)
+        where
+            CB: ContainerBuilder,
+            F: FnMut(
                     &mut C,
                     &mut Session<
                         G::Timestamp,
                         CB,
                         Counter<G::Timestamp, CB::Container, Tee<G::Timestamp, CB::Container>>,
                     >,
-                ) + 'static,
-        ) -> (Self, StreamCore<G, CB::Container>);
+                ) + 'static;
     }
 
     impl<G: Scope, C: Container + Clone + 'static> Bifurcate<G, C> for StreamCore<G, C> {
-        fn bifurcate<CB: ContainerBuilder>(
-            &self,
-            name: &str,
-            mut logic: impl FnMut(
+        fn bifurcate<CB, F>(&self, name: &str, mut logic: F) -> (Self, StreamCore<G, CB::Container>)
+        where
+            CB: ContainerBuilder,
+            F: FnMut(
                     &mut C,
                     &mut Session<
                         G::Timestamp,
@@ -969,8 +973,8 @@ mod bifurcate {
                         Counter<G::Timestamp, CB::Container, Tee<G::Timestamp, CB::Container>>,
                     >,
                 ) + 'static,
-        ) -> (Self, StreamCore<G, CB::Container>) {
-            let mut builder = OperatorBuilder::new(format!("Bifurcate {name}"), self.scope());
+        {
+            let mut builder = OperatorBuilder::new(format!("Bifurcate({name})"), self.scope());
             let mut input = builder.new_input(self, Pipeline);
             let (mut self_out, self_stream) = builder.new_output::<ProvidedBuilder<C>>();
             let (mut other_out, other_stream) = builder.new_output::<CB>();

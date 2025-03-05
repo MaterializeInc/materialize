@@ -159,6 +159,7 @@ struct SharedLoggingState {
     arrangement_size_activators: BTreeMap<usize, Activator>,
 }
 
+/// Data returned by the logging dataflow initialization.
 pub(crate) struct LoggingTraces {
     /// Exported traces, by log variant.
     pub traces: BTreeMap<LogVariant, TraceBundle>,
@@ -170,6 +171,7 @@ pub(crate) struct LoggingTraces {
     pub logging_handles: LoggingHandles,
 }
 
+/// Handles to logging inputs.
 pub(crate) struct LoggingHandles {
     /// Handle to provide heap size limits per dataflow.
     pub heap_size_limits_handle: Handle<Timestamp, Update<(usize, u64)>>,

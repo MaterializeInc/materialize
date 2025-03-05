@@ -1360,7 +1360,7 @@ where
             refresh_schedule: dataflow.refresh_schedule,
             debug_name: dataflow.debug_name,
             time_dependence: dataflow.time_dependence,
-            memory_limit: dataflow.memory_limit,
+            heap_size_limit: dataflow.heap_size_limit,
         };
 
         if augmented_dataflow.is_transient() {
@@ -2017,18 +2017,14 @@ where
                 self.update_operator_hydration_status(replica_id, status)
             }
             StatusResponse::DataflowLimitExceeded(status) => {
-                self.update_dataflow_limit_status(replica_id, status)
+                self.handle_dataflow_limit_status(replica_id, status)
             }
         }
     }
 
-    /// Update the tracked hydration status for an operator according to a received status update.
-    fn update_dataflow_limit_status(&mut self, replica_id: ReplicaId, status: DataflowLimitStatus) {
-        tracing::warn!(
-            "Dataflow limit exceeded on replica {}: {:?}",
-            replica_id,
-            status
-        );
+    /// Handle a dataflow limit exceeded response.
+    fn handle_dataflow_limit_status(&mut self, replica_id: ReplicaId, status: DataflowLimitStatus) {
+        tracing::debug!(%replica_id, ?status, "dataflow limit exceeded");
         if let Some(subscribe) = self.subscribes.get(&status.collection_id) {
             self.deliver_response(ComputeControllerResponse::SubscribeResponse(
                 status.collection_id,
