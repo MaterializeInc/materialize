@@ -3376,10 +3376,53 @@ pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVie
     oid: oid::VIEW_MZ_SINK_STATUSES_OID,
     column_defs: None,
     sql: "
-WITH latest_events AS (
-    SELECT DISTINCT ON(sink_id) occurred_at, sink_id, status, error, details
-    FROM mz_internal.mz_sink_status_history
-    ORDER BY sink_id, occurred_at DESC
+WITH
+-- The status history contains per-replica events and sink-global events.
+-- For the latter, replica_id is NULL. We turn these into '<sink>', so that
+-- we can treat them uniformly below.
+uniform_status_history AS
+(
+    SELECT
+        s.sink_id,
+        COALESCE(s.replica_id, '<sink>') as replica_id,
+        s.occurred_at,
+        s.status,
+        s.error,
+        s.details
+    FROM mz_internal.mz_sink_status_history s
+),
+-- For getting the latest events, we first determine the latest per-replica
+-- events here and then apply precedence rules below.
+latest_per_replica_events AS
+(
+    SELECT DISTINCT ON (sink_id, replica_id)
+        occurred_at, sink_id, replica_id, status, error, details
+    FROM uniform_status_history
+    ORDER BY sink_id, replica_id, occurred_at DESC
+),
+-- We have a precedence list that determines the overall status in case
+-- there is differing per-replica (including sink-global) statuses. If
+-- there is no 'dropped' status, and any replica reports 'running', the
+-- overall status is 'running' even if there might be some replica that has
+-- errors or is paused.
+latest_events AS
+(
+    SELECT DISTINCT ON (sink_id)
+        sink_id,
+        occurred_at,
+        status,
+        error,
+        details
+    FROM latest_per_replica_events
+    ORDER BY sink_id, CASE status
+                WHEN 'dropped' THEN 1
+                WHEN 'running' THEN 2
+                WHEN 'stalled' THEN 3
+                WHEN 'starting' THEN 4
+                WHEN 'paused' THEN 5
+                WHEN 'ceased' THEN 6
+                ELSE 7  -- For any other status values
+            END
 )
 SELECT
     mz_sinks.id,
