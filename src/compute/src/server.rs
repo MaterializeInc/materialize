@@ -31,7 +31,6 @@ use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
-use mz_service::local::LocalActivator;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use timely::communication::Allocate;
@@ -235,7 +234,6 @@ impl ClusterSpec for Config {
         client_rx: crossbeam_channel::Receiver<(
             crossbeam_channel::Receiver<ComputeCommand>,
             mpsc::UnboundedSender<ComputeResponse>,
-            mpsc::UnboundedSender<LocalActivator>,
         )>,
     ) {
         if self.context.worker_core_affinity {
@@ -733,7 +731,6 @@ fn spawn_channel_adapter(
     client_rx: crossbeam_channel::Receiver<(
         crossbeam_channel::Receiver<ComputeCommand>,
         mpsc::UnboundedSender<ComputeResponse>,
-        mpsc::UnboundedSender<LocalActivator>,
     )>,
     command_tx: command_channel::Sender,
     response_rx: crossbeam_channel::Receiver<(ComputeResponse, u64)>,
@@ -750,16 +747,10 @@ fn spawn_channel_adapter(
             // for previous clients.
             let mut epoch = 0;
 
-            while let Ok((command_rx, response_tx, activator_tx)) = client_rx.recv() {
+            while let Ok((command_rx, response_tx)) = client_rx.recv() {
                 epoch += 1;
 
                 // Serve this connection until we see any of the channels disconnect.
-
-                let activator = LocalActivator::new(thread::current());
-                if activator_tx.send(activator).is_err() {
-                    continue;
-                }
-
                 loop {
                     crossbeam_channel::select! {
                         recv(command_rx) -> msg => match msg {
