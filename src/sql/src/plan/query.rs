@@ -510,7 +510,11 @@ pub fn plan_copy_item(
     // should be simplified. The reason they are currently separate code paths is so we can roll
     // out `COPY ... FROM <url>` without touching the current `COPY ... FROM ... STDIN` behavior.
 
-    // If we're copying data into a table, then we generate an MFP.
+    // If we're copying data into a table that users can write into (e.g. not a `CREATE TABLE ...
+    // FROM SOURCE ...`), then we generate an MFP.
+    //
+    // Note: This method is called for both `COPY INTO <table> FROM` and `COPY <expr> TO <external>`
+    // so it's not always guaranteed that our `item` is a table.
     let mfp = if let Some(table_defaults) = item.writable_table_details() {
         let mut table_defaults = table_defaults.to_vec();
 
