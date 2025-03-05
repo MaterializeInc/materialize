@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::time::Instant;
+
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsFutureExt;
 use uuid::Uuid;
@@ -29,14 +31,18 @@ impl Client {
         let name = "exchange_secret_for_token";
         let histogram = metrics.request_duration_seconds.with_label_values(&[name]);
 
+        let start = Instant::now();
         let response = self
             .client
             .post(admin_api_token_url)
             .json(&request)
             .send()
-            .wall_time()
-            .observe(histogram)
             .await?;
+        let duration = start.elapsed();
+
+        // Authentication is on the blocking path for connection startup so we
+        // want to make sure it stays fast.
+        histogram.observe(duration.as_secs_f64());
 
         let status = response.status().to_string();
         metrics
@@ -51,7 +57,15 @@ impl Client {
             .map(|v| v.to_string());
 
         match response.error_for_status_ref() {
-            Ok(_) => Ok(response.json().await?),
+            Ok(_) => {
+                tracing::debug!(
+                    ?request.client_id,
+                    frontegg_trace_id,
+                    ?duration,
+                    "request success",
+                );
+                Ok(response.json().await?)
+            }
             Err(e) => {
                 let body = response
                     .text()
