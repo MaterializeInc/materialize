@@ -10,7 +10,6 @@
 use std::time::Instant;
 
 use mz_ore::instrument;
-use mz_ore::metrics::MetricsFutureExt;
 use uuid::Uuid;
 
 use crate::metrics::Metrics;
