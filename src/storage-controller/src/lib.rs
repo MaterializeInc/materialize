@@ -1767,11 +1767,6 @@ where
                         collections_to_drop.push(*id);
                         source_statistics_to_drop.push(*id);
                     }
-                    DataSource::Table { primary: None } => {
-                        collections_to_drop.push(*id);
-                    }
-                    // Tables that are not the primary collection do not need Persist compaction applied.
-                    DataSource::Table { primary: Some(_) } => (),
                     DataSource::Ingestion(_) => {
                         ingestions_to_drop.insert(*id);
                         source_statistics_to_drop.push(*id);
@@ -1812,11 +1807,17 @@ where
                         ingestions_to_drop.insert(*id);
                         source_statistics_to_drop.push(*id);
                     }
-                    DataSource::Progress => {
+                    DataSource::Progress | DataSource::Table { .. } | DataSource::Other => {
                         collections_to_drop.push(*id);
                     }
-                    DataSource::Other | DataSource::Introspection(_) => (),
-                    DataSource::Sink { .. } => {}
+                    DataSource::Introspection(_) | DataSource::Sink { .. } => {
+                        // Collections of these types are either not sources and should be dropped
+                        // through other means, or are sources but should never be dropped.
+                        soft_panic_or_log!(
+                            "drop_sources called on a {:?} (id={id}))",
+                            collection_state.data_source,
+                        );
+                    }
                 }
             }
         }

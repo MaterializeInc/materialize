@@ -204,7 +204,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         }
 
         let count = u64::cast_from(run_sinks.len());
-        self.metrics.run_ingestions_count.set(count);
+        self.metrics.run_sinks_count.set(count);
         if !run_sinks.is_empty() {
             self.commands.push(StorageCommand::RunSinks(run_sinks));
         }
@@ -232,6 +232,8 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
             self.commands.push(StorageCommand::InitializationComplete);
         }
 
+        let count = u64::from(allow_writes);
+        self.metrics.allow_writes_count.set(count);
         if allow_writes {
             self.commands.push(StorageCommand::AllowWrites);
         }

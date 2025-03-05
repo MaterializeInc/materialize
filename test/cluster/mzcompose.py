@@ -2463,6 +2463,10 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
+    def get_summed_value(self, metric_name: str) -> float:
+        metrics = self.with_name(metric_name)
+        return sum(metrics.values())
+
     def get_command_count(self, metric: str, command_type: str) -> float:
         metrics = self.with_name(metric)
         values = [
@@ -2484,9 +2488,14 @@ class Metrics:
             "mz_compute_replica_history_command_count", command_type
         )
 
-    def get_controller_history_command_count(self, command_type: str) -> float:
+    def get_compute_controller_history_command_count(self, command_type: str) -> float:
         return self.get_command_count(
             "mz_compute_controller_history_command_count", command_type
+        )
+
+    def get_storage_controller_history_command_count(self, command_type: str) -> float:
+        return self.get_command_count(
+            "mz_storage_controller_history_command_count", command_type
         )
 
     def get_commands_total(self, command_type: str) -> float:
@@ -2510,6 +2519,14 @@ class Metrics:
         values = [v for k, v in metrics.items() if f'result="{result}"' in k]
         assert len(values) == 1
         return values[0]
+
+    def get_wallclock_lag_count(self, collection_id: str) -> float | None:
+        metrics = self.with_name("mz_dataflow_wallclock_lag_seconds_count")
+        values = [
+            v for k, v in metrics.items() if f'collection_id="{collection_id}"' in k
+        ]
+        assert len(values) <= 1
+        return next(iter(values), None)
 
     def get_wallclock_lag_count(self, collection_id: str) -> float | None:
         metrics = self.with_name("mz_dataflow_wallclock_lag_seconds_count")
@@ -2786,21 +2803,25 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count == 0, f"got {count}"
 
     # mz_compute_controller_history_command_count
-    count = metrics.get_controller_history_command_count("create_timely")
+    count = metrics.get_compute_controller_history_command_count("create_timely")
     assert count == 1, f"got {count}"
-    count = metrics.get_controller_history_command_count("create_instance")
+    count = metrics.get_compute_controller_history_command_count("create_instance")
     assert count == 1, f"got {count}"
-    count = metrics.get_controller_history_command_count("allow_compaction")
+    count = metrics.get_compute_controller_history_command_count("allow_compaction")
     assert count > 0, f"got {count}"
-    count = metrics.get_controller_history_command_count("create_dataflow")
+    count = metrics.get_compute_controller_history_command_count("create_dataflow")
     assert count > 0, f"got {count}"
-    count = metrics.get_controller_history_command_count("peek")
+    count = metrics.get_compute_controller_history_command_count("peek")
     assert count <= 2, f"got {count}"
-    count = metrics.get_controller_history_command_count("cancel_peek")
+    count = metrics.get_compute_controller_history_command_count("cancel_peek")
     assert count <= 2, f"got {count}"
-    count = metrics.get_controller_history_command_count("initialization_complete")
+    count = metrics.get_compute_controller_history_command_count(
+        "initialization_complete"
+    )
     assert count == 1, f"got {count}"
-    count = metrics.get_controller_history_command_count("update_configuration")
+    count = metrics.get_compute_controller_history_command_count("update_configuration")
+    assert count == 1, f"got {count}"
+    count = metrics.get_compute_controller_history_command_count("allow_writes")
     assert count == 1, f"got {count}"
 
     count = metrics.get_value("mz_compute_controller_history_dataflow_count")
@@ -2845,6 +2866,138 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     metrics = fetch_metrics()
     assert metrics.get_wallclock_lag_count(index_id) is None
     assert metrics.get_wallclock_lag_count(mv_id) is None
+
+
+def workflow_test_storage_controller_metrics(c: Composition) -> None:
+    """Test metrics exposed by the storage controller."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized", "kafka", "schema-registry")
+    c.up("testdrive", persistent=True)
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp)
+
+    # Set up a cluster with a couple storage objects.
+    c.testdrive(
+        dedent(
+            """
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET enable_alter_table_add_column = true
+
+            > CREATE CLUSTER test SIZE '1'
+            > SET cluster = test
+
+            > CREATE TABLE t (a int)
+            > INSERT INTO t VALUES (1)
+
+            > CREATE TABLE t_alter (a int)
+            > INSERT INTO t_alter VALUES (1)
+            > ALTER TABLE t_alter ADD COLUMN b int
+
+            > CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
+
+            > CREATE SOURCE src FROM LOAD GENERATOR COUNTER
+
+            > CREATE CONNECTION kafka_conn
+                TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+            > CREATE CONNECTION csr_conn
+                TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}')
+            > CREATE SINK snk FROM t
+                INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk-${testdrive.seed}')
+                FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                ENVELOPE DEBEZIUM
+
+            > SELECT count(*) > 0 FROM t
+            true
+            > SELECT count(*) > 0 FROM t_alter
+            true
+            > SELECT count(*) > 0 FROM mv
+            true
+            > SELECT count(*) > 0 FROM src
+            true
+            """
+        )
+    )
+
+    table1_id = c.sql_query("SELECT id FROM mz_tables WHERE name = 't'")[0][0]
+    table2_id = c.sql_query("SELECT id FROM mz_tables WHERE name = 't_alter'")[0][0]
+    mv_id = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")[0][0]
+    source_id = c.sql_query("SELECT id FROM mz_sources WHERE name = 'src'")[0][0]
+    sink_id = c.sql_query("SELECT id FROM mz_sinks WHERE name = 'snk'")[0][0]
+
+    # Wait a bit to let the controller refresh its metrics.
+    time.sleep(2)
+
+    # Check that expected metrics exist and have sensible values.
+    metrics = fetch_metrics()
+    metrics_u2 = metrics.for_instance("u2")
+    metrics_ux = metrics.for_instance("")
+
+    count = metrics_u2.get_summed_value("mz_storage_messages_sent_bytes")
+    assert count > 0, f"got {count}"
+    count = metrics_u2.get_summed_value("mz_storage_messages_received_bytes")
+    assert count > 0, f"got {count}"
+
+    # mz_compute_controller_history_command_count
+    count = metrics_u2.get_storage_controller_history_command_count("create_timely")
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_controller_history_command_count("allow_compaction")
+    assert count > 0, f"got {count}"
+    count = metrics_u2.get_storage_controller_history_command_count("run_ingestions")
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_controller_history_command_count("run_sinks")
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_controller_history_command_count(
+        "initialization_complete"
+    )
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_controller_history_command_count(
+        "update_configuration"
+    )
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_controller_history_command_count("allow_writes")
+    assert count == 1, f"got {count}"
+
+    # mz_dataflow_wallclock_lag_seconds_count
+    count = metrics_ux.get_wallclock_lag_count(table1_id)
+    assert count, f"got {count}"
+    count = metrics_ux.get_wallclock_lag_count(table2_id)
+    assert count, f"got {count}"
+    count = metrics_ux.get_wallclock_lag_count(mv_id)
+    assert count, f"got {count}"
+    count = metrics_u2.get_wallclock_lag_count(source_id)
+    assert count, f"got {count}"
+    count = metrics_u2.get_wallclock_lag_count(sink_id)
+    assert count, f"got {count}"
+
+    # Drop the storage objects.
+    c.sql(
+        """
+        DROP sink snk;
+        DROP SOURCE src;
+        DROP MATERIALIZED VIEW mv;
+        DROP TABLE t;
+        DROP TABLE t_alter;
+        """
+    )
+
+    # Wait a bit to let the controller refresh its metrics.
+    time.sleep(2)
+
+    # Check that the per-collection metrics have been cleaned up.
+    metrics = fetch_metrics()
+    metrics_u2 = metrics.for_instance("u2")
+    metrics_ux = metrics.for_instance("")
+
+    assert metrics_ux.get_wallclock_lag_count(table1_id) is None
+    assert metrics_ux.get_wallclock_lag_count(table2_id) is None
+    assert metrics_ux.get_wallclock_lag_count(mv_id) is None
+    assert metrics_u2.get_wallclock_lag_count(source_id) is None
+    assert metrics_u2.get_wallclock_lag_count(sink_id) is None
 
 
 def workflow_test_optimizer_metrics(c: Composition) -> None:
