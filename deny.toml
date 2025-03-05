@@ -133,6 +133,8 @@ skip = [
     { name = "twox-hash", version = "1.6.3" },
     { name = "miniz_oxide", version = "0.5.4" },
     { name = "unicode-width", version = "0.1.10" },
+    # Used by postgres
+    { name = "fallible-iterator", version = "0.2.0" },
     # Used by rdkafka-sys
     { name = "num_enum", version = "0.5.11" },
     { name = "num_enum_derive", version = "0.5.11" },
