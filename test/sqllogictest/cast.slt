@@ -125,3 +125,16 @@ SELECT date('2000')
 
 query error db error: ERROR: function date\(unknown, unknown\) does not exist
 SELECT date('2000', 'a')
+
+query T
+SELECT CAST(5 + 3 AS text);
+----
+8
+
+query T
+SELECT (5 + 3)::text;
+----
+8
+
+query error db error: ERROR: operator does not exist: integer \+ text
+SELECT 5 + 3::text;
