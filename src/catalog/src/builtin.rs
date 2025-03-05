@@ -3210,13 +3210,82 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     column_defs: None,
     sql: "
     WITH
-    -- Get the latest events
+    per_replica_status_history AS (
+        SELECT *
+        FROM mz_internal.mz_source_status_history
+        WHERE replica_id IS NOT NULL
+    ),
+    per_source_status_history AS (
+        SELECT *
+        FROM mz_internal.mz_source_status_history
+        WHERE replica_id IS NULL
+    ),
+    active_replicas AS (
+        SELECT DISTINCT ON (source_id, replica_id)
+            source_id,
+            replica_id
+        FROM mz_internal.mz_source_status_history
+        WHERE replica_id IS NOT NULL
+    ),
+    -- Raise per-source status (like paused) to be per-replica, for each
+    -- replica. So that we can treat all status updates the same below.
+    combined_status_history AS
+    (
+        SELECT
+            s.source_id,
+            s.replica_id,
+            s.occurred_at,
+            s.status,
+            s.error,
+            s.details
+        FROM
+            per_replica_status_history s
+        UNION ALL
+        SELECT
+            r.source_id,
+            r.replica_id,
+            s.occurred_at,
+            s.status,
+            s.error,
+            s.details
+        FROM
+            active_replicas r
+        JOIN
+            per_source_status_history s ON r.source_id = s.source_id
+    ),
+    -- For getting the latest events, we first determine the latest per-replica
+    -- events here and then apply precedence rules below.
+    latest_per_replica_events AS
+    (
+        SELECT DISTINCT ON (source_id, replica_id)
+            occurred_at, source_id, replica_id, status, error, details
+        FROM combined_status_history
+        ORDER BY source_id, replica_id, occurred_at DESC
+    ),
+    -- And then we have a precedence list that determines the overall status in
+    -- case there is differing per-replica statuses. For example, if any
+    -- replica has 'paused' as it's latest status, it means the overall source
+    -- is paused. If there is no 'dropped' or 'paused' status, and any replica
+    -- reports 'running', the overall status is 'running' even if there might
+    -- be some replica that has errors.
     latest_events AS
     (
-        SELECT DISTINCT ON (source_id)
-            occurred_at, source_id, status, error, details
-        FROM mz_internal.mz_source_status_history
-        ORDER BY source_id, occurred_at DESC
+       SELECT DISTINCT ON (source_id)
+            source_id,
+            occurred_at,
+            status,
+            error,
+            details
+        FROM latest_per_replica_events
+        ORDER BY source_id, CASE status
+                    WHEN 'dropped' THEN 1
+                    WHEN 'running' THEN 2
+                    WHEN 'stalled' THEN 3
+                    WHEN 'starting' THEN 4
+                    WHEN 'paused' THEN 5
+                    WHEN 'ceased' THEN 6
+                    ELSE 7  -- For any other status values
+                END
     ),
     -- Determine which sources are subsources and which are parent sources
     subsources AS
