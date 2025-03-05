@@ -27,11 +27,6 @@ weight = 5
 #
 
 [[menu.main]]
-identifier = "ingest-data"
-name = "Ingest data"
-weight = 11
-
-[[menu.main]]
 name = "SQL Server"
 parent = 'ingest-data'
 identifier = 'sql-server'
