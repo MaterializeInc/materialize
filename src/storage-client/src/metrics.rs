@@ -34,7 +34,6 @@ pub type UIntGauge = DeleteOnDropGauge<AtomicU64, Vec<String>>;
 pub struct StorageControllerMetrics {
     messages_sent_bytes: prometheus::HistogramVec,
     messages_received_bytes: prometheus::HistogramVec,
-    startup_prepared_statements_kept: prometheus::IntGauge,
     regressed_offset_known: IntCounterVec,
     history_command_count: UIntGaugeVec,
 
@@ -56,10 +55,6 @@ impl StorageControllerMetrics {
                 help: "size of storage messages received",
                 var_labels: ["instance_id", "replica_id"],
                 buckets: HISTOGRAM_BYTE_BUCKETS.to_vec()
-            )),
-            startup_prepared_statements_kept: metrics_registry.register(metric!(
-                name: "mz_storage_startup_prepared_statements_kept",
-                help: "number of prepared statements kept on startup",
             )),
             regressed_offset_known: metrics_registry.register(metric!(
                 name: "mz_storage_regressed_offset_known",
@@ -98,11 +93,6 @@ impl StorageControllerMetrics {
             instance_id: id,
             metrics: self.clone(),
         }
-    }
-
-    pub fn set_startup_prepared_statements_kept(&self, n: u64) {
-        let n: i64 = n.try_into().expect("realistic number");
-        self.startup_prepared_statements_kept.set(n);
     }
 }
 
