@@ -483,7 +483,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
             };
 
         let (arrangement_heap_size, arrangement_heap_size_stripped) =
-            arrangement_heap_size.bifurcate::<CapacityContainerBuilder<Vec<_>>>(
+            arrangement_heap_size.bifurcate::<CapacityContainerBuilder<Vec<_>>, _>(
                 "arrangement_heap_size",
                 |data, session| {
                     session.give_iterator(

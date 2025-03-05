@@ -63,7 +63,7 @@ message ProtoDataflowDescription {
 
   string debug_name = 8;
 
-  optional uint64 memory_limit = 12;
+  optional uint64 heap_size_limit = 12;
 }
 
 message ProtoIndexDesc {

@@ -76,7 +76,7 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     /// Description of how the dataflow's progress relates to wall-clock time. None for unknown.
     pub time_dependence: Option<TimeDependence>,
     /// Optional heap size limit for this dataflow, in bytes.
-    pub memory_limit: Option<u64>,
+    pub heap_size_limit: Option<u64>,
 }
 
 impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
@@ -149,7 +149,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             refresh_schedule: None,
             debug_name: name,
             time_dependence: None,
-            memory_limit: None,
+            heap_size_limit: None,
         }
     }
 
@@ -571,7 +571,7 @@ where
             refresh_schedule: self.refresh_schedule.clone(),
             debug_name: self.debug_name.clone(),
             time_dependence: self.time_dependence.clone(),
-            memory_limit: self.memory_limit,
+            heap_size_limit: self.heap_size_limit,
         }
     }
 }
@@ -590,7 +590,7 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<RenderPlan, Coll
             refresh_schedule: self.refresh_schedule.into_proto(),
             debug_name: self.debug_name.clone(),
             time_dependence: self.time_dependence.into_proto(),
-            memory_limit: self.memory_limit.into_proto(),
+            heap_size_limit: self.heap_size_limit.into_proto(),
         }
     }
 
@@ -614,7 +614,7 @@ impl RustType<ProtoDataflowDescription> for DataflowDescription<RenderPlan, Coll
             refresh_schedule: proto.refresh_schedule.into_rust()?,
             debug_name: proto.debug_name,
             time_dependence: proto.time_dependence.into_rust()?,
-            memory_limit: proto.memory_limit,
+            heap_size_limit: proto.heap_size_limit,
         })
     }
 }
@@ -820,7 +820,7 @@ where
                     refresh_schedule,
                     debug_name,
                 ),
-                (time_dependence, memory_limit),
+                (time_dependence, heap_size_limit),
             )| DataflowDescription {
                 source_imports: BTreeMap::from_iter(source_imports),
                 index_imports: BTreeMap::from_iter(index_imports),
@@ -845,7 +845,7 @@ where
                 },
                 debug_name,
                 time_dependence,
-                memory_limit,
+                heap_size_limit,
             },
         )
 }

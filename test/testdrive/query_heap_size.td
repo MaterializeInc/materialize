@@ -9,47 +9,38 @@
 
 # Test the `max_query_heap_size` session variable.
 
-$ set-arg-default single-replica-cluster=quickstart
+$ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 
-> CREATE SOURCE tpch
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR TPCH (SCALE FACTOR 1, UP TO 1000)
-  FOR ALL TABLES;
+> CREATE TABLE t1 (a int4, b text)
 
-> CREATE VIEW vq01 AS
-  SELECT
-    l_returnflag,
-    l_linestatus,
-    sum(l_quantity) AS sum_qty,
-    sum(l_extendedprice) AS sum_base_price,
-    sum(l_extendedprice * (1 - l_discount)) AS sum_disc_price,
-    sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) AS sum_charge,
-    avg(l_quantity) AS avg_qty,
-    avg(l_extendedprice) AS avg_price,
-    avg(l_discount) AS avg_disc,
-    count(*) AS count_order
-  FROM
-    lineitem
-  WHERE
-    l_shipdate <= DATE '1998-12-01' - INTERVAL '60' day
-  GROUP BY
-    l_returnflag,
-    l_linestatus
-  ORDER BY
-    l_returnflag,
-    l_linestatus;
+> INSERT INTO t1 SELECT * FROM generate_series(1, 10000), repeat('a', 100);
 
 > SET max_query_heap_size = '1kB';
 
-! SELECT * FROM vq01;
+> BEGIN
+
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT max(a) FROM t1);
+
+# The first timestamp is computed without detecting that the limit has been
+# exceeded.
+> FETCH 1 c;
+<TIMESTAMP> 1 10000
+
+# No output should be produced. Instead an error .. notice?
+! FETCH 1 c;
 contains:Dataflow limit exceeded
+
+> ROLLBACK;
 
 > SET max_query_heap_size = '128MB';
 
-> SELECT * FROM vq01;
-4 values hashing to 87d2cbecfc8cdcd9c9614dfb7e6d236f
+> BEGIN
 
-> SET max_query_heap_size = '';
+> DECLARE c CURSOR FOR SUBSCRIBE (SELECT max(a) FROM t1);
 
-> SELECT * FROM vq01;
-4 values hashing to 87d2cbecfc8cdcd9c9614dfb7e6d236f
+> FETCH 1 c;
+<TIMESTAMP> 1 10000
+
+> FETCH 1 FROM c WITH (TIMEOUT = '1s');
+
+> ROLLBACK;

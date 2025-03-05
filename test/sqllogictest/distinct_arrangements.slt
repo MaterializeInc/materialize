@@ -1099,6 +1099,7 @@ Arrange Timely(MessagesSent)
 Arrange Timely(Operates)
 Arrange Timely(Parks)
 Arrange Timely(Reachability)
+Reduce: dataflow_to_heap_size_count
 dataflow_to_heap_size
 dataflow_to_heap_size_count
 heap_size_limits
