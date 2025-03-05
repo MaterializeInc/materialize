@@ -12,6 +12,7 @@
 mod tunnel;
 use std::time::Duration;
 
+use aws_rds::RdsTokenError;
 pub use tunnel::{
     Config, MySqlConn, TimeoutConfig, TunnelConfig, DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT, DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME, DEFAULT_TCP_KEEPALIVE,
@@ -39,6 +40,7 @@ pub use privileges::validate_source_privileges;
 
 pub mod decoding;
 pub use decoding::pack_mysql_row;
+mod aws_rds;
 
 #[derive(Debug, Clone)]
 pub struct UnsupportedDataType {
@@ -116,6 +118,9 @@ pub enum MySqlError {
     MySql(#[from] mysql_async::Error),
     #[error("connection attempt timed out after {0:?}")]
     ConnectionTimeout(Duration),
+    /// Error retrieving AWS authorization token
+    #[error(transparent)]
+    AwsTokenError(#[from] RdsTokenError),
 }
 
 /// Quotes MySQL identifiers. [See MySQL quote_identifier()](https://github.com/mysql/mysql-sys/blob/master/functions/quote_identifier.sql)
