@@ -20,21 +20,19 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
-    DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, GaugeVec, HistogramVec,
-    IntCounterVec, MetricVecExt, MetricsRegistry,
+    DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, HistogramVec, IntCounterVec,
+    MetricVecExt, MetricsRegistry,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
 use mz_service::codec::StatsCollector;
-use prometheus::core::{AtomicF64, AtomicU64};
+use prometheus::core::AtomicU64;
 
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
 
 pub(crate) type IntCounter = DeleteOnDropCounter<AtomicU64, Vec<String>>;
-type Gauge = DeleteOnDropGauge<AtomicF64, Vec<String>>;
-/// TODO(database-issues#7533): Add documentation.
-pub type UIntGauge = DeleteOnDropGauge<AtomicU64, Vec<String>>;
+pub(crate) type UIntGauge = DeleteOnDropGauge<AtomicU64, Vec<String>>;
 type Histogram = DeleteOnDropHistogram<Vec<String>>;
 
 /// Compute controller metrics.
@@ -65,9 +63,6 @@ pub struct ComputeControllerMetrics {
     // peeks
     peeks_total: IntCounterVec,
     peek_duration_seconds: HistogramVec,
-
-    // dataflows
-    dataflow_initial_output_duration_seconds: GaugeVec,
 
     /// Metrics shared with the storage controller.
     shared: ControllerMetrics,
@@ -167,11 +162,6 @@ impl ComputeControllerMetrics {
                 help: "A histogram of peek durations since restart.",
                 var_labels: ["instance_id", "result"],
                 buckets: histogram_seconds_buckets(0.000_500, 32.),
-            )),
-            dataflow_initial_output_duration_seconds: metrics_registry.register(metric!(
-                name: "mz_dataflow_initial_output_duration_seconds",
-                help: "The time from dataflow creation up to when the first output was produced.",
-                var_labels: ["instance_id", "replica_id", "collection_id"],
             )),
 
             shared,
@@ -394,27 +384,13 @@ impl ReplicaMetrics {
             return None;
         }
 
-        let labels = vec![
-            self.instance_id.to_string(),
-            self.replica_id.to_string(),
-            collection_id.to_string(),
-        ];
-
-        let initial_output_duration_seconds = self
-            .metrics
-            .dataflow_initial_output_duration_seconds
-            .get_delete_on_drop_metric(labels.clone());
-
         let wallclock_lag = self.metrics.shared.wallclock_lag_metrics(
             collection_id.to_string(),
             Some(self.instance_id.to_string()),
             Some(self.replica_id.to_string()),
         );
 
-        Some(ReplicaCollectionMetrics {
-            initial_output_duration_seconds,
-            wallclock_lag,
-        })
+        Some(ReplicaCollectionMetrics { wallclock_lag })
     }
 }
 
@@ -440,8 +416,6 @@ impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetric
 /// Per-replica-and-collection metrics.
 #[derive(Debug)]
 pub(crate) struct ReplicaCollectionMetrics {
-    /// Gauge tracking dataflow hydration time.
-    pub initial_output_duration_seconds: Gauge,
     /// Metrics tracking dataflow wallclock lag.
     pub wallclock_lag: WallclockLagMetrics,
 }
