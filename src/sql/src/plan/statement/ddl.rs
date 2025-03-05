@@ -3201,7 +3201,6 @@ pub fn describe_create_sink(
 generate_extracted_config!(
     CreateSinkOption,
     (Snapshot, bool),
-    (PartitionStrategy, String),
     (Version, u64)
 );
 
@@ -3403,7 +3402,6 @@ fn plan_sink(
     let CreateSinkOptionExtracted {
         snapshot,
         version,
-        partition_strategy: _,
         seen: _,
     } = with_options.try_into()?;
 

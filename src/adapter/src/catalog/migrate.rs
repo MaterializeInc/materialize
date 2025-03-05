@@ -123,7 +123,6 @@ pub(crate) async fn migrate(
         //
         // Migration functions may also take `tx` as input to stage
         // arbitrary changes to the catalog.
-        ast_rewrite_create_sink_partition_strategy(stmt)?;
         Ok(())
     })?;
 
@@ -853,17 +852,5 @@ fn add_to_audit_log(
     let event =
         mz_audit_log::VersionedEvent::new(id, event_type, object_type, details, None, occurred_at);
     tx.insert_audit_log_event(event);
-    Ok(())
-}
-
-// Remove PARTITION STRATEGY from CREATE SINK statements.
-fn ast_rewrite_create_sink_partition_strategy(
-    stmt: &mut Statement<Raw>,
-) -> Result<(), anyhow::Error> {
-    let Statement::CreateSink(stmt) = stmt else {
-        return Ok(());
-    };
-    stmt.with_options
-        .retain(|op| op.name != CreateSinkOptionName::PartitionStrategy);
     Ok(())
 }
