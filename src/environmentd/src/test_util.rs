@@ -80,7 +80,9 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 use url::Url;
 
-use crate::{CatalogConfig, FronteggAuthentication, WebSocketAuth, WebSocketResponse};
+use crate::{
+    CatalogConfig, FronteggAuthentication, LicenseKeyConfig, WebSocketAuth, WebSocketResponse,
+};
 
 pub static KAFKA_ADDRS: LazyLock<String> =
     LazyLock::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
@@ -568,6 +570,7 @@ impl Listeners {
                 internal_console_redirect_url: config.internal_console_redirect_url,
                 tls_reload_certs,
                 helm_chart_version: None,
+                license_key_config: LicenseKeyConfig::for_tests(),
             })
             .await?;
 

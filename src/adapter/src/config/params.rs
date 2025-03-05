@@ -27,12 +27,6 @@ pub struct SynchronizedParameters {
     modified: BTreeSet<&'static str>,
 }
 
-impl Default for SynchronizedParameters {
-    fn default() -> Self {
-        Self::new(SystemVars::default())
-    }
-}
-
 impl SynchronizedParameters {
     pub fn new(system_vars: SystemVars) -> Self {
         let synchronized = system_vars
@@ -160,7 +154,7 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_github_18189() {
-        let vars = SystemVars::default();
+        let vars = SystemVars::for_tests();
         let mut sync = SynchronizedParameters::new(vars);
         assert!(sync.modify("allowed_cluster_replica_sizes", "1,2"));
         assert_eq!(sync.get("allowed_cluster_replica_sizes"), r#""1", "2""#);
@@ -171,7 +165,7 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_vars_are_synced() {
-        let vars = SystemVars::default();
+        let vars = SystemVars::for_tests();
         let sync = SynchronizedParameters::new(vars);
 
         assert!(!sync.synchronized().is_empty());

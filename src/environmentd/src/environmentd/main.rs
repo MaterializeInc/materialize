@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, env, iter, thread};
 
 use anyhow::{bail, Context};
+use bytesize::ByteSize;
 use clap::{ArgAction, Parser, ValueEnum};
 use fail::FailScenario;
 use http::header::HeaderValue;
@@ -43,7 +44,7 @@ use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::{Authenticator, FronteggCliArgs};
-use mz_orchestrator::Orchestrator;
+use mz_orchestrator::{MemoryLimit, Orchestrator};
 use mz_orchestrator_kubernetes::{
     KubernetesImagePullPolicy, KubernetesOrchestrator, KubernetesOrchestratorConfig,
 };
@@ -64,6 +65,7 @@ use mz_persist_client::rpc::{
     MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
 };
 use mz_persist_client::PersistLocation;
+use mz_repr::adt::numeric::Numeric;
 use mz_secrets::SecretsController;
 use mz_server_core::TlsCliArgs;
 use mz_service::emit_boot_diagnostics;
@@ -72,11 +74,12 @@ use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use opentelemetry::trace::TraceContextExt;
 use prometheus::IntGauge;
-use tracing::{error, info, info_span, Instrument};
+use tracing::{error, info, info_span, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
 use crate::environmentd::sys;
+use crate::license_keys::LicenseKeyConfig;
 use crate::{CatalogConfig, Listeners, ListenersConfig, BUILD_INFO};
 
 static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
@@ -598,6 +601,9 @@ pub struct Args {
         value_delimiter = ';'
     )]
     system_parameter_default: Vec<KeyValueArg<String, String>>,
+    /// File containing a valid Materialize license key.
+    #[clap(long, env = "LICENSE_KEY")]
+    license_key: Option<String>,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -680,6 +686,22 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     // handled to our liking ASAP.
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
+
+    let license_key_config = if let Some(license_key_file) = args.license_key {
+        let license_key_text = std::fs::read_to_string(&license_key_file)?;
+        let license_key = mz_license_keys::validate(
+            &license_key_text,
+            &args.environment_id.organization_id().to_string(),
+        )?;
+        // expired license key should not be a hard error, to avoid
+        // disrupting existing live infrastructure
+        if license_key.expired {
+            error!("The license key provided at {license_key_file} is expired! Please contact Materialize for assistance.");
+        }
+        license_key.into()
+    } else {
+        LicenseKeyConfig::default()
+    };
 
     // Configure testing options.
     if let Some(fingerprint_whitespace) = args.unsafe_builtin_table_fingerprint_whitespace {
@@ -1026,8 +1048,19 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         },
     };
 
-    let cluster_replica_sizes: ClusterReplicaSizeMap =
+    let mut cluster_replica_sizes: ClusterReplicaSizeMap =
         serde_json::from_str(&args.cluster_replica_sizes).context("parsing replica size map")?;
+    if !license_key_config.allow_credit_consumption_override {
+        for (name, replica) in cluster_replica_sizes.0.iter_mut() {
+            let memory_limit = replica.memory_limit.get_or_insert_with(|| {
+                warn!("No memory limit found in cluster definition for {name}, defaulting to 4GiB");
+                MemoryLimit(ByteSize::gib(4))
+            });
+            replica.credits_per_hour = Numeric::from(
+                (memory_limit.0 * replica.scale * u64::try_from(replica.workers).unwrap()).0,
+            ) / Numeric::from(1024 * 1024 * 1024);
+        }
+    }
 
     emit_boot_diagnostics!(&BUILD_INFO);
     sys::adjust_rlimits();
@@ -1117,6 +1150,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
                 helm_chart_version: args.helm_chart_version.clone(),
+                license_key_config,
                 // AWS options.
                 aws_account_id: args.aws_account_id,
                 aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,

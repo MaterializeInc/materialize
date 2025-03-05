@@ -640,6 +640,7 @@ async fn upgrade_check(
             enable_expression_cache_override: None,
             enable_0dt_deployment: true,
             helm_chart_version: None,
+            max_credit_consumption_rate: None,
         },
         &mut storage,
     )

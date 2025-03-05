@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+use mz_sql::session::vars::SystemVars;
 use tokio::time;
 
 use crate::config::{
@@ -44,7 +45,8 @@ pub async fn system_parameter_sync(
         tick_interval.as_secs()
     );
 
-    let mut params = SynchronizedParameters::default();
+    let mut params =
+        SynchronizedParameters::new(SystemVars::new(sync_config.max_credit_consumption_rate));
     loop {
         // Wait for the next sync period
         interval.tick().await;
