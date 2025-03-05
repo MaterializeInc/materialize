@@ -294,6 +294,7 @@ def workflow_rehydration(c: Composition) -> None:
 
 def workflow_out_of_disk(c: Composition) -> None:
     """Test rocksdb OOD"""
+    c.down(destroy_volumes=True)
 
     dependencies = [
         "materialized",
@@ -340,7 +341,6 @@ def workflow_out_of_disk(c: Composition) -> None:
         ),
         Testdrive(no_reset=True),
     ):
-        c.down(destroy_volumes=True)
         c.up(*dependencies)
         c.run_testdrive_files("rocksdb_ood/01-setup.td")
         c.run_testdrive_files("rocksdb_ood/02-source-setup.td")
@@ -351,6 +351,10 @@ def workflow_out_of_disk(c: Composition) -> None:
         c.up("clusterd1")
 
         c.run_testdrive_files("rocksdb_ood/03-after-rehydration.td")
+        # clusterd volumes override is only valid in this scope, cleanup
+        # has to be done before leaving or it will leave behind the tiny
+        # scratch volume
+        c.down(destroy_volumes=True)
 
 
 def workflow_failpoint(c: Composition) -> None:
