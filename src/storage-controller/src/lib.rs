@@ -2119,24 +2119,8 @@ where
                     }
                 }
             }
-            Some((_replica_id, StorageResponse::StatusUpdates(updates))) => {
-                for status_update in updates.iter() {
-                    // NOTE(aljoscha): We sniff out the hydration status for
-                    // ingestions from status updates. This is the easiest we
-                    // can do right now, without going deeper into changing the
-                    // comms protocol between controller and cluster. We cannot,
-                    // for example use `StorageResponse::FrontierUppers`,
-                    // because those will already get sent when the ingestion is
-                    // just being created.
-                    //
-                    // Sources differ in when they will report as Running. Kafka
-                    // UPSERT sources will only switch to `Running` once their
-                    // state has been initialized from persist, which is the
-                    // first case that we care about right now.
-                    //
-                    // I wouldn't say it's ideal, but it's workable until we
-                    // find something better.
-
+            Some((replica_id, StorageResponse::StatusUpdates(mut updates))) => {
+                for status_update in &mut updates {
                     match status_update.status {
                         Status::Running => {
                             let collection = self.collections.get_mut(&status_update.id);
@@ -2164,6 +2148,11 @@ where
                             }
                         }
                         _ => (),
+                    }
+
+                    // Set replica_id in the status update if available
+                    if let Some(id) = replica_id {
+                        status_update.replica_id = Some(id);
                     }
                 }
                 self.record_status_updates(updates);
