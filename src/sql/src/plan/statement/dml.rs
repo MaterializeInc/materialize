@@ -1213,7 +1213,7 @@ fn plan_copy_from(
     let (id, source_desc, columns, maybe_mfp) = query::plan_copy_from(scx, table_name, columns)?;
 
     let Some(mfp) = maybe_mfp else {
-        bail_unsupported!("COPY FROM ... expects an MFP to be produced");
+        sql_bail!("[internal error] COPY FROM ... expects an MFP to be produced");
     };
 
     Ok(Plan::CopyFrom(CopyFromPlan {

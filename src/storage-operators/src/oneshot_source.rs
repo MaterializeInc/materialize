@@ -1030,7 +1030,7 @@ pub enum StorageErrorXKind {
     MissingSize,
     #[error("object is missing the required '{0}' field")]
     MissingField(Arc<str>),
-    #[error("the supplied mfp filtered out a row, it is only supposed to map and project")]
+    #[error("[internal error] the supplied mfp filtered out a row, it is only supposed to map and project")]
     MfpFiltered,
     #[error("failed while evaluating the provided mfp: '{0}'")]
     MfpEvalError(Arc<str>),
