@@ -2712,6 +2712,9 @@ where
 
                 // Send AllowCompaction command directly to the instance
                 if let Some(instance) = self.instances.get_mut(&cluster_id) {
+                    if key.is_user() {
+                        tracing::info!(id = %key, "sending final AllowCompaction");
+                    }
                     instance.send(StorageCommand::AllowCompaction(vec![(
                         key,
                         frontier.clone(),
