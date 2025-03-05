@@ -22,6 +22,7 @@ use timely::dataflow::operators::{CapabilitySet, InspectCore};
 use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
+use timely::scheduling::Activator;
 use timely::{Container, Data, PartialOrder};
 use tokio::sync::Notify;
 
@@ -67,6 +68,8 @@ pub struct Handle<T: Timestamp> {
     /// The private frontier containing the changes produced by this handle only
     handle_frontier: Antichain<T>,
     notify: Rc<Notify>,
+    /// Activators to notify when the frontier progresses
+    activators: Rc<RefCell<Vec<Activator>>>,
 }
 
 impl<T: Timestamp> Default for Handle<T> {
@@ -78,6 +81,7 @@ impl<T: Timestamp> Default for Handle<T> {
             frontier: Rc::new(RefCell::new(MutableAntichain::new())),
             handle_frontier: Antichain::new(),
             notify: Rc::new(Notify::new()),
+            activators: Rc::default(),
         }
     }
 }
@@ -135,7 +139,15 @@ impl<T: Timestamp> Handle<T> {
         self.handle_frontier.extend(new_frontier.iter().cloned());
         if changes.count() > 0 {
             self.notify.notify_waiters();
+            for activator in self.activators.borrow().iter() {
+                activator.activate();
+            }
         }
+    }
+
+    /// Register an activator to be notified when the frontier progresses
+    pub fn activate(&self, activator: Activator) {
+        self.activators.borrow_mut().push(activator);
     }
 }
 
@@ -154,6 +166,7 @@ impl<T: Timestamp> Clone for Handle<T> {
             frontier: Rc::clone(&self.frontier),
             handle_frontier: Antichain::new(),
             notify: Rc::clone(&self.notify),
+            activators: Rc::clone(&self.activators),
         }
     }
 }

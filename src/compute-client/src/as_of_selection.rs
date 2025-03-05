@@ -1038,7 +1038,7 @@ mod tests {
                     storage_metadata: Default::default(),
                     typ: RelationType::empty(),
                 };
-                (id, (desc, Default::default()))
+                (id, (desc, Default::default(), Default::default()))
             })
             .collect();
         let index_imports = input_ids

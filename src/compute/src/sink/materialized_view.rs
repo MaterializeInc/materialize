@@ -113,7 +113,7 @@ use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::{Collection, Hashable};
+use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::StreamExt;
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
@@ -131,6 +131,7 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::builder_async::{Event, OperatorBuilder};
+use mz_timely_util::probe::{Handle, ProbeNotify};
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -161,12 +162,17 @@ where
         mut ok_collection: Collection<G, Row, Diff>,
         mut err_collection: Collection<G, DataflowError, Diff>,
         _ct_times: Option<Collection<G, (), Diff>>,
+        output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
-        // Attach a probe reporting the compute frontier.
+        // Attach probes reporting the compute frontier.
         // The `apply_refresh` operator can round up frontiers, making it impossible to accurately
-        // track the progress of the computation, so we need to attach the probe before it.
+        // track the progress of the computation, so we need to attach probes before it.
         let probe = probe::Handle::default();
-        ok_collection = ok_collection.probe_with(&probe);
+        ok_collection = ok_collection
+            .probe_with(&probe)
+            .inner
+            .probe_notify_with(vec![output_probe.clone()])
+            .as_collection();
         let collection_state = compute_state.expect_collection_mut(sink_id);
         collection_state.compute_probe = Some(probe);
 

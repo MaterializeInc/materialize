@@ -1087,6 +1087,69 @@ SCENARIOS = [
         materialized_memory="4.5Gb",
         clusterd_memory="3.5Gb",
     ),
+    Scenario(
+        name="dataflow-logical-backpressure",
+        pre_restart=dedent(
+            """
+            # * Timestamp interval to quickly create a source with many distinct timestamps.
+            # * Lgalloc disabled to force more memory pressure.
+            # * Index options to enable retained history.
+            # * Finally, enable backpressure.
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM SET min_timestamp_interval = '10ms';
+            ALTER SYSTEM SET enable_lgalloc = false;
+            ALTER SYSTEM SET enable_index_options = true;
+            ALTER SYSTEM SET enable_compute_logical_backpressure = true;
+
+            > DROP CLUSTER REPLICA clusterd.r1;
+
+            # Table to hold back frontiers.
+            > CREATE TABLE t (a int);
+            > INSERT INTO t VALUES (1);
+
+            # Create a source with 512 distinct timestamps.
+            > CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '100ms', UP TO 512) WITH (TIMESTAMP INTERVAL '100ms', RETAIN HISTORY FOR '10d');
+
+            > CREATE MATERIALIZED VIEW cv WITH (RETAIN HISTORY FOR '10d') AS SELECT counter FROM counter, t;
+
+            # Wait until counter is fully ingested.
+            > SELECT count(*) FROM counter;
+            512
+
+            > CREATE CLUSTER REPLICA clusterd.r1
+              STORAGECTL ADDRESSES ['clusterd:2100'],
+              STORAGE ADDRESSES ['clusterd:2103'],
+              COMPUTECTL ADDRESSES ['clusterd:2101'],
+              COMPUTE ADDRESSES ['clusterd:2102'];
+
+            > SET CLUSTER = clusterd
+
+            # Ballast is the concatenation of two 32-byte strings, for readability.
+            > CREATE VIEW v AS
+                SELECT
+                    c1.counter + c2.counter * 10 + c3.counter * 100 AS c,
+                    '01234567890123456789012345678901'||'01234567890123456789012345678901' AS ballast
+                FROM
+                    cv c1,
+                    cv c2,
+                    cv c3;
+            > CREATE DEFAULT INDEX ON v WITH (RETAIN HISTORY FOR '10d');
+            > SELECT count(*) > 0 FROM v;
+            true
+            """
+        ),
+        post_restart=dedent(
+            """
+            > SET CLUSTER = clusterd
+
+            > SELECT count(*) > 0 FROM v;
+            true
+            """
+        ),
+        materialized_memory="10Gb",
+        clusterd_memory="3.5Gb",
+    ),
 ]
 
 

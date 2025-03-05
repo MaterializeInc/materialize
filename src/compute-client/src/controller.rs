@@ -88,7 +88,7 @@ mod sequential_hydration;
 pub mod error;
 
 type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
-type StorageCollections<T> = Arc<
+pub(crate) type StorageCollections<T> = Arc<
     dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = T> + Send + Sync,
 >;
 
