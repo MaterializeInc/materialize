@@ -178,7 +178,7 @@ class Composition:
 
             for volume_name, volume_def in getattr(module, "VOLUMES", {}).items():
                 if volume_name in self.compose["volumes"]:
-                    raise UIError(f"volue {volume_name!r} specified more than once")
+                    raise UIError(f"volume {volume_name!r} specified more than once")
                 self.compose["volumes"][volume_name] = volume_def
 
         # The CLI driver will handle acquiring these dependencies.
