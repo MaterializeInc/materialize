@@ -52,6 +52,10 @@ pub struct AsyncStorageWorker<T: Timestamp + Lattice + Codec64> {
 pub enum AsyncStorageWorkerCommand {
     /// Calculate a recent resumption frontier for the ingestion.
     UpdateFrontiers(GlobalId, IngestionDescription<CollectionMetadata>),
+
+    /// This command is used to properly order create and drop of dataflows.
+    /// Currently, this is a no-op in AsyncStorageWorker.
+    DropDataflow(GlobalId),
 }
 
 /// Responses from [AsyncStorageWorker].
@@ -73,6 +77,10 @@ pub enum AsyncStorageWorkerResponse<T: Timestamp + Lattice + Codec64> {
         /// have already been durably ingested.
         source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
     },
+
+    /// Successful processing of Dataflow being dropped.  For AsyncStorageWorker,
+    /// this is currently a no-op.
+    DataflowDropped(GlobalId),
 }
 
 async fn reclock_resume_uppers<C, IntoTime>(
@@ -385,6 +393,14 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                             break;
                         }
                     }
+                    AsyncStorageWorkerCommand::DropDataflow(id) => {
+                        if let Err(_) =
+                            response_tx.send(AsyncStorageWorkerResponse::DataflowDropped(id))
+                        {
+                            // Receiver hang up
+                            break;
+                        }
+                    }
                 }
             }
             tracing::trace!("shutting down async storage worker task");
@@ -405,6 +421,12 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
         ingestion: IngestionDescription<CollectionMetadata>,
     ) {
         self.send(AsyncStorageWorkerCommand::UpdateFrontiers(id, ingestion))
+    }
+
+    /// Enqueue a drop dataflow in the async storage worker channel to ensure proper
+    /// ordering of creating and dropping data flows.
+    pub fn drop_dataflow(&self, id: GlobalId) {
+        self.send(AsyncStorageWorkerCommand::DropDataflow(id))
     }
 
     fn send(&self, cmd: AsyncStorageWorkerCommand) {

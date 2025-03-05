@@ -486,6 +486,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
         &self,
         async_response: AsyncStorageWorkerResponse<mz_repr::Timestamp>,
     ) {
+        // NOTE: If we want to share the load of async processing we
+        // have to change `handle_storage_command` and change this
+        // assert.
+        assert_eq!(
+            self.timely_worker.index(),
+            0,
+            "only worker #0 is doing async processing"
+        );
         match async_response {
             AsyncStorageWorkerResponse::FrontiersUpdated {
                 id,
@@ -494,14 +502,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 resume_uppers,
                 source_resume_uppers,
             } => {
-                // NOTE: If we want to share the load of async processing we
-                // have to change `handle_storage_command` and change this
-                // assert.
-                assert_eq!(
-                    self.timely_worker.index(),
-                    0,
-                    "only worker #0 is doing async processing"
-                );
                 self.storage_state.internal_cmd_tx.send(
                     InternalStorageCommand::CreateIngestionDataflow {
                         id,
@@ -511,6 +511,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         source_resume_uppers,
                     },
                 );
+            }
+            AsyncStorageWorkerResponse::DataflowDropped(id) => {
+                self.storage_state
+                    .internal_cmd_tx
+                    .send(InternalStorageCommand::DropDataflow(vec![id]));
             }
         }
     }
@@ -1411,10 +1416,10 @@ impl StorageState {
             self.dropped_ids.push(id);
         }
 
-        // Broadcast from one worker to make sure its sequences with the other internal commands.
+        // Send through async worker for correct ordering with RunIngestion, and
+        // dropping the dataflow is done on async worker response.
         if self.timely_worker_index == 0 {
-            self.internal_cmd_tx
-                .send(InternalStorageCommand::DropDataflow(vec![id]));
+            self.async_worker.drop_dataflow(id);
         }
     }
 
