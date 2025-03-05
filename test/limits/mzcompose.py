@@ -129,7 +129,8 @@ class Connections(Generator):
         print("$ postgres-execute connection=mz_system")
         # three extra connections for mz_system, default connection, and one
         # since sqlparse 0.4.4. 3 reserved superuser connections since materialize#25666
-        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+4};")
+        # try bumping limit a bit further since this is sometimes flaky
+        print(f"ALTER SYSTEM SET max_connections = {Connections.COUNT+10};")
 
         for i in cls.all():
             print(
