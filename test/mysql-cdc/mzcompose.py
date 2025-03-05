@@ -29,8 +29,8 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 
-def create_mysql(mysql_version: str) -> MySql:
-    return MySql(version=mysql_version)
+def create_mysql(mysql_version: str, name: str = "mysql") -> MySql:
+    return MySql(version=mysql_version, name=name)
 
 
 def create_mysql_replica(mysql_version: str) -> MySql:
@@ -54,6 +54,7 @@ SERVICES = [
         },
     ),
     create_mysql(MySql.DEFAULT_VERSION),
+    create_mysql(MySql.DEFAULT_VERSION, "mysql2"),
     create_mysql_replica(MySql.DEFAULT_VERSION),
     TestCerts(),
     Toxiproxy(),
@@ -112,8 +113,10 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     print(f"Files: {sharded_files}")
 
-    with c.override(create_mysql(mysql_version)):
-        c.up("materialized", "mysql")
+    with c.override(
+        create_mysql(mysql_version), create_mysql(mysql_version, name="mysql2")
+    ):
+        c.up("materialized", "mysql", "mysql2")
 
         valid_ssl_context = retrieve_ssl_context_for_mysql(c)
         wrong_ssl_context = retrieve_invalid_ssl_context_for_mysql(c)
