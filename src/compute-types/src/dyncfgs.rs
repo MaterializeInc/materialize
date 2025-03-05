@@ -21,16 +21,7 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
      linear joins.",
 );
 
-/// Whether rendering should use the new MV sink implementation.
-pub const ENABLE_MATERIALIZED_VIEW_SINK_V2: Config<bool> = Config::new(
-    "enable_compute_materialized_view_sink_v2",
-    true,
-    "Whether compute should use the new MV sink implementation.",
-);
-
 /// Whether rendering should use the new MV sink correction buffer implementation.
-///
-/// Only has an effect when `enable_compute_materialized_view_sink_v2` is enabled.
 pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "enable_compute_correction_v2",
     false,
@@ -203,7 +194,6 @@ pub const ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION: Config<bool> = Co
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ENABLE_MZ_JOIN_CORE)
-        .add(&ENABLE_MATERIALIZED_VIEW_SINK_V2)
         .add(&ENABLE_CORRECTION_V2)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
