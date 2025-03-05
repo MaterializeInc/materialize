@@ -323,7 +323,7 @@ impl Coordinator {
                 let mut to_item = entry.item;
                 match &mut to_item {
                     CatalogItem::Connection(c) => {
-                        let mut stmt = match mz_sql::parse::parse(&c.create_sql)
+                        let mut stmt = match mz_sql::parse::parse(&c.create_sql, true)
                             .expect("invalid create sql persisted to catalog")
                             .into_element()
                             .ast
