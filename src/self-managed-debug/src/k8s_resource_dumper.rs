@@ -341,6 +341,7 @@ where
 }
 
 /// Spawns a new task to run `kubectl describe` for a given resource type K and writes the output to a file.
+#[must_use]
 pub fn spawn_dump_kubectl_describe_process<K>(
     context: Context,
     namespace: Option<String>,
