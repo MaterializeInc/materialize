@@ -55,7 +55,7 @@ pub enum AsyncStorageWorkerCommand {
 
     /// This command is used to properly order create and drop of dataflows.
     /// Currently, this is a no-op in AsyncStorageWorker.
-    DropDataflow(GlobalId),
+    ForwardDropDataflow(GlobalId),
 }
 
 /// Responses from [AsyncStorageWorker].
@@ -78,9 +78,8 @@ pub enum AsyncStorageWorkerResponse<T: Timestamp + Lattice + Codec64> {
         source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
     },
 
-    /// Successful processing of Dataflow being dropped.  For AsyncStorageWorker,
-    /// this is currently a no-op.
-    DataflowDropped(GlobalId),
+    /// Indicates data flow can be dropped.
+    DropDataflow(GlobalId),
 }
 
 async fn reclock_resume_uppers<C, IntoTime>(
@@ -393,9 +392,9 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                             break;
                         }
                     }
-                    AsyncStorageWorkerCommand::DropDataflow(id) => {
+                    AsyncStorageWorkerCommand::ForwardDropDataflow(id) => {
                         if let Err(_) =
-                            response_tx.send(AsyncStorageWorkerResponse::DataflowDropped(id))
+                            response_tx.send(AsyncStorageWorkerResponse::DropDataflow(id))
                         {
                             // Receiver hang up
                             break;
@@ -426,7 +425,7 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
     /// Enqueue a drop dataflow in the async storage worker channel to ensure proper
     /// ordering of creating and dropping data flows.
     pub fn drop_dataflow(&self, id: GlobalId) {
-        self.send(AsyncStorageWorkerCommand::DropDataflow(id))
+        self.send(AsyncStorageWorkerCommand::ForwardDropDataflow(id))
     }
 
     fn send(&self, cmd: AsyncStorageWorkerCommand) {

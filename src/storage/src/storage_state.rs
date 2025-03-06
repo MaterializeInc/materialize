@@ -512,7 +512,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     },
                 );
             }
-            AsyncStorageWorkerResponse::DataflowDropped(id) => {
+            AsyncStorageWorkerResponse::DropDataflow(id) => {
                 self.storage_state
                     .internal_cmd_tx
                     .send(InternalStorageCommand::DropDataflow(vec![id]));
