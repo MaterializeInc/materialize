@@ -280,7 +280,8 @@ impl Config {
 
             let token = rds_auth_token(host, port, username, aws_config).await?;
             // Cleartext plugin must be enabled for IAM authentication, for security,
-            // the network traffic is SSL/TLS encrypted.
+            // the network traffic is SSL/TLS encrypted.  The cleartext plugin is built
+            // into the MySQL client library.
             opts_builder = opts_builder
                 .pass(Some(token.to_string()))
                 .enable_cleartext_plugin(true);

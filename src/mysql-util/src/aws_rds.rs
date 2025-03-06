@@ -23,19 +23,19 @@ const DB_ACTION: &str = "connect";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RdsTokenError {
-    /// AWS SdkConfig did not contain a credentials provider
+    /// The AWS SdkConfig did not contain a credentials provider.
     #[error("Credentials provider required to sign RDS IAM request")]
     MissingCredentialsProvider,
 
-    /// Credentials provider failed to generate credentials to use for signing
+    /// The supplied credentials provider failed to generate credentials for URL signing.
     #[error(transparent)]
     CredentialsError(#[from] CredentialsError),
 
-    /// Invalid options for signing the token request
+    /// The signing parameters could not be created due to a missing required argument.
     #[error(transparent)]
     SigningParametersBuildError(#[from] BuildError),
 
-    /// Failed to parse the url or create a signed request
+    /// The URL could not be signed.
     #[error(transparent)]
     SigningError(#[from] SigningError),
 }
