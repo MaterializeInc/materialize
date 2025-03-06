@@ -2528,14 +2528,6 @@ class Metrics:
         assert len(values) <= 1
         return next(iter(values), None)
 
-    def get_wallclock_lag_count(self, collection_id: str) -> float | None:
-        metrics = self.with_name("mz_dataflow_wallclock_lag_seconds_count")
-        values = [
-            v for k, v in metrics.items() if f'collection_id="{collection_id}"' in k
-        ]
-        assert len(values) <= 1
-        return next(iter(values), None)
-
     def get_e2e_optimization_time(self, object_type: str) -> float:
         metrics = self.with_name("mz_optimizer_e2e_optimization_time_seconds_sum")
         values = [v for k, v in metrics.items() if f'object_type="{object_type}"' in k]
