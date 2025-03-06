@@ -547,21 +547,27 @@ impl Coordinator {
                 }
             }
         }
-        let hydrated_fut = self
+        let compute_hydrated_fut = self
             .controller
             .compute
-            .collections_hydrated_for_replicas(cluster.id, pending_replicas, [].into())
+            .collections_hydrated_for_replicas(cluster.id, pending_replicas.clone(), [].into())
+            .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
+
+        let storage_hydrated = self
+            .controller
+            .storage
+            .collections_hydrated_on_replicas(Some(pending_replicas), &[].into())
             .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn(
             || "Alter Cluster: wait for hydrated",
             async move {
-                let hydrated = hydrated_fut
+                let compute_hydrated = compute_hydrated_fut
                     .await
                     .map_err(|e| AdapterError::internal("Failed to check hydration", e))?;
 
-                if hydrated {
+                if compute_hydrated && storage_hydrated {
                     // We're done
                     Ok(Box::new(ClusterStage::Finalize(AlterClusterFinalize {
                         validity,
