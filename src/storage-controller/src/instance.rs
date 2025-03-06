@@ -26,7 +26,7 @@ use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_client::client::{
-    Status, StatusUpdate, StorageClient, StorageCommand, StorageGrpcClient, StorageResponse,
+    StorageClient, StorageCommand, StorageGrpcClient, StorageResponse,
 };
 use mz_storage_client::metrics::{InstanceMetrics, ReplicaMetrics};
 use timely::order::TotalOrder;
@@ -56,6 +56,12 @@ pub(crate) struct Instance<T> {
     /// list of running ingestions is quite a bit more convenient in the
     /// implementation of `StorageController::active_ingestions`.
     active_ingestions: BTreeSet<GlobalId>,
+    /// The exports currently running on this instance.
+    ///
+    /// While this is derivable from `history` on demand, keeping a denormalized
+    /// list of running exports is quite a bit more convenient for the
+    /// controller.
+    active_exports: BTreeSet<GlobalId>,
     /// The command history, used to replay past commands when introducing new replicas or
     /// reconnecting to existing replicas.
     history: CommandHistory<T>,
@@ -95,6 +101,7 @@ where
         let mut instance = Self {
             replicas: Default::default(),
             active_ingestions: BTreeSet::new(),
+            active_exports: BTreeSet::new(),
             history,
             epoch,
             metrics,
@@ -160,45 +167,50 @@ where
         &self.active_ingestions
     }
 
+    /// Returns the exports running on this instance.
+    pub fn active_exports(&self) -> &BTreeSet<GlobalId> {
+        &self.active_exports
+    }
+
     /// Sets the status to paused for all sources/sinks in the history.
     fn update_paused_statuses(&mut self) {
-        let now = mz_ore::now::to_datetime((self.now)());
-        let make_update = |id, object_type| StatusUpdate {
-            id,
-            status: Status::Paused,
-            timestamp: now,
-            error: None,
-            hints: BTreeSet::from([format!(
-                "There is currently no replica running this {object_type}"
-            )]),
-            namespaced_errors: Default::default(),
-            replica_id: None,
-        };
+        // let now = mz_ore::now::to_datetime((self.now)());
+        // let make_update = |id, object_type| StatusUpdate {
+        //     id,
+        //     status: Status::Paused,
+        //     timestamp: now,
+        //     error: None,
+        //     hints: BTreeSet::from([format!(
+        //         "There is currently no replica running this {object_type}"
+        //     )]),
+        //     namespaced_errors: Default::default(),
+        //     replica_id: None,
+        // };
 
-        self.history.reduce();
+        // self.history.reduce();
 
-        let mut status_updates = Vec::new();
-        for command in self.history.iter() {
-            match command {
-                StorageCommand::RunIngestions(cmds) => {
-                    let updates = cmds.iter().map(|c| make_update(c.id, "source"));
-                    status_updates.extend(updates);
-                }
-                StorageCommand::RunSinks(cmds) => {
-                    let updates = cmds.iter().map(|c| make_update(c.id, "sink"));
-                    status_updates.extend(updates);
-                }
-                _ => (),
-            }
-        }
+        // let mut status_updates = Vec::new();
+        // for command in self.history.iter() {
+        //     match command {
+        //         StorageCommand::RunIngestions(cmds) => {
+        //             let updates = cmds.iter().map(|c| make_update(c.id, "source"));
+        //             status_updates.extend(updates);
+        //         }
+        //         StorageCommand::RunSinks(cmds) => {
+        //             let updates = cmds.iter().map(|c| make_update(c.id, "sink"));
+        //             status_updates.extend(updates);
+        //         }
+        //         _ => (),
+        //     }
+        // }
 
-        if !status_updates.is_empty() {
-            let response = StorageResponse::StatusUpdates(status_updates);
-            // NOTE: If we lift this "inject paused status" logic to the
-            // controller, we could instead return ReplicaId instead of an
-            // Option<ReplicaId>.
-            let _ = self.response_tx.send((None, response));
-        }
+        // if !status_updates.is_empty() {
+        //     let response = StorageResponse::StatusUpdates(status_updates);
+        //     // NOTE: If we lift this "inject paused status" logic to the
+        //     // controller, we could instead return ReplicaId instead of an
+        //     // Option<ReplicaId>.
+        //     let _ = self.response_tx.send((None, response));
+        // }
     }
 
     /// Sends a command to this storage instance.
@@ -209,10 +221,16 @@ where
                     self.active_ingestions.insert(ingestion.id);
                 }
             }
+            StorageCommand::RunSinks(sinks) => {
+                for sink in sinks {
+                    self.active_exports.insert(sink.id);
+                }
+            }
             StorageCommand::AllowCompaction(policies) => {
                 for (id, frontier) in policies {
                     if frontier.is_empty() {
                         self.active_ingestions.remove(id);
+                        self.active_exports.remove(id);
                     }
                 }
             }

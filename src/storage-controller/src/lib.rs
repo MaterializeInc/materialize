@@ -516,6 +516,22 @@ where
             .get_mut(&instance_id)
             .unwrap_or_else(|| panic!("instance {instance_id} does not exist"));
 
+        let status_now = mz_ore::now::to_datetime((self.now)());
+        let mut source_status_updates = vec![];
+        let mut sink_status_updates = vec![];
+
+        let make_update = |id, object_type| StatusUpdate {
+            id,
+            status: Status::Paused,
+            timestamp: status_now,
+            error: None,
+            hints: BTreeSet::from([format!(
+                "The replica running this {object_type} has been dropped"
+            )]),
+            namespaced_errors: Default::default(),
+            replica_id: Some(replica_id),
+        };
+
         for id in instance.active_ingestions() {
             self.collections
                 .get_mut(id)
@@ -529,8 +545,43 @@ where
                     self.dropped_objects.remove(id);
                 }
             }
+
+            source_status_updates.push(make_update(*id, "source"));
         }
+
+        for id in instance.active_exports() {
+            self.collections
+                .get_mut(id)
+                .expect("instance contains unknown export")
+                .active_replicas
+                .remove(&replica_id);
+
+            if let Some(active_replicas) = self.dropped_objects.get_mut(id) {
+                active_replicas.remove(&replica_id);
+                if active_replicas.is_empty() {
+                    self.dropped_objects.remove(id);
+                }
+            }
+
+            sink_status_updates.push(make_update(*id, "sink"));
+        }
+
         instance.drop_replica(replica_id);
+
+        if !self.read_only {
+            if !source_status_updates.is_empty() {
+                self.append_status_introspection_updates(
+                    IntrospectionType::SourceStatusHistory,
+                    source_status_updates,
+                );
+            }
+            if !sink_status_updates.is_empty() {
+                self.append_status_introspection_updates(
+                    IntrospectionType::SinkStatusHistory,
+                    sink_status_updates,
+                );
+            }
+        }
     }
 
     async fn evolve_nullability_for_bootstrap(
