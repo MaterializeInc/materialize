@@ -29,6 +29,7 @@ use mz_compute_client::protocol::response::{
     OperatorHydrationStatus, PeekResponse, StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dyncfgs::ENABLE_COMPUTE_HEAP_SIZE_LIMIT;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::plan::LirId;
 use mz_dyncfg::ConfigSet;
@@ -65,7 +66,8 @@ use uuid::Uuid;
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
-use crate::logging::{LoggingHandles, LoggingTraces};
+use crate::logging::initialize::LoggingTraces;
+use crate::logging::LoggingHandles;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
@@ -74,7 +76,7 @@ use crate::server::{ComputeInstanceContext, ResponseSender};
 ///
 /// This state is restricted to the COMPUTE state, the deterministic, idempotent work
 /// done between data ingress and egress.
-pub(crate) struct ComputeState {
+pub struct ComputeState {
     /// State kept for each installed compute collection.
     ///
     /// Each collection has exactly one frontier.
@@ -181,7 +183,7 @@ pub(crate) struct ComputeState {
     logging_interval: Duration,
 
     /// The handles to inject updates for logging dataflows. Only available if logging is enabled.
-    pub logging_handles: Option<LoggingHandles>,
+    pub logging_handles: LoggingHandles,
     /// Shared set of collections exceeding their heap size limit.
     pub dataflows_exceeding_heap_size_limit: Rc<RefCell<BTreeSet<usize>>>,
 }
@@ -229,7 +231,7 @@ impl ComputeState {
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
             logging_interval: Duration::ZERO,
-            logging_handles: None,
+            logging_handles: LoggingHandles::default(),
             dataflows_exceeding_heap_size_limit: Rc::default(),
         }
     }
@@ -563,9 +565,11 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 .insert(id, Rc::clone(&suspension_token));
         }
 
-        if let (Some(limit), true) = (dataflow.heap_size_limit, dataflow.is_transient()) {
+        if ENABLE_COMPUTE_HEAP_SIZE_LIMIT.get(&self.compute_state.worker_config)
+            && dataflow.is_transient()
+        {
             for id in dataflow.export_ids() {
-                self.handle_set_heap_size_limit(id, Some(limit));
+                self.handle_set_heap_size_limit(id, dataflow.heap_size_limit);
             }
         }
 
@@ -607,18 +611,15 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             .collections
             .get_mut(&id)
             .expect("collection must exist");
-        let old_limit = collection.heap_size_limit;
-        collection.heap_size_limit = limit;
 
-        if let Some(handles) = self.compute_state.logging_handles.as_mut() {
-            let handle = &mut handles.heap_size_limits_handle;
-            let time = *handle.time();
-            if let Some(old_limit) = old_limit {
-                handle.send(((collection.dataflow_id, old_limit), time, -1));
-            }
-            if let Some(limit) = limit {
-                handle.send(((collection.dataflow_id, limit), time, 1));
-            }
+        let handle = &mut self.compute_state.logging_handles.heap_size_limits_handle;
+        let time = *handle.time();
+        if let Some(limit) = collection.heap_size_limit {
+            handle.send(((collection.dataflow_id, limit), time, -1));
+        }
+        collection.heap_size_limit = limit;
+        if let Some(limit) = collection.heap_size_limit {
+            handle.send(((collection.dataflow_id, limit), time, 1));
         }
     }
 
@@ -691,11 +692,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         };
         self.compute_state.dropped_collections.push((id, dropped));
 
-        if let (Some(handle), Some(limit)) = (
-            self.compute_state.logging_handles.as_mut(),
-            collection.heap_size_limit,
-        ) {
-            let handle = &mut handle.heap_size_limits_handle;
+        if let Some(limit) = collection.heap_size_limit {
+            let handle = &mut self.compute_state.logging_handles.heap_size_limits_handle;
             let time = *handle.time();
             handle.send(((collection.dataflow_id, limit), time, -1));
         }
@@ -711,11 +709,11 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             traces,
             dataflow_index,
             compute_logger: logger,
-            logging_handles,
         } = logging::initialize(
             self.timely_worker,
             &config,
             Rc::clone(&self.compute_state.dataflows_exceeding_heap_size_limit),
+            &mut self.compute_state.logging_handles,
         );
 
         let mut log_index_ids = config.index_logs;
@@ -753,7 +751,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         );
 
         self.compute_state.compute_logger = Some(logger);
-        self.compute_state.logging_handles = Some(logging_handles);
         self.compute_state.logging_interval = config.interval;
     }
 
@@ -1038,17 +1035,15 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     ///
     /// Advances the handles based on the current system time.
     pub fn advance_handles(&mut self) {
-        if let Some(handles) = self.compute_state.logging_handles.as_mut() {
-            // We try to tick time rounded to the logging interval.
-            let interval_ms = std::cmp::max(1, self.compute_state.logging_interval.as_millis());
-            let interval_ms = u64::try_from(interval_ms).expect("must fit");
-            // TODO: Is it correct to use the system time?
-            let now = mz_ore::now::SYSTEM_TIME();
-            let time_ms = ((now / interval_ms) + 1) * interval_ms;
-            let new_time_ms: Timestamp = time_ms.try_into().expect("must fit");
+        // We try to tick time rounded to the logging interval.
+        let interval_ms = std::cmp::max(1, self.compute_state.logging_interval.as_millis());
+        let interval_ms = u64::try_from(interval_ms).expect("must fit");
+        // TODO: Is it correct to use the system time?
+        let now = mz_ore::now::SYSTEM_TIME();
+        let time_ms = ((now / interval_ms) + 1) * interval_ms;
+        let new_time_ms: Timestamp = time_ms.try_into().expect("must fit");
 
-            handles.advance_to(new_time_ms);
-        }
+        self.compute_state.logging_handles.advance_to(new_time_ms);
     }
 
     /// Send a response to the coordinator.

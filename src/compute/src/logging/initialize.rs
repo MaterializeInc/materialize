@@ -21,7 +21,6 @@ use mz_timely_util::containers::{Column, ColumnBuilder};
 use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::container::{ContainerBuilder, PushInto};
-use timely::dataflow::operators::Input;
 use timely::dataflow::Scope;
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
@@ -31,10 +30,17 @@ use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder}
 use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
-use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
+use crate::logging::{BatchLogger, EventQueue, LoggingHandles, SharedLoggingState};
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 /// Initialize logging dataflows.
+///
+/// The parameters control how we're rending the logging dataflow.
+/// * `worker` is the Timely worker.
+/// * `config` is the logging config.
+/// * `dataflows_exceeding_heap_size_limit` is a shared set of dataflow IDs that the watchdog
+///   writes at.
+/// * `logging_handles` contains handles to inject log data.
 ///
 /// Returns a logger for compute events, and for each `LogVariant` a trace bundle usable for
 /// retrieving logged records as well as the index of the exporting dataflow.
@@ -42,7 +48,8 @@ pub fn initialize<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
     dataflows_exceeding_heap_size_limit: Rc<RefCell<BTreeSet<usize>>>,
-) -> super::LoggingTraces {
+    logging_handles: &mut LoggingHandles,
+) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
     // Track time relative to the Unix epoch, rather than when the server
@@ -70,21 +77,20 @@ pub fn initialize<A: Allocate + 'static>(
     // Depending on whether we should log the creation of the logging dataflows, we register the
     // loggers with timely either before or after creating them.
     let dataflow_index = context.worker.next_dataflow_index();
-    let (traces, handles) = if config.log_logging {
+    let traces = if config.log_logging {
         context.register_loggers();
-        context.construct_dataflow()
+        context.construct_dataflow(logging_handles)
     } else {
-        let traces_and_handles = context.construct_dataflow();
+        let traces = context.construct_dataflow(logging_handles);
         context.register_loggers();
-        traces_and_handles
+        traces
     };
 
     let compute_logger = worker.log_register().get("materialize/compute").unwrap();
-    super::LoggingTraces {
+    LoggingTraces {
         traces,
         dataflow_index,
         compute_logger,
-        logging_handles: handles,
     }
 }
 
@@ -104,8 +110,20 @@ struct LoggingContext<'a, A: Allocate> {
     dataflows_exceeding_heap_size_limit: Rc<RefCell<BTreeSet<usize>>>,
 }
 
+pub(crate) struct LoggingTraces {
+    /// Exported traces, by log variant.
+    pub traces: BTreeMap<LogVariant, TraceBundle>,
+    /// The index of the dataflow that exports the traces.
+    pub dataflow_index: usize,
+    /// The compute logger.
+    pub compute_logger: super::compute::Logger,
+}
+
 impl<A: Allocate + 'static> LoggingContext<'_, A> {
-    fn construct_dataflow(&mut self) -> (BTreeMap<LogVariant, TraceBundle>, super::LoggingHandles) {
+    fn construct_dataflow(
+        &mut self,
+        logging_handles: &mut LoggingHandles,
+    ) -> BTreeMap<LogVariant, TraceBundle> {
         self.worker.dataflow_named("Dataflow: logging", |scope| {
             let mut collections = BTreeMap::new();
 
@@ -150,7 +168,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             );
             collections.extend(compute_collections);
 
-            let (heap_size_limits_handle, heap_size_limits) = scope.new_input();
+            let heap_size_limits = logging_handles.heap_size_limits_handle.to_stream(scope);
 
             let watchdog_streams = super::watchdog::Streams {
                 arrangement_heap_size,
@@ -179,11 +197,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                     (log, bundle)
                 })
                 .collect();
-
-            let handles = super::LoggingHandles {
-                heap_size_limits_handle,
-            };
-            (traces, handles)
+            traces
         })
     }
 

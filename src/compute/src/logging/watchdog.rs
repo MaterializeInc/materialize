@@ -15,11 +15,12 @@ use std::rc::Rc;
 
 use differential_dataflow::trace::{BatchReader, Cursor};
 use differential_dataflow::AsCollection;
-use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::Inspect;
+use timely::dataflow::operators::{Concat, Enter};
 use timely::dataflow::{Scope, Stream};
 
 use crate::extensions::arrange::MzArrange;
+use crate::extensions::reduce::MzReduce;
 use crate::logging::Update;
 use crate::typedefs::spines::{ColKeyBuilder, ColValBatcher, ColValBuilder};
 use crate::typedefs::{KeyBatcher, KeySpine, KeyValSpine};
@@ -37,7 +38,7 @@ pub(super) struct Streams<S: Scope> {
 }
 
 pub(super) fn construct<S: Scope<Timestamp = mz_repr::Timestamp>>(
-    _scope: S,
+    mut scope: S,
     streams: Streams<S>,
 ) -> () {
     let Streams {
@@ -72,61 +73,69 @@ pub(super) fn construct<S: Scope<Timestamp = mz_repr::Timestamp>>(
     //
     // We encode the size of a dataflow in the diff field, and the limit as actual data.
 
-    let operator_to_heap_size = arrangement_heap_size.concat(&batcher_heap_size);
-    let operator_to_heap_size = operator_to_heap_size
-        .as_collection()
-        .mz_arrange::<KeyBatcher<_, _, _>, ColKeyBuilder<_, _, _>, KeySpine<_, _, _>>(
-            "operator_to_heap_size",
-        );
+    scope.scoped("watchdog", |inner| {
+        let arrangement_heap_size = arrangement_heap_size.enter(inner);
+        let batcher_heap_size = batcher_heap_size.enter(inner);
+        let operator_to_dataflow = operator_to_dataflow.enter(inner);
+        let heap_size_limits = heap_size_limits.enter(inner);
 
-    let operator_to_dataflow = operator_to_dataflow
-        .as_collection()
-        .mz_arrange::<ColValBatcher<_, _, _, _>, ColValBuilder<_, _, _, _>, KeyValSpine<_, _, _, _>>(
-            "operator_to_dataflow",
-        );
+        let operator_to_heap_size = arrangement_heap_size.concat(&batcher_heap_size);
+        let operator_to_heap_size = operator_to_heap_size
+            .as_collection()
+            .mz_arrange::<KeyBatcher<_, _, _>, ColKeyBuilder<_, _, _>, KeySpine<_, _, _>>(
+                "operator_to_heap_size",
+            );
 
-    let dataflow_to_heap_size = operator_to_heap_size
-        .join_core(&operator_to_dataflow, |_op, (), dataflow| {
-            Some((*dataflow, ()))
-        })
-        .mz_arrange::<KeyBatcher<_, _, _>, ColKeyBuilder<_, _, _>, KeySpine<_, _, _>>(
-            "dataflow_to_heap_size",
-        );
+        let operator_to_dataflow = operator_to_dataflow
+            .as_collection()
+            .mz_arrange::<ColValBatcher<_, _, _, _>, ColValBuilder<_, _, _, _>, KeyValSpine<_, _, _, _>>(
+                "operator_to_dataflow",
+            );
 
-    let heap_size_limits = heap_size_limits
-        .as_collection()
-        .mz_arrange::<ColValBatcher<_, _, _, _>, ColValBuilder<_, _, _, _>, KeyValSpine<_, _, _, _>>("heap_size_limits");
+        let dataflow_to_heap_size = operator_to_heap_size
+            .join_core(&operator_to_dataflow, |_op, (), dataflow| {
+                Some((*dataflow, ()))
+            })
+            .mz_arrange::<KeyBatcher<_, _, _>, ColKeyBuilder<_, _, _>, KeySpine<_, _, _>>(
+                "dataflow_to_heap_size",
+            );
 
-    let dataflow_to_heap_size_limit =  dataflow_to_heap_size
-        .join_core(&heap_size_limits, |dataflow, (), limit| {
-            std::iter::once((*dataflow, *limit))
-        })
-        .mz_arrange::<ColValBatcher<usize, u64, _, _>, ColValBuilder<_, _, _, _>, KeyValSpine<usize, u64, _, mz_repr::Diff>>(
-            "dataflow_to_heap_size_count",
-        )
-        .reduce_abelian::<_, usize, (), ColKeyBuilder<_, _, _>, KeySpine<_, _, _>>("Reduce: dataflow_to_heap_size_count", |_dataflow, s, t| {
-            t.extend(s.iter().flat_map(|(&limit, size)| {
-                if *size >= limit.try_into().expect("must fit") {
-                    // We could output `size` here to report the actual size of the dataflow.
-                    Some(((), 1))
-                } else {
-                    None
-                }
-            }));
-        });
+        let heap_size_limits = heap_size_limits
+            .as_collection()
+            .mz_arrange::<ColValBatcher<_, _, _, _>, ColValBuilder<_, _, _, _>, KeyValSpine<_, _, _, _>>("heap_size_limits");
 
-    dataflow_to_heap_size_limit.stream.inspect(move |batch| {
-        let mut cursor = batch.cursor();
-        while cursor.key_valid(batch) {
-            let dataflow_id = *cursor.key(batch);
-            cursor.map_times(batch, |_time, _diff| {
-                // TODO: This only ever adds, never removes. Depending on what signals
-                //   we'd like to have, we could also consider _removing_ dataflows here.
-                dataflows_exceeding_heap_size_limit
-                    .borrow_mut()
-                    .insert(dataflow_id);
+        let dataflow_to_heap_size_limit = dataflow_to_heap_size
+            .join_core(&heap_size_limits, |dataflow, (), limit| {
+                std::iter::once((*dataflow, *limit))
+            })
+            .mz_arrange::<ColValBatcher<usize, u64, _, _>, ColValBuilder<_, _, _, _>, KeyValSpine<usize, u64, _, mz_repr::Diff>>(
+                "dataflow_to_heap_size_count",
+            )
+            .mz_reduce_abelian::<_, usize, (), ColKeyBuilder<_, _, _>, KeySpine<_, _, _>>("Reduce: dataflow_to_heap_size_count", |_dataflow, s, t| {
+                t.extend(s.iter().flat_map(|(&limit, size)| {
+                    if *size >= limit.try_into().expect("must fit") {
+                        // We could output `size` here to report the actual size of the dataflow.
+                        Some(((), 1))
+                    } else {
+                        None
+                    }
+                }));
             });
-            cursor.step_key(batch);
-        }
+
+        dataflow_to_heap_size_limit.stream.inspect(move |batch| {
+            let mut cursor = batch.cursor();
+            while cursor.key_valid(batch) {
+                let dataflow_id = *cursor.key(batch);
+                cursor.map_times(batch, |_time, _diff| {
+                    // TODO: This only ever adds, never removes (the main loop drains it). Depending
+                    //   on what signals we'd like to have, we could also consider _removing_
+                    //   dataflows here.
+                    dataflows_exceeding_heap_size_limit
+                        .borrow_mut()
+                        .insert(dataflow_id);
+                });
+                cursor.step_key(batch);
+            }
+        });
     });
 }

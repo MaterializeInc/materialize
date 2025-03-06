@@ -41,7 +41,6 @@ use mz_timely_util::activator::RcActivator;
 use mz_timely_util::containers::ColumnBuilder;
 use mz_timely_util::operator::consolidate_pact;
 
-use crate::arrangement::manager::TraceBundle;
 use crate::typedefs::RowRowAgent;
 
 pub use crate::logging::initialize::initialize;
@@ -159,19 +158,8 @@ struct SharedLoggingState {
     arrangement_size_activators: BTreeMap<usize, Activator>,
 }
 
-/// Data returned by the logging dataflow initialization.
-pub(crate) struct LoggingTraces {
-    /// Exported traces, by log variant.
-    pub traces: BTreeMap<LogVariant, TraceBundle>,
-    /// The index of the dataflow that exports the traces.
-    pub dataflow_index: usize,
-    /// The compute logger.
-    pub compute_logger: compute::Logger,
-    /// Handles to logging inputs.
-    pub logging_handles: LoggingHandles,
-}
-
 /// Handles to logging inputs.
+#[derive(Default)]
 pub(crate) struct LoggingHandles {
     /// Handle to provide heap size limits per dataflow.
     pub heap_size_limits_handle: Handle<Timestamp, Update<(usize, u64)>>,
