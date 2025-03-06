@@ -1425,6 +1425,7 @@ pub mod datadriven {
     use crate::read::{Listen, ListenEvent, READER_LEASE_DURATION};
     use crate::rpc::NoopPubSubSender;
     use crate::tests::new_test_client;
+    use crate::write::COMBINE_INLINE_WRITES;
     use crate::{GarbageCollector, PersistClient};
 
     use super::*;
@@ -1459,6 +1460,7 @@ pub mod datadriven {
                 .cfg
                 .set_config(&STRUCTURED_ORDER, *STRUCTURED_ORDER.default());
             client.cfg.set_config(&BUILDER_STRUCTURED, true);
+            client.cfg.set_config(&COMBINE_INLINE_WRITES, false);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),
