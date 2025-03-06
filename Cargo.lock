@@ -5926,6 +5926,10 @@ name = "mz-mysql-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sigv4",
+ "aws-types",
  "chrono",
  "fancy-regex",
  "indexmap 1.9.1",
@@ -5947,8 +5951,10 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.11",
+ "tokio",
  "tonic-build",
  "tracing",
+ "url",
  "uuid",
  "workspace-hack",
 ]

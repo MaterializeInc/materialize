@@ -7,12 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use aws_types::SdkConfig;
+use mysql_async::{Conn, Opts, OptsBuilder};
 use std::collections::BTreeSet;
 use std::net::IpAddr;
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
-
-use mysql_async::{Conn, Opts, OptsBuilder};
 
 use mz_ore::future::{InTask, TimeoutError};
 use mz_ore::option::OptionExt;
@@ -23,6 +23,7 @@ use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
+use crate::aws_rds::rds_auth_token;
 use crate::MySqlError;
 
 /// Configures an optional tunnel for use when connecting to a MySQL
@@ -215,6 +216,7 @@ pub struct Config {
     in_task: InTask,
     ssh_timeout_config: SshTimeoutConfig,
     mysql_timeout_config: TimeoutConfig,
+    aws_config: Option<SdkConfig>,
 }
 
 impl Config {
@@ -224,6 +226,7 @@ impl Config {
         ssh_timeout_config: SshTimeoutConfig,
         in_task: InTask,
         mysql_timeout_config: TimeoutConfig,
+        aws_config: Option<SdkConfig>,
     ) -> Result<Self, MySqlError> {
         let opts = mysql_timeout_config.apply_to_opts(builder)?;
         Ok(Self {
@@ -232,6 +235,7 @@ impl Config {
             in_task,
             ssh_timeout_config,
             mysql_timeout_config,
+            aws_config,
         })
     }
 
@@ -269,6 +273,19 @@ impl Config {
         ssh_tunnel_manager: &SshTunnelManager,
     ) -> Result<MySqlConn, MySqlError> {
         let mut opts_builder = OptsBuilder::from_opts(self.inner.clone());
+
+        if let Some(aws_config) = &self.aws_config {
+            let (host, port) = self.address();
+            let username = self.inner.user().expect("MySQL: username required");
+
+            let token = rds_auth_token(host, port, username, aws_config).await?;
+            // Cleartext plugin must be enabled for IAM authentication, for security,
+            // the network traffic is SSL/TLS encrypted.  The cleartext plugin is built
+            // into the MySQL client library.
+            opts_builder = opts_builder
+                .pass(Some(token.to_string()))
+                .enable_cleartext_plugin(true);
+        }
 
         match &self.tunnel {
             TunnelConfig::Direct { resolved_ips } => {
