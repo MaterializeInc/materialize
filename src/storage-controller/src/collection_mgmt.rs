@@ -378,6 +378,15 @@ where
                 update_tx.clone()
             };
 
+            for update in &updates {
+                match update {
+                    AppendOnlyUpdate::Status(status) => {
+                        tracing::info!(?status, "blind_write");
+                    }
+                    _ => {}
+                }
+            }
+
             let (tx, _rx) = oneshot::channel();
             update_tx.send((updates, tx)).expect("rx hung up");
         }

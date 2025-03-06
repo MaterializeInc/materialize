@@ -504,6 +504,23 @@ impl StatusUpdate {
             replica_id: None,
         }
     }
+
+    pub fn new_with_replica(
+        id: GlobalId,
+        replica_id: ReplicaId,
+        timestamp: chrono::DateTime<chrono::Utc>,
+        status: Status,
+    ) -> StatusUpdate {
+        StatusUpdate {
+            id,
+            timestamp,
+            status,
+            error: None,
+            hints: Default::default(),
+            namespaced_errors: Default::default(),
+            replica_id: Some(replica_id),
+        }
+    }
 }
 
 impl From<StatusUpdate> for Row {
