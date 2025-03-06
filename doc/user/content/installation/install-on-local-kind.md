@@ -81,8 +81,9 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    to the `kind` node (in this example, the `kind-control-plane` node).
 
    ```shell
-   kubectl label node kind-control-plane materialize.cloud/disk=true
-   kubectl label node kind-control-plane workload=materialize-instance
+   MYNODE=$(kubectl get nodes --no-headers | awk '{print $1}')
+   kubectl label node  $MYNODE materialize.cloud/disk=true
+   kubectl label node  $MYNODE workload=materialize-instance
    ```
 
    Verify that the labels were successfully applied by running the following
