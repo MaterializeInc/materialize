@@ -1811,13 +1811,13 @@ steps:
 
   - id: 0dt
     label: Zero downtime
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 180
     plugins:
       - ./ci/plugins/mzcompose:
           composition: 0dt
     agents:
-      queue: hetzner-x86-64-dedi-8cpu-32gb
+      queue: hetzner-aarch64-16cpu-32gb
 
   - id: emulator
     label: Materialize Emulator
