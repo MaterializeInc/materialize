@@ -6,6 +6,7 @@ aliases:
 menu:
   main:
     parent: "installation"
+    identifier: "install-on-gcp"
 ---
 
 {{% self-managed/materialize-components-sentence %}}

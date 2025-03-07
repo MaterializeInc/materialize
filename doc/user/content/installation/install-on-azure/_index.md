@@ -3,9 +3,11 @@ title: "Install on Azure"
 description: "Install Materialize on Azure Kubernetes Service (AKS) using Terraform"
 aliases:
   - /self-hosted/install-on-gcp/
+
 menu:
   main:
     parent: "installation"
+    identifier: "install-on-azure"
 ---
 
 {{% self-managed/materialize-components-sentence %}}
@@ -60,7 +62,7 @@ the [Helm documentation](https://helm.sh/docs/intro/install/).
 
 ### jq (Optional)
 
-*Optional*. `jq` is used to parse the EKS cluster name and region from the
+*Optional*. `jq` is used to parse the AKS cluster name and region from the
 Terraform outputs. Alternatively, you can manually specify the name and region.
 If you want to use `jq` and do not have `jq` installed, install.
 
@@ -179,12 +181,12 @@ node instance type, etc.), see the
    `terraform.tfvars.example` file) and specify:
 
    - The prefix for the resources. Prefix has a maximum of 10 characters and
-     contains only alphanumeric characters; e.g., `mydemo`.
+     contains only alphanumeric characters and hyphens; e.g., `mydemo`.
 
    -  The location for the AKS cluster.
 
    ```bash
-   prefix="enter-prefix"  //  maximum 10 characters, containing only alphanumeric characters; e.g. mydemo
+   prefix="enter-prefix"  //  maximum 10 characters, containing only alphanumeric characters and hyphens; e.g. mydemo
    location="eastus2"
    ```
 
