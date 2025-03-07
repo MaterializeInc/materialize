@@ -125,11 +125,6 @@ pub struct PersistConfig {
     /// In Compactor::compact_and_apply_background, how many updates to encode or
     /// decode before voluntarily yielding the task.
     pub compaction_yield_after_n_updates: usize,
-    /// The maximum size of the connection pool to Postgres/CRDB when performing
-    /// consensus reads and writes.
-    pub consensus_connection_pool_max_size: usize,
-    /// The maximum time to wait when attempting to obtain a connection from the pool.
-    pub consensus_connection_pool_max_wait: Option<Duration>,
     /// Length of time after a writer's last operation after which the writer
     /// may be expired.
     pub writer_lease_duration: Duration,
@@ -192,8 +187,6 @@ impl PersistConfig {
             compaction_concurrency_limit: 5,
             compaction_queue_size: 20,
             compaction_yield_after_n_updates: 100_000,
-            consensus_connection_pool_max_size: 50,
-            consensus_connection_pool_max_wait: Some(Duration::from_secs(60)),
             writer_lease_duration: 60 * Duration::from_secs(60),
             critical_downgrade_interval: Duration::from_secs(30),
             pubsub_connect_attempt_timeout: Duration::from_secs(5),
@@ -330,6 +323,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&BLOB_OPERATION_ATTEMPT_TIMEOUT)
         .add(&BLOB_CONNECT_TIMEOUT)
         .add(&BLOB_READ_TIMEOUT)
+        .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_SIZE)
+        .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_WAIT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
@@ -391,6 +386,25 @@ impl PersistConfig {
         self.set_config(&STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT, val);
     }
 }
+
+/// Sets the maximum size of the connection pool that is used by consensus.
+///
+/// Requires a restart of the process to take effect.
+pub const CONSENSUS_CONNECTION_POOL_MAX_SIZE: Config<usize> = Config::new(
+    "persist_consensus_connection_pool_max_size",
+    50,
+    "The maximum size the connection pool to Postgres/CRDB will grow to.",
+);
+
+/// Sets the maximum amount of time we'll wait to acquire a connection from
+/// the connection pool.
+///
+/// Requires a restart of the process to take effect.
+const CONSENSUS_CONNECTION_POOL_MAX_WAIT: Config<Duration> = Config::new(
+    "persist_consensus_connection_pool_max_wait",
+    Duration::from_secs(60),
+    "The amount of time we'll wait for a connection to become available.",
+);
 
 /// The minimum TTL of a connection to Postgres/CRDB before it is proactively
 /// terminated. Connections are routinely culled to balance load against the
@@ -548,11 +562,11 @@ pub const USAGE_STATE_FETCH_CONCURRENCY_LIMIT: Config<usize> = Config::new(
 
 impl PostgresClientKnobs for PersistConfig {
     fn connection_pool_max_size(&self) -> usize {
-        self.consensus_connection_pool_max_size
+        CONSENSUS_CONNECTION_POOL_MAX_SIZE.get(self)
     }
 
     fn connection_pool_max_wait(&self) -> Option<Duration> {
-        self.consensus_connection_pool_max_wait
+        Some(CONSENSUS_CONNECTION_POOL_MAX_WAIT.get(self))
     }
 
     fn connection_pool_ttl(&self) -> Duration {
