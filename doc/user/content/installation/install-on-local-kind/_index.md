@@ -1,22 +1,23 @@
 ---
-title: "Install locally on minikube"
-description: "Deploy Self-managed Materialize to a local minikube cluster."
+title: "Install locally on kind"
+description: "Deploy Self-managed Materialize to a local kind cluster."
 aliases:
-  - /self-hosted/install-on-local-minikube/
+  - /self-hosted/install-on-local-kind/
 menu:
   main:
     parent: "installation"
+    identifier: "install-on-local-kind"
 ---
 
 {{% self-managed/materialize-components-sentence %}}
 
-The following tutorial deploys the following components onto your local
-[`minikube`](https://minikube.sigs.k8s.io/docs/start/):
+The following tutorial uses a local [`kind`](https://kind.sigs.k8s.io/) cluster
+and deploys the following components:
 
-- Materialize Operator using Helm into your local `minikube` cluster.
+- Materialize Operator using Helm into your local `kind` cluster.
 - MinIO object storage as the blob storage for your Materialize.
 - PostgreSQL database as the metadata database for your Materialize.
-- Materialize as a containerized application into your local `minikube` cluster.
+- Materialize as a containerized application into your local `kind` cluster.
 
 {{< important >}}
 
@@ -31,20 +32,15 @@ This tutorial is for local evaluation/testing purposes only.
 
 ## Prerequisites
 
-### minikube
+### kind
 
-Install [`minikube`](https://minikube.sigs.k8s.io/docs/start/).
+Install [`kind`](https://kind.sigs.k8s.io/docs/user/quick-start/).
 
-### Container or virtual machine manager
-
-The following tutorial uses `Docker` as the container or virtual machine
-manager. To use another container or virtual machine manager as listed on the
-[`minikube` documentation](https://minikube.sigs.k8s.io/docs/start/), refer to
-the specific container/VM manager documentation.
+### Docker
 
 Install [`Docker`](https://docs.docker.com/get-started/get-docker/).
 
-#### Resource requirements for your container/virtual machine manager
+#### Docker resource requirements
 
 {{% self-managed/local-resource-requirements %}}
 
@@ -55,7 +51,8 @@ If you don't have Helm version 3.2.0+ installed, install. For details, see the
 
 ### `kubectl`
 
-This tutorial uses `kubectl`. To install, refer to the [`kubectl` documentationq](https://kubernetes.io/docs/tasks/tools/).
+This tutorial uses `kubectl`. To install, refer to the [`kubectl`
+documentationq](https://kubernetes.io/docs/tasks/tools/).
 
 For help with `kubectl` commands, see [kubectl Quick
 reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
@@ -75,14 +72,14 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    cd my-local-mz
    ```
 
-1. Create a minikube cluster.
+1. Create a `kind` cluster.
 
    ```shell
-   minikube start
+   kind create cluster
    ```
 
 1. Add labels `materialize.cloud/disk=true` and `workload=materialize-instance`
-   to the `minikube` node (in this example, named `minikube`).
+   to the `kind` node (in this example, the `kind-control-plane` node).
 
    ```shell
    MYNODE=$(kubectl get nodes --no-headers | awk '{print $1}')
@@ -90,7 +87,8 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    kubectl label node  $MYNODE workload=materialize-instance
    ```
 
-   Verify that the labels were successfully applied by running the following command:
+   Verify that the labels were successfully applied by running the following
+   command:
 
    ```shell
    kubectl get nodes --show-labels
@@ -116,7 +114,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
       helm repo update materialize
       ```
 
-   {{% self-managed/versions/step-install-helm-version-local-minikube-install %}}
+   {{% self-managed/versions/step-install-helm-version-local-kind-install %}}
 
    1. Verify the installation and check the status:
 
@@ -128,13 +126,13 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
       ```none
       NAME                                           READY   STATUS    RESTARTS   AGE
-      pod/my-materialize-operator-7c75785df9-6cn88   1/1     Running   0          9s
+      pod/my-materialize-operator-6c4c7d6fc9-hbzvr   1/1     Running   0          16s
 
       NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
-      deployment.apps/my-materialize-operator   1/1     1            1           9s
+      deployment.apps/my-materialize-operator   1/1     1            1           16s
 
       NAME                                                 DESIRED   CURRENT         READY   AGE
-      replicaset.apps/my-materialize-operator-7c75785df9   1         1               1       9s
+      replicaset.apps/my-materialize-operator-6c4c7d6fc9   1         1               1       16s
       ```
 
       If you run into an error during deployment, refer to the
@@ -164,24 +162,24 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
        Wait for the components to be ready and in the `Running` state:
 
        ```none
-       NAME                                           READY   STATUS    RESTARTS   AGE
-       pod/minio-777db75dd4-7cd77                     1/1     Running   0          30s
-       pod/my-materialize-operator-7c75785df9-6cn88   1/1     Running   0          88s
-       pod/postgres-55fbcd88bf-zkwvz                  1/1     Running   0          34s
+       NAME                                           READY   STATUS     RESTARTS   AGE
+       pod/minio-777db75dd4-zcl89                     1/1     Running    0          84s
+       pod/my-materialize-operator-6c4c7d6fc9-hbzvr   1/1     Running    0          107s
+       pod/postgres-55fbcd88bf-b4kdv                  1/1     Running    0          86s
 
-       NAME               TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
-       service/minio      ClusterIP   10.98.114.67    <none>        9000/TCP   30s
-       service/postgres   ClusterIP   10.98.144.251   <none>        5432/TCP   34s
+       NAME               TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+       service/minio      ClusterIP   10.96.51.9     <none>        9000/TCP   84s
+       service/postgres   ClusterIP   10.96.19.166   <none>        5432/TCP   86s
 
-       NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
-       deployment.apps/minio                     1/1     1            1           30s
-       deployment.apps/my-materialize-operator   1/1     1            1           88s
-       deployment.apps/postgres                  1/1     1            1           34s
+       NAME                                      READY   UP-TO-DATE    AVAILABLE   AGE
+       deployment.apps/minio                     1/1     1             1           84s
+       deployment.apps/my-materialize-operator   1/1     1             1           107s
+       deployment.apps/postgres                  1/1     1             1           86s
 
-       NAME                                                 DESIRED   CURRENT          READY   AGE
-       replicaset.apps/minio-777db75dd4                     1         1                1       30s
-       replicaset.apps/my-materialize-operator-7c75785df9   1         1                1       88s
-       replicaset.apps/postgres-55fbcd88bf                  1         1                1       34s
+       NAME                                                 DESIRED    CURRENT         READY   AGE
+       replicaset.apps/minio-777db75dd4                     1          1               1       84s
+       replicaset.apps/my-materialize-operator-6c4c7d6fc9   1          1               1       107s
+       replicaset.apps/postgres-55fbcd88bf                  1          1               1       86s
        ```
 
 1. Install the metrics service to the `kube-system` namespace.
@@ -224,7 +222,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
       ```none
       NAME                             READY   STATUS    RESTARTS   AGE
-      metrics-server-89dfdc559-jt94n   1/1     Running   0          14m
+      metrics-server-89dfdc559-bq59m   1/1     Running   0          2m6s
       ```
 
 1. Install Materialize into a new `materialize-environment` namespace:
@@ -245,35 +243,35 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
        Wait for the components to be ready and in the `Running` state.
 
        ```none
-       NAME                                             READY   STATUS    RESTARTS          AGE
-       pod/mz10wiu7fyr7-balancerd-fddc4bd7c-lwqmp       1/1     Running   0                 19s
-       pod/mz10wiu7fyr7-cluster-s2-replica-s1-gen-1-0   1/1     Running   0                 26s
-       pod/mz10wiu7fyr7-cluster-u1-replica-u1-gen-1-0   1/1     Running   0                 25s
-       pod/mz10wiu7fyr7-console-6cbcd997dc-95tf2        1/1     Running   0                 12s
-       pod/mz10wiu7fyr7-console-6cbcd997dc-bbm5h        1/1     Running   0                 12s
-       pod/mz10wiu7fyr7-environmentd-1-0                1/1     Running   0                 32s
+       NAME                                             READY   STATUS    RESTARTS   AGE
+       pod/mz32bsnzerqo-balancerd-756b65959c-6q9db      1/1     Running   0                 12s
+       pod/mz32bsnzerqo-cluster-s2-replica-s1-gen-1-0   1/1     Running   0                 14s
+       pod/mz32bsnzerqo-cluster-u1-replica-u1-gen-1-0   1/1     Running   0                 14s
+       pod/mz32bsnzerqo-console-6b7c975fb9-jkm8l        1/1     Running   0          5s
+       pod/mz32bsnzerqo-console-6b7c975fb9-z8g8f        1/1     Running   0          5s
+       pod/mz32bsnzerqo-environmentd-1-0                1/1     Running   0                 19s
 
        NAME                                               TYPE        CLUSTER-IP          EXTERNAL-IP   PORT(S)                                        AGE
-       service/mz10wiu7fyr7-balancerd                     ClusterIP   None                <none>        6876/TCP,6875/TCP                              19s
-       service/mz10wiu7fyr7-cluster-s2-replica-s1-gen-1   ClusterIP   None                <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   26s
-       service/mz10wiu7fyr7-cluster-u1-replica-u1-gen-1   ClusterIP   None                <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   26s
-       service/mz10wiu7fyr7-console                       ClusterIP   None                <none>        8080/TCP                                       12s
-       service/mz10wiu7fyr7-environmentd                  ClusterIP   None                <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            19s
-       service/mz10wiu7fyr7-environmentd-1                ClusterIP   None                <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            32s
-       service/mz10wiu7fyr7-persist-pubsub-1              ClusterIP   None                <none>        6879/TCP                                       32s
+       service/mz32bsnzerqo-balancerd                     ClusterIP   None                <none>        6876/TCP,6875/TCP                              12s
+       service/mz32bsnzerqo-cluster-s2-replica-s1-gen-1   ClusterIP   None                <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   14s
+       service/mz32bsnzerqo-cluster-u1-replica-u1-gen-1   ClusterIP   None                <none>        2100/TCP,2103/TCP,2101/TCP,2102/TCP,6878/TCP   14s
+       service/mz32bsnzerqo-console                       ClusterIP   None                <none>        8080/TCP                                       5s
+       service/mz32bsnzerqo-environmentd                  ClusterIP   None                <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            12s
+       service/mz32bsnzerqo-environmentd-1                ClusterIP   None                <none>        6875/TCP,6876/TCP,6877/TCP,6878/TCP            19s
+       service/mz32bsnzerqo-persist-pubsub-1              ClusterIP   None                <none>        6879/TCP                                       19s
 
        NAME                                     READY   UP-TO-DATE   AVAILABLE   AGE
-       deployment.apps/mz10wiu7fyr7-balancerd   1/1     1            1           19s
-       deployment.apps/mz10wiu7fyr7-console     2/2     2            2           12s
+       deployment.apps/mz32bsnzerqo-balancerd   1/1     1            1           12s
+       deployment.apps/mz32bsnzerqo-console     2/2     2            2           5s
 
-       NAME                                               DESIRED   CURRENT   READY          AGE
-       replicaset.apps/mz10wiu7fyr7-balancerd-fddc4bd7c   1         1         1              19s
-       replicaset.apps/mz10wiu7fyr7-console-6cbcd997dc    2         2         2              12s
+       NAME                                                DESIRED   CURRENT   READY          AGE
+       replicaset.apps/mz32bsnzerqo-balancerd-756b65959c   1         1         1              12s
+       replicaset.apps/mz32bsnzerqo-console-6b7c975fb9     2         2         2              5s
 
        NAME                                                        READY   AGE
-       statefulset.apps/mz10wiu7fyr7-cluster-s2-replica-s1-gen-1   1/1     26s
-       statefulset.apps/mz10wiu7fyr7-cluster-u1-replica-u1-gen-1   1/1     26s
-       statefulset.apps/mz10wiu7fyr7-environmentd-1                1/1     32s
+       statefulset.apps/mz32bsnzerqo-cluster-s2-replica-s1-gen-1   1/1     14s
+       statefulset.apps/mz32bsnzerqo-cluster-u1-replica-u1-gen-1   1/1     14s
+       statefulset.apps/mz32bsnzerqo-environmentd-1                1/1     19s
        ```
 
        If you run into an error during deployment, refer to the
@@ -298,7 +296,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 To delete the whole local deployment (including Materialize instances and data):
 
 ```bash
-minikube delete
+kind delete cluster
 ```
 
 ## See also
