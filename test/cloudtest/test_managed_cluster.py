@@ -130,7 +130,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
             SELECT mz_cluster_replicas.name
             FROM mz_cluster_replicas, mz_clusters
             WHERE mz_cluster_replicas.cluster_id = mz_clusters.id
-            AND mz_clusters.name = 'gracefulatlertest';
+            AND mz_clusters.name = 'gracefulaltertest';
             """
         )
         assert [replica[0] for replica in replicas] == names
@@ -143,7 +143,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
                         FROM mz_internal.mz_pending_cluster_replicas  ur
                         INNER join mz_cluster_replicas cr ON cr.id=ur.id
                         INNER join mz_clusters c ON c.id=cr.cluster_id
-                        WHERE c.name = 'gracefulatlertest';
+                        WHERE c.name = 'gracefulaltertest';
                         """
                     )
                 )
@@ -163,14 +163,14 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     # - timedout until ready queries take the appropriate action
     # - Fails to gracefully alter cluster with source
     mz.environmentd.sql(
-        'CREATE CLUSTER gracefulatlertest ( SIZE = "1" )',
+        'CREATE CLUSTER gracefulaltertest ( SIZE = "1" )',
         port="internal",
         user="mz_system",
     )
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER gracefulatlertest SET ( SIZE = '2' ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER gracefulaltertest SET ( SIZE = '2' ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -179,7 +179,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER gracefulatlertest SET ( SIZE = '1', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER gracefulaltertest SET ( SIZE = '1', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -188,7 +188,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER gracefulatlertest SET ( SIZE = '1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER gracefulaltertest SET ( SIZE = '1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -197,7 +197,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER gracefulatlertest SET ( SIZE = '2', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER gracefulaltertest SET ( SIZE = '2', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -206,7 +206,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER gracefulatlertest SET ( SIZE = '1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER gracefulaltertest SET ( SIZE = '1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -215,30 +215,51 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
 
     # Setup for validating cancelation and
     # replica checks during alter
-    mz.environmentd.sql(
-        """
-        DROP CLUSTER IF EXISTS gracefulatlertest CASCADE;
+    mz.testdrive.run(
+        input=dedent(
+            """
+        $ kafka-create-topic topic=graceful-reconfig
+
+        $ kafka-ingest topic=graceful-reconfig format=bytes key-format=bytes key-terminator=: repeat=1000
+        key${kafka-ingest.iteration}:value${kafka-ingest.iteration}
+
+        $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+        DROP CLUSTER IF EXISTS gracefulaltertest CASCADE;
         DROP TABLE IF EXISTS t CASCADE;
+        CREATE CLUSTER gracefulaltertest ( SIZE = '1');
+        GRANT ALL ON CLUSTER gracefulaltertest TO materialize;
 
-        CREATE CLUSTER gracefulatlertest ( SIZE = '1');
+        > SET CLUSTER = gracefulaltertest;
 
-        SET CLUSTER = gracefulatlertest;
+        > CREATE TABLE t (a int);
+        > CREATE DEFAULT INDEX ON t;
+        > INSERT INTO t VALUES (42);
 
-        -- now let's give it another go with user-defined objects
-        CREATE TABLE t (a int);
-        CREATE DEFAULT INDEX ON t;
-        INSERT INTO t VALUES (42);
-        GRANT ALL ON CLUSTER gracefulatlertest TO materialize;
-        """,
-        port="internal",
-        user="mz_system",
+        > CREATE CONNECTION kafka_conn
+          TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+
+        > CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
+            URL '${testdrive.schema-registry-url}'
+          )
+
+        > CREATE SOURCE kafka_src
+          IN CLUSTER cluster1
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-graceful-reconfig-${testdrive.seed}')
+
+        > CREATE TABLE kafka_tbl
+          FROM SOURCE kafka_src (REFERENCE "testdrive-graceful-reconfig-${testdrive.seed}")
+          KEY FORMAT TEXT
+          VALUE FORMAT TEXT
+          ENVELOPE UPSERT
+        """
+        ),
     )
 
     # Valudate replicas are correct during an ongoing alter
     def gracefully_alter():
         mz.environmentd.sql(
             """
-            ALTER CLUSTER gracefulatlertest SET (SIZE = '2') WITH ( WAIT FOR '5s')
+            ALTER CLUSTER gracefulaltertest SET (SIZE = '2') WITH ( WAIT FOR '5s')
             """,
             port="internal",
             user="mz_system",
@@ -252,7 +273,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     assert (
         mz.environmentd.sql_query(
             """
-        SELECT size FROM mz_clusters WHERE name='gracefulatlertest';
+        SELECT size FROM mz_clusters WHERE name='gracefulaltertest';
         """
         )
         == (["1"],)
@@ -264,7 +285,7 @@ def test_graceful_reconfiguration(mz: MaterializeApplication) -> None:
     assert (
         mz.environmentd.sql_query(
             """
-        SELECT size FROM mz_clusters WHERE name='gracefulatlertest';
+        SELECT size FROM mz_clusters WHERE name='gracefulaltertest';
         """
         )
         == (["2"],)
