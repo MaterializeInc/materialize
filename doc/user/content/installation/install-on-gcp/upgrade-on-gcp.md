@@ -197,4 +197,4 @@ If you want to use `jq` and do not have `jq` installed, install.
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-{{% self-managed/upgrade/upgrade-steps %}}
+{{% self-managed/versions/upgrade/upgrade-steps-cloud %}}
