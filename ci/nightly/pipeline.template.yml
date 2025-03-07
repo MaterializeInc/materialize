@@ -62,6 +62,15 @@ steps:
           queue: hetzner-aarch64-8cpu-16gb
         sanitizer: skip
 
+      - id: cargo-deny-check-advisories
+        label: Security advisories
+        command: bin/ci-builder run stable cargo deny check advisories
+        depends_on: []
+        timeout_in_minutes: 20
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        sanitizer: skip
+
   - id: miri-test
     label: ":rust: Miri test (full)"
     depends_on: []
