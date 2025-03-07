@@ -18,7 +18,6 @@ use mz_ore::now::NowFn;
 use mz_persist_types::ShardId;
 use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::CreateSinkOptionName;
 use mz_sql::names::FullItemName;
 use mz_sql_parser::ast::{IdentError, Raw, Statement};
 use mz_storage_client::controller::StorageTxn;
@@ -114,7 +113,7 @@ pub(crate) async fn migrate(
         ast_rewrite_sources_to_tables(tx, now)?;
     }
 
-    rewrite_ast_items(tx, |_tx, _id, stmt| {
+    rewrite_ast_items(tx, |_tx, _id, _stmt| {
         // Add per-item AST migrations below.
         //
         // Each migration should be a function that takes `stmt` (the AST

@@ -3198,11 +3198,7 @@ pub fn describe_create_sink(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(
-    CreateSinkOption,
-    (Snapshot, bool),
-    (Version, u64)
-);
+generate_extracted_config!(CreateSinkOption, (Snapshot, bool), (Version, u64));
 
 pub fn plan_create_sink(
     scx: &StatementContext,
