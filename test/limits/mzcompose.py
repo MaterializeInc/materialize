@@ -1543,6 +1543,90 @@ class PostgresSources(Generator):
             print(f"{i}")
 
 
+class PostgresTables(Generator):
+    @classmethod
+    def body(cls) -> None:
+        print("> SET statement_timeout='300s'")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_tables = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=postgres://postgres:postgres@postgres")
+        print("ALTER USER postgres WITH replication;")
+        print("DROP SCHEMA IF EXISTS public CASCADE;")
+        print("DROP PUBLICATION IF EXISTS mz_source;")
+        print("CREATE SCHEMA public;")
+        for i in cls.all():
+            print(f"CREATE TABLE t{i} (c int);")
+            print(f"ALTER TABLE t{i} REPLICA IDENTITY FULL;")
+            print(f"INSERT INTO t{i} VALUES ({i});")
+        print("CREATE PUBLICATION mz_source FOR ALL TABLES;")
+        print("> CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'")
+        print(
+            """> CREATE CONNECTION pg TO POSTGRES (
+                HOST postgres,
+                DATABASE postgres,
+                USER postgres,
+                PASSWORD SECRET pgpass
+            )"""
+        )
+        print(
+            """> CREATE SOURCE p
+          IN CLUSTER single_replica_cluster
+          FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+          """
+        )
+        for i in cls.all():
+            print(
+                f"""> CREATE TABLE t{i}
+              FROM SOURCE p (REFERENCE t{i})
+              """
+            )
+        for i in cls.all():
+            cls.store_explain_and_run(f"SELECT * FROM t{i}")
+            print(f"{i}")
+
+
+class PostgresTablesOldSyntax(Generator):
+    @classmethod
+    def body(cls) -> None:
+        print("> SET statement_timeout='300s'")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_tables = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=postgres://postgres:postgres@postgres")
+        print("ALTER USER postgres WITH replication;")
+        print("DROP SCHEMA IF EXISTS public CASCADE;")
+        print("DROP PUBLICATION IF EXISTS mz_source;")
+        print("CREATE SCHEMA public;")
+        for i in cls.all():
+            print(f"CREATE TABLE t{i} (c int);")
+            print(f"ALTER TABLE t{i} REPLICA IDENTITY FULL;")
+            print(f"INSERT INTO t{i} VALUES ({i});")
+        print("CREATE PUBLICATION mz_source FOR ALL TABLES;")
+        print("> CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'")
+        print(
+            """> CREATE CONNECTION pg TO POSTGRES (
+                HOST postgres,
+                DATABASE postgres,
+                USER postgres,
+                PASSWORD SECRET pgpass
+            )"""
+        )
+        print(
+            """> CREATE SOURCE p
+          IN CLUSTER single_replica_cluster
+          FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR SCHEMAS (public)
+          """
+        )
+        for i in cls.all():
+            cls.store_explain_and_run(f"SELECT * FROM t{i}")
+            print(f"{i}")
+
+
 class MySqlSources(Generator):
     COUNT = 300  # high memory consumption, slower with source tables
 
