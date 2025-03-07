@@ -888,10 +888,40 @@ impl<'a> Parser<'a> {
         self.expect_keyword(AS)?;
         let data_type = self.parse_data_type()?;
         self.expect_token(&Token::RParen)?;
-        Ok(Expr::Cast {
-            expr: Box::new(expr),
-            data_type,
-        })
+        // We are potentially rewriting an expression like
+        //     CAST(<expr> OP <expr> AS <type>)
+        // to
+        //     <expr> OP <expr>::<type>
+        // (because we print Expr::Cast always as a Postgres-style cast, i.e. `::`)
+        // which could incorrectly change the meaning of the expression
+        // as the `::` binds tightly. To be safe, we wrap the inner
+        // expression in parentheses
+        //    (<expr> OP <expr>)::<type>
+        // unless the inner expression is of a kind that we know is
+        // safe to follow with a `::` without wrapping.
+        if !matches!(
+            expr,
+            Expr::Nested(_)
+                | Expr::Value(_)
+                | Expr::Cast { .. }
+                | Expr::Function { .. }
+                | Expr::Identifier { .. }
+                | Expr::Collate { .. }
+                | Expr::HomogenizingFunction { .. }
+                | Expr::NullIf { .. }
+                | Expr::Subquery { .. }
+                | Expr::Parameter(..)
+        ) {
+            Ok(Expr::Cast {
+                expr: Box::new(Expr::Nested(Box::new(expr))),
+                data_type,
+            })
+        } else {
+            Ok(Expr::Cast {
+                expr: Box::new(expr),
+                data_type,
+            })
+        }
     }
 
     /// Parse a SQL EXISTS expression e.g. `WHERE EXISTS(SELECT ...)`.
