@@ -215,23 +215,44 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     # Setup for validating cancelation and
     # replica checks during alter
-    mz.environmentd.sql(
-        """
+    mz.testdrive.run(
+        input=dedent(
+            """
+        $ kafka-create-topic topic=zdt-reconfig
+
+        $ kafka-ingest topic=zdt-reconfig format=bytes key-format=bytes key-terminator=: repeat=1000
+        key${kafka-ingest.iteration}:value${kafka-ingest.iteration}
+
+        $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
         DROP CLUSTER IF EXISTS zdtaltertest CASCADE;
         DROP TABLE IF EXISTS t CASCADE;
-
         CREATE CLUSTER zdtaltertest ( SIZE = '1');
+        GRANT ALL ON CLUSTER zdtaltertest TO materialize;
 
         SET CLUSTER = zdtaltertest;
 
-        -- now let's give it another go with user-defined objects
-        CREATE TABLE t (a int);
-        CREATE DEFAULT INDEX ON t;
-        INSERT INTO t VALUES (42);
-        GRANT ALL ON CLUSTER zdtaltertest TO materialize;
-        """,
-        port="internal",
-        user="mz_system",
+        > CREATE TABLE t (a int);
+        > CREATE DEFAULT INDEX ON t;
+        > INSERT INTO t VALUES (42);
+
+        > CREATE CONNECTION kafka_conn
+          TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+
+        > CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
+            URL '${testdrive.schema-registry-url}'
+          )
+
+        > CREATE SOURCE kafka_src
+          IN CLUSTER zdtaltertest
+          FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-zdt-reconfig-${testdrive.seed}')
+
+        > CREATE TABLE kafka_tbl
+          FROM SOURCE kafka_src (REFERENCE "testdrive-zdt-reconfig-${testdrive.seed}")
+          KEY FORMAT TEXT
+          VALUE FORMAT TEXT
+          ENVELOPE UPSERT
+        """
+        ),
     )
 
     # Valudate replicas are correct during an ongoing alter

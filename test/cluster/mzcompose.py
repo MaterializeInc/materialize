@@ -4945,27 +4945,46 @@ def workflow_test_zero_downtime_reconfigure(
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.up("clusterd1")
-        c.sql(
-            """
-            ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
+        c.up("materialized", "clusterd1", "zookeeper", "kafka", "schema-registry")
+        c.testdrive(
+            dedent(
+                """
+            $ kafka-create-topic topic=graceful-reconfig
 
+            $ kafka-ingest topic=graceful-reconfig format=bytes key-format=bytes key-terminator=: repeat=1000
+            key${kafka-ingest.iteration}:value${kafka-ingest.iteration}
+
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
             DROP CLUSTER IF EXISTS cluster1 CASCADE;
             DROP TABLE IF EXISTS t CASCADE;
-
             CREATE CLUSTER cluster1 ( SIZE = '1');
-
-            SET CLUSTER = cluster1;
-
-            -- now let's give it another go with user-defined objects
-            CREATE TABLE t (a int);
-            CREATE DEFAULT INDEX ON t;
-            INSERT INTO t VALUES (42);
             GRANT ALL ON CLUSTER cluster1 TO materialize;
-            """,
-            port=6877,
-            user="mz_system",
+
+            > SET CLUSTER = cluster1;
+
+            > CREATE TABLE t (a int);
+            > CREATE DEFAULT INDEX ON t;
+            > INSERT INTO t VALUES (42);
+
+            > CREATE CONNECTION kafka_conn
+              TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+
+            > CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
+                URL '${testdrive.schema-registry-url}'
+              )
+
+            > CREATE SOURCE kafka_src
+              IN CLUSTER cluster1
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-graceful-reconfig-${testdrive.seed}')
+
+            > CREATE TABLE kafka_tbl
+              FROM SOURCE kafka_src (REFERENCE "testdrive-graceful-reconfig-${testdrive.seed}")
+              KEY FORMAT TEXT
+              VALUE FORMAT TEXT
+              ENVELOPE UPSERT
+            """
+            ),
         )
         replicas = c.sql_query(
             """
