@@ -434,11 +434,7 @@ impl Listeners {
         updates.add(&CONSENSUS_CONNECTION_POOL_MAX_SIZE, 1);
         updates.apply(&dyncfgs);
 
-        let mut persist_cfg = PersistConfig::new(
-            &crate::BUILD_INFO,
-            persist_now.clone(),
-            dyncfgs,
-        );
+        let mut persist_cfg = PersistConfig::new(&crate::BUILD_INFO, persist_now.clone(), dyncfgs);
         persist_cfg.build_version = config.code_version;
         // Stress persist more by writing rollups frequently
         persist_cfg.set_rollup_threshold(5);
