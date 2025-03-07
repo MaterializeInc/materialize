@@ -21,6 +21,7 @@ use k8s_openapi::api::core::v1::Service;
 use kube::{Api, Client};
 use mz_ore::retry::{self, RetryResult};
 use mz_ore::task::{self, AbortOnDropHandle};
+use tracing::{error, info};
 
 use crate::Args;
 
@@ -102,7 +103,7 @@ pub fn spawn_sql_port_forwarding_process(
                 let local_port = port_forwarding_info.local_port;
                 let target_port = port_forwarding_info.target_port;
 
-                println!(
+                info!(
                     "Spawning port forwarding process for {} from ports {} -> {}",
                     service_name, local_port, target_port
                 );
@@ -140,7 +141,7 @@ pub fn spawn_sql_port_forwarding_process(
                                     ),
                                     String::from_utf8_lossy(&output.stderr)
                                 );
-                                eprintln!("{}", retry_err_msg);
+                                error!("{}", retry_err_msg);
 
                                 return RetryResult::RetryableErr(anyhow::anyhow!(retry_err_msg));
                             }
@@ -160,7 +161,7 @@ pub fn spawn_sql_port_forwarding_process(
             })
             .await
         {
-            eprintln!("{}", err);
+            error!("{}", err);
         }
     })
     .abort_on_drop()

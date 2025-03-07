@@ -35,6 +35,8 @@ use mz_cloud_resources::crd::gen::cert_manager::certificates::Certificate;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
+use tracing::error;
+use tracing_subscriber::EnvFilter;
 
 mod k8s_resource_dumper;
 mod system_catalog_dumper;
@@ -73,6 +75,11 @@ pub struct Context {
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("mz_self_managed_debug=info"))
+        .without_time()
+        .init();
+
     let args: Args = cli::parse_args(CliConfig {
         env_prefix: Some("SELF_MANAGED_DEBUG_"),
         enable_version_flag: true,
@@ -83,7 +90,7 @@ async fn main() {
     let context = Context { start_time, args };
 
     if let Err(err) = run(context).await {
-        eprintln!(
+        error!(
             "self-managed-debug: fatal: {}\nbacktrace: {}",
             err.display_with_causes(),
             err.backtrace()
@@ -191,7 +198,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
     let client = match create_k8s_client(context.args.k8s_context.clone()).await {
         Ok(client) => client,
         Err(e) => {
-            eprintln!("Failed to create k8s client: {}", e);
+            error!("Failed to create k8s client: {}", e);
             return Err(e);
         }
     };
