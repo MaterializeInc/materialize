@@ -610,7 +610,7 @@ impl Coordinator {
         // This has to be the `storage_as_of`, because bootstrapping uses this in
         // `bootstrap_storage_collections`.
         if let Some(storage_as_of_ts) = storage_as_of.as_option() {
-            let stmt = mz_sql::parse::parse(&create_sql)
+            let stmt = mz_sql::parse::parse(&create_sql, true)
                 .map_err(|_| {
                     AdapterError::internal(
                         "create materialized view",

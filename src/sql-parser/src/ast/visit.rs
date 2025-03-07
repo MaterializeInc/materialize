@@ -87,7 +87,7 @@
 //!
 //! fn main() -> Result<(), Box<dyn Error>> {
 //!     let sql = "SELECT (SELECT 1) FROM (SELECT 1) WHERE EXISTS (SELECT (SELECT 1))";
-//!     let stmts = mz_sql_parser::parser::parse_statements(sql.into())?;
+//!     let stmts = mz_sql_parser::parser::parse_statements(sql.into(), true)?;
 //!
 //!     let mut counter = SubqueryCounter { count: 0 };
 //!     for stmt in &stmts {
@@ -131,7 +131,7 @@
 //!
 //! fn main() -> Result<(), Box<dyn Error>> {
 //!     let sql = "SELECT a FROM b.c WHERE 1 + d(e)";
-//!     let stmts = mz_sql_parser::parser::parse_statements(sql.into())?;
+//!     let stmts = mz_sql_parser::parser::parse_statements(sql.into(), true)?;
 //!
 //!     let mut collector = IdentCollector { idents: vec![] };
 //!     for stmt in &stmts {

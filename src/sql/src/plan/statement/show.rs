@@ -931,7 +931,7 @@ impl<'a> ShowSelect<'a> {
             filter,
             order.unwrap_or("q.*")
         );
-        let stmts = parse::parse(&query).expect("ShowSelect::new called with invalid SQL");
+        let stmts = parse::parse(&query, true).expect("ShowSelect::new called with invalid SQL");
         let stmt = match stmts.into_element().ast {
             Statement::Select(select) => select,
             _ => panic!("ShowSelect::new called with non-SELECT statement"),
@@ -1002,7 +1002,7 @@ fn humanize_sql_for_show_create(
 ) -> Result<String, PlanError> {
     use mz_sql_parser::ast::{CreateSourceConnection, MySqlConfigOptionName, PgConfigOptionName};
 
-    let parsed = parse::parse(sql)?.into_element().ast;
+    let parsed = parse::parse(sql, true)?.into_element().ast;
     let (mut resolved, _) = names::resolve(catalog, parsed)?;
 
     // Simplify names.

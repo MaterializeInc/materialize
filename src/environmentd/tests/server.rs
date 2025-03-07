@@ -297,7 +297,7 @@ ORDER BY mseh.began_at;",
         assert_eq!(r.sample_rate, 1.0);
 
         let expected_sql = if r.sql.contains("SECRET") {
-            mz_sql::parse::parse(&r.sql)
+            mz_sql::parse::parse(&r.sql, true)
                 .unwrap()
                 .into_element()
                 .ast
@@ -315,7 +315,7 @@ ORDER BY mseh.began_at;",
         // that none of these statements took longer than 5s wall-clock time.
         assert!(r.finished_at - r.began_at <= chrono::Duration::try_seconds(5).unwrap());
         if !r.sql.is_empty() {
-            let expected_redacted = mz_sql::parse::parse(&r.sql)
+            let expected_redacted = mz_sql::parse::parse(&r.sql, true)
                 .unwrap()
                 .into_element()
                 .ast

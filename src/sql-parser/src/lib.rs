@@ -31,7 +31,7 @@
 //!            WHERE a > b AND b < 100 \
 //!            ORDER BY a DESC, b";
 //!
-//! let ast = parser::parse_statements(sql).unwrap();
+//! let ast = parser::parse_statements(sql, true).unwrap();
 //! println!("AST: {:?}", ast);
 //! ```
 
@@ -69,11 +69,11 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
 
     fn parse_statement(tc: &TestCase) -> String {
         let input = tc.input.strip_suffix('\n').unwrap_or(&tc.input);
-        match parser::parse_statements(input) {
+        match parser::parse_statements(input, false) {
             Ok(s) => {
                 let stmt = s.into_element().ast;
                 for printed in [stmt.to_ast_string(), stmt.to_ast_string_stable()] {
-                    let mut parsed = match parser::parse_statements(&printed) {
+                    let mut parsed = match parser::parse_statements(&printed, false) {
                         Ok(parsed) => parsed.into_element().ast,
                         Err(err) => panic!("reparse failed: {}: {}\n", stmt, err),
                     };
@@ -94,6 +94,17 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
                         );
                     }
                 }
+
+                // Also check that the redacted version of the statement can be reparsed. This is
+                // important so that we are still able to pretty-print redacted statements, which
+                // helps during debugging.
+                let redacted = stmt.to_ast_string_redacted();
+                let res = parser::parse_statements(&redacted, false);
+                assert!(
+                    res.is_ok(),
+                    "redacted statement could not be reparsed: {res:?}\noriginal:\n{stmt}\nredacted:\n{redacted}"
+                );
+
                 if tc.args.contains_key("roundtrip") {
                     format!("{}\n", stmt)
                 } else {

@@ -502,7 +502,7 @@ impl CatalogState {
                             entry_name: entry.name().clone(),
                         });
                     }
-                    let statement = match mz_sql::parse::parse(entry.create_sql()) {
+                    let statement = match mz_sql::parse::parse(entry.create_sql(), true) {
                         Ok(mut statements) if statements.len() == 1 => {
                             let statement = statements.pop().expect("checked length");
                             statement.ast
