@@ -103,8 +103,6 @@ binary logging.
 
 {{% mysql-direct/create-a-user-for-replication %}}
 
-IAM authentication with AWS RDS for MySQL is also supported.  See the [Amazon RDS User Guide](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.html) for instructions on enabling IAM database authentication, creating IAM policies, and creating a database account.
-
 ## B. (Optional) Configure network security
 
 {{< note >}}
