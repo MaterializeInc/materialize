@@ -20,4 +20,7 @@ When you use the Materialize Self-Managed Community Edition or the Materialize E
 
 The collection of this data is subject to the [Materialize Privacy Policy](https://materialize.com/privacy-policy/).
 
-Please note that if you visit our website or otherwise engage with us outside of downloading the Materialize Self Managed Community Edition or the Materialize Emulator we may collect additional information about you as further described in our [Privacy Policy](https://materialize.com/privacy-policy/).
+Please note that if you visit our website or otherwise engage with us outside of
+downloading the Materialize Self-Managed Community Edition or the Materialize
+Emulator, we may collect additional information about you as further described
+in our [Privacy Policy](https://materialize.com/privacy-policy/).
