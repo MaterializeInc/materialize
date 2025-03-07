@@ -18,7 +18,8 @@ be careful to keep these tests while enabling the new behavior.
 
 Our default `EXPLAIN` output should be concise and in a format
 reminiscent of Postgres's. Ideally, `EXPLAIN` output should match the
-output in `mz_lir_mapping`.
+output in `mz_lir_mapping`. The documentation should reflect this new
+syntax.
 
 ## Out of Scope
 
@@ -29,7 +30,8 @@ the different meanings of `ArrangeBy` in MIR.
 We are not going to invent fundamentally new ways of explaining
 how Materialize works.
 
-We are not going to do a user study in advance of any changes.
+We are not going to do a user study in advance of any changes. (But we
+will listen attentively to feedback!)
 
 ## Solution Proposal
 
@@ -46,10 +48,10 @@ Operator
      ...
 ```
 
-To avoid bikeshedding, we should simply copy Postgres names whenever
-possible. When a have new concepts, we should aim to follow Postgres's
-norms: operator names spelled out with spaces, and properties are
-clearly elucidated in human-readable formats.
+We should aim to follow Postgres's norms: operator names spelled out
+with spaces, and properties are clearly elucidated in human-readable
+formats. When it is sensible, we have simply borrowed Postgres's
+terminology, i.e., `Reduce` is renamed to `GroupAggregate`.
 
 Postgres displays some parts of the query differently from us, namely:
 
@@ -58,7 +60,64 @@ Postgres displays some parts of the query differently from us, namely:
     + When a column name is unavailable, it gives the number using `$2`.
   - `Map` and `Project` do not appear
 
+We will use LIR as the new default `EXPLAIN`/`EXPLAIN AS TEXT`
+output. We will update `mz_lir_mapping` to use the new Postgres-style
+syntax (fixing [a bug with `Let` and `LetRec`
+rendering](https://github.com/MaterializeInc/database-issues/issues/8993)
+in the process.
+
+We will need three pieces of work, which should all land together:
+
+ - We must implement the new output and put in appropriate SLT tests
+   for it.
+ - We must update `mz_lir_mapping` to use the new vocabulary.
+ - We must update the documentation to explain the new output, ideally
+   using this output everywhere `EXPLAIN` is used.
+
+### Concrete Mapping
+
+| LIR node    | `mz_lir_mapping` node                    | New, Postgres-style syntax              |
+| :---------- | :--------------------------------------- | :-------------------------------------- |
+| `Constant`  | `Constant`                               | `Constant`                              |
+| `Get`       | `Get::PassArrangements l0`               | `Index Scan on l0 using ...`            |
+| `Get`       | `Get::Arrangement l0 (val=...)`          | `Index Lookup on l0 using ...`          |
+| `Get`       | `Get::Collection l0`                     | `Read l0`                               |
+| `Mfp`       | `MapFilterProject`                       | `Map/Filter/Project`                    |
+| `FlatMap`   | `FlatMap`                                | `Flat Map`                              |
+| `Join`      | `Join::Differential`                     | `Differential Join`                     |
+| `Join`      | `Join::Delta`                            | `Delta Join`                            |
+| `Reduce`    | `Reduce::Distinct`                       | `Distinct GroupAggregate`               |
+| `Reduce`    | `Reduce::Accumulable`                    | `Accumulable GroupAggregate`            |
+| `Reduce`    | `Reduce::Hierarchical (monotonic)`       | `Monotonic Hierarchical GroupAggregate` |
+| `Reduce`    | `Reduce::Hierarchical (buckets: ...)`    | `Bucketed Hierarchical GroupAggregate`  |
+| `Reduce`    | `Reduce::Basic`                          | `Non-incremental GroupAggregate`        |
+| `Reduce`    | `Reduce::Collation`                      | `Collated GroupAggregate` (details?)    |
+| `TopK`      | `TopK::MonotonicTop1`                    | `Monotonic Top1`                        |
+| `TopK`      | `TopK::MonotonicTopK`                    | `Monotonic TopK`                        |
+| `TopK`      | `TopK::Basic`                            | `Non-monotonic TopK`                    |
+| `Negate`    | `Negate`                                 | `Negate Diffs`                          |
+| `Threshold` | `Threshold`                              | `Threshold Diffs`                       |
+| `Union`     | `Union`                                  | `Union`                                 |
+| `Union`     | `Union (consolidates output)`            | `Consolidating Union`                   |
+| `ArrangeBy` | `Arrange`                                | `Arrange`                               |
+| `Let`       | `e0 With l1 = e1 ...`                    | `e1 With l1 = e1 ...`                   |
+| `LetRec`    | `e0 With Mutually Recursive l1 = e1 ...` | `e0 With Mutually Recursve l1 = e1 ...` |
+
+In the new Postgres-style syntax, extra information will appear on the
+next line: for joins, it will be the join pipelines; for
+`Map/Filter/Project` it will be the expressions used in the maps and
+filters.
+
+For `Delta Join` in particular, we will want to push information
+further down in the listing; see [TPC-H query 3](#tpc-h-query-3) below
+for an example.
+
 ## Minimal Viable Prototype
+
+These examples are adapted from existing MIR explain plans, so they
+are not completely faithful to the language above (e.g., `Map` and
+`Filter` are separate, when they will be combined in
+`Map/Filter/Project`).
 
 ### TPC-H query 1
 
@@ -126,7 +185,7 @@ New Materialize `EXPLAIN`:
         Columns: l_returnflag..=sum, #9..=#11, count
         -> Map // { arity: 12 }
            (bigint_to_numeric(case when (count = 0) then null else count end), (sum_l_quantity / #8), (sum_l_extendedprice / #8), (sum_l_discount / #8))
-           -> Reduce // { arity: 8 }
+           -> Accumulable GroupAggregate // { arity: 8 }
               Group Key: l_returnflag, l_linestatus
               Aggregates: sum(l_quantity), sum(l_extendedprice), sum((l_extendedprice * (1 - l_discount))), sum(((l_extendedprice * (1 - l_discount)) * (1 + l_tax))), count(*), sum(l_discount)
               -> Project // { arity: 6 }
@@ -239,15 +298,15 @@ Finish
                    %0:customer » %1:orders[#1]KAif » %2:lineitem[#0]KAif
                    %1:orders » %0:customer[#0]KAef » %2:lineitem[#0]KAif
                    %2:lineitem » %1:orders[#0]KAif » %0:customer[#0]KAef
-                 -> Arrangement // { arity: 8 }
+                 -> Arranged // { arity: 8 }
                     Keys: [c_custkey]
                     -> Index Scan using pk_customer_custkey on customer // { arity: 8 }
                        Delta join first input (full scan): pk_customer_custkey
-                 -> Arrangement // { arity: 9 }
+                 -> Arrange // { arity: 9 }
                     Keys: [o_orderkey], [o_custkey]
                     -> Index Scan using pk_orders_orderkey, fk_orders_custkey on orders // { arity: 9 }
                        Delta join lookup: pk_orders_orderkey, fk_orders_custkey
-                 -> Arrangement // { arity: 16 }
+                 -> Arrange // { arity: 16 }
                     Keys: [l_orderkey]
                     -> Index Scan using fk_lineitem_orderkey on lineitem // { arity: 16 }
                        Delta join lookup: fk_lineitem_orderkey
@@ -260,7 +319,6 @@ Used Indexes:
 
 Target cluster: quickstart
 ```
-
 
 ## Alternatives
 
@@ -275,7 +333,3 @@ Should we show `Project`?
 Should we show _all_ expressions for `Map` and `Filter`?
 
 How much of this data should `mz_lir_mapping` show?
-
-There is a bug/infelicity in how `mz_lir_mapping` renders `Let`s and
-`LetRec`s. We'll need to fix `mz_lir_mapping` and do something cognate
-here: what is the best format to present this?
