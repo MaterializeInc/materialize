@@ -216,12 +216,12 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
 
-    // TODO: Use the forwarded port to dump the system catalog.
+    // TODO(debug_tool1): Use the forwarded port to dump the system catalog.
 
     // Wait for all the describe processes to finish.
     join_all(describe_handles).await;
 
-    // TODO: Compress files to ZIP
+    // TODO(debug_tool1): Compress files to ZIP
     Ok(())
 }
 
