@@ -9,3 +9,6 @@ menu:
 
 Materialize is licensed under the Business Source License agreement [available
 in the public GitHub repo here](https://github.com/MaterializeInc/materialize/blob/main/LICENSE).
+
+For Self-Managed Materialize Enterprise license, see
+https://materialize.com/self-managed.
