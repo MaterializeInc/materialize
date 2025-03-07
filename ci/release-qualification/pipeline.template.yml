@@ -204,7 +204,6 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
             args: [--max-joins=2, --runtime=6000]
-      skip: "Reenable when database-issues#7046 is fixed"
 
     - id: sqlsmith-explain-long
       label: "Longer SQLsmith explain"
@@ -216,7 +215,6 @@ steps:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
             args: [--max-joins=15, --explain-only, --runtime=6000]
-      skip: "Reenable when database-issues#7046 is fixed"
 
   - id: test-preflight-check-rollback
     label: Test with preflight check and rollback

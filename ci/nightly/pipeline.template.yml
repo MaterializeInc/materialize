@@ -1295,8 +1295,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
-              # TODO(def-) Increase number of joins when database-issues#7046 is fixed
-              args: [--max-joins=1, --runtime=1500]
+              args: [--max-joins=2, --runtime=1500]
 
       - id: sqlsmith-explain
         label: "SQLsmith explain"
@@ -1307,8 +1306,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
-              # TODO(def-) Increase number of joins when database-issues#7046 is fixed
-              args: [--max-joins=5, --explain-only, --runtime=1500]
+              args: [--max-joins=15, --explain-only, --runtime=1500]
 
   - group: SQLancer
     key: sqlancer
