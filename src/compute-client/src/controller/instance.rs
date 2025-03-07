@@ -2034,21 +2034,22 @@ where
                     updates: Err("Dataflow limit exceeded".to_string()),
                 },
             ))
+        // Look for a matching peek
+        } else if let Some((uuid, _)) = self
+            .peeks
+            .iter()
+            .find(|(_, peek)| peek.read_hold.id() == status.collection_id)
+        {
+            self.cancel_peek(
+                *uuid,
+                PeekResponse::Error("Dataflow limit exceeded".to_string()),
+            );
         } else {
-            // Look for a matching peek
-            let mut peek_uuid = None;
-            for (uuid, peek) in self.peeks.iter() {
-                if peek.read_hold.id() == status.collection_id {
-                    peek_uuid = Some(*uuid);
-                    break;
-                }
-            }
-            if let Some(uuid) = peek_uuid {
-                self.cancel_peek(
-                    uuid,
-                    PeekResponse::Error("Dataflow limit exceeded".to_string()),
-                );
-            }
+            tracing::warn!(
+                %replica_id,
+                collection_id = %status.collection_id,
+                "dataflow limit exceeded for unknown collection"
+            );
         }
     }
 
