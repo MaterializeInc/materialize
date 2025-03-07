@@ -165,7 +165,12 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, PosErro
 
         if let Some(original) = args.insert(pieces[0].to_owned(), pieces[1].to_owned()) {
             return Err(PosError {
-                source: anyhow!("argument '{}' specified twice", original),
+                source: anyhow!(
+                    "argument '{}' specified twice: {} & {}",
+                    pieces[0],
+                    original,
+                    pieces[1]
+                ),
                 pos: Some(pos),
             });
         };
