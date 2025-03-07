@@ -3533,9 +3533,12 @@ enum StatusHistoryRetentionPolicy {
     TimeWindow(Duration),
 }
 
-fn source_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<GlobalId> {
+fn source_status_history_desc(
+    params: &StorageParameters,
+) -> StatusHistoryDesc<(GlobalId, Option<ReplicaId>)> {
     let desc = &MZ_SOURCE_STATUS_HISTORY_DESC;
-    let (key_idx, _) = desc.get_by_name(&"source_id".into()).expect("exists");
+    let (source_id_idx, _) = desc.get_by_name(&"source_id".into()).expect("exists");
+    let (replica_id_idx, _) = desc.get_by_name(&"replica_id".into()).expect("exists");
     let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
 
     StatusHistoryDesc {
@@ -3543,15 +3546,28 @@ fn source_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<G
             params.keep_n_source_status_history_entries,
         ),
         extract_key: Box::new(move |datums| {
-            GlobalId::from_str(datums[key_idx].unwrap_str()).expect("GlobalId column")
+            (
+                GlobalId::from_str(datums[source_id_idx].unwrap_str()).expect("GlobalId column"),
+                if datums[replica_id_idx].is_null() {
+                    None
+                } else {
+                    Some(
+                        ReplicaId::from_str(datums[replica_id_idx].unwrap_str())
+                            .expect("ReplicaId column"),
+                    )
+                },
+            )
         }),
         extract_time: Box::new(move |datums| datums[time_idx].unwrap_timestamptz()),
     }
 }
 
-fn sink_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<GlobalId> {
+fn sink_status_history_desc(
+    params: &StorageParameters,
+) -> StatusHistoryDesc<(GlobalId, Option<ReplicaId>)> {
     let desc = &MZ_SINK_STATUS_HISTORY_DESC;
-    let (key_idx, _) = desc.get_by_name(&"sink_id".into()).expect("exists");
+    let (sink_id_idx, _) = desc.get_by_name(&"sink_id".into()).expect("exists");
+    let (replica_id_idx, _) = desc.get_by_name(&"replica_id".into()).expect("exists");
     let (time_idx, _) = desc.get_by_name(&"occurred_at".into()).expect("exists");
 
     StatusHistoryDesc {
@@ -3559,7 +3575,17 @@ fn sink_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<Glo
             params.keep_n_sink_status_history_entries,
         ),
         extract_key: Box::new(move |datums| {
-            GlobalId::from_str(datums[key_idx].unwrap_str()).expect("GlobalId column")
+            (
+                GlobalId::from_str(datums[sink_id_idx].unwrap_str()).expect("GlobalId column"),
+                if datums[replica_id_idx].is_null() {
+                    None
+                } else {
+                    Some(
+                        ReplicaId::from_str(datums[replica_id_idx].unwrap_str())
+                            .expect("ReplicaId column"),
+                    )
+                },
+            )
         }),
         extract_time: Box::new(move |datums| datums[time_idx].unwrap_timestamptz()),
     }

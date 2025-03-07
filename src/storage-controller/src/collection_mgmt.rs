@@ -74,6 +74,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::BoxFuture;
 use futures::stream::StreamExt;
 use futures::{Future, FutureExt};
+use mz_cluster_client::ReplicaId;
 use mz_dyncfg::ConfigSet;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
@@ -1045,7 +1046,7 @@ where
     /// We have to shut down when receiving from this.
     shutdown_rx: oneshot::Receiver<()>,
     /// If this collection deduplicates statuses, this map is used to track the previous status.
-    previous_statuses: Option<BTreeMap<GlobalId, Status>>,
+    previous_statuses: Option<BTreeMap<(GlobalId, Option<ReplicaId>), Status>>,
 }
 
 impl<T> AppendOnlyWriteTask<T>
@@ -1070,37 +1071,38 @@ where
         let (tx, rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        let previous_statuses: Option<BTreeMap<GlobalId, Status>> = match introspection_config
-            .as_ref()
-            .map(|config| config.introspection_type)
-        {
-            Some(IntrospectionType::SourceStatusHistory)
-            | Some(IntrospectionType::SinkStatusHistory) => Some(BTreeMap::new()),
+        let previous_statuses: Option<BTreeMap<(GlobalId, Option<ReplicaId>), Status>> =
+            match introspection_config
+                .as_ref()
+                .map(|config| config.introspection_type)
+            {
+                Some(IntrospectionType::SourceStatusHistory)
+                | Some(IntrospectionType::SinkStatusHistory) => Some(BTreeMap::new()),
 
-            Some(IntrospectionType::ReplicaMetricsHistory)
-            | Some(IntrospectionType::WallclockLagHistory)
-            | Some(IntrospectionType::PrivatelinkConnectionStatusHistory)
-            | Some(IntrospectionType::ReplicaStatusHistory)
-            | Some(IntrospectionType::PreparedStatementHistory)
-            | Some(IntrospectionType::StatementExecutionHistory)
-            | Some(IntrospectionType::SessionHistory)
-            | Some(IntrospectionType::StatementLifecycleHistory)
-            | Some(IntrospectionType::SqlText)
-            | None => None,
+                Some(IntrospectionType::ReplicaMetricsHistory)
+                | Some(IntrospectionType::WallclockLagHistory)
+                | Some(IntrospectionType::PrivatelinkConnectionStatusHistory)
+                | Some(IntrospectionType::ReplicaStatusHistory)
+                | Some(IntrospectionType::PreparedStatementHistory)
+                | Some(IntrospectionType::StatementExecutionHistory)
+                | Some(IntrospectionType::SessionHistory)
+                | Some(IntrospectionType::StatementLifecycleHistory)
+                | Some(IntrospectionType::SqlText)
+                | None => None,
 
-            Some(introspection_type @ IntrospectionType::ShardMapping)
-            | Some(introspection_type @ IntrospectionType::Frontiers)
-            | Some(introspection_type @ IntrospectionType::ReplicaFrontiers)
-            | Some(introspection_type @ IntrospectionType::StorageSourceStatistics)
-            | Some(introspection_type @ IntrospectionType::StorageSinkStatistics)
-            | Some(introspection_type @ IntrospectionType::ComputeDependencies)
-            | Some(introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus)
-            | Some(introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes)
-            | Some(introspection_type @ IntrospectionType::ComputeErrorCounts)
-            | Some(introspection_type @ IntrospectionType::ComputeHydrationTimes) => {
-                unreachable!("not append-only collection: {introspection_type:?}")
-            }
-        };
+                Some(introspection_type @ IntrospectionType::ShardMapping)
+                | Some(introspection_type @ IntrospectionType::Frontiers)
+                | Some(introspection_type @ IntrospectionType::ReplicaFrontiers)
+                | Some(introspection_type @ IntrospectionType::StorageSourceStatistics)
+                | Some(introspection_type @ IntrospectionType::StorageSinkStatistics)
+                | Some(introspection_type @ IntrospectionType::ComputeDependencies)
+                | Some(introspection_type @ IntrospectionType::ComputeOperatorHydrationStatus)
+                | Some(introspection_type @ IntrospectionType::ComputeMaterializedViewRefreshes)
+                | Some(introspection_type @ IntrospectionType::ComputeErrorCounts)
+                | Some(introspection_type @ IntrospectionType::ComputeHydrationTimes) => {
+                    unreachable!("not append-only collection: {introspection_type:?}")
+                }
+            };
 
         let mut task = Self {
             id,
@@ -1420,7 +1422,12 @@ where
                 .filter(|r| match r {
                     AppendOnlyUpdate::Row(_) => true,
                     AppendOnlyUpdate::Status(update) => {
-                        match (previous_statuses.get(&update.id).as_deref(), &update.status) {
+                        match (
+                            previous_statuses
+                                .get(&(update.id, update.replica_id))
+                                .as_deref(),
+                            &update.status,
+                        ) {
                             (None, _) => true,
                             (Some(old), new) => old.superseded_by(*new),
                         }
@@ -1429,7 +1436,9 @@ where
                 .collect();
             previous_statuses.extend(new.iter().filter_map(|update| match update {
                 AppendOnlyUpdate::Row(_) => None,
-                AppendOnlyUpdate::Status(update) => Some((update.id, update.status)),
+                AppendOnlyUpdate::Status(update) => {
+                    Some(((update.id, update.replica_id), update.status))
+                }
             }));
             new
         } else {
