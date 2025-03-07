@@ -5463,6 +5463,7 @@ dependencies = [
  "mz-catalog",
  "mz-cloud-resources",
  "mz-controller",
+ "mz-dyncfg",
  "mz-dyncfgs",
  "mz-environmentd",
  "mz-frontegg-auth",

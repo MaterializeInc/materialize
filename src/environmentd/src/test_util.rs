@@ -33,6 +33,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
 
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_controller::ControllerConfig;
+use mz_dyncfg::ConfigUpdates;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::metrics::MetricsRegistry;
@@ -44,7 +45,7 @@ use mz_ore::tracing::{
     TracingHandle,
 };
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::cfg::{PersistConfig, CONSENSUS_CONNECTION_POOL_MAX_SIZE};
 use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
@@ -425,15 +426,20 @@ impl Listeners {
         // Messing with the clock causes persist to expire leases, causing hangs and
         // panics. Is it possible/desirable to put this back somehow?
         let persist_now = SYSTEM_TIME.clone();
+        let dyncfgs = mz_dyncfgs::all_dyncfgs();
+
+        let mut updates = ConfigUpdates::default();
+        // Tune down the number of connections to make this all work a little easier
+        // with local postgres.
+        updates.add(&CONSENSUS_CONNECTION_POOL_MAX_SIZE, 1);
+        updates.apply(&dyncfgs);
+
         let mut persist_cfg = PersistConfig::new(
             &crate::BUILD_INFO,
             persist_now.clone(),
-            mz_dyncfgs::all_dyncfgs(),
+            dyncfgs,
         );
         persist_cfg.build_version = config.code_version;
-        // Tune down the number of connections to make this all work a little easier
-        // with local postgres.
-        persist_cfg.consensus_connection_pool_max_size = 1;
         // Stress persist more by writing rollups frequently
         persist_cfg.set_rollup_threshold(5);
 
