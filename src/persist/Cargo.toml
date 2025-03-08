@@ -30,7 +30,7 @@ aws-config = { version = "1.2.0", default-features = false }
 aws-credential-types = { version = "1.2.1", features = ["hardcoded-credentials"] }
 aws-sdk-s3 = { version = "1.23.0", default-features = false, features = ["rt-tokio"] }
 aws-types = "1.1.1"
-azure_identity = { version = "0.21.0" }
+azure_identity = { version = "0.22.0" }
 azure_storage = { version = "0.21.0" }
 azure_storage_blobs = { version = "0.21.0" }
 azure_core = "0.21.0"
