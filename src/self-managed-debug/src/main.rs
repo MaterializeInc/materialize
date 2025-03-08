@@ -48,23 +48,30 @@ pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version
 #[clap(name = "self-managed-debug", next_line_help = true, version = VERSION.as_str())]
 pub struct Args {
     // === Kubernetes options. ===
-    #[clap(long = "k8s-context", env = "KUBERNETES_CONTEXT")]
+    #[clap(long, env = "KUBERNETES_CONTEXT")]
     k8s_context: Option<String>,
-    #[clap(long = "k8s-namespace", required = true, action = clap::ArgAction::Append)]
+    #[clap(long= "k8s-namespace", required = true, action = clap::ArgAction::Append)]
     k8s_namespaces: Vec<String>,
-    #[clap(long = "k8s-dump-secret-values", action = clap::ArgAction::SetTrue)]
+    #[clap(long , action = clap::ArgAction::SetTrue)]
     k8s_dump_secret_values: bool,
+    // === Port forwarding options. ===
     /// If true, the tool will not attempt to port-forward the SQL port.
-    #[clap(long = "skip-port-forward", action = clap::ArgAction::SetTrue)]
+    #[clap(long , action = clap::ArgAction::SetTrue)]
     skip_port_forward: bool,
-    /// The SQL port we want to port-forward to.
-    /// By default, we will attempt to find this port by looking for an environmentd service with a port named "internal sql"
-    #[clap(long = "sql-target-port")]
+    /// The kubernetes service and port with the SQL connection we want to port-forward to
+    /// By default, we will attempt to find both by looking for an environmentd service with a port named "internal sql"
+    #[clap(long, requires = "sql_target_port")]
+    sql_target_service: Option<String>,
+    #[clap(long, requires = "sql_target_service")]
     sql_target_port: Option<i32>,
-    /// The port on the local machine that will be forwarded to sql-target-port.
+    /// The port that will be forwarded to the target port.
     /// By default, this will be the same as the target port.
-    #[clap(long = "sql-local-port")]
+    #[clap(long)]
     sql_local_port: Option<i32>,
+    /// The address string to bind the local port to. e.g. "0.0.0.0"
+    /// By default, this will be "localhost".
+    #[clap(long)]
+    sql_local_address: Option<String>,
 }
 
 #[derive(Clone)]
@@ -216,7 +223,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
 
         _port_forward_handle = system_catalog_dumper::spawn_sql_port_forwarding_process(
             &port_forwarding_info,
-            context.args.k8s_context.clone(),
+            &context.args,
         );
         // There may be a delay between when the port forwarding process starts and when it's ready to use.
         // We wait a few seconds to ensure that port forwarding is ready.
