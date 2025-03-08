@@ -73,6 +73,7 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::internal_control::InternalStorageCommand;
 use crate::metrics::source::SourceMetrics;
 use crate::metrics::StorageMetrics;
+use crate::source::probe;
 use crate::source::reclock::ReclockOperator;
 use crate::source::types::{Probe, SourceMessage, SourceOutput, SourceRender, StackedCollection};
 use crate::statistics::SourceStatistics;
@@ -802,9 +803,6 @@ where
     let active_worker = usize::cast_from(source_id.hashed()) % scope.peers();
     let is_active_worker = active_worker == scope.index();
 
-    let mut ticker = tokio::time::interval(interval);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
     let mut op = AsyncOperatorBuilder::new("synthesize_probes".into(), scope);
     let (output, output_stream) = op.new_output();
     let mut input = op.new_input_for(progress, Pipeline, &output);
@@ -815,6 +813,8 @@ where
         }
 
         let [cap] = caps.try_into().expect("one capability per output");
+
+        let mut ticker = probe::Ticker::new(move || interval, now_fn.clone());
 
         let minimum_frontier = Antichain::from_elem(Timestamp::minimum());
         let mut frontier = minimum_frontier.clone();
@@ -829,9 +829,9 @@ where
                 // This makes it so the first remap binding corresponds to the snapshot of the
                 // source, and because the first binding always maps to the minimum *target*
                 // frontier we guarantee that the source will never appear empty.
-                _ = ticker.tick(), if frontier != minimum_frontier => {
+                probe_ts = ticker.tick(), if frontier != minimum_frontier => {
                     let probe = Probe {
-                        probe_ts: now_fn().into(),
+                        probe_ts,
                         upstream_frontier: frontier.clone(),
                     };
                     output.give(&cap, probe);
