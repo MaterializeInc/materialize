@@ -4694,7 +4694,7 @@ dependencies = [
  "prost",
  "qcell",
  "rand 0.8.5",
- "rand_chacha 0.3.0",
+ "rand_chacha 0.9.0",
  "semver",
  "serde",
  "serde_json",
@@ -8591,9 +8591,12 @@ dependencies = [
 
 [[package]]
 name = "ppv-lite86"
-version = "0.2.10"
+version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac74c624d6b2d21f425f752262f42188365d7b8ff1aff74c82e45136510a4857"
+checksum = "77957b295656769bb8ad2b6a6b09d897d94f05c41b069aede1fcdaa675eaea04"
+dependencies = [
+ "zerocopy",
+]
 
 [[package]]
 name = "predicates"
@@ -8730,7 +8733,7 @@ dependencies = [
  "lazy_static",
  "num-traits",
  "rand 0.8.5",
- "rand_chacha 0.3.0",
+ "rand_chacha 0.3.1",
  "rand_xorshift",
  "regex-syntax 0.8.3",
  "unarray",
@@ -8975,7 +8978,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
 dependencies = [
  "libc",
- "rand_chacha 0.3.0",
+ "rand_chacha 0.3.1",
  "rand_core 0.6.2",
  "serde",
 ]
@@ -8992,12 +8995,22 @@ dependencies = [
 
 [[package]]
 name = "rand_chacha"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e12735cf05c9e10bf21534da50a147b924d555dc7a547c42e6bb2d5b6017ae0d"
+checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
 dependencies = [
  "ppv-lite86",
  "rand_core 0.6.2",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.9.3",
 ]
 
 [[package]]
@@ -9017,6 +9030,15 @@ checksum = "34cf66eb183df1c5876e2dcf6b13d57340741e8dc255b48e40a26de954d06ae7"
 dependencies = [
  "getrandom 0.2.10",
  "serde",
+]
+
+[[package]]
+name = "rand_core"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
+dependencies = [
+ "getrandom 0.3.1",
 ]
 
 [[package]]
@@ -12041,7 +12063,7 @@ dependencies = [
  "prost-types",
  "quote",
  "rand 0.8.5",
- "rand_chacha 0.3.0",
+ "rand_chacha 0.9.0",
  "rdkafka-sys",
  "regex",
  "regex-automata 0.4.7",
@@ -12135,6 +12157,7 @@ version = "0.7.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74d4d3961e53fa4c9a25a8637fc2bfaf2595b3d3ae34875568a5cf64787716be"
 dependencies = [
+ "byteorder",
  "zerocopy-derive",
 ]
 
