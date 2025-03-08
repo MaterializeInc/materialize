@@ -65,8 +65,8 @@ use crate::protocol::command::{
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
-    StatusResponse, SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, DataflowLimitStatus, FrontiersResponse,
+    OperatorHydrationStatus, PeekResponse, StatusResponse, SubscribeBatch, SubscribeResponse,
 };
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -1360,6 +1360,7 @@ where
             refresh_schedule: dataflow.refresh_schedule,
             debug_name: dataflow.debug_name,
             time_dependence: dataflow.time_dependence,
+            heap_size_limit: dataflow.heap_size_limit,
         };
 
         if augmented_dataflow.is_transient() {
@@ -2015,6 +2016,40 @@ where
             StatusResponse::OperatorHydration(status) => {
                 self.update_operator_hydration_status(replica_id, status)
             }
+            StatusResponse::DataflowLimitExceeded(status) => {
+                self.handle_dataflow_limit_status(replica_id, status)
+            }
+        }
+    }
+
+    /// Handle a dataflow limit exceeded response.
+    fn handle_dataflow_limit_status(&mut self, replica_id: ReplicaId, status: DataflowLimitStatus) {
+        tracing::debug!(%replica_id, ?status, "dataflow limit exceeded");
+        if let Some(subscribe) = self.subscribes.get(&status.collection_id) {
+            self.deliver_response(ComputeControllerResponse::SubscribeResponse(
+                status.collection_id,
+                SubscribeBatch {
+                    lower: subscribe.frontier.clone(),
+                    upper: subscribe.frontier.clone(),
+                    updates: Err("Dataflow limit exceeded".to_string()),
+                },
+            ))
+        // Look for a matching peek
+        } else if let Some((uuid, _)) = self
+            .peeks
+            .iter()
+            .find(|(_, peek)| peek.read_hold.id() == status.collection_id)
+        {
+            self.cancel_peek(
+                *uuid,
+                PeekResponse::Error("Dataflow limit exceeded".to_string()),
+            );
+        } else {
+            tracing::warn!(
+                %replica_id,
+                collection_id = %status.collection_id,
+                "dataflow limit exceeded for unknown collection"
+            );
         }
     }
 

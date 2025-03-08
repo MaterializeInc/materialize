@@ -13,8 +13,10 @@
 
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
-use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
+use differential_dataflow::trace::implementations::chunker::{ColumnationChunker, VecChunker};
+use differential_dataflow::trace::implementations::merge_batcher::{
+    ColMerger, MergeBatcher, VecMerger,
+};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
@@ -121,3 +123,8 @@ pub type RowErrBuilder<T, R> = RowValBuilder<DataflowError, T, R>;
 pub type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
 pub type KeyValBatcher<K, V, T, D> =
     MergeBatcher<Vec<((K, V), T, D)>, ColumnationChunker<((K, V), T, D)>, ColMerger<(K, V), T, D>>;
+
+// Batchers for consolidation, based on vectors. Only use for data that cannot spill.
+pub type VecKeyBatcher<K, T, D> = VecKeyValBatcher<K, (), T, D>;
+pub type VecKeyValBatcher<K, V, T, D> =
+    MergeBatcher<Vec<((K, V), T, D)>, VecChunker<((K, V), T, D)>, VecMerger<(K, V), T, D>>;
