@@ -61,10 +61,12 @@ use crate::deployment::state::DeploymentState;
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 
 pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
+pub use crate::license_keys::LicenseKeyConfig;
 
 mod deployment;
 pub mod environmentd;
 pub mod http;
+mod license_keys;
 mod telemetry;
 #[cfg(feature = "test")]
 pub mod test_util;
@@ -169,6 +171,8 @@ pub struct Config {
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
+    /// Configuration managed by license keys
+    pub license_key_config: LicenseKeyConfig,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -366,6 +370,7 @@ impl Listeners {
                 config.now.clone(),
                 ld_sdk_key,
                 config.launchdarkly_key_map,
+                config.license_key_config.max_credit_consumption_rate(),
             ))
         } else {
             None
@@ -702,6 +707,7 @@ impl Listeners {
             enable_0dt_deployment,
             caught_up_trigger,
             helm_chart_version: config.helm_chart_version.clone(),
+            max_credit_consumption_rate: config.license_key_config.max_credit_consumption_rate(),
         })
         .instrument(info_span!("adapter::serve"))
         .await?;
