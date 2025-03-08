@@ -71,7 +71,7 @@ indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.41.1", features = ["json"] }
 k8s-openapi = { version = "0.22.0", default-features = false, features = ["schemars", "v1_30"] }
 kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
-kube-client = { version = "0.92.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
+kube-client = { version = "0.95.0", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.92.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
 libc = { version = "0.2.170", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.21", features = ["static"] }
@@ -205,7 +205,7 @@ indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.41.1", features = ["json"] }
 k8s-openapi = { version = "0.22.0", default-features = false, features = ["schemars", "v1_30"] }
 kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
-kube-client = { version = "0.92.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
+kube-client = { version = "0.95.0", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.92.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
 libc = { version = "0.2.170", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.21", features = ["static"] }
