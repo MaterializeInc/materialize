@@ -214,7 +214,6 @@ Explained Query:
         Union
           Get::Collection materialize.public.right2
             project=(#0..=#2)
-            filter=((#0) IS NOT NULL)
             map=(true)
             raw=true
           Mfp
@@ -230,7 +229,6 @@ Explained Query:
                   Negate
                     Get::Collection materialize.public.right2
                       project=(#0)
-                      filter=((#0) IS NOT NULL)
                       raw=true
                   ArrangeBy
                     input_key=[#0]
