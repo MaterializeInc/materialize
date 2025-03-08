@@ -13,7 +13,7 @@ workspace = true
 anyhow = "1.0.95"
 async-trait = "0.1.83"
 dec = "0.4.8"
-deadpool-postgres = "0.10.3"
+deadpool-postgres = "0.14.1"
 futures = "0.3.25"
 mz-adapter-types = { path = "../adapter-types" }
 mz-ore = { path = "../ore", features = ["chrono", "async", "tracing"] }
