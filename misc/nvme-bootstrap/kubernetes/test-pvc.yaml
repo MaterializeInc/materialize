@@ -1,0 +1,39 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-lvm-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: openebs-lvm-instance-store-ext4
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-lvm-pod
+  namespace: default
+spec:
+  containers:
+  - name: test-container
+    image: busybox
+    command: ["/bin/sh", "-c", "while true; do echo $(date) > /data/test.txt; sleep 60; done"]
+    volumeMounts:
+    - mountPath: /data
+      name: test-volume
+  volumes:
+  - name: test-volume
+    persistentVolumeClaim:
+      claimName: test-lvm-pvc

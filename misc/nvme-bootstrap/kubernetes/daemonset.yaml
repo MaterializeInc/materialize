@@ -1,0 +1,70 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvme-disk-setup
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: nvme-disk-setup
+  template:
+    metadata:
+      labels:
+        app: nvme-disk-setup
+    spec:
+      serviceAccountName: nvme-setup-sa
+      initContainers:
+      - name: apply-taint
+        image: bobbyiliev/nvme-bootstrap:latest
+        command: ["/usr/local/bin/manage-taints.sh", "add"]
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+      containers:
+      - name: setup-nvme
+        image: bobbyiliev/nvme-bootstrap:latest
+        securityContext:
+          privileged: true
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        volumeMounts:
+        - name: host-dev
+          mountPath: /dev
+        - name: host-sys
+          mountPath: /sys
+        - name: host-proc
+          mountPath: /proc
+      volumes:
+      - name: host-dev
+        hostPath:
+          path: /dev
+      - name: host-sys
+        hostPath:
+          path: /sys
+      - name: host-proc
+        hostPath:
+          path: /proc
+      tolerations:
+      - key: disk-unconfigured
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
