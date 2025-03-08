@@ -88,7 +88,7 @@ SERVICES = [
     Mc(),
     Balancerd(),
     *create_mzs(azurite=False, transaction_isolation=False),
-    Clusterd(name="storaged"),
+    Clusterd(name="storaged", workers=4),
     Grafana(),
     Prometheus(),
     SshBastionHost(),
@@ -237,10 +237,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 """
                 CREATE CLUSTER storage REPLICAS (r2 (
                     STORAGECTL ADDRESSES ['storaged:2100'],
-                    STORAGE ADDRESSES ['storaged:2103'],
-                    COMPUTECTL ADDRESSES ['storaged:2101'],
-                    COMPUTE ADDRESSES ['storaged:2102'],
-                    WORKERS 4
+                    COMPUTECTL ADDRESSES ['storaged:2101']
                 ))
             """
             )
