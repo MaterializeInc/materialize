@@ -1262,6 +1262,9 @@ impl SystemVars {
                 ConfigVal::Duration(default) => {
                     VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
                 }
+                ConfigVal::OptDuration(default) => {
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                }
                 ConfigVal::Json(default) => {
                     VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
                 }
@@ -1951,6 +1954,9 @@ impl SystemVars {
                 }
                 ConfigVal::Duration(_) => {
                     ConfigVal::from(*self.expect_config_value::<Duration>(name))
+                }
+                ConfigVal::OptDuration(_) => {
+                    ConfigVal::from(*self.expect_config_value::<Option<Duration>>(name))
                 }
                 ConfigVal::Json(_) => {
                     ConfigVal::from(self.expect_config_value::<serde_json::Value>(name).clone())
