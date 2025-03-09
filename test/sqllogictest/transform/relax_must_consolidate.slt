@@ -249,10 +249,12 @@ Explained Query:
           project=()
         Union
           Get::Collection materialize.public.t
-            filter=((1 = (#0 % 2)))
+            project=(#0, #1)
+            filter=((1 = #2))
             raw=true
           Get::Collection materialize.public.t
-            filter=((0 = (#0 % 2)))
+            project=(#0, #1)
+            filter=((0 = #2))
             raw=true
   Return
     Union
@@ -274,6 +276,10 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
           Constant
             - ()
+
+Source materialize.public.t
+  project=(#0..=#2)
+  map=((#0 % 2))
 
 Target cluster: quickstart
 
@@ -327,11 +333,13 @@ Explained Query:
             types=[integer, integer?]
             Union consolidate_output=true
               Get::Collection materialize.public.t
-                filter=((1 = (#0 % 2)))
+                project=(#0, #1)
+                filter=((1 = #2))
                 raw=true
               Negate
                 Get::Collection materialize.public.t
-                  filter=((0 = (#0 % 2)))
+                  project=(#0, #1)
+                  filter=((0 = #2))
                   raw=true
   Return
     Union
@@ -353,6 +361,10 @@ Explained Query:
               arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
           Constant
             - ()
+
+Source materialize.public.t
+  project=(#0..=#2)
+  map=((#0 % 2))
 
 Target cluster: quickstart
 
@@ -523,7 +535,7 @@ Explained Query:
             types=[integer]
             Get::Collection materialize.public.t
               project=(#1)
-              filter=((#0 = 5) AND (1 = (#0 % 2)) AND (#1) IS NOT NULL)
+              filter=((1 = (#0 % 2)))
               raw=true
           ArrangeBy
             raw=true
@@ -531,7 +543,6 @@ Explained Query:
             types=[integer]
             Get::Collection materialize.public.t
               project=(#1)
-              filter=((#0 = 5) AND (#1) IS NOT NULL)
               raw=true
   Return
     Union
