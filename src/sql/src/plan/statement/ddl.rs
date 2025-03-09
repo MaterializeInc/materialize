@@ -4359,7 +4359,12 @@ generate_extracted_config!(
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
     (EnableNewOuterJoinLowering, Option<bool>, Default(None)),
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
-    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None))
+    (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
+    (
+        EnableProjectionPushdownAfterRelationCse,
+        Option<bool>,
+        Default(None)
+    )
 );
 
 /// Convert a [`CreateClusterStatement`] into a [`Plan`].
@@ -4496,6 +4501,7 @@ pub fn plan_create_cluster_inner(
             enable_new_outer_join_lowering,
             enable_variadic_left_join_lowering,
             enable_letrec_fixpoint_analysis,
+            enable_projection_pushdown_after_relation_cse,
             seen: _,
         } = ClusterFeatureExtracted::try_from(features)?;
         let optimizer_feature_overrides = OptimizerFeatureOverrides {
@@ -4504,6 +4510,7 @@ pub fn plan_create_cluster_inner(
             enable_new_outer_join_lowering,
             enable_variadic_left_join_lowering,
             enable_letrec_fixpoint_analysis,
+            enable_projection_pushdown_after_relation_cse,
             ..Default::default()
         };
 
@@ -4600,6 +4607,7 @@ pub fn unplan_create_cluster(
                 enable_letrec_fixpoint_analysis,
                 enable_reduce_reduction: _,
                 enable_let_prefix_extraction: _,
+                enable_projection_pushdown_after_relation_cse,
             } = optimizer_feature_overrides;
             let features_extracted = ClusterFeatureExtracted {
                 // Seen is ignored when unplanning.
@@ -4609,6 +4617,7 @@ pub fn unplan_create_cluster(
                 enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis,
+                enable_projection_pushdown_after_relation_cse,
             };
             let features = features_extracted.into_values(scx.catalog);
             let availability_zones = if availability_zones.is_empty() {
