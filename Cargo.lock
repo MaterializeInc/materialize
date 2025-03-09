@@ -473,7 +473,7 @@ dependencies = [
  "futures-lite 2.6.0",
  "parking",
  "polling",
- "rustix",
+ "rustix 0.38.44",
  "slab",
  "tracing",
  "windows-sys 0.59.0",
@@ -505,7 +505,7 @@ dependencies = [
  "cfg-if",
  "event-listener 5.4.0",
  "futures-lite 2.6.0",
- "rustix",
+ "rustix 0.38.44",
  "tracing",
 ]
 
@@ -521,7 +521,7 @@ dependencies = [
  "cfg-if",
  "futures-core",
  "futures-io",
- "rustix",
+ "rustix 0.38.44",
  "signal-hook-registry",
  "slab",
  "windows-sys 0.59.0",
@@ -4274,6 +4274,12 @@ name = "linux-raw-sys"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78b3ae25bc7c8c38cec158d1f2757ee79e9b3740fbc7ccf0e59e4b08d793fa89"
+
+[[package]]
+name = "linux-raw-sys"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6db9c683daf087dc577b7506e9695b3d556a9f3849903fa28186283afd6809e9"
 
 [[package]]
 name = "lock_api"
@@ -8457,7 +8463,7 @@ dependencies = [
  "concurrent-queue",
  "hermit-abi 0.4.0",
  "pin-project-lite",
- "rustix",
+ "rustix 0.38.44",
  "tracing",
  "windows-sys 0.59.0",
 ]
@@ -8764,7 +8770,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0f3e5beed80eb580c68e2c600937ac2c4eedabdfd5ef1e5b7ea4f3fba84497b"
 dependencies = [
  "heck 0.5.0",
- "itertools 0.12.1",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "once_cell",
@@ -8784,7 +8790,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.12.1",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.98",
@@ -9444,7 +9450,20 @@ dependencies = [
  "bitflags 2.4.1",
  "errno",
  "libc",
- "linux-raw-sys",
+ "linux-raw-sys 0.4.14",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "rustix"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dade4812df5c384711475be5fcd8c162555352945401aed22a35bffeab61f657"
+dependencies = [
+ "bitflags 2.4.1",
+ "errno",
+ "libc",
+ "linux-raw-sys 0.9.2",
  "windows-sys 0.59.0",
 ]
 
@@ -10415,15 +10434,15 @@ dependencies = [
 
 [[package]]
 name = "tempfile"
-version = "3.17.1"
+version = "3.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22e5a0acb1f3f55f65cc4a866c361b2fb2a0ff6366785ae6fbb5f85df07ba230"
+checksum = "2c317e0a526ee6120d8dabad239c8dadca62b24b6f168914bbbc8e2fb1f0e567"
 dependencies = [
  "cfg-if",
  "fastrand 2.3.0",
  "getrandom 0.3.1",
  "once_cell",
- "rustix",
+ "rustix 1.0.1",
  "windows-sys 0.59.0",
 ]
 
@@ -10442,7 +10461,7 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5352447f921fda68cf61b4101566c0bdb5104eff6804d0678e5227580ab6a4e9"
 dependencies = [
- "rustix",
+ "rustix 0.38.44",
  "windows-sys 0.59.0",
 ]
 
@@ -11632,7 +11651,7 @@ dependencies = [
  "either",
  "home",
  "once_cell",
- "rustix",
+ "rustix 0.38.44",
 ]
 
 [[package]]
@@ -11644,7 +11663,7 @@ dependencies = [
  "either",
  "home",
  "once_cell",
- "rustix",
+ "rustix 0.38.44",
  "windows-sys 0.48.0",
 ]
 
@@ -12000,13 +12019,14 @@ dependencies = [
  "hyper-util",
  "indexmap 1.9.1",
  "insta",
+ "itertools 0.12.1",
  "k8s-openapi",
  "kube",
  "kube-client",
  "kube-core",
  "libc",
  "libz-sys",
- "linux-raw-sys",
+ "linux-raw-sys 0.4.14",
  "log",
  "lru",
  "memchr",
@@ -12049,7 +12069,7 @@ dependencies = [
  "reqwest 0.11.24",
  "reqwest 0.12.4",
  "ring",
- "rustix",
+ "rustix 0.38.44",
  "schemars",
  "scopeguard",
  "security-framework",
@@ -12104,8 +12124,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e105d177a3871454f754b33bb0ee637ecaaac997446375fd3e5d43a2ed00c909"
 dependencies = [
  "libc",
- "linux-raw-sys",
- "rustix",
+ "linux-raw-sys 0.4.14",
+ "rustix 0.38.44",
 ]
 
 [[package]]

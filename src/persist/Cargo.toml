@@ -79,7 +79,7 @@ features = ["asm"]
 [dev-dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 serde_json = "1.0.125"
-tempfile = "3.17.1"
+tempfile = "3.18.0"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
