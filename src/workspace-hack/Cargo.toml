@@ -50,7 +50,7 @@ debugid = { version = "0.8.0", default-features = false, features = ["serde"] }
 dec = { version = "0.4.9", default-features = false, features = ["num-traits", "serde"] }
 deranged = { version = "0.3.11", default-features = false, features = ["powerfmt", "quickcheck", "serde", "std"] }
 digest = { version = "0.10.7", features = ["mac", "std"] }
-either = { version = "1.8.0" }
+either = { version = "1.15.0", features = ["use_std"] }
 event-listener = { version = "5.4.0" }
 event-listener-strategy = { version = "0.5.2" }
 flate2 = { version = "1.1.0", features = ["zlib"] }
@@ -185,7 +185,7 @@ debugid = { version = "0.8.0", default-features = false, features = ["serde"] }
 dec = { version = "0.4.9", default-features = false, features = ["num-traits", "serde"] }
 deranged = { version = "0.3.11", default-features = false, features = ["powerfmt", "quickcheck", "serde", "std"] }
 digest = { version = "0.10.7", features = ["mac", "std"] }
-either = { version = "1.8.0" }
+either = { version = "1.15.0", features = ["use_std"] }
 event-listener = { version = "5.4.0" }
 event-listener-strategy = { version = "0.5.2" }
 flate2 = { version = "1.1.0", features = ["zlib"] }
