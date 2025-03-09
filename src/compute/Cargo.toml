@@ -39,7 +39,7 @@ mz-txn-wal = { path = "../txn-wal" }
 prometheus = { version = "0.13.3", default-features = false }
 scopeguard = "1.2.0"
 serde = { version = "1.0.218", features = ["derive"] }
-smallvec = { version = "1.10.0", features = ["serde", "union"] }
+smallvec = { version = "1.14.0", features = ["serde", "union"] }
 timely = "0.19.0"
 tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "net"] }
 tracing = "0.1.37"
