@@ -69,6 +69,7 @@ hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.4.1", features = ["cl
 hyper-util = { version = "0.1.6", features = ["client-legacy", "server-auto", "service"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.41.1", features = ["json"] }
+itertools = { version = "0.12.1" }
 k8s-openapi = { version = "0.22.0", default-features = false, features = ["schemars", "v1_30"] }
 kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.92.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
@@ -89,7 +90,7 @@ num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
-openssl = { version = "0.10.70", features = ["vendored"] }
+openssl = { version = "0.10.71", features = ["vendored"] }
 openssl-sys = { version = "0.9.106", default-features = false, features = ["vendored"] }
 ordered-float = { version = "4.6.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
@@ -203,6 +204,7 @@ hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.4.1", features = ["cl
 hyper-util = { version = "0.1.6", features = ["client-legacy", "server-auto", "service"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.41.1", features = ["json"] }
+itertools = { version = "0.12.1" }
 k8s-openapi = { version = "0.22.0", default-features = false, features = ["schemars", "v1_30"] }
 kube = { version = "0.92.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 kube-client = { version = "0.92.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
@@ -223,7 +225,7 @@ num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
-openssl = { version = "0.10.70", features = ["vendored"] }
+openssl = { version = "0.10.71", features = ["vendored"] }
 openssl-sys = { version = "0.9.106", default-features = false, features = ["vendored"] }
 ordered-float = { version = "4.6.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
