@@ -2188,6 +2188,12 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_projection_pushdown_after_relation_cse,
+        desc: "Run ProjectionPushdown one more time after the last RelationCSE.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2204,6 +2210,8 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
             enable_let_prefix_extraction: vars.enable_let_prefix_extraction(),
+            enable_projection_pushdown_after_relation_cse: vars
+                .enable_projection_pushdown_after_relation_cse(),
         }
     }
 }
