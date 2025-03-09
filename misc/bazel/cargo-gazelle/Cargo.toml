@@ -25,7 +25,7 @@ protobuf-parse = "3.7.1"
 quote = "1.0.38"
 syn = { version = "1.0.107", features = ["extra-traits", "full"] }
 serde = "1.0.218"
-serde_json = "1.0.125"
+serde_json = "1.0.140"
 tempfile = "3.17.1"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "std"] }
