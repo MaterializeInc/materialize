@@ -177,8 +177,9 @@ Explained Query:
           Filter (#4 = "lo") AND (#1) IS NOT NULL // { arity: 5 }
             Get l27 // { arity: 5 }
     cte l5 =
-      Map (array_index(regexp_split_to_array[" ", case_insensitive=false](#0), 1), substr(#1, 2)) // { arity: 3 }
-        Get l0 // { arity: 1 }
+      Project (#1, #2) // { arity: 2 }
+        Map (array_index(regexp_split_to_array[" ", case_insensitive=false](#0), 1), substr(#1, 2)) // { arity: 3 }
+          Get l0 // { arity: 1 }
     cte l6 =
       Project (#0..=#3, #5) // { arity: 5 }
         Map ((#3 + 1)) // { arity: 6 }
@@ -187,9 +188,9 @@ Explained Query:
               %0:l4[#1]Kef » %1:l5[#0]Kef
             Get l4 // { arity: 4 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
-              Project (#2) // { arity: 1 }
-                Filter ("%" = substr(#1, 1, 1)) // { arity: 3 }
-                  Get l5 // { arity: 3 }
+              Project (#1) // { arity: 1 }
+                Filter ("%" = substr(#0, 1, 1)) // { arity: 2 }
+                  Get l5 // { arity: 2 }
     cte l7 =
       Distinct project=[#0, #2, #3, #1] // { arity: 4 }
         Project (#0..=#3) // { arity: 4 }
@@ -268,9 +269,9 @@ Explained Query:
               Project (#0..=#3) // { arity: 4 }
                 Get l13 // { arity: 5 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
-              Project (#2) // { arity: 1 }
-                Filter ("&" = substr(#1, 1, 1)) // { arity: 3 }
-                  Get l5 // { arity: 3 }
+              Project (#1) // { arity: 1 }
+                Filter ("&" = substr(#0, 1, 1)) // { arity: 2 }
+                  Get l5 // { arity: 2 }
     cte l15 =
       Distinct project=[#0] // { arity: 1 }
         Project (#1) // { arity: 1 }

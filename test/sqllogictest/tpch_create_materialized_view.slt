@@ -1809,8 +1809,9 @@ ORDER BY
 materialize.public.q22:
   With
     cte l0 =
-      Map (substr(char_to_text(#4{c_phone}), 1, 2)) // { arity: 9 }
-        ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
+      Project (#0{c_custkey}, #4{c_phone}, #5{c_acctbal}, #8) // { arity: 4 }
+        Map (substr(char_to_text(#4{c_phone}), 1, 2)) // { arity: 9 }
+          ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
     cte l1 =
       Project (#0{c_custkey}..=#2{c_acctbal}) // { arity: 3 }
         Filter (#2{c_acctbal} > (#3{sum_c_acctbal} / bigint_to_numeric(case when (#4{count} = 0) then null else #4{count} end))) // { arity: 5 }
@@ -1818,14 +1819,14 @@ materialize.public.q22:
             implementation
               %1[×]UA » %0:l0[×]ef
             ArrangeBy keys=[[]] // { arity: 3 }
-              Project (#0{c_custkey}, #4{c_phone}, #5{c_acctbal}) // { arity: 3 }
-                Filter ((#8 = "13") OR (#8 = "17") OR (#8 = "18") OR (#8 = "23") OR (#8 = "29") OR (#8 = "30") OR (#8 = "31")) // { arity: 9 }
-                  Get l0 // { arity: 9 }
+              Project (#0{c_custkey}..=#2{c_acctbal}) // { arity: 3 }
+                Filter ((#3 = "13") OR (#3 = "17") OR (#3 = "18") OR (#3 = "23") OR (#3 = "29") OR (#3 = "30") OR (#3 = "31")) // { arity: 4 }
+                  Get l0 // { arity: 4 }
             ArrangeBy keys=[[]] // { arity: 2 }
               Reduce aggregates=[sum(#0{c_acctbal}), count(*)] // { arity: 2 }
-                Project (#5{c_acctbal}) // { arity: 1 }
-                  Filter (#5{c_acctbal} > 0) AND ((#8 = "13") OR (#8 = "17") OR (#8 = "18") OR (#8 = "23") OR (#8 = "29") OR (#8 = "30") OR (#8 = "31")) // { arity: 9 }
-                    Get l0 // { arity: 9 }
+                Project (#2{c_acctbal}) // { arity: 1 }
+                  Filter (#2{c_acctbal} > 0) AND ((#3 = "13") OR (#3 = "17") OR (#3 = "18") OR (#3 = "23") OR (#3 = "29") OR (#3 = "30") OR (#3 = "31")) // { arity: 4 }
+                    Get l0 // { arity: 4 }
     cte l2 =
       Distinct project=[#0{c_custkey}] // { arity: 1 }
         Project (#0{c_custkey}) // { arity: 1 }

@@ -381,28 +381,30 @@ Explained Query:
                 FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
                   ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
-      Map ((#2 = "-"), case when #3 then #0 else case when (#2 = "|") then (#0 - 1) else case when (#2 = "F") then (#0 + 1) else case when (#2 = "L") then (#0 - 1) else case when (#2 = "J") then #0 else case when (#2 = "7") then #0 else null end end end end end end, case when #3 then (#1 - 1) else case when (#2 = "|") then #1 else case when (#2 = "F") then #1 else case when (#2 = "L") then #1 else case when (#2 = "J") then (#1 - 1) else case when (#2 = "7") then (#1 - 1) else null end end end end end end) // { arity: 6 }
-        Get l0 // { arity: 3 }
+      Project (#0..=#2, #4, #5) // { arity: 5 }
+        Map ((#2 = "-"), case when #3 then #0 else case when (#2 = "|") then (#0 - 1) else case when (#2 = "F") then (#0 + 1) else case when (#2 = "L") then (#0 - 1) else case when (#2 = "J") then #0 else case when (#2 = "7") then #0 else null end end end end end end, case when #3 then (#1 - 1) else case when (#2 = "|") then #1 else case when (#2 = "F") then #1 else case when (#2 = "L") then #1 else case when (#2 = "J") then (#1 - 1) else case when (#2 = "7") then (#1 - 1) else null end end end end end end) // { arity: 6 }
+          Get l0 // { arity: 3 }
     cte l2 =
-      Map ((#2 = "-"), case when #3 then #0 else case when (#2 = "|") then (#0 + 1) else case when (#2 = "F") then #0 else case when (#2 = "L") then #0 else case when (#2 = "J") then (#0 - 1) else case when (#2 = "7") then (#0 + 1) else null end end end end end end, case when #3 then (#1 + 1) else case when (#2 = "|") then #1 else case when (#2 = "F") then (#1 + 1) else case when (#2 = "L") then (#1 + 1) else case when (#2 = "J") then #1 else case when (#2 = "7") then #1 else null end end end end end end) // { arity: 6 }
-        Get l0 // { arity: 3 }
+      Project (#0..=#2, #4, #5) // { arity: 5 }
+        Map ((#2 = "-"), case when #3 then #0 else case when (#2 = "|") then (#0 + 1) else case when (#2 = "F") then #0 else case when (#2 = "L") then #0 else case when (#2 = "J") then (#0 - 1) else case when (#2 = "7") then (#0 + 1) else null end end end end end end, case when #3 then (#1 + 1) else case when (#2 = "|") then #1 else case when (#2 = "F") then (#1 + 1) else case when (#2 = "L") then (#1 + 1) else case when (#2 = "J") then #1 else case when (#2 = "7") then #1 else null end end end end end end) // { arity: 6 }
+          Get l0 // { arity: 3 }
     cte l3 =
       Project (#0..=#3) // { arity: 4 }
         Filter (#4{count} = 2) // { arity: 5 }
           Reduce group_by=[#0..=#3] aggregates=[count(*)] // { arity: 5 }
             Union // { arity: 4 }
-              Project (#0, #1, #4, #5) // { arity: 4 }
-                Filter (#2 != ".") AND (#2 != "S") // { arity: 6 }
-                  Get l1 // { arity: 6 }
-              Project (#0, #1, #4, #5) // { arity: 4 }
-                Filter (#2 != ".") AND (#2 != "S") // { arity: 6 }
-                  Get l2 // { arity: 6 }
-              Project (#4, #5, #0, #1) // { arity: 4 }
-                Filter (#2 != ".") AND (#2 != "S") AND (#4) IS NOT NULL AND (#5) IS NOT NULL // { arity: 6 }
-                  Get l1 // { arity: 6 }
-              Project (#4, #5, #0, #1) // { arity: 4 }
-                Filter (#2 != ".") AND (#2 != "S") AND (#4) IS NOT NULL AND (#5) IS NOT NULL // { arity: 6 }
-                  Get l2 // { arity: 6 }
+              Project (#0, #1, #3, #4) // { arity: 4 }
+                Filter (#2 != ".") AND (#2 != "S") // { arity: 5 }
+                  Get l1 // { arity: 5 }
+              Project (#0, #1, #3, #4) // { arity: 4 }
+                Filter (#2 != ".") AND (#2 != "S") // { arity: 5 }
+                  Get l2 // { arity: 5 }
+              Project (#3, #4, #0, #1) // { arity: 4 }
+                Filter (#2 != ".") AND (#2 != "S") AND (#3) IS NOT NULL AND (#4) IS NOT NULL // { arity: 5 }
+                  Get l1 // { arity: 5 }
+              Project (#3, #4, #0, #1) // { arity: 4 }
+                Filter (#2 != ".") AND (#2 != "S") AND (#3) IS NOT NULL AND (#4) IS NOT NULL // { arity: 5 }
+                  Get l2 // { arity: 5 }
               Project (#0, #1, #3, #1) // { arity: 4 }
                 Filter (#2 = "S") // { arity: 4 }
                   Map ((#0 + 1)) // { arity: 4 }
@@ -572,8 +574,9 @@ Explained Query:
   Return // { arity: 2 }
     With
       cte l18 =
-        Filter (#2 = true) // { arity: 3 }
-          Get l17 // { arity: 3 }
+        Project (#0, #1) // { arity: 2 }
+          Filter (#2 = true) // { arity: 3 }
+            Get l17 // { arity: 3 }
       cte l19 =
         Reduce aggregates=[count(*)] // { arity: 1 }
           Union // { arity: 0 }
@@ -583,14 +586,13 @@ Explained Query:
                   implementation
                     %1[#0, #1]UKKA » %0:l18[#0, #1]UKKef
                   ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                    Project (#0, #1) // { arity: 2 }
-                      Get l18 // { arity: 3 }
+                    Get l18 // { arity: 2 }
                   ArrangeBy keys=[[#0, #1]] // { arity: 2 }
                     Distinct project=[#0, #1] // { arity: 2 }
                       Project (#0, #1) // { arity: 2 }
                         Get l8 // { arity: 3 }
             Project () // { arity: 0 }
-              Get l18 // { arity: 3 }
+              Get l18 // { arity: 2 }
     Return // { arity: 2 }
       CrossJoin type=differential // { arity: 2 }
         implementation
