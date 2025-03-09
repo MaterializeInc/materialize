@@ -333,8 +333,9 @@ Explained Query:
                       Get l7
                   Get l5
     cte l9 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l8
+      Project (#0, #1)
+        Filter ((#2) IS NULL OR (#2 = false))
+          Get l8
     cte l10 =
       Distinct project=[#0]
         Project (#0)
@@ -361,8 +362,7 @@ Explained Query:
       Project (#0, #1, #3)
         Join on=(#0 = #2) type=differential
           ArrangeBy keys=[[#0]]
-            Project (#0, #1)
-              Get l9
+            Get l9
           ArrangeBy keys=[[#0]]
             Union
               Get l12
@@ -373,8 +373,9 @@ Explained Query:
                       Get l12
                   Get l10
     cte l14 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l13
+      Project (#0, #1)
+        Filter ((#2) IS NULL OR (#2 = false))
+          Get l13
     cte l15 =
       Distinct project=[#0]
         Project (#0)
@@ -403,8 +404,7 @@ Explained Query:
       Project (#0, #1, #3)
         Join on=(#0 = #2) type=differential
           ArrangeBy keys=[[#0]]
-            Project (#0, #1)
-              Get l14
+            Get l14
           ArrangeBy keys=[[#0]]
             Union
               Get l18
@@ -453,9 +453,10 @@ Explained Query:
                       Get l23
                   Get l20
     cte l25 =
-      Filter ((#4) IS NULL OR (#4 = false))
-        Map ((#2 AND #3))
-          Get l24
+      Project (#0, #1)
+        Filter ((#4) IS NULL OR (#4 = false))
+          Map ((#2 AND #3))
+            Get l24
     cte l26 =
       Distinct project=[#0]
         Project (#0)
@@ -479,8 +480,7 @@ Explained Query:
       Project (#0, #1, #3)
         Join on=(#0 = #2) type=differential
           ArrangeBy keys=[[#0]]
-            Project (#0, #1)
-              Get l25
+            Get l25
           ArrangeBy keys=[[#0]]
             Union
               Get l28
@@ -491,8 +491,9 @@ Explained Query:
                       Get l28
                   Get l26
     cte l30 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l29
+      Project (#0, #1)
+        Filter ((#2) IS NULL OR (#2 = false))
+          Get l29
     cte l31 =
       Distinct project=[#0]
         Project (#0)
@@ -519,8 +520,7 @@ Explained Query:
       Project (#0, #1, #3)
         Join on=(#0 = #2) type=differential
           ArrangeBy keys=[[#0]]
-            Project (#0, #1)
-              Get l30
+            Get l30
           ArrangeBy keys=[[#0]]
             Union
               Get l33
@@ -531,8 +531,9 @@ Explained Query:
                       Get l33
                   Get l31
     cte l35 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l34
+      Project (#0, #1)
+        Filter ((#2) IS NULL OR (#2 = false))
+          Get l34
     cte l36 =
       Distinct project=[#0]
         Project (#0)
@@ -580,8 +581,7 @@ Explained Query:
               Map (case when #3 then 6 else 7 end)
                 Join on=(#0 = #2) type=differential
                   ArrangeBy keys=[[#0]]
-                    Project (#0, #1)
-                      Get l35
+                    Get l35
                   ArrangeBy keys=[[#0]]
                     Union
                       Get l38
@@ -691,8 +691,9 @@ Explained Query:
                       Get l48
                   Get l46
     cte l50 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l49
+      Project (#0, #1)
+        Filter ((#2) IS NULL OR (#2 = false))
+          Get l49
     cte l51 =
       Distinct project=[#0]
         Project (#1)
@@ -719,8 +720,7 @@ Explained Query:
       Project (#0, #1, #3)
         Join on=(#1 = #2) type=differential
           ArrangeBy keys=[[#1]]
-            Project (#0, #1)
-              Get l50
+            Get l50
           ArrangeBy keys=[[#0]]
             Union
               Get l53
@@ -731,8 +731,9 @@ Explained Query:
                       Get l53
                   Get l51
     cte l55 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l54
+      Project (#0, #1)
+        Filter ((#2) IS NULL OR (#2 = false))
+          Get l54
     cte l56 =
       Distinct project=[#0]
         Project (#1)
@@ -761,8 +762,7 @@ Explained Query:
       Project (#0, #1, #3)
         Join on=(#1 = #2) type=differential
           ArrangeBy keys=[[#1]]
-            Project (#0, #1)
-              Get l55
+            Get l55
           ArrangeBy keys=[[#0]]
             Union
               Get l59
@@ -811,9 +811,10 @@ Explained Query:
                       Get l64
                   Get l61
     cte l66 =
-      Filter ((#4) IS NULL OR (#4 = false))
-        Map ((#2 AND #3))
-          Get l65
+      Project (#0, #1)
+        Filter ((#4) IS NULL OR (#4 = false))
+          Map ((#2 AND #3))
+            Get l65
     cte l67 =
       Distinct project=[#0]
         Project (#1)
@@ -837,8 +838,7 @@ Explained Query:
       Project (#0, #1, #3)
         Join on=(#1 = #2) type=differential
           ArrangeBy keys=[[#1]]
-            Project (#0, #1)
-              Get l66
+            Get l66
           ArrangeBy keys=[[#0]]
             Union
               Get l69
@@ -849,8 +849,9 @@ Explained Query:
                       Get l69
                   Get l67
     cte l71 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l70
+      Project (#0, #1)
+        Filter ((#2) IS NULL OR (#2 = false))
+          Get l70
     cte l72 =
       Distinct project=[#0]
         Project (#1)
@@ -877,8 +878,7 @@ Explained Query:
       Project (#0, #1, #3)
         Join on=(#1 = #2) type=differential
           ArrangeBy keys=[[#1]]
-            Project (#0, #1)
-              Get l71
+            Get l71
           ArrangeBy keys=[[#0]]
             Union
               Get l74
@@ -889,8 +889,9 @@ Explained Query:
                       Get l74
                   Get l72
     cte l76 =
-      Filter ((#2) IS NULL OR (#2 = false))
-        Get l75
+      Project (#0, #1)
+        Filter ((#2) IS NULL OR (#2 = false))
+          Get l75
     cte l77 =
       Distinct project=[#0]
         Project (#1)
@@ -944,8 +945,7 @@ Explained Query:
                     Map (case when #3 then 6 else 7 end)
                       Join on=(#1 = #2) type=differential
                         ArrangeBy keys=[[#1]]
-                          Project (#0, #1)
-                            Get l76
+                          Get l76
                         ArrangeBy keys=[[#0]]
                           Union
                             Get l79

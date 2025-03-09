@@ -380,27 +380,29 @@ Explained Query:
                 FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0) array_length 1), 1)
                   ReadStorage materialize.public.input
     cte l1 =
-      Map ((#2 = "-"), case when #3 then #0 else case when (#2 = "|") then (#0 - 1) else case when (#2 = "F") then (#0 + 1) else case when (#2 = "L") then (#0 - 1) else case when (#2 = "J") then #0 else case when (#2 = "7") then #0 else null end end end end end end, case when #3 then (#1 - 1) else case when (#2 = "|") then #1 else case when (#2 = "F") then #1 else case when (#2 = "L") then #1 else case when (#2 = "J") then (#1 - 1) else case when (#2 = "7") then (#1 - 1) else null end end end end end end)
-        Get l0
+      Project (#0..=#2, #4, #5)
+        Map ((#2 = "-"), case when #3 then #0 else case when (#2 = "|") then (#0 - 1) else case when (#2 = "F") then (#0 + 1) else case when (#2 = "L") then (#0 - 1) else case when (#2 = "J") then #0 else case when (#2 = "7") then #0 else null end end end end end end, case when #3 then (#1 - 1) else case when (#2 = "|") then #1 else case when (#2 = "F") then #1 else case when (#2 = "L") then #1 else case when (#2 = "J") then (#1 - 1) else case when (#2 = "7") then (#1 - 1) else null end end end end end end)
+          Get l0
     cte l2 =
-      Map ((#2 = "-"), case when #3 then #0 else case when (#2 = "|") then (#0 + 1) else case when (#2 = "F") then #0 else case when (#2 = "L") then #0 else case when (#2 = "J") then (#0 - 1) else case when (#2 = "7") then (#0 + 1) else null end end end end end end, case when #3 then (#1 + 1) else case when (#2 = "|") then #1 else case when (#2 = "F") then (#1 + 1) else case when (#2 = "L") then (#1 + 1) else case when (#2 = "J") then #1 else case when (#2 = "7") then #1 else null end end end end end end)
-        Get l0
+      Project (#0..=#2, #4, #5)
+        Map ((#2 = "-"), case when #3 then #0 else case when (#2 = "|") then (#0 + 1) else case when (#2 = "F") then #0 else case when (#2 = "L") then #0 else case when (#2 = "J") then (#0 - 1) else case when (#2 = "7") then (#0 + 1) else null end end end end end end, case when #3 then (#1 + 1) else case when (#2 = "|") then #1 else case when (#2 = "F") then (#1 + 1) else case when (#2 = "L") then (#1 + 1) else case when (#2 = "J") then #1 else case when (#2 = "7") then #1 else null end end end end end end)
+          Get l0
     cte l3 =
       Project (#0..=#3)
         Filter (#4 = 2)
           Reduce group_by=[#0..=#3] aggregates=[count(*)]
             Union
-              Project (#0, #1, #4, #5)
+              Project (#0, #1, #3, #4)
                 Filter (#2 != ".") AND (#2 != "S")
                   Get l1
-              Project (#0, #1, #4, #5)
+              Project (#0, #1, #3, #4)
                 Filter (#2 != ".") AND (#2 != "S")
                   Get l2
-              Project (#4, #5, #0, #1)
-                Filter (#2 != ".") AND (#2 != "S") AND (#4) IS NOT NULL AND (#5) IS NOT NULL
+              Project (#3, #4, #0, #1)
+                Filter (#2 != ".") AND (#2 != "S") AND (#3) IS NOT NULL AND (#4) IS NOT NULL
                   Get l1
-              Project (#4, #5, #0, #1)
-                Filter (#2 != ".") AND (#2 != "S") AND (#4) IS NOT NULL AND (#5) IS NOT NULL
+              Project (#3, #4, #0, #1)
+                Filter (#2 != ".") AND (#2 != "S") AND (#3) IS NOT NULL AND (#4) IS NOT NULL
                   Get l2
               Project (#0, #1, #3, #1)
                 Filter (#2 = "S")
@@ -553,8 +555,9 @@ Explained Query:
     Return
       With
         cte l18 =
-          Filter (#2 = true)
-            Get l17
+          Project (#0, #1)
+            Filter (#2 = true)
+              Get l17
         cte l19 =
           Reduce aggregates=[count(*)]
             Union
@@ -562,8 +565,7 @@ Explained Query:
                 Project ()
                   Join on=(#0 = #2 AND #1 = #3) type=differential
                     ArrangeBy keys=[[#0, #1]]
-                      Project (#0, #1)
-                        Get l18
+                      Get l18
                     ArrangeBy keys=[[#0, #1]]
                       Distinct project=[#0, #1]
                         Project (#0, #1)

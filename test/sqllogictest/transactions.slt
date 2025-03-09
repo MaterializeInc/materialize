@@ -988,8 +988,9 @@ Explained Query:
               Filter (#2) IS NULL AND (#1 = "view")
                 ReadStorage mz_internal.mz_comments
     cte l1 =
-      Filter (#2 = "u3")
-        ReadStorage mz_catalog.mz_views
+      Project (#0, #3)
+        Filter (#2 = "u3")
+          ReadStorage mz_catalog.mz_views
   Return
     Project (#0, #2)
       Map (coalesce(#1, ""))
@@ -1000,13 +1001,12 @@ Explained Query:
                 Project (#1)
                   Join on=(#0 = #2) type=differential
                     ArrangeBy keys=[[#0]]
-                      Project (#0, #3)
-                        Get l1
+                      Get l1
                     ArrangeBy keys=[[#0]]
                       Distinct project=[#0]
                         Project (#0)
                           Get l0
-              Project (#3)
+              Project (#1)
                 Get l1
           Project (#2, #3)
             Filter (#1 = "u3")

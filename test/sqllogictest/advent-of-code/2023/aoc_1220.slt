@@ -148,8 +148,9 @@ Explained Query:
           FlatMap generate_series(3, (regexp_split_to_array[" ", case_insensitive=false](#0) array_length 1), 1)
             Get l0
     cte l2 =
-      Map (array_index(regexp_split_to_array[" ", case_insensitive=false](#0), 1), substr(#1, 2))
-        Get l0
+      Project (#1, #2)
+        Map (array_index(regexp_split_to_array[" ", case_insensitive=false](#0), 1), substr(#1, 2))
+          Get l0
   Return
     With Mutually Recursive
       cte l3 =
@@ -186,8 +187,8 @@ Explained Query:
             Join on=(#1 = #4) type=differential
               Get l5
               ArrangeBy keys=[[#0]]
-                Project (#2)
-                  Filter ("%" = substr(#1, 1, 1))
+                Project (#1)
+                  Filter ("%" = substr(#0, 1, 1))
                     Get l2
       cte l7 =
         Distinct project=[#0, #2, #3, #1]
@@ -257,8 +258,8 @@ Explained Query:
                 Project (#0..=#3)
                   Get l13
               ArrangeBy keys=[[#0]]
-                Project (#2)
-                  Filter ("&" = substr(#1, 1, 1))
+                Project (#1)
+                  Filter ("&" = substr(#0, 1, 1))
                     Get l2
       cte l15 =
         Distinct project=[#0]
