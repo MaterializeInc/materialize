@@ -799,6 +799,14 @@ impl Optimizer {
             Box::new(CanonicalizeMfp),
             // Identifies common relation subexpressions.
             Box::new(cse::relation_cse::RelationCSE::new(false)),
+            // `RelationCSE` can create new points of interest for `ProjectionPushdown`: If an MFP
+            // is cut in half by `RelationCSE`, then we'd like to push projections behind the new
+            // Get as much as possible. This is because a fork in the plan involves copying the
+            // data. (But we need `ProjectionPushdown` to skip joins, because it can't deal with
+            // filled in JoinImplementations.)
+            Box::new(ProjectionPushdown::skip_joins()),
+            // Plans look nicer if we tidy MFPs again after ProjectionPushdown.
+            Box::new(CanonicalizeMfp),
             // Do a last run of constant folding. Importantly, this also runs `NormalizeLets`!
             // We need `NormalizeLets` at the end of the MIR pipeline for various reasons:
             // - The rendering expects some invariants about Let/LetRecs.
