@@ -235,18 +235,18 @@ EXPLAIN SELECT t1.a, array_agg(t1.c), array_agg(t2.c) FROM t t1 INNER JOIN t t2 
 Explained Query:
   With
     cte l0 =
-      Filter (#2) IS NOT NULL
-        ReadStorage materialize.public.t
+      Project (#0, #2)
+        Filter (#2) IS NOT NULL
+          ReadStorage materialize.public.t
   Return
     Project (#0, #1, #1)
       Reduce group_by=[#0] aggregates=[array_agg[order_by=[]](row(array[#1]))]
         Project (#0, #1)
           Join on=(#1 = #2) type=differential
             ArrangeBy keys=[[#1]]
-              Project (#0, #2)
-                Get l0
+              Get l0
             ArrangeBy keys=[[#0]]
-              Project (#2)
+              Project (#1)
                 Get l0
 
 Source materialize.public.t

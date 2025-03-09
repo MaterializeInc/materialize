@@ -178,14 +178,14 @@ Explained Query:
             Negate
               Get l8
       cte l5 =
-        Filter (#2 = "O")
-          Get l4
+        Project (#0, #1)
+          Filter (#2 = "O")
+            Get l4
       cte l6 =
         Project (#0, #1)
           Join on=(#0 = (#2 + 1) AND #1 = #3) type=differential
             ArrangeBy keys=[[#1, #0]]
-              Project (#0, #1)
-                Get l5
+              Get l5
             ArrangeBy keys=[[#1, (#0 + 1)]]
               Project (#0, #1)
                 Filter (#2 = ".")

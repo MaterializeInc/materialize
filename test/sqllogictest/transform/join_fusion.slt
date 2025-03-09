@@ -151,7 +151,8 @@ EXPLAIN WITH(arity, join implementations) SELECT  MIN( o_orderkey  )
 Explained Query:
   With
     cte l0 =
-      ReadIndex on=materialize.public.lineitem fk_lineitem_orderkey=[lookup value=(38)] // { arity: 9 }
+      Project (#0) // { arity: 1 }
+        ReadIndex on=materialize.public.lineitem fk_lineitem_orderkey=[lookup value=(38)] // { arity: 9 }
     cte l1 =
       Reduce aggregates=[min(#0)] // { arity: 1 }
         Project (#1) // { arity: 1 }
@@ -170,14 +171,13 @@ Explained Query:
                   ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 4 }
             ArrangeBy keys=[[#0]] // { arity: 1 }
               Union // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Get l0 // { arity: 9 }
+                Get l0 // { arity: 1 }
                 Map (error("more than one record produced in subquery")) // { arity: 1 }
                   Project () // { arity: 0 }
                     Filter error("more than one record produced in subquery") AND (#0 > 1) // { arity: 1 }
                       Reduce aggregates=[count(*)] // { arity: 1 }
                         Project () // { arity: 0 }
-                          Get l0 // { arity: 9 }
+                          Get l0 // { arity: 1 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       Get l1 // { arity: 1 }

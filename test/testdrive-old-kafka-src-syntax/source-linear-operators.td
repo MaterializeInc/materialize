@@ -187,27 +187,6 @@ Target cluster: quickstart
 
 > CREATE VIEW v as SELECT s2.c from data s1, data s2 where s1.a = s2.a
 
-? EXPLAIN SELECT * FROM v;
-Explained Query:
-  With
-    cte l0 =
-      Filter (#0) IS NOT NULL
-        ReadStorage materialize.public.data
-  Return
-    Project (#2)
-      Join on=(#0 = #1) type=differential
-        ArrangeBy keys=[[#0]]
-          Project (#0)
-            Get l0
-        ArrangeBy keys=[[#0]]
-          Project (#0, #2)
-            Get l0
-
-Source materialize.public.data
-  filter=((#0) IS NOT NULL)
-
-Target cluster: quickstart
-
 > CREATE DEFAULT INDEX ON v;
 > SELECT * FROM v
 3

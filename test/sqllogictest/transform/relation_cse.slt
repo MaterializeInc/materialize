@@ -136,17 +136,17 @@ EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 AS a1 LEFT JOIN t1 AS
 Explained Query:
   With
     cte l0 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+      Project (#0, #1) // { arity: 2 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
   Return // { arity: 3 }
     CrossJoin type=differential // { arity: 3 }
       implementation
         %0:l0[×]e » %1:l0[×]e
       ArrangeBy keys=[[]] // { arity: 2 }
-        Project (#0, #1) // { arity: 2 }
-          Get l0 // { arity: 3 }
+        Get l0 // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 1 }
         Project (#1) // { arity: 1 }
-          Get l0 // { arity: 3 }
+          Get l0 // { arity: 2 }
 
 Used Indexes:
   - materialize.public.i1 (lookup)
@@ -202,18 +202,18 @@ EXPLAIN WITH(arity, join implementations) SELECT * FROM t1 WHERE f1 = (SELECT f1
 Explained Query:
   With
     cte l0 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+      Project (#0) // { arity: 1 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
     cte l1 =
       ArrangeBy keys=[[#0]] // { arity: 1 }
         Union // { arity: 1 }
-          Project (#0) // { arity: 1 }
-            Get l0 // { arity: 3 }
+          Get l0 // { arity: 1 }
           Map (error("more than one record produced in subquery")) // { arity: 1 }
             Project () // { arity: 0 }
               Filter (#0 > 1) // { arity: 1 }
                 Reduce aggregates=[count(*)] // { arity: 1 }
                   Project () // { arity: 0 }
-                    Get l0 // { arity: 3 }
+                    Get l0 // { arity: 1 }
   Return // { arity: 2 }
     Project (#0, #1) // { arity: 2 }
       Join on=(#0 = #2 AND #1 = #3) type=delta // { arity: 4 }
@@ -379,19 +379,18 @@ AND a2.f2 = 3
 Explained Query:
   With
     cte l0 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+      Project (#0, #1) // { arity: 2 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
   Return // { arity: 4 }
     CrossJoin type=differential // { arity: 4 }
       implementation
         %0:l0[×]ef » %1:l0[×]ef
       ArrangeBy keys=[[]] // { arity: 2 }
-        Project (#0, #1) // { arity: 2 }
-          Filter (#1 = 2) // { arity: 3 }
-            Get l0 // { arity: 3 }
+        Filter (#1 = 2) // { arity: 2 }
+          Get l0 // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 2 }
-        Project (#0, #1) // { arity: 2 }
-          Filter (#1 = 3) // { arity: 3 }
-            Get l0 // { arity: 3 }
+        Filter (#1 = 3) // { arity: 2 }
+          Get l0 // { arity: 2 }
 
 Used Indexes:
   - materialize.public.i1 (lookup)
@@ -459,17 +458,17 @@ EXPLAIN WITH(arity, join implementations) SELECT (SELECT f1 FROM t1 WHERE f1 = 1
 Explained Query:
   With
     cte l0 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+      Project (#0) // { arity: 1 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
     cte l1 =
       Union // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Get l0 // { arity: 3 }
+        Get l0 // { arity: 1 }
         Map (error("more than one record produced in subquery")) // { arity: 1 }
           Project () // { arity: 0 }
             Filter (#0 > 1) // { arity: 1 }
               Reduce aggregates=[count(*)] // { arity: 1 }
                 Project () // { arity: 0 }
-                  Get l0 // { arity: 3 }
+                  Get l0 // { arity: 1 }
   Return // { arity: 2 }
     Project (#0, #0) // { arity: 2 }
       CrossJoin type=differential // { arity: 1 }
@@ -503,17 +502,17 @@ EXPLAIN WITH(arity, join implementations) SELECT MIN((SELECT f1 FROM t1 WHERE f1
 Explained Query:
   With
     cte l0 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+      Project (#0) // { arity: 1 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
     cte l1 =
       Union // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Get l0 // { arity: 3 }
+        Get l0 // { arity: 1 }
         Map (error("more than one record produced in subquery")) // { arity: 1 }
           Project () // { arity: 0 }
             Filter (#0 > 1) // { arity: 1 }
               Reduce aggregates=[count(*)] // { arity: 1 }
                 Project () // { arity: 0 }
-                  Get l0 // { arity: 3 }
+                  Get l0 // { arity: 1 }
     cte l2 =
       ArrangeBy keys=[[]] // { arity: 1 }
         Union // { arity: 1 }
@@ -566,14 +565,14 @@ EXPLAIN WITH(arity, join implementations) SELECT (SELECT f1 FROM t1 WHERE f1 = 1
 Explained Query:
   With
     cte l0 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+      Project (#0) // { arity: 1 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
     cte l1 =
       Project () // { arity: 0 }
-        Get l0 // { arity: 3 }
+        Get l0 // { arity: 1 }
     cte l2 =
       Union // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Get l0 // { arity: 3 }
+        Get l0 // { arity: 1 }
         Map (error("more than one record produced in subquery")) // { arity: 1 }
           Project () // { arity: 0 }
             Filter (#0 > 1) // { arity: 1 }
@@ -618,19 +617,17 @@ SELECT f1 FROM t1 WHERE f1 = 1
 Explained Query:
   With
     cte l0 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
-    cte l1 =
       Project (#0) // { arity: 1 }
-        Get l0 // { arity: 3 }
-    cte l2 =
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+    cte l1 =
       Union // { arity: 1 }
-        Get l1 // { arity: 1 }
+        Get l0 // { arity: 1 }
         Map (error("more than one record produced in subquery")) // { arity: 1 }
           Project () // { arity: 0 }
             Filter (#0 > 1) // { arity: 1 }
               Reduce aggregates=[count(*)] // { arity: 1 }
                 Project () // { arity: 0 }
-                  Get l0 // { arity: 3 }
+                  Get l0 // { arity: 1 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       CrossJoin type=differential // { arity: 1 }
@@ -641,16 +638,16 @@ Explained Query:
             ReadIndex on=t1 i1=[*** full scan ***] // { arity: 2 }
         ArrangeBy keys=[[]] // { arity: 1 }
           Union // { arity: 1 }
-            Get l2 // { arity: 1 }
+            Get l1 // { arity: 1 }
             Map (null) // { arity: 1 }
               Union // { arity: 0 }
                 Negate // { arity: 0 }
                   Distinct project=[] // { arity: 0 }
                     Project () // { arity: 0 }
-                      Get l2 // { arity: 1 }
+                      Get l1 // { arity: 1 }
                 Constant // { arity: 0 }
                   - ()
-      Get l1 // { arity: 1 }
+      Get l0 // { arity: 1 }
 
 Used Indexes:
   - materialize.public.i1 (*** full scan ***, lookup)
@@ -755,9 +752,11 @@ Explained Query:
       ArrangeBy keys=[[#0]] // { arity: 2 }
         ReadIndex on=t1 i1=[lookup] // { arity: 2 }
     cte l1 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+      Project (#0) // { arity: 1 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
     cte l2 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(2)] // { arity: 3 }
+      Project (#0) // { arity: 1 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(2)] // { arity: 3 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       CrossJoin type=differential // { arity: 1 }
@@ -765,19 +764,17 @@ Explained Query:
           %0:l1[×]e » %1:l1[×]e
         ArrangeBy keys=[[]] // { arity: 0 }
           Project () // { arity: 0 }
-            Get l1 // { arity: 3 }
+            Get l1 // { arity: 1 }
         ArrangeBy keys=[[]] // { arity: 1 }
-          Project (#0) // { arity: 1 }
-            Get l1 // { arity: 3 }
+          Get l1 // { arity: 1 }
       CrossJoin type=differential // { arity: 1 }
         implementation
           %0:l2[×]e » %1:l2[×]e
         ArrangeBy keys=[[]] // { arity: 0 }
           Project () // { arity: 0 }
-            Get l2 // { arity: 3 }
+            Get l2 // { arity: 1 }
         ArrangeBy keys=[[]] // { arity: 1 }
-          Project (#0) // { arity: 1 }
-            Get l2 // { arity: 3 }
+          Get l2 // { arity: 1 }
 
 Used Indexes:
   - materialize.public.i1 (lookup)
@@ -796,15 +793,15 @@ WHERE s1.f1 = 1 AND s2.f1 = 1
 Explained Query:
   With
     cte l0 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+      Project (#0) // { arity: 1 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
     cte l1 =
       ArrangeBy keys=[[]] // { arity: 0 }
         Project () // { arity: 0 }
-          Get l0 // { arity: 3 }
+          Get l0 // { arity: 1 }
     cte l2 =
       ArrangeBy keys=[[]] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Get l0 // { arity: 3 }
+        Get l0 // { arity: 1 }
   Return // { arity: 2 }
     CrossJoin type=delta // { arity: 2 }
       implementation
@@ -837,9 +834,11 @@ Explained Query:
       ArrangeBy keys=[[#0]] // { arity: 2 }
         ReadIndex on=t1 i1=[lookup] // { arity: 2 }
     cte l1 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+      Project (#0) // { arity: 1 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
     cte l2 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(2)] // { arity: 3 }
+      Project (#0) // { arity: 1 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(2)] // { arity: 3 }
   Return // { arity: 2 }
     CrossJoin type=delta // { arity: 2 }
       implementation
@@ -849,16 +848,14 @@ Explained Query:
         %3:l2 » %0:l1[×]e » %1:l1[×]e » %2:l2[×]e
       ArrangeBy keys=[[]] // { arity: 0 }
         Project () // { arity: 0 }
-          Get l1 // { arity: 3 }
+          Get l1 // { arity: 1 }
       ArrangeBy keys=[[]] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Get l1 // { arity: 3 }
+        Get l1 // { arity: 1 }
       ArrangeBy keys=[[]] // { arity: 0 }
         Project () // { arity: 0 }
-          Get l2 // { arity: 3 }
+          Get l2 // { arity: 1 }
       ArrangeBy keys=[[]] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Get l2 // { arity: 3 }
+        Get l2 // { arity: 1 }
 
 Used Indexes:
   - materialize.public.i1 (lookup)
@@ -968,7 +965,8 @@ Explained Query:
       ArrangeBy keys=[[#0]] // { arity: 2 }
         ReadIndex on=t1 i1=[differential join, lookup] // { arity: 2 }
     cte l1 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+      Project (#0) // { arity: 1 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
     cte l2 =
       Project (#0, #1) // { arity: 2 }
         Join on=(#0 = #2) type=differential // { arity: 3 }
@@ -977,14 +975,13 @@ Explained Query:
           Get l0 // { arity: 2 }
           ArrangeBy keys=[[#0]] // { arity: 1 }
             Union // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Get l1 // { arity: 3 }
+              Get l1 // { arity: 1 }
               Map (error("more than one record produced in subquery")) // { arity: 1 }
                 Project () // { arity: 0 }
                   Filter (#0 > 1) // { arity: 1 }
                     Reduce aggregates=[count(*)] // { arity: 1 }
                       Project () // { arity: 0 }
-                        Get l1 // { arity: 3 }
+                        Get l1 // { arity: 1 }
   Return // { arity: 2 }
     Union // { arity: 2 }
       Get l2 // { arity: 2 }
@@ -1338,13 +1335,14 @@ SELECT f2 FROM t1 WHERE f1 = 1
 Explained Query:
   With
     cte l0 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+      Project (#0, #1) // { arity: 2 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       Project (#0) // { arity: 1 }
-        Get l0 // { arity: 3 }
+        Get l0 // { arity: 2 }
       Project (#1) // { arity: 1 }
-        Get l0 // { arity: 3 }
+        Get l0 // { arity: 2 }
 
 Used Indexes:
   - materialize.public.i1 (lookup)
@@ -1396,9 +1394,11 @@ Explained Query:
       ArrangeBy keys=[[#0]] // { arity: 2 }
         ReadIndex on=t1 i1=[lookup] // { arity: 2 }
     cte l1 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
+      Project (#0) // { arity: 1 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(1)] // { arity: 3 }
     cte l2 =
-      ReadIndex on=materialize.public.t1 i1=[lookup value=(2)] // { arity: 3 }
+      Project (#0) // { arity: 1 }
+        ReadIndex on=materialize.public.t1 i1=[lookup value=(2)] // { arity: 3 }
   Return // { arity: 1 }
     Union // { arity: 1 }
       CrossJoin type=differential // { arity: 1 }
@@ -1406,19 +1406,17 @@ Explained Query:
           %0:l1[×]e » %1:l1[×]e
         ArrangeBy keys=[[]] // { arity: 0 }
           Project () // { arity: 0 }
-            Get l1 // { arity: 3 }
+            Get l1 // { arity: 1 }
         ArrangeBy keys=[[]] // { arity: 1 }
-          Project (#0) // { arity: 1 }
-            Get l1 // { arity: 3 }
+          Get l1 // { arity: 1 }
       CrossJoin type=differential // { arity: 1 }
         implementation
           %0:l2[×]e » %1:l2[×]e
         ArrangeBy keys=[[]] // { arity: 0 }
           Project () // { arity: 0 }
-            Get l2 // { arity: 3 }
+            Get l2 // { arity: 1 }
         ArrangeBy keys=[[]] // { arity: 1 }
-          Project (#0) // { arity: 1 }
-            Get l2 // { arity: 3 }
+          Get l2 // { arity: 1 }
 
 Used Indexes:
   - materialize.public.i1 (lookup)
