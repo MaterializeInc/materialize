@@ -447,9 +447,10 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0, #1]
     With
       cte l0 =
-        Filter (#8 < 2012-01-02 00:00:00) AND (#8 >= 2007-01-02 00:00:00) // { arity: 9 }
-          Map (date_to_timestamp(#4)) // { arity: 9 }
-            ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
+        Project (#0..=#2, #4, #6) // { arity: 5 }
+          Filter (#8 < 2012-01-02 00:00:00) AND (#8 >= 2007-01-02 00:00:00) // { arity: 9 }
+            Map (date_to_timestamp(#4)) // { arity: 9 }
+              ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
     Return // { arity: 2 }
       Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
         Project (#4) // { arity: 1 }
@@ -457,8 +458,7 @@ Explained Query:
             implementation
               %1[#0..=#3]UKKKKA » %0:l0[#0..=#3]UKKKKiif
             ArrangeBy keys=[[#0..=#3]] // { arity: 5 }
-              Project (#0..=#2, #4, #6) // { arity: 5 }
-                Get l0 // { arity: 9 }
+              Get l0 // { arity: 5 }
             ArrangeBy keys=[[#0..=#3]] // { arity: 4 }
               Distinct project=[#0..=#3] // { arity: 4 }
                 Project (#0..=#3) // { arity: 4 }
@@ -467,8 +467,8 @@ Explained Query:
                       implementation
                         %0:l0[#2, #1, #0]UKKKiif » %1:orderline[#2, #1, #0]KKKAiif
                       ArrangeBy keys=[[#2, #1, #0]] // { arity: 4 }
-                        Project (#0..=#2, #4) // { arity: 4 }
-                          Get l0 // { arity: 9 }
+                        Project (#0..=#3) // { arity: 4 }
+                          Get l0 // { arity: 5 }
                       ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
                         ReadIndex on=orderline fk_orderline_order=[differential join] // { arity: 10 }
 
@@ -1614,8 +1614,9 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
     With
       cte l0 =
-        Map (substr(char_to_text(#11), 1, 1)) // { arity: 23 }
-          ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
+        Project (#0..=#2, #9, #16, #22) // { arity: 6 }
+          Map (substr(char_to_text(#11), 1, 1)) // { arity: 23 }
+            ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
       cte l1 =
         Project (#0..=#4) // { arity: 5 }
           Filter (#4 > (#5 / bigint_to_numeric(case when (#6 = 0) then null else #6 end))) // { arity: 7 }
@@ -1623,14 +1624,14 @@ Explained Query:
               implementation
                 %1[×]UA » %0:l0[×]ef
               ArrangeBy keys=[[]] // { arity: 5 }
-                Project (#0..=#2, #9, #16) // { arity: 5 }
-                  Filter ((#22 = "1") OR (#22 = "2") OR (#22 = "3") OR (#22 = "4") OR (#22 = "5") OR (#22 = "6") OR (#22 = "7")) // { arity: 23 }
-                    Get l0 // { arity: 23 }
+                Project (#0..=#4) // { arity: 5 }
+                  Filter ((#5 = "1") OR (#5 = "2") OR (#5 = "3") OR (#5 = "4") OR (#5 = "5") OR (#5 = "6") OR (#5 = "7")) // { arity: 6 }
+                    Get l0 // { arity: 6 }
               ArrangeBy keys=[[]] // { arity: 2 }
                 Reduce aggregates=[sum(#0), count(*)] // { arity: 2 }
-                  Project (#16) // { arity: 1 }
-                    Filter (#16 > 0) AND ((#22 = "1") OR (#22 = "2") OR (#22 = "3") OR (#22 = "4") OR (#22 = "5") OR (#22 = "6") OR (#22 = "7")) // { arity: 23 }
-                      Get l0 // { arity: 23 }
+                  Project (#4) // { arity: 1 }
+                    Filter (#4 > 0) AND ((#5 = "1") OR (#5 = "2") OR (#5 = "3") OR (#5 = "4") OR (#5 = "5") OR (#5 = "6") OR (#5 = "7")) // { arity: 6 }
+                      Get l0 // { arity: 6 }
       cte l2 =
         Project (#0..=#2) // { arity: 3 }
           Get l1 // { arity: 5 }

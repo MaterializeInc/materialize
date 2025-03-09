@@ -444,8 +444,9 @@ Explained Query:
             Project (#0, #4) // { arity: 2 }
               ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
     cte l1 =
-      Filter (null OR ((#0 <= 100) AND (#0 >= 59) AND (#11 >= 1998-03-22))) // { arity: 16 }
-        ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
+      Project (#4, #11) // { arity: 2 }
+        Filter (null OR ((#0 <= 100) AND (#0 >= 59) AND (#11 >= 1998-03-22))) // { arity: 16 }
+          ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
   Return // { arity: 2 }
     Union // { arity: 2 }
       Project (#1, #0) // { arity: 2 }
@@ -457,14 +458,13 @@ Explained Query:
                   implementation
                     %1[#0]UKA » %0:l1[#1]Kif
                   ArrangeBy keys=[[#1]] // { arity: 2 }
-                    Project (#4, #11) // { arity: 2 }
-                      Get l1 // { arity: 16 }
+                    Get l1 // { arity: 2 }
                   ArrangeBy keys=[[#0]] // { arity: 1 }
                     Distinct project=[#0] // { arity: 1 }
                       Project (#2) // { arity: 1 }
                         Get l0 // { arity: 5 }
-            Project (#4) // { arity: 1 }
-              Get l1 // { arity: 16 }
+            Project (#0) // { arity: 1 }
+              Get l1 // { arity: 2 }
       Project (#4, #1) // { arity: 2 }
         Filter ((#2 = #3) OR ((#0 <= 100) AND (#0 >= 59) AND (#2 >= 1998-03-22))) // { arity: 5 }
           Get l0 // { arity: 5 }
