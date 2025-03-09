@@ -63,7 +63,7 @@ thiserror = "2.0.11"
 timely = "0.19.0"
 tokio = { version = "1.38.0" }
 tracing = "0.1.37"
-uuid = "1.2.2"
+uuid = "1.15.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
