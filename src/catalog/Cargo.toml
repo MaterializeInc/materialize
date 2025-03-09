@@ -19,7 +19,7 @@ chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 derivative = "2.2.0"
 differential-dataflow = "0.13.7"
-futures = "0.3.25"
+futures = "0.3.30"
 ipnet = "2.11.0"
 itertools = "0.12.1"
 mz-adapter-types = { path = "../adapter-types" }

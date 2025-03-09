@@ -16,7 +16,7 @@ bytesize = "1.3.0"
 crossbeam-channel = "0.5.14"
 derivative = "2.2.0"
 differential-dataflow = "0.13.7"
-futures = "0.3.25"
+futures = "0.3.30"
 http = "1.2.0"
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
