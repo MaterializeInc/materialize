@@ -122,7 +122,7 @@ serde = { version = "1.0.218", features = ["alloc", "derive", "rc"] }
 serde_json = { version = "1.0.127", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
 sha2 = { version = "0.10.8", features = ["asm"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
-smallvec = { version = "1.13.2", default-features = false, features = ["const_new", "serde", "union"] }
+smallvec = { version = "1.14.0", default-features = false, features = ["const_new", "serde", "union"] }
 socket2 = { version = "0.5.8", default-features = false, features = ["all"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
@@ -258,7 +258,7 @@ serde = { version = "1.0.218", features = ["alloc", "derive", "rc"] }
 serde_json = { version = "1.0.127", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
 sha2 = { version = "0.10.8", features = ["asm"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
-smallvec = { version = "1.13.2", default-features = false, features = ["const_new", "serde", "union"] }
+smallvec = { version = "1.14.0", default-features = false, features = ["const_new", "serde", "union"] }
 socket2 = { version = "0.5.8", default-features = false, features = ["all"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
