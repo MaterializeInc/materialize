@@ -122,6 +122,8 @@ optimizer_feature_flags!({
     enable_join_prioritize_arranged: bool,
     // Extract expressions in MFP::extract_common, making them available to sources.
     extract_common_mfp_expressions: bool,
+    // See the feature flag of the same name.
+    enable_projection_pushdown_after_relation_cse: bool,
 });
 
 /// A trait used to implement layered config construction.

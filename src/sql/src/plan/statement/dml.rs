@@ -376,7 +376,12 @@ generate_extracted_config!(
     (EnableEagerDeltaJoins, Option<bool>, Default(None)),
     (EnableVariadicLeftJoinLowering, Option<bool>, Default(None)),
     (EnableLetrecFixpointAnalysis, Option<bool>, Default(None)),
-    (EnableJoinPrioritizeArranged, Option<bool>, Default(None))
+    (EnableJoinPrioritizeArranged, Option<bool>, Default(None)),
+    (
+        EnableProjectionPushdownAfterRelationCse,
+        Option<bool>,
+        Default(None)
+    )
 );
 
 impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
@@ -428,6 +433,8 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_reduce_reduction: Default::default(),
                 enable_join_prioritize_arranged: v.enable_join_prioritize_arranged,
                 extract_common_mfp_expressions: Default::default(),
+                enable_projection_pushdown_after_relation_cse: v
+                    .enable_projection_pushdown_after_relation_cse,
             },
         })
     }
