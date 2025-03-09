@@ -9202,7 +9202,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "once_cell",
@@ -12791,6 +12791,7 @@ dependencies = [
  "hyper 0.14.27",
  "idna",
  "insta",
+ "itertools 0.13.0",
  "libc",
  "libz-sys",
  "linux-raw-sys 0.4.15",
