@@ -1209,8 +1209,9 @@ Explained Query:
             ArrangeBy keys=[[#2{messageid}]] // { arity: 3 }
               ReadIndex on=person_likes_message person_likes_message_messageid=[differential join] // { arity: 3 }
       cte l2 =
-        Filter (#0{name} = "Bob_Geldof") // { arity: 3 }
-          Get l0 // { arity: 3 }
+        Project (#1{messageid}, #2{creatorpersonid}) // { arity: 2 }
+          Filter (#0{name} = "Bob_Geldof") // { arity: 3 }
+            Get l0 // { arity: 3 }
       cte l3 =
         Distinct project=[#0{creatorpersonid}, #1{personid}] // { arity: 2 }
           Union // { arity: 2 }
@@ -1222,14 +1223,13 @@ Explained Query:
                       implementation
                         %1[#0]UKA » %0:l2[#0]Kef
                       ArrangeBy keys=[[#0{messageid}]] // { arity: 2 }
-                        Project (#1{messageid}, #2{creatorpersonid}) // { arity: 2 }
-                          Get l2 // { arity: 3 }
+                        Get l2 // { arity: 2 }
                       ArrangeBy keys=[[#0{messageid}]] // { arity: 1 }
                         Distinct project=[#0{messageid}] // { arity: 1 }
                           Project (#1{messageid}) // { arity: 1 }
                             Get l1 // { arity: 4 }
-                Project (#2{creatorpersonid}) // { arity: 1 }
-                  Get l2 // { arity: 3 }
+                Project (#1{creatorpersonid}) // { arity: 1 }
+                  Get l2 // { arity: 2 }
             Project (#2{creatorpersonid}, #3{personid}) // { arity: 2 }
               Filter (#0{name} = "Bob_Geldof") // { arity: 4 }
                 Get l1 // { arity: 4 }

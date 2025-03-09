@@ -163,16 +163,16 @@ Explained Query:
           Negate // { arity: 3 }
             Get l8 // { arity: 3 }
     cte l3 =
-      Filter (#2 = "O") // { arity: 3 }
-        Get l2 // { arity: 3 }
+      Project (#0, #1) // { arity: 2 }
+        Filter (#2 = "O") // { arity: 3 }
+          Get l2 // { arity: 3 }
     cte l4 =
       Project (#0, #1) // { arity: 2 }
         Join on=(#0 = (#2 + 1) AND #1 = #3) type=differential // { arity: 4 }
           implementation
             %0:l3[#1, #0]KKef » %1:l2[#1, (#0 + 1)]KKef
           ArrangeBy keys=[[#1, #0]] // { arity: 2 }
-            Project (#0, #1) // { arity: 2 }
-              Get l3 // { arity: 3 }
+            Get l3 // { arity: 2 }
           ArrangeBy keys=[[#1, (#0 + 1)]] // { arity: 2 }
             Project (#0, #1) // { arity: 2 }
               Filter (#2 = ".") // { arity: 3 }
@@ -198,7 +198,7 @@ Explained Query:
             %1[×]U » %0:l3[×]ef
           ArrangeBy keys=[[]] // { arity: 1 }
             Project (#0) // { arity: 1 }
-              Get l3 // { arity: 3 }
+              Get l3 // { arity: 2 }
           ArrangeBy keys=[[]] // { arity: 1 }
             Union // { arity: 1 }
               Get l6 // { arity: 1 }
