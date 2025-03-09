@@ -32,7 +32,7 @@ hyper = { version = "1.4.1", features = ["http1", "server"] }
 hyper-openssl = "0.10.2"
 hyper-tls = "0.6.0"
 hyper-util = "0.1.6"
-include_dir = "0.7.3"
+include_dir = "0.7.4"
 ipnet = "2.11.0"
 itertools = "0.12.1"
 jsonwebtoken = "9.3.1"
