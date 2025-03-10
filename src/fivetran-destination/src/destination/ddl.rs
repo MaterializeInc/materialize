@@ -88,13 +88,13 @@ pub async fn describe_table(
             let ty = Type::from_oid_and_typmod(ty_oid, ty_mod).with_context(|| {
                 format!("looking up type with OID {ty_oid} and modifier {ty_mod}")
             })?;
-            let (ty, decimal) = utils::to_fivetran_type(ty)?;
+            let (ty, params) = utils::to_fivetran_type(ty)?;
 
             columns.push(Column {
                 name,
                 r#type: ty.into(),
                 primary_key,
-                decimal,
+                params,
             })
         }
         columns
@@ -128,7 +128,7 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
             name: FIVETRAN_SYSTEM_COLUMN_DELETE.to_string(),
             r#type: DataType::Boolean.into(),
             primary_key: false,
-            decimal: None,
+            params: None,
         };
         total_columns.push(delete_column);
     }

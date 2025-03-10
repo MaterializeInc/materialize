@@ -85,12 +85,10 @@ $ fivetran-destination action=write_batch
     "update_files": [],
     "delete_files": [],
     "file_params": {
-        "Csv": {
-            "compression": 2,
-            "encryption": 0,
-            "null_string": "null-123",
-            "unmodified_string": "unmodified-123"
-        }
+        "compression": 2,
+        "encryption": 0,
+        "null_string": "null-123",
+        "unmodified_string": "unmodified-123"
     }
 }
 {
