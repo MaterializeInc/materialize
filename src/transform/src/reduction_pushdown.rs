@@ -53,6 +53,7 @@ use std::iter::FromIterator;
 use mz_expr::visit::Visit;
 use mz_expr::{AggregateExpr, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
+use crate::analysis::equivalences::EquivalenceClasses;
 use crate::TransformCtx;
 
 /// Pushes Reduce operators toward sources.
@@ -183,6 +184,13 @@ fn try_push_reduce_through_join(
     // `<component>` is either `Join {<subset of inputs>}` or
     // `<element of inputs>`.
 
+    // 0) Make sure that `equivalences` is a proper equivalence relation. Later, in 3a)/i), we'll
+    //    rely on expressions appearing in at most one equivalence class.
+    let mut eq_classes = EquivalenceClasses::default();
+    eq_classes.classes = equivalences.clone();
+    eq_classes.minimize(None);
+    let equivalences = eq_classes.classes;
+
     let old_join_mapper = JoinInputMapper::new(inputs.as_slice());
     // 1) Partition the join constraints into constraints containing a group
     //    key and constraints that don't.
@@ -255,6 +263,8 @@ fn try_push_reduce_through_join(
     // (2) every expression in the equivalences of the new join.
     for key in group_key {
         // i) Find the equivalence class that the key is in.
+        //    This relies on the expression appearing in at most one equivalence class. This
+        //    invariant is ensured in step 0).
         if let Some(cls) = new_join_equivalences
             .iter()
             .find(|cls| cls.iter().any(|expr| expr == key))
