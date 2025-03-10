@@ -745,7 +745,7 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
 }
 
 impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, T, D> {
-    fn new(
+    pub(crate) fn new(
         metrics: Arc<Metrics>,
         part: EncodedPart<T>,
         migration: PartMigration<K, V>,

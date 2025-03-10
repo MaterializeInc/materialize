@@ -85,7 +85,7 @@ pub trait Codec: Default + Sized + PartialEq + 'static {
 
     /// A type used with [Self::decode_from] for allocation reuse. Set to `()`
     /// if unnecessary.
-    type Storage: Default;
+    type Storage: Default + Send + Sync;
     /// An alternate form of [Self::decode] which enables amortizing allocs.
     ///
     /// First, instead of returning `Self`, it takes `&mut Self` as a parameter,
