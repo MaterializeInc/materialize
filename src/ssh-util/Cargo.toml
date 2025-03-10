@@ -22,7 +22,7 @@ scopeguard = "1.2.0"
 serde = { version = "1.0.218", features = ["derive"] }
 serde_json = { version = "1.0.125" }
 ssh-key = { version = "0.4.3" }
-tempfile = "3.17.1"
+tempfile = "3.18.0"
 thiserror = { version = "2.0.11" }
 tokio = "1.38.0"
 tokio-stream = "0.1.17"
