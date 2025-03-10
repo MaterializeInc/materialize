@@ -59,7 +59,7 @@ build apply=ReductionPushdown
 (reduce (join [(get x) (get y)] [[(call_variadic substr [#1 5]) #3]]) [#3] [])
 ----
 Project (#1)
-  Join on=(#0 = #1)
+  Join on=(#1 = #0)
     Distinct project=[substr(#1, 5)]
       Get x
     Distinct project=[#1]
@@ -73,7 +73,7 @@ build apply=ReductionPushdown
     [])
 ----
 Project (#0)
-  Join on=(#0 = #1)
+  Join on=(#1 = #0)
     Distinct project=[substr(#1, 5)]
       Get x
     Distinct project=[#1]

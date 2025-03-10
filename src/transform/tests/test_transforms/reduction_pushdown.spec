@@ -40,7 +40,7 @@ Distinct project=[#1]
 Project (#0)
   CrossJoin
     Distinct project=[#1]
-      Filter (((#1 + #1) = #0) OR (((#1 + #1)) IS NULL AND (#0) IS NULL))
+      Filter ((#0 = (#1 + #1)) OR ((#0) IS NULL AND ((#1 + #1)) IS NULL))
         Get x
     Distinct project=[]
       Get y
