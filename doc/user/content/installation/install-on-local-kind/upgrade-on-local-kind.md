@@ -15,6 +15,14 @@ cluster.
 The tutorial assumes you have installed Materialize on `kind` using the
 instructions on [Install locally on kind](/installation/install-on-local-kind/).
 
+## Version compatibility
+
+When updating, you need to specify the Materialize Operator version,
+`orchestratord` version, and the `environmentd` versions. The following table
+presents the versions compatibility for the operator and the applications:
+
+{{< yaml-table data="self_managed/self_managed_operator_compatibility" >}}
+
 ## Prerequisites
 
 ### Helm 3.2.0+
