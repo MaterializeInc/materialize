@@ -34,6 +34,7 @@ pub struct S3BlobMetrics {
     pub(crate) delete_head: IntCounter,
     pub(crate) delete_object: IntCounter,
     pub(crate) list_objects: IntCounter,
+    pub(crate) error_counts: IntCounterVec,
 
     /// Metrics for all usages of LgBytes. Exposed as public for convenience in
     /// persist boot, we'll have to pull this out and do the plumbing
@@ -48,6 +49,11 @@ impl S3BlobMetrics {
             name: "mz_persist_s3_operations",
             help: "number of raw s3 calls on behalf of Blob interface methods",
             var_labels: ["op"],
+        ));
+        let errors: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_s3_errors",
+            help: "errors",
+            var_labels: ["op", "code"],
         ));
         Self {
             operation_timeouts: registry.register(metric!(
@@ -75,6 +81,7 @@ impl S3BlobMetrics {
             delete_head: operations.with_label_values(&["delete_head"]),
             delete_object: operations.with_label_values(&["delete_object"]),
             list_objects: operations.with_label_values(&["list_objects"]),
+            error_counts: errors,
             lgbytes: LgBytesMetrics::new(registry),
         }
     }
