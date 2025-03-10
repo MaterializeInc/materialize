@@ -291,6 +291,7 @@ zstd-sys = { version = "2.0.13", features = ["std"] }
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
+miniz_oxide = { version = "0.8.5", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.13", features = ["std"] }
@@ -300,6 +301,7 @@ rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "proce
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
 linux-raw-sys = { version = "0.4.14", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
+miniz_oxide = { version = "0.8.5", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.13", features = ["std"] }
@@ -308,6 +310,7 @@ rustix = { version = "0.38.44", features = ["event", "fs", "net", "pipe", "proce
 [target.x86_64-apple-darwin.dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
+miniz_oxide = { version = "0.8.5", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.13", features = ["std"] }
@@ -317,6 +320,7 @@ security-framework = { version = "2.10.0", features = ["alpn"] }
 [target.x86_64-apple-darwin.build-dependencies]
 camino = { version = "1.1.9", default-features = false, features = ["serde1"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", default-features = false, features = ["runtime"] }
+miniz_oxide = { version = "0.8.5", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.13", features = ["std"] }
