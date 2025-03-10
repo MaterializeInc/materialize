@@ -90,7 +90,7 @@ num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
-openssl = { version = "0.10.70", features = ["vendored"] }
+openssl = { version = "0.10.71", features = ["vendored"] }
 openssl-sys = { version = "0.9.106", default-features = false, features = ["vendored"] }
 ordered-float = { version = "4.6.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
@@ -225,7 +225,7 @@ num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
-openssl = { version = "0.10.70", features = ["vendored"] }
+openssl = { version = "0.10.71", features = ["vendored"] }
 openssl-sys = { version = "0.9.106", default-features = false, features = ["vendored"] }
 ordered-float = { version = "4.6.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
