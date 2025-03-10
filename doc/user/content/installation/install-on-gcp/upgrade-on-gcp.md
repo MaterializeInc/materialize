@@ -18,7 +18,7 @@ or the root).
 
 ## Version compatibility
 
-When updating, you need to specify the Materialize Operator version,
+When upgrading, you need to specify the Materialize Operator version,
 `orchestratord` version, and the `environmentd` versions. The following table
 presents the versions compatibility for the operator and the applications:
 
@@ -28,12 +28,13 @@ presents the versions compatibility for the operator and the applications:
 
 {{< important >}}
 
-The following procedure performs a rolling upgrade (where both the old and new
-Materialize instances are running before the the old instances are removed).
-Ensure you have enough resources to support having both the old and new
-Materialize instances running.
+The following procedure performs an in-place upgrade, which incurs downtime.
 
-To perform an in-place upgrade, you can specify `inPlaceRollout` to false.
+To perform a rolling upgrade(where both the old and new Materialize instances
+are running before the the old instances are removed), you can specify
+`inPlaceRollout` to false. When performing a rolling upgrade, ensure you have
+enough resources to support having both the old and new Materialize instances
+running.
 
 {{</ important >}}
 

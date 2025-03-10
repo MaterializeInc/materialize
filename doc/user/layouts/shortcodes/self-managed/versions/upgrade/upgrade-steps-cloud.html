@@ -79,7 +79,7 @@
    | `create_database`  | Set to `false`. |
    | `environmentd_version`  | New Materialize instance version. |
    | `request_rollout`  or `force_rollout` | A new UUID string.  Can be generated with `uuidgen`.<br> <ul><li>`request_rollout` triggers a rollout only if changes exist. </li><li>`force_rollout`  triggers a rollout even if no changes exist.</li></ul> |
-   | `inPlaceRollout` | Set to `false` to perform a rolling upgrade.  Ensure you have enough resources to support having both the old and new Materialize instances running. |
+   | `inPlaceRollout` | Set to `true` to perform an in-place upgrade.<br>Set to `false` to perform a rolling upgrade. For rolling upgrades, ensure you have enough resources to support having both the old and new Materialize instances running during the upgrade. |
 
    For example, the following instance specifies:
 
