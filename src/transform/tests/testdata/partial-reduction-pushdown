@@ -87,7 +87,7 @@ build apply=ReductionPushdown
     [])
 ----
 Project (#1)
-  Join on=(#0 = #1)
+  Join on=(#1 = #0)
     Distinct project=[substr(#1, 5)]
       Constant <empty>
     Distinct project=[#1]
@@ -101,7 +101,7 @@ build apply=ReductionPushdown
     [])
 ----
 Project (#0)
-  Join on=(#0 = #1)
+  Join on=(#1 = #0)
     Distinct project=[substr(#1, 5)]
       Get x
     Distinct project=[#1]
