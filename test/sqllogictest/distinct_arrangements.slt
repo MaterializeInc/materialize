@@ -1030,7 +1030,7 @@ ArrangeBy[[]]  11
 Arranged␠DistinctBy  47
 Arranged␠MinsMaxesHierarchical␠input  14
 Arranged␠ReduceInaccumulable  3
-Arranged␠TopK␠input  68
+Arranged␠TopK␠input  92
 Distinct␠recursive␠err  4
 DistinctBy  47
 DistinctByErrorCheck  47
@@ -1040,7 +1040,7 @@ ReduceInaccumulable␠Error␠Check  3
 ReduceMinsMaxes  3
 ReduceMinsMaxes␠Error␠Check  1
 Reduced␠Fallibly␠MinsMaxesHierarchical  14
-Reduced␠TopK␠input  68
+Reduced␠TopK␠input  92
 Threshold␠local  10
 
 statement ok

@@ -139,7 +139,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM mz_internal.mz_source_status_history
 ----
 Explained Query (fast path):
-  Project (#1, #0, #2..=#4)
+  Project (#1, #0, #2..=#5)
     ReadIndex on=mz_internal.mz_source_status_history mz_source_status_history_ind=[*** full scan ***]
 
 Used Indexes:

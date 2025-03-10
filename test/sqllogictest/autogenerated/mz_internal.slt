@@ -581,6 +581,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  status  text
 4  error  text
 5  details  jsonb
+6  replica_id  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statistics' ORDER BY position
@@ -618,6 +619,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  status  text
 4  error  text
 5  details  jsonb
+6  replica_id  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_statement_lifecycle_history' ORDER BY position
