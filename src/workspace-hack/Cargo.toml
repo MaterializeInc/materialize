@@ -85,7 +85,7 @@ mysql_async = { version = "0.35.1", default-features = false, features = ["binlo
 mysql_common = { version = "0.34.1", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
-nom = { version = "7.1.2" }
+nom = { version = "7.1.3" }
 num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
@@ -220,7 +220,7 @@ mysql_async = { version = "0.35.1", default-features = false, features = ["binlo
 mysql_common = { version = "0.34.1", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["alpn"] }
 nix = { version = "0.26.1" }
-nom = { version = "7.1.2" }
+nom = { version = "7.1.3" }
 num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6" }
 num-integer = { version = "0.1.46", features = ["i128"] }
