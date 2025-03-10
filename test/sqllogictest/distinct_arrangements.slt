@@ -980,12 +980,12 @@ WHERE mdod.dataflow_name NOT LIKE '%introspection-subscribe%'
 GROUP BY mdod.name
 ORDER BY mdod.name;
 ----
-AccumulableErrorCheck  9
+AccumulableErrorCheck  10
 Arrange␠ReduceMinsMaxes  3
 Arrange␠export␠iterative  2
 Arrange␠export␠iterative␠err  2
 Arrange␠recursive␠err  4
-ArrangeAccumulable␠[val:␠empty]  9
+ArrangeAccumulable␠[val:␠empty]  10
 ArrangeBy[[CallBinary␠{␠func:␠JsonbGetString␠{␠stringify:␠true␠},␠expr1:␠Column(1),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  2
 ArrangeBy[[CallBinary␠{␠func:␠JsonbGetString␠{␠stringify:␠true␠},␠expr1:␠Column(2),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  1
 ArrangeBy[[CallVariadic␠{␠func:␠Coalesce,␠exprs:␠[Column(2),␠Column(3)]␠}]]  2
@@ -1004,12 +1004,12 @@ ArrangeBy[[Column(0),␠Column(1)]]  2
 ArrangeBy[[Column(0),␠Column(2)]]  4
 ArrangeBy[[Column(0),␠Column(3)]]  4
 ArrangeBy[[Column(0),␠Column(4)]]  1
-ArrangeBy[[Column(0)]]  154
+ArrangeBy[[Column(0)]]  155
 ArrangeBy[[Column(0)]]-errors  44
 ArrangeBy[[Column(1),␠Column(0)]]  1
 ArrangeBy[[Column(1),␠Column(2)]]  2
 ArrangeBy[[Column(1),␠Column(3)]]  1
-ArrangeBy[[Column(1)]]  25
+ArrangeBy[[Column(1)]]  26
 ArrangeBy[[Column(1)]]-errors  7
 ArrangeBy[[Column(13)]]  1
 ArrangeBy[[Column(15)]]  1
@@ -1034,7 +1034,7 @@ Arranged␠TopK␠input  68
 Distinct␠recursive␠err  4
 DistinctBy  47
 DistinctByErrorCheck  47
-ReduceAccumulable  9
+ReduceAccumulable  10
 ReduceInaccumulable  3
 ReduceInaccumulable␠Error␠Check  3
 ReduceMinsMaxes  3
