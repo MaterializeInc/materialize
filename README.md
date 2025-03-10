@@ -6,7 +6,7 @@
 
 Materialize is a real-time data integration platform that creates and continually updates consistent views of transactional data from across your organization. Its SQL interface democratizes the ability to serve and access live data. Materialize can be deployed anywhere your infrastructure runs.
 
-Use Materialize to do things like deliver fresh context for RAG pipelines, deliver operational dashboards, and create more dynamic customer experiences without building time-consuming custom data pipelines.
+Use Materialize to do things like deliver fresh context for AI/RAG pipelines, power operational dashboards, and create more dynamic customer experiences without building time-consuming custom data pipelines.
 
 
 The three most common patterns for adopting Materialize are the following:
@@ -28,12 +28,9 @@ Have questions? We'd love to hear from you:
 
 Materialize focuses on providing correct and [consistent](https://materialize.com/docs/overview/isolation-level/) answers with minimal latency, and does not ask you to accept either approximate answers or eventual consistency. Whenever Materialize answers a query, that answer is the correct result on some specific (and recent) version of your data. Materialize does all of this by recasting your SQL queries as *dataflows*, which can react efficiently to changes in your data as they happen.
 
-Our fully managed service is cloud native, featuring **high availability**, via
-multi-active replication, **horizontal scalability**, by seamlessly scaling
-dataflows across multiple machines, and **near infinite storage**, by
-leveraging cloud object storage (e.g., Amazon S3). You can self-manage Materialize using our Enterprise or Community editions.
+Our fully managed service is cloud-native, featuring **high availability** through multi-active replication, **horizontal scalability** by seamlessly scaling dataflows across multiple machines, and **near-infinite storage** by leveraging cloud object storage (e.g., Amazon S3). You can self-manage Materialize using our Enterprise or Community editions.
 
-We support a large fraction of PostgreSQL features, and are actively working on supporting more built-in PostgreSQL functions. Please file an issue if you have an idea for an improvement!
+We support a large fraction of PostgreSQL features and are actively expanding support for more built-in PostgreSQL functions. Please file an issue if you have an idea for an improvement!
 
 ## Get data in
 
@@ -116,9 +113,9 @@ Stream inserts, updates, and deletes on the underlying tables (`lineitem` and `s
 
 ## Get data out
 
-**Pull based**: Use any PostgreSQL-compatible driver in any language/environment to make `SELECT` queries against your views. Tell them they're talking to a PostgreSQL database, they don't ever need to know otherwise.
+**Pull based**: Use any PostgreSQL-compatible driver in any language/environment to make `SELECT` queries against your views. Tell them they're talking to a PostgreSQL database, they don't ever need to know otherwise. This is particularly helpful for pointing services and BI tools directly at Materialize.
 
-**Push based**: Listen to changes directly using `SUBSCRIBE` or configure Materialize to stream results to a Kafka topic as soon as the views change.
+**Push based**: Listen to changes directly using `SUBSCRIBE` or configure Materialize to stream results to a Kafka topic as soon as the views change. You can also copy updates to object storage.
 
 ## Documentation
 
