@@ -21,6 +21,15 @@ to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
 {{% postgres-direct/before-you-begin %}}
 
+{{< warning >}}
+There is a known issue with Aurora PostgreSQL 16.1 that can cause logical replication to fail with the following error:
+- `postgres: sql client error: db error: ERROR: could not map filenumber "base/16402/3147867235" to relation OID`
+
+This is due to a bug in Aurora's implementation of logical replication in PostgreSQL 16.1, where the system fails to correctly fetch relation metadata from the catalogs. If you encounter these errors, you should upgrade your Aurora PostgreSQL instance to a newer minor version (16.2 or later).
+
+For more information, see [this AWS discussion](https://repost.aws/questions/QU4RXUrLNQS_2oSwV34pmwww/error-could-not-map-filenumber-after-aurora-upgrade-to-16-1).
+{{</ warning >}}
+
 ## A. Configure Amazon Aurora
 
 ### 1. Enable logical replication
