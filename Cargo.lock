@@ -657,15 +657,16 @@ dependencies = [
 
 [[package]]
 name = "aws-runtime"
-version = "1.2.0"
+version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4963ac9ff2d33a4231b3806c1c69f578f221a9cabb89ad2bde62ce2b442c8a7"
+checksum = "2424565416eef55906f9f8cece2072b6b6a76075e3ff81483ebe938a89a4c05f"
 dependencies = [
  "aws-credential-types",
  "aws-sigv4",
  "aws-smithy-async",
  "aws-smithy-eventstream",
  "aws-smithy-http",
+ "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
@@ -673,10 +674,33 @@ dependencies = [
  "fastrand 2.3.0",
  "http 0.2.9",
  "http-body 0.4.5",
+ "once_cell",
  "percent-encoding",
  "pin-project-lite",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "aws-sdk-kms"
+version = "1.42.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704ab31904cf70104a3bb023079e201b1353cf132ca674b26ba6f23acbbb53c9"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "http 0.2.9",
+ "once_cell",
+ "regex-lite",
+ "tracing",
 ]
 
 [[package]]
@@ -913,9 +937,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime"
-version = "1.3.1"
+version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44e7945379821074549168917e89e60630647e186a69243248f08c6d168b975a"
+checksum = "d1ce695746394772e7000b39fe073095db6d45a862d0767dd5ad0ac0d7f8eb87"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-http",
@@ -927,6 +951,7 @@ dependencies = [
  "http 0.2.9",
  "http-body 0.4.5",
  "http-body 1.0.0",
+ "httparse",
  "hyper 0.14.27",
  "once_cell",
  "pin-project-lite",
@@ -989,15 +1014,14 @@ dependencies = [
 
 [[package]]
 name = "aws-types"
-version = "1.2.0"
+version = "1.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a43b56df2c529fe44cb4d92bd64d0479883fb9608ff62daede4df5405381814"
+checksum = "dfbd0a668309ec1f66c0f6bda4840dd6d4796ae26d699ebc266d7cc95c6d040f"
 dependencies = [
  "aws-credential-types",
  "aws-smithy-async",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
- "http 0.2.9",
  "rustc_version",
  "tracing",
 ]
@@ -5854,6 +5878,25 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-license-keys"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "aws-sdk-kms",
+ "base64 0.22.0",
+ "clap",
+ "jsonwebtoken",
+ "mz-aws-util",
+ "pem",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -11998,9 +12041,11 @@ dependencies = [
  "aws-smithy-async",
  "aws-smithy-http",
  "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
  "aws-smithy-types",
  "axum",
  "axum-core",
+ "base64 0.21.5",
  "bitflags 2.4.1",
  "byteorder",
  "bytes",
@@ -12083,6 +12128,7 @@ dependencies = [
  "quote",
  "rand 0.8.5",
  "rand_chacha 0.3.0",
+ "rand_core 0.6.2",
  "rdkafka-sys",
  "regex",
  "regex-automata 0.4.7",
