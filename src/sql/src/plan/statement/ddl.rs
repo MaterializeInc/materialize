@@ -3198,12 +3198,7 @@ pub fn describe_create_sink(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(
-    CreateSinkOption,
-    (Snapshot, bool),
-    (PartitionStrategy, String),
-    (Version, u64)
-);
+generate_extracted_config!(CreateSinkOption, (Snapshot, bool), (Version, u64));
 
 pub fn plan_create_sink(
     scx: &StatementContext,
@@ -3403,7 +3398,6 @@ fn plan_sink(
     let CreateSinkOptionExtracted {
         snapshot,
         version,
-        partition_strategy: _,
         seen: _,
     } = with_options.try_into()?;
 

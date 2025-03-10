@@ -1698,21 +1698,21 @@ ALTER MATERIALIZED VIEW name SET (property = true)
 parse-statement
 ALTER SINK name SET (property = true)
 ----
-error: Expected one of PARTITION or SNAPSHOT or VERSION, found identifier "property"
+error: Expected one of SNAPSHOT or VERSION, found identifier "property"
 ALTER SINK name SET (property = true)
                      ^
 
 parse-statement
 ALTER SINK IF EXISTS name SET (SIZE LARGE)
 ----
-error: Expected one of PARTITION or SNAPSHOT or VERSION, found SIZE
+error: Expected one of SNAPSHOT or VERSION, found SIZE
 ALTER SINK IF EXISTS name SET (SIZE LARGE)
                                ^
 
 parse-statement
 ALTER SINK name RESET (SIZE)
 ----
-error: Expected one of PARTITION or SNAPSHOT or VERSION, found SIZE
+error: Expected one of SNAPSHOT or VERSION, found SIZE
 ALTER SINK name RESET (SIZE)
                        ^
 
