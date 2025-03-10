@@ -115,7 +115,7 @@ regex-automata = { version = "0.4.7", default-features = false, features = ["dfa
 regex-syntax = { version = "0.8.3" }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.4", default-features = false, features = ["blocking", "charset", "http2", "json", "native-tls-vendored", "stream"] }
 reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored", "stream"] }
-schemars = { version = "0.8.11", features = ["uuid1"] }
+schemars = { version = "0.8.22", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.23", features = ["serde"] }
 serde = { version = "1.0.218", features = ["alloc", "derive", "rc"] }
@@ -251,7 +251,7 @@ regex-automata = { version = "0.4.7", default-features = false, features = ["dfa
 regex-syntax = { version = "0.8.3" }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.4", default-features = false, features = ["blocking", "charset", "http2", "json", "native-tls-vendored", "stream"] }
 reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored", "stream"] }
-schemars = { version = "0.8.11", features = ["uuid1"] }
+schemars = { version = "0.8.22", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.23", features = ["serde"] }
 serde = { version = "1.0.218", features = ["alloc", "derive", "rc"] }
