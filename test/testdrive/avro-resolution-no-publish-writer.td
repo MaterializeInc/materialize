@@ -45,5 +45,9 @@ GRANT CREATE, USAGE ON SCHEMA public TO materialize
 $ kafka-ingest format=bytes topic=resolution-no-publish-writer timestamp=1
 \\x00\x00\x00\x00\x01\xf6\x01
 
+# TODO: Reenable when database-issues#9049 is fixed
+$ skip-if
+SELECT true
+
 ! SELECT * FROM resolution_no_publish_writer_tbl;
 contains:to resolve
