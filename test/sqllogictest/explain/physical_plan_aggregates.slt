@@ -461,18 +461,18 @@ Explained Query:
             raw=true
             arrangements[0]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
             types=[integer, text]
-            Get::Collection l0
-              project=(#0, #2)
+            Get::PassArrangements l0
               raw=true
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#0], permutation=id, thinning=() }
             types=[text]
             Get::Collection l0
-              project=(#2)
+              project=(#1)
               raw=true
 
 Source materialize.public.t
+  project=(#0, #2)
   filter=((#2) IS NOT NULL)
 
 Target cluster: quickstart

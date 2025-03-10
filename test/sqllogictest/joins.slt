@@ -549,8 +549,9 @@ EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SEL
 Explained Query:
   With
     cte l0 =
-      Filter (#1 = 1) // { arity: 2 }
-        ReadStorage materialize.public.t4362 // { arity: 2 }
+      Project (#0) // { arity: 1 }
+        Filter (#1 = 1) // { arity: 2 }
+          ReadStorage materialize.public.t4362 // { arity: 2 }
   Return // { arity: 2 }
     Project (#0, #1) // { arity: 2 }
       Join on=(#0 = #2) type=differential // { arity: 3 }
@@ -560,14 +561,13 @@ Explained Query:
           ReadStorage materialize.public.t4362 // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Union // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Get l0 // { arity: 2 }
+            Get l0 // { arity: 1 }
             Map (error("more than one record produced in subquery")) // { arity: 1 }
               Project () // { arity: 0 }
                 Filter (#0 > 1) // { arity: 1 }
                   Reduce aggregates=[count(*)] // { arity: 1 }
                     Project () // { arity: 0 }
-                      Get l0 // { arity: 2 }
+                      Get l0 // { arity: 1 }
 
 Source materialize.public.t4362
 

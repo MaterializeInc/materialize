@@ -193,8 +193,9 @@ Target cluster: quickstart
 Explained Query:
   With
     cte l0 =
-      Filter (#0) IS NOT NULL
-        ReadStorage materialize.public.data_tbl
+      Project (#0, #2)
+        Filter (#0) IS NOT NULL
+          ReadStorage materialize.public.data_tbl
   Return
     Project (#2)
       Join on=(#0 = #1) type=differential
@@ -202,8 +203,7 @@ Explained Query:
           Project (#0)
             Get l0
         ArrangeBy keys=[[#0]]
-          Project (#0, #2)
-            Get l0
+          Get l0
 
 Source materialize.public.data_tbl
   filter=((#0) IS NOT NULL)
