@@ -139,7 +139,7 @@ tower-http = { version = "0.5.2", features = ["auth", "cors", "map-response-body
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.33" }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
-tungstenite = { version = "0.21.0" }
+tungstenite = { version = "0.23.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
@@ -276,7 +276,7 @@ tower-http = { version = "0.5.2", features = ["auth", "cors", "map-response-body
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.33" }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
-tungstenite = { version = "0.21.0" }
+tungstenite = { version = "0.23.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
