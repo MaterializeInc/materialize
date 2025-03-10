@@ -652,6 +652,7 @@ mz_sink_statistics_raw  messages_staged
 mz_sink_status_history  details
 mz_sink_status_history  error
 mz_sink_status_history  occurred_at
+mz_sink_status_history  replica_id
 mz_sink_status_history  sink_id
 mz_sink_status_history  status
 mz_sink_statuses  details
@@ -718,6 +719,7 @@ mz_source_statistics_with_history  updates_staged
 mz_source_status_history  details
 mz_source_status_history  error
 mz_source_status_history  occurred_at
+mz_source_status_history  replica_id
 mz_source_status_history  source_id
 mz_source_status_history  status
 mz_source_statuses  details
