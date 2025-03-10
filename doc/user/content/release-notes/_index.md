@@ -12,11 +12,13 @@ menu:
 
 {{% self-managed/self-managed-details %}}
 
-### Materialize Operator Helm Chart
-
-As part of the Self-managed Materialize, Materialize provides:
+### Materialize Operator
 
 {{% self-managed/versions/self-managed-products %}}
+
+#### Compatibility
+
+{{< yaml-table data="self_managed/self_managed_operator_compatibility" >}}
 
 ## Self-managed versioning and lifecycle
 
