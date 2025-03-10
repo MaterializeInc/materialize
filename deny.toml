@@ -137,6 +137,9 @@ skip = [
     { name = "num_enum_derive", version = "0.5.11" },
     # Used by protobuf-parse
     { name = "which", version = "4.4.2" },
+    # Used by tempfile
+    { name = "linux-raw-sys", version = "0.9.2" },
+    { name = "rustix", version = "0.38.44" },
 ]
 
 # Use `tracing` instead.

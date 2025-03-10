@@ -13,7 +13,7 @@ workspace = true
 anyhow = "1.0.66"
 derivative = "2.2.0"
 futures = "0.3.30"
-smallvec = { version = "1.10.0", features = ["union"] }
+smallvec = { version = "1.14.0", features = ["union"] }
 static_assertions = "1.1"
 tiberius = { version = "0.12", default-features = false, features = ["tds73"] }
 tokio = { version = "1.38.0", features = ["net"] }

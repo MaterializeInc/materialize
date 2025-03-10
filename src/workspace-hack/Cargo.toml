@@ -50,7 +50,7 @@ debugid = { version = "0.8.0", default-features = false, features = ["serde"] }
 dec = { version = "0.4.9", default-features = false, features = ["num-traits", "serde"] }
 deranged = { version = "0.3.11", default-features = false, features = ["powerfmt", "quickcheck", "serde", "std"] }
 digest = { version = "0.10.7", features = ["mac", "std"] }
-either = { version = "1.8.0" }
+either = { version = "1.15.0", features = ["use_std"] }
 event-listener = { version = "5.4.0" }
 event-listener-strategy = { version = "0.5.2" }
 flate2 = { version = "1.1.0", features = ["zlib"] }
@@ -105,7 +105,7 @@ predicates = { version = "2.1.5", default-features = false, features = ["diff"] 
 proc-macro2 = { version = "1.0.93", features = ["span-locations"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.14.7", default-features = false, features = ["serde"] }
-prost-types = { version = "0.13.4" }
+prost-types = { version = "0.13.5" }
 quote = { version = "1.0.38" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
@@ -120,9 +120,9 @@ scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.23", features = ["serde"] }
 serde = { version = "1.0.218", features = ["alloc", "derive", "rc"] }
 serde_json = { version = "1.0.127", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
-sha2 = { version = "0.10.6", features = ["asm"] }
+sha2 = { version = "0.10.8", features = ["asm"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
-smallvec = { version = "1.13.2", default-features = false, features = ["const_new", "serde", "union"] }
+smallvec = { version = "1.14.0", default-features = false, features = ["const_new", "serde", "union"] }
 socket2 = { version = "0.5.8", default-features = false, features = ["all"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
@@ -185,7 +185,7 @@ debugid = { version = "0.8.0", default-features = false, features = ["serde"] }
 dec = { version = "0.4.9", default-features = false, features = ["num-traits", "serde"] }
 deranged = { version = "0.3.11", default-features = false, features = ["powerfmt", "quickcheck", "serde", "std"] }
 digest = { version = "0.10.7", features = ["mac", "std"] }
-either = { version = "1.8.0" }
+either = { version = "1.15.0", features = ["use_std"] }
 event-listener = { version = "5.4.0" }
 event-listener-strategy = { version = "0.5.2" }
 flate2 = { version = "1.1.0", features = ["zlib"] }
@@ -241,7 +241,7 @@ proc-macro2 = { version = "1.0.93", features = ["span-locations"] }
 proptest-derive = { version = "0.5.1", default-features = false, features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.14.7", default-features = false, features = ["serde"] }
-prost-types = { version = "0.13.4" }
+prost-types = { version = "0.13.5" }
 quote = { version = "1.0.38" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
@@ -256,9 +256,9 @@ scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.23", features = ["serde"] }
 serde = { version = "1.0.218", features = ["alloc", "derive", "rc"] }
 serde_json = { version = "1.0.127", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
-sha2 = { version = "0.10.6", features = ["asm"] }
+sha2 = { version = "0.10.8", features = ["asm"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
-smallvec = { version = "1.13.2", default-features = false, features = ["const_new", "serde", "union"] }
+smallvec = { version = "1.14.0", default-features = false, features = ["const_new", "serde", "union"] }
 socket2 = { version = "0.5.8", default-features = false, features = ["all"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
