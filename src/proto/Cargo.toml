@@ -26,7 +26,7 @@ serde = { version = "1.0.218", features = ["derive", "rc"] }
 serde_json = { version = "1.0.125", features = ["arbitrary_precision"] }
 tokio-postgres = { version = "0.7.8", optional = true }
 url = { version = "2.3.1", features = ["serde"] }
-uuid = "1.2.2"
+uuid = "1.15.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
