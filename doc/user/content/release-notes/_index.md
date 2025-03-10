@@ -39,4 +39,6 @@ For Self-managed Materialize, Materialize supports the latest 2 major releases.
 | **License Compliance** <br>License key support to make it easier to comply with license terms. | In progress |
 | **Spill to disk** <br> Cloud feature that enables Materialize to support workloads that are larger than can fit into memory. | In progress |
 | **Ingress from outside cluster** <br> Provide Terraform modules to set up ingress from outside the Kubernetes cluster hosting self-managed Materialize. | In progress |
+| **AWS Connections** <br> AWS connections require backing cluster that hosts Materialize to be AWS EKS.  | |
+| **EKS/Azure Connections** | |
 | **Temporal Filtering** <br> Memory optimizations for filtering time-series data are not yet implemented. | |
