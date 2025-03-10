@@ -120,6 +120,10 @@ impl OneshotObject for S3Object {
         &self.name
     }
 
+    fn path(&self) -> &str {
+        &self.key
+    }
+
     fn size(&self) -> usize {
         self.size
     }
@@ -200,7 +204,7 @@ impl OneshotSource for AwsS3Source {
             // TODO(cf1): Validate our checksum.
             let client = self.client().await.map_err(StorageErrorXKind::generic)?;
 
-            let mut request = client.get_object().bucket(&self.bucket).key(&object.name);
+            let mut request = client.get_object().bucket(&self.bucket).key(&object.key);
             if let Some(range) = range {
                 let value = range.into_range_header_value();
                 request = request.range(value);
@@ -215,7 +219,7 @@ impl OneshotSource for AwsS3Source {
                 .err_into()
                 .boxed();
 
-            Ok::<_, StorageErrorXKind>(stream)
+            Ok::<_, StorageErrorX>(stream)
         };
 
         futures::stream::once(initial_response)
