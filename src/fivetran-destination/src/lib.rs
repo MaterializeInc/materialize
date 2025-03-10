@@ -16,4 +16,4 @@ pub mod logging;
 pub mod utils;
 
 pub use destination::MaterializeDestination;
-pub use fivetran_sdk::destination_server::DestinationServer;
+pub use fivetran_sdk::destination_connector_server::DestinationConnectorServer;

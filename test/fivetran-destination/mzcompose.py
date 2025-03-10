@@ -138,10 +138,13 @@ def _run_destination_tester(c: Composition, test_file: Path):
             print(ret.stdout)
             assert (
                 ret.returncode != 0
-            ), f"destination tester did not fail with expected message {expected_failure!r}"
-            assert (
-                expected_failure in ret.stdout
-            ), f"destination tester did not fail with expected message {expected_failure!r}"
+            ), "destination tester returned success code when expected failure"
+            # TODO(parkmycar): Re-enable this assertion when the Fivetran Destination Tester starts
+            # outputting errors again.
+            #
+            # assert (
+            #     expected_failure in ret.stderr
+            # ), f"destination tester did not fail with expected message {expected_failure!r}\n\tfound: {ret.stdout!r}"
         else:
             c.run("fivetran-destination-tester")
 

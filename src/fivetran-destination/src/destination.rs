@@ -14,13 +14,15 @@ use mz_ore::retry::{Retry, RetryResult};
 use postgres_protocol::escape;
 use tonic::{Request, Response, Status};
 
-use crate::error::{Context, OpError};
-use crate::fivetran_sdk::destination_server::Destination;
+use crate::error::{Context, OpError, OpErrorKind};
+use crate::fivetran_sdk::data_type_params::Params;
+use crate::fivetran_sdk::destination_connector_server::DestinationConnector;
 use crate::fivetran_sdk::{
-    self, AlterTableRequest, AlterTableResponse, ConfigurationFormRequest,
-    ConfigurationFormResponse, CreateTableRequest, CreateTableResponse, DescribeTableRequest,
-    DescribeTableResponse, TestRequest, TestResponse, TruncateRequest, TruncateResponse,
-    WriteBatchRequest, WriteBatchResponse,
+    self, AlterTableRequest, AlterTableResponse, BatchFileFormat, CapabilitiesRequest,
+    CapabilitiesResponse, ConfigurationFormRequest, ConfigurationFormResponse, CreateTableRequest,
+    CreateTableResponse, DataType, DecimalParams, DescribeTableRequest, DescribeTableResponse,
+    TestRequest, TestResponse, TruncateRequest, TruncateResponse, Warning, WriteBatchRequest,
+    WriteBatchResponse, WriteHistoryBatchRequest,
 };
 use crate::utils;
 
@@ -38,7 +40,7 @@ const FIVETRAN_SYSTEM_COLUMN_ID: &str = "_fivetran_id";
 pub struct MaterializeDestination;
 
 #[tonic::async_trait]
-impl Destination for MaterializeDestination {
+impl DestinationConnector for MaterializeDestination {
     async fn configuration_form(
         &self,
         _: Request<ConfigurationFormRequest>,
@@ -64,6 +66,16 @@ impl Destination for MaterializeDestination {
         }))
     }
 
+    async fn capabilities(
+        &self,
+        _request: Request<CapabilitiesRequest>,
+    ) -> Result<Response<CapabilitiesResponse>, Status> {
+        let response = CapabilitiesResponse {
+            batch_file_format: BatchFileFormat::Csv.into(),
+        };
+        to_grpc(Ok(response))
+    }
+
     async fn describe_table(
         &self,
         request: Request<DescribeTableRequest>,
@@ -79,7 +91,9 @@ impl Destination for MaterializeDestination {
         let response = match result {
             Ok(None) => fivetran_sdk::describe_table_response::Response::NotFound(true),
             Ok(Some(table)) => fivetran_sdk::describe_table_response::Response::Table(table),
-            Err(e) => fivetran_sdk::describe_table_response::Response::Failure(e.to_string()),
+            Err(e) => fivetran_sdk::describe_table_response::Response::Warning(Warning {
+                message: e.to_string(),
+            }),
         };
         to_grpc(Ok(DescribeTableResponse {
             response: Some(response),
@@ -100,7 +114,9 @@ impl Destination for MaterializeDestination {
 
         let response = match result {
             Ok(()) => fivetran_sdk::create_table_response::Response::Success(true),
-            Err(e) => fivetran_sdk::create_table_response::Response::Failure(e.to_string()),
+            Err(e) => fivetran_sdk::create_table_response::Response::Warning(Warning {
+                message: e.to_string(),
+            }),
         };
         to_grpc(Ok(CreateTableResponse {
             response: Some(response),
@@ -121,7 +137,9 @@ impl Destination for MaterializeDestination {
 
         let response = match result {
             Ok(()) => fivetran_sdk::alter_table_response::Response::Success(true),
-            Err(e) => fivetran_sdk::alter_table_response::Response::Failure(e.to_string()),
+            Err(e) => fivetran_sdk::alter_table_response::Response::Warning(Warning {
+                message: e.to_string(),
+            }),
         };
         to_grpc(Ok(AlterTableResponse {
             response: Some(response),
@@ -142,7 +160,9 @@ impl Destination for MaterializeDestination {
 
         let response = match result {
             Ok(()) => fivetran_sdk::truncate_response::Response::Success(true),
-            Err(e) => fivetran_sdk::truncate_response::Response::Failure(e.to_string()),
+            Err(e) => fivetran_sdk::truncate_response::Response::Warning(Warning {
+                message: e.to_string(),
+            }),
         };
         to_grpc(Ok(TruncateResponse {
             response: Some(response),
@@ -163,8 +183,22 @@ impl Destination for MaterializeDestination {
 
         let response = match result {
             Ok(()) => fivetran_sdk::write_batch_response::Response::Success(true),
-            Err(e) => fivetran_sdk::write_batch_response::Response::Failure(e.to_string()),
+            Err(e) => fivetran_sdk::write_batch_response::Response::Warning(Warning {
+                message: e.to_string(),
+            }),
         };
+        to_grpc(Ok(WriteBatchResponse {
+            response: Some(response),
+        }))
+    }
+
+    async fn write_history_batch(
+        &self,
+        _request: Request<WriteHistoryBatchRequest>,
+    ) -> Result<Response<WriteBatchResponse>, Status> {
+        let response = fivetran_sdk::write_batch_response::Response::Warning(Warning {
+            message: "write history batch is not supported".to_string(),
+        });
         to_grpc(Ok(WriteBatchResponse {
             response: Some(response),
         }))
@@ -241,11 +275,22 @@ impl TryFrom<&crate::fivetran_sdk::Column> for ColumnMetadata {
 
     fn try_from(value: &crate::fivetran_sdk::Column) -> Result<Self, Self::Error> {
         let escaped_name = escape::escape_identifier(&value.name);
+
         let mut ty: Cow<'static, str> = utils::to_materialize_type(value.r#type())?.into();
-        if let Some(d) = &value.decimal {
-            ty.to_mut()
-                .push_str(&format!("({}, {})", d.precision, d.scale));
-        }
+        let params = value.params.as_ref().and_then(|p| p.params.as_ref());
+
+        match (value.r#type(), params) {
+            (DataType::Decimal, Some(Params::Decimal(DecimalParams { precision, scale }))) => {
+                ty.to_mut().push_str(&format!("({}, {})", precision, scale));
+            }
+            (other, Some(Params::Decimal(DecimalParams { .. }))) => {
+                let msg = format!("found decimal params for {other:?} data type!");
+                return Err(OpError::new(OpErrorKind::InvariantViolated(msg)));
+            }
+            // TODO(parkmycar): Also handle the string datatype params here.
+            _ => (),
+        };
+
         let is_primary =
             value.primary_key || value.name.to_lowercase() == FIVETRAN_SYSTEM_COLUMN_ID;
 

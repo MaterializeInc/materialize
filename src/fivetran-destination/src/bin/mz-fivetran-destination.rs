@@ -10,7 +10,7 @@
 //! Fivetran destination for Materialize.
 
 use mz_fivetran_destination::logging::FivetranLoggingFormat;
-use mz_fivetran_destination::{DestinationServer, MaterializeDestination};
+use mz_fivetran_destination::{DestinationConnectorServer, MaterializeDestination};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use socket2::{Domain, Protocol, Socket, Type};
@@ -75,7 +75,7 @@ async fn run(Args { port }: Args) -> Result<(), Box<dyn std::error::Error>> {
     let tcp_listener: std::net::TcpListener = socket.into();
     let tcp_listener = TcpListenerStream::new(TcpListener::from_std(tcp_listener)?);
 
-    let destination = DestinationServer::new(MaterializeDestination)
+    let destination = DestinationConnectorServer::new(MaterializeDestination)
         .accept_compressed(CompressionEncoding::Gzip)
         .send_compressed(CompressionEncoding::Gzip);
     Server::builder()
