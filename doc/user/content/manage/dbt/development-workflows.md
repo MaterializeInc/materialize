@@ -360,6 +360,19 @@ These environments are later swapped transparently.
     deployment, which transparently handles running that subset of models
     against the deployment environment.
 
+    {{< callout >}}
+  If you encounter an error like `String 'deploy:' is not valid YAML`, you
+  might need to use an alternative syntax depending on your terminal environment.
+  Different terminals handle quotes differently, so try:
+
+  ```bash
+  dbt run --vars "{\"deploy\": true}"
+  ```
+
+  This alternative syntax is compatible with Windows terminals, PowerShell, or
+  PyCharm Terminal.
+    {{</ callout >}}
+
 #### Validation
 
 [//]: # "TODO(morsapaes) Expand after we make dbt test more pliable to
