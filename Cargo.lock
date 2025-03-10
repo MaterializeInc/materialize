@@ -6837,7 +6837,9 @@ dependencies = [
  "serde",
  "serde_yaml",
  "tokio",
+ "tokio-postgres",
  "tracing",
+ "tracing-subscriber",
  "workspace-hack",
 ]
 

@@ -40,6 +40,7 @@ use mz_cloud_resources::crd::gen::cert_manager::certificates::Certificate;
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_ore::task::JoinHandle;
 use serde::{de::DeserializeOwned, Serialize};
+use tracing::{error, info};
 
 use crate::Context;
 
@@ -83,7 +84,7 @@ where
             if let Some(namespace) = &self.namespace {
                 err_msg = format!("{} for namespace {}", err_msg, namespace);
             }
-            println!("{}", err_msg);
+            info!("{}", err_msg);
             return Ok(());
         }
         let file_path = format_resource_path(
@@ -111,7 +112,7 @@ where
                 serde_yaml::to_writer(&mut file, &item)?;
             }
 
-            println!("Exported {}", file_name.display());
+            info!("Exported {}", file_name.display());
         }
 
         Ok(())
@@ -119,7 +120,7 @@ where
 
     async fn dump(&self) {
         if let Err(e) = self._dump().await {
-            eprintln!("Failed to write k8s {}: {}", self.resource_type, e);
+            error!("Failed to write k8s {}: {}", self.resource_type, e);
         }
     }
 }
@@ -163,13 +164,13 @@ async fn _dump_k8s_pod_logs(
                 .await?;
 
             if logs.is_empty() {
-                eprintln!("No {} logs found for pod {}", suffix, pod_name);
+                error!("No {} logs found for pod {}", suffix, pod_name);
                 return Ok(());
             }
 
             let mut file = File::create(&file_name)?;
             file.write_all(logs.as_bytes())?;
-            println!("Exported {}", file_name.display());
+            info!("Exported {}", file_name.display());
 
             Ok(())
         }
@@ -177,10 +178,10 @@ async fn _dump_k8s_pod_logs(
         if let Err(e) = export_pod_logs(&pods, &pod_name, &file_path, true).await {
             match e.downcast_ref::<kube::Error>() {
                 Some(kube::Error::Api(e)) if e.code == 400 => {
-                    eprintln!("No previous logs available for pod {}", pod_name);
+                    error!("No previous logs available for pod {}", pod_name);
                 }
                 _ => {
-                    eprintln!(
+                    error!(
                         "Failed to export previous logs for pod {}: {}",
                         &pod_name, e
                     );
@@ -189,7 +190,7 @@ async fn _dump_k8s_pod_logs(
         }
 
         if let Err(e) = export_pod_logs(&pods, &pod_name, &file_path, false).await {
-            eprintln!("Failed to export current logs for pod {}: {}", &pod_name, e);
+            error!("Failed to export current logs for pod {}: {}", &pod_name, e);
         }
     }
     Ok(())
@@ -198,7 +199,7 @@ async fn _dump_k8s_pod_logs(
 /// Write k8s pod logs to a yaml file per pod.
 async fn dump_k8s_pod_logs(context: &Context, client: Client, namespace: &String) {
     if let Err(e) = _dump_k8s_pod_logs(context, client, namespace).await {
-        eprintln!("Failed to dump k8s pod logs: {}", e);
+        error!("Failed to dump k8s pod logs: {}", e);
     }
 }
 
@@ -325,7 +326,7 @@ where
         if let Some(namespace) = namespace {
             err_msg = format!("{} for namespace {}", err_msg, namespace);
         }
-        eprintln!("{}", err_msg);
+        error!("{}", err_msg);
         return Ok(());
     }
 
@@ -335,12 +336,13 @@ where
     let mut file = File::create(&file_name)?;
     file.write_all(&output.stdout)?;
 
-    println!("Exported {}", file_name.display());
+    info!("Exported {}", file_name.display());
 
     Ok(())
 }
 
 /// Spawns a new task to run `kubectl describe` for a given resource type K and writes the output to a file.
+#[must_use]
 pub fn spawn_dump_kubectl_describe_process<K>(
     context: Context,
     namespace: Option<String>,
@@ -350,7 +352,7 @@ where
 {
     mz_ore::task::spawn(|| "dump-kubectl-describe", async move {
         if let Err(e) = dump_kubectl_describe::<K>(&context, namespace.as_ref()).await {
-            eprintln!(
+            error!(
                 "Failed to dump kubectl describe for {}: {}",
                 K::plural(&()).into_owned(),
                 e
