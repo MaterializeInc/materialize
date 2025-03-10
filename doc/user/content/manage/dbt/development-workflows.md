@@ -295,6 +295,15 @@ For development environments with no downtime considerations, you might prefer
 to use the [slim deployment pattern](#slim-deployments) instead for quicker
 iteration and reduced CI costs.
 
+### RBAC permissions requirements
+
+When using blue/green deployments with [role-based access control (RBAC)](/manage/access-control/#role-based-access-control-rbac), ensure that the role executing the deployment operations has sufficient privileges on the target objects:
+
+* The role must have ownership privileges on the schemas being deployed
+* The role must have ownership privileges on the clusters being deployed
+
+These permissions are required because the blue/green deployment process needs to create, modify, and swap resources during the deployment lifecycle.
+
 #### Configuration and initialization
 
 {{< warning >}}
