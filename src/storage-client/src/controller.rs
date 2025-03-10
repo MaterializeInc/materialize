@@ -302,6 +302,19 @@ pub trait StorageController: Debug {
         collection_id: GlobalId,
     ) -> Result<bool, StorageError<Self::Timestamp>>;
 
+    /// Returns `true` if each non-transient, non-excluded collection is
+    /// hydrated on at least one of the provided replicas.
+    ///
+    /// If no replicas are provided, this checks for hydration on _any_ replica.
+    ///
+    /// This also returns `true` in case this cluster does not have any
+    /// replicas.
+    fn collections_hydrated_on_replicas(
+        &self,
+        target_replica_ids: Option<Vec<ReplicaId>>,
+        exclude_collections: &BTreeSet<GlobalId>,
+    ) -> Result<bool, StorageError<Self::Timestamp>>;
+
     /// Returns the since/upper frontiers of the identified collection.
     fn collection_frontiers(
         &self,
