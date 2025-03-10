@@ -18,7 +18,7 @@ or the root).
 
 ## Version compatibility
 
-When updating, you need to specify the Materialize Operator version,
+When upgrading, you need to specify the Materialize Operator version,
 `orchestratord` version, and the `environmentd` versions. The following table
 presents the versions compatibility for the operator and the applications:
 
