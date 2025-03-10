@@ -5,6 +5,7 @@ menu:
   main:
     parent: "install-on-aws"
     identifier: "upgrade-on-aws"
+    weight: 10
 ---
 
 To upgrade your Materialize instances, upgrade the Materialize operator first
