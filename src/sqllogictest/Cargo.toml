@@ -16,7 +16,7 @@ chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 dec = "0.4.8"
 fallible-iterator = "0.2.0"
-futures = "0.3.25"
+futures = "0.3.30"
 itertools = "0.12.1"
 junit-report = "0.8.3"
 md-5 = "0.10.5"

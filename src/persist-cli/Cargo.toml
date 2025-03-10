@@ -24,7 +24,7 @@ axum = "0.7.5"
 bytes = { version = "1.3.0", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 differential-dataflow = "0.13.7"
-futures = "0.3.25"
+futures = "0.3.30"
 humantime = "2.1.0"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }

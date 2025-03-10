@@ -16,7 +16,7 @@ openssh = { version = "0.11.5", default-features = false, features = ["native-mu
 openssh-mux-client = "0.17.6"
 openssl = { version = "0.10.48", features = ["vendored"] }
 rand = "0.8.5"
-futures = "0.3.25"
+futures = "0.3.30"
 itertools = "0.12.1"
 scopeguard = "1.2.0"
 serde = { version = "1.0.218", features = ["derive"] }
