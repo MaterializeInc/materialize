@@ -1,0 +1,9 @@
+columns:
+  - column: "Materialize Operator"
+  - column: "orchestratord version"
+  - column: "environmentd version"
+
+rows:
+  - "Materialize Operator": "v25.1.2"
+    "orchestratord version": "v0.130.4"
+    "environmentd version": "v0.130.4"
