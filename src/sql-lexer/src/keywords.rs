@@ -97,7 +97,6 @@ impl Keyword {
     /// Reports whether this keyword requires quoting when used as a column
     /// alias.
     ///
-    ///
     /// Note that this rule is only applies when the column alias is "bare";
     /// i.e., when the column alias is not preceded by `AS`.
     ///
@@ -114,12 +113,23 @@ impl Keyword {
         ) || self.is_reserved()
     }
 
+    /// Reports whether this keyword requires quoting when used in expressions.
+    ///
+    /// These are the keywords `Parser::parse_prefix` won't parse as an identifier.
+    /// (Note that for some keywords `parse_prefix` checks whether they are followed by an opening
+    /// parenthesis before treating them as keywords. These keywords do not need to be marked as
+    /// reserved here.)
+    pub fn is_reserved_in_expression(self) -> bool {
+        matches!(self, TRUE | FALSE | NULL | ARRAY | CASE | CAST | NOT) || self.is_reserved()
+    }
+
     /// Reports whether a keyword is considered reserved in any context:
     /// either in table aliases, column aliases, or in all contexts.
     pub fn is_sometimes_reserved(self) -> bool {
         self.is_reserved()
             || self.is_reserved_in_table_alias()
             || self.is_reserved_in_column_alias()
+            || self.is_reserved_in_expression()
     }
 }
 
