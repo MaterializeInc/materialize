@@ -101,7 +101,7 @@ For a full rundown of selection logic options, check the [dbt documentation](htt
 
 {{< note >}}
 The `dbt show` command uses a `LIMIT` clause under the hood, which has
-[known performance limitations](https://materialize.com/docs/transform-data/troubleshooting/#result-filtering)
+[known performance limitations](/transform-data/troubleshooting/#result-filtering)
 in Materialize.
 {{</ note >}}
 

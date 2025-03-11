@@ -311,9 +311,9 @@ to destroy the objects you created for this guide.
 
 For more information on RBAC in Materialize, review the reference documentation:
 
-* [`GRANT ROLE`](https://materialize.com/docs/sql/grant-role/)
-* [`CREATE ROLE`](https://materialize.com/docs/sql/create-role/)
-* [`GRANT PRIVILEGE`](https://materialize.com/docs/sql/grant-privilege/)
-* [`ALTER ROLE`](https://materialize.com/docs/sql/alter-role/)
-* [`REVOKE PRIVILEGE`](https://materialize.com/docs/sql/revoke-privilege/)
-* [`DROP ROLE`](https://materialize.com/docs/sql/drop-role/)
+* [`GRANT ROLE`](/sql/grant-role/)
+* [`CREATE ROLE`](/sql/create-role/)
+* [`GRANT PRIVILEGE`](/sql/grant-privilege/)
+* [`ALTER ROLE`](/sql/alter-role/)
+* [`REVOKE PRIVILEGE`](/sql/revoke-privilege/)
+* [`DROP ROLE`](/sql/drop-role/)
