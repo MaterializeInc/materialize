@@ -26,7 +26,7 @@ Have questions? We'd love to hear from you:
 
 ## About
 
-Materialize focuses on providing correct and [consistent](https://materialize.com/docs/overview/isolation-level/) answers with minimal latency, and does not ask you to accept either approximate answers or eventual consistency. Whenever Materialize answers a query, that answer is the correct result on some specific (and recent) version of your data. Materialize does all of this by recasting your SQL queries as *dataflows*, which can react efficiently to changes in your data as they happen.
+Materialize focuses on providing correct and [consistent](https://materialize.com/docs/overview/isolation-level/) answers with minimal latency, and does not ask you to accept either approximate answers or eventual consistency. This guarantee holds even when joining data from [multiple upstream systems](https://materialize.com/blog/strong-consistency-in-materialize/). Whenever Materialize answers a query, that answer is the correct result on some specific (and recent) version of your data. Materialize does all of this by recasting your SQL queries as *dataflows*, which can react efficiently to changes in your data as they happen.
 
 Our fully managed service is cloud-native, featuring **high availability** through multi-active replication, **horizontal scalability** by seamlessly scaling dataflows across multiple machines, and **near-infinite storage** by leveraging cloud object storage (e.g., Amazon S3). You can self-manage Materialize using our Enterprise or Community editions.
 
