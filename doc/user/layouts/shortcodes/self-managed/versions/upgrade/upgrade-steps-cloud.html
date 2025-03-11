@@ -84,6 +84,7 @@
    For example, the following instance specifies:
 
    - a `create_database` of `false`,
+   - an `inPlaceRollout` of `true`,
    - an `environmentd_version` of `"v0.130.4"`, and
    - a `request_rollout` of `"12345678-1305-1304-1304-123456781304"`.
 
@@ -97,6 +98,7 @@
          memory_request = "2Gi"
          memory_limit   = "2Gi"
          create_database = false
+         inPlaceRollout = true
          environmentd_version = "v0.130.4"
          request_rollout="12345678-1305-1304-1304-123456781304"
        }
