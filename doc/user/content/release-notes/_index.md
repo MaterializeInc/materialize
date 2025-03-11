@@ -8,7 +8,7 @@ menu:
     identifier: "release-notes"
 ---
 
-## **Upcoming**
+## 2025-03-11
 
 {{% self-managed/self-managed-details %}}
 
@@ -20,18 +20,7 @@ menu:
 
 {{< yaml-table data="self_managed/self_managed_operator_compatibility" >}}
 
-## Self-managed versioning and lifecycle
-
-Self-managed Materialize uses a calendar versioning (calver) scheme of the form
-`vYY.R.PP` where:
-
-- `YY` indicates the year.
-- `R` indicates major release.
-- `PP` indicates the patch number.
-
-For Self-managed Materialize, Materialize supports the latest 2 major releases.
-
-## Known Limitations
+### Known Limitations
 
 | Item                                    | Status      |
 |-----------------------------------------|-------------|
@@ -42,3 +31,14 @@ For Self-managed Materialize, Materialize supports the latest 2 major releases.
 | **AWS Connections** <br> AWS connections require backing cluster that hosts Materialize to be AWS EKS.  | |
 | **EKS/Azure Connections** | |
 | **Temporal Filtering** <br> Memory optimizations for filtering time-series data are not yet implemented. | |
+
+## Self-managed versioning and lifecycle
+
+Self-managed Materialize uses a calendar versioning (calver) scheme of the form
+`vYY.R.PP` where:
+
+- `YY` indicates the year.
+- `R` indicates major release.
+- `PP` indicates the patch number.
+
+For Self-managed Materialize, Materialize supports the latest 2 major releases.
