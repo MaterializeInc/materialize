@@ -115,8 +115,12 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
 
             let super::timely::Return {
                 collections: timely_collections,
-                compute_events: compute_events_timely,
-            } = super::timely::construct(scope.clone(), self.config, self.t_event_queue.clone());
+            } = super::timely::construct(
+                scope.clone(),
+                self.config,
+                self.t_event_queue.clone(),
+                Rc::clone(&self.shared_state),
+            );
             collections.extend(timely_collections);
 
             let super::reachability::Return {
@@ -130,7 +134,6 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
 
             let super::differential::Return {
                 collections: differential_collections,
-                compute_events: compute_events_differential,
             } = super::differential::construct(
                 scope.clone(),
                 self.config,
@@ -146,7 +149,6 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                 scope.parent.clone(),
                 self.config,
                 self.c_event_queue.clone(),
-                [compute_events_timely, compute_events_differential],
                 Rc::clone(&self.shared_state),
             );
             collections.extend(compute_collections);
@@ -202,6 +204,8 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         self.register_reachability_logger::<(Timestamp, Subtime)>(&mut register, 2);
         register.insert_logger("differential/arrange", d_logger);
         register.insert_logger("materialize/compute", c_logger.clone());
+
+        self.shared_state.borrow_mut().compute_logger = Some(c_logger);
     }
 
     fn simple_logger<CB: ContainerBuilder>(
