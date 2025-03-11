@@ -12,11 +12,12 @@ aliases:
 
 ## License
 
-Materialize is licensed under the Business Source License agreement [available
-in the public GitHub repo here](https://github.com/MaterializeInc/materialize/blob/main/LICENSE).
+Use of the Materialize Community edition is subject to the [Materialize Business
+Source License](https://github.com/MaterializeInc/materialize/blob/main/LICENSE)
+agreement.
 
-For Self-Managed Materialize Enterprise license, see
-https://materialize.com/self-managed.
+To purchase a Self-Managed Materialize Enterprise License, contact us
+[here](https://materialize.com/self-managed).
 
 ## Self-Managed Community Edition Privacy Policy
 
