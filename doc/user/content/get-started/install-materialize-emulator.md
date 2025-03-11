@@ -15,19 +15,19 @@ representative of Materialize's performance and full feature set.
 
 {{< important >}}
 
-The Materialize Emulator is <redb> not suitable production workloads.</redb>.
+The Materialize Emulator is <redb> not suitable for production workloads.</redb>.
 
 {{</ important >}}
 
 ### Materialize Emulator
 
-Materialize Emulator is easiest way to get started with Materialize, but is not
-suitable for full feature set evaluations or production workloads.
+Materialize Emulator is the easiest way to get started with Materialize, but is
+not suitable for full feature set evaluations or production workloads.
 
 | Materialize Emulator              | Details    |
 |-----------------------------------|------------|
 | **What is it**                    | A single Docker container version of Materialize. |
-| **Best For**                       | Very quick prototyping and CI jobs. |
+| **Best For**                       | Prototyping and CI jobs. |
 | **Known Limitations**     | Not indicative of true Materialize performance. <br>Services are bundled in a single container. <br>No fault tolerance. <br>No data persistence. <br>No support for version upgrades. |
 | **Evaluation Experience**          | Download from Docker Hub. |
 | **Support**                        | [Materialize Community Slack channel](https://materialize.com/s/chat).|
@@ -99,7 +99,7 @@ suitable for full feature set evaluations or production workloads.
   Cloud
   account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
   The full experience of Materialize is also available as a self-managed
-  offering.  See [Self-managed Materialize](/self-managed/).
+  offering. See [Self-managed Materialize](/self-managed/).
 
 ### Technical Support
 

@@ -43,8 +43,8 @@ flippers. Specifically, you will:
 
 ## Prerequisite
 
-To get started with Materialize Cloud, you need a Materialize account. If you do
-not have an account, you can [sign up for a free
+To get started with Materialize Cloud, you will need a Materialize account. If
+you do not have an account, you can [sign up for a free
 trial](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
 
 Alternatively:
