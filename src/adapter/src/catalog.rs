@@ -26,7 +26,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
 };
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::{EventType, FullNameV1, ObjectType, VersionedStorageUsage};
-use mz_build_info::DUMMY_BUILD_INFO;
+use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_catalog::builtin::{
     BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BUILTIN_PREFIXES,
     MZ_CATALOG_SERVER_CLUSTER,
@@ -590,6 +590,7 @@ impl Catalog {
             storage,
             now,
             environment_id,
+            &DUMMY_BUILD_INFO,
             system_parameter_defaults,
             bootstrap_args,
             None,
@@ -621,6 +622,7 @@ impl Catalog {
             storage,
             now,
             environment_id,
+            &DUMMY_BUILD_INFO,
             system_parameter_defaults,
             bootstrap_args,
             None,
@@ -637,13 +639,18 @@ impl Catalog {
         now: NowFn,
         environment_id: EnvironmentId,
         system_parameter_defaults: BTreeMap<String, String>,
-        version: semver::Version,
+        build_info: &'static BuildInfo,
         bootstrap_args: &BootstrapArgs,
         enable_expression_cache_override: Option<bool>,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
             .with_organization_id(environment_id.organization_id())
-            .with_version(version)
+            .with_version(
+                build_info
+                    .version
+                    .parse()
+                    .expect("build version is parseable"),
+            )
             .build()
             .await?;
         let storage = openable_storage.open_read_only(bootstrap_args).await?;
@@ -652,6 +659,7 @@ impl Catalog {
             storage,
             now,
             Some(environment_id),
+            build_info,
             system_parameter_defaults,
             bootstrap_args,
             enable_expression_cache_override,
@@ -664,6 +672,7 @@ impl Catalog {
         storage: Box<dyn DurableCatalogState>,
         now: NowFn,
         environment_id: Option<EnvironmentId>,
+        build_info: &'static BuildInfo,
         system_parameter_defaults: BTreeMap<String, String>,
         bootstrap_args: &BootstrapArgs,
         enable_expression_cache_override: Option<bool>,
@@ -675,6 +684,7 @@ impl Catalog {
         let previous_ts = now().into();
         let replica_size = &bootstrap_args.default_cluster_replica_size;
         let read_only = false;
+
         let OpenCatalogResult {
             catalog,
             migrated_storage_collections_0dt: _,
@@ -688,7 +698,7 @@ impl Catalog {
             state: StateConfig {
                 unsafe_mode: true,
                 all_features: false,
-                build_info: &DUMMY_BUILD_INFO,
+                build_info,
                 environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
                 read_only,
                 now,

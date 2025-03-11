@@ -185,11 +185,14 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
         .and_then(|storage_metadata| storage_metadata.unfinalized_shards);
 
     // Load the on-disk catalog and dump its state.
-    let version: semver::Version = state.build_info.version.parse().expect("invalid version");
+
+    // Make sure the version is parseable.
+    let _: semver::Version = state.build_info.version.parse().expect("invalid version");
+
     let maybe_disk_catalog = state
         .with_catalog_copy(
             system_parameter_defaults,
-            version,
+            state.build_info,
             &state.materialize.bootstrap_args,
             // The expression cache can be taxing on the CPU and is unnecessary for consistency checks.
             Some(false),
