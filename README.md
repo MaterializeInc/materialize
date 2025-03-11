@@ -34,7 +34,7 @@ We support a large fraction of PostgreSQL features and are actively expanding su
 
 ## Get data in
 
-Materialize can read data directly from a [PostgreSQL](https://materialize.com/docs/sql/create-source/postgres/) or [MySQL](https://materialize.com/docs/sql/create-source/mysql/) replication stream, from [Kafka](https://materialize.com/docs/sql/create-source/kafka/) (and other Kafka API-compatible systems like [Redpanda](https://materialize.com/docs/integrations/redpanda/)), or from SaaS applications [via webhooks](https://materialize.com/docs/sql/create-source/webhook/). 
+Materialize can read data directly from a [PostgreSQL](https://materialize.com/docs/sql/create-source/postgres/) or [MySQL](https://materialize.com/docs/sql/create-source/mysql/) replication stream, from [Kafka](https://materialize.com/docs/sql/create-source/kafka/) (and other Kafka API-compatible systems like [Redpanda](https://materialize.com/docs/integrations/redpanda/)), or from SaaS applications [via webhooks](https://materialize.com/docs/sql/create-source/webhook/).
 
 ## Transform, manipulate, and read your data
 
