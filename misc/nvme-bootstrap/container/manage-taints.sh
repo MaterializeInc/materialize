@@ -9,13 +9,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-set -e
+set -euo pipefail
 
 # Node name is provided via downward API
 NODE_NAME=${NODE_NAME:-$(hostname)}
 TAINT_KEY="disk-unconfigured"
-TAINT_VALUE="true"
-TAINT_EFFECT="NoSchedule"
 
 echo "Starting taint management for node: $NODE_NAME"
 echo "Action: $1"
@@ -23,25 +21,13 @@ echo "Action: $1"
 # Check if necessary environment variables and files exist
 if [ -z "$KUBERNETES_SERVICE_HOST" ] || [ -z "$KUBERNETES_SERVICE_PORT" ]; then
     echo "Error: Kubernetes service environment variables not found"
-    exit 0  # Exit with success to avoid crash loop
+    exit 1
 fi
 
 if [ ! -f "/var/run/secrets/kubernetes.io/serviceaccount/token" ]; then
     echo "Error: Service account token not found"
-    exit 0  # Exit with success to avoid crash loop
+    exit 1
 fi
-
-# Add the taint to the node
-add_taint() {
-    echo "Adding taint $TAINT_KEY=$TAINT_VALUE:$TAINT_EFFECT to node $NODE_NAME"
-
-    kubectl --server="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}" \
-            --token="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
-            --certificate-authority="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt" \
-            taint nodes "$NODE_NAME" "$TAINT_KEY=$TAINT_VALUE:$TAINT_EFFECT" --overwrite || {
-                echo "Warning: Failed to add taint, but continuing anyway"
-            }
-}
 
 # Remove the taint from the node
 remove_taint() {
@@ -56,18 +42,15 @@ remove_taint() {
 }
 
 # Main execution
-ACTION=${1:-"add"}
+ACTION=${1:-"remove"}
 
 case "$ACTION" in
-    add)
-        add_taint
-        ;;
     remove)
         remove_taint
         ;;
     *)
-        echo "Usage: $0 [add|remove]"
-        exit 0  # Exit with success to avoid crash loop
+        echo "Usage: $0 [remove]"
+        exit 1
         ;;
 esac
 

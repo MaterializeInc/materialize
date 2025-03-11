@@ -9,47 +9,111 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-set -xeo pipefail
+set -xeuo pipefail
 
-# Volume group name
 VG_NAME="instance-store-vg"
+CLOUD_PROVIDER=""
 
-# Function to detect cloud provider
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --cloud-provider|-c)
+      CLOUD_PROVIDER="$2"
+      shift 2
+      ;;
+    --vg-name|-v)
+      VG_NAME="$2"
+      shift 2
+      ;;
+    --help|-h)
+      echo "Usage: $0 [options]"
+      echo "Options:"
+      echo "  --cloud-provider, -c PROVIDER   Specify cloud provider (aws, gcp, azure, generic)"
+      echo "  --vg-name, -v NAME     Specify volume group name (default: instance-store-vg)"
+      echo "  --help, -h             Show this help message"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1"
+      exit 1
+      ;;
+  esac
+done
+
 detect_cloud_provider() {
-    # Check for AWS
-    if curl -s -m 5 http://169.254.169.254/latest/meta-data/ >/dev/null; then
+    # Only attempt detection if not explicitly provided
+    if [[ -n "$CLOUD_PROVIDER" ]]; then
+        echo "$CLOUD_PROVIDER"
+        return
+    fi
+
+    # Fall back to AWS detection if no provider is specified
+    if curl -s -m 5 --fail http://169.254.169.254/latest/meta-data/ >/dev/null 2>&1; then
         echo "aws"
         return
     fi
 
-    # Default to generic
+    # Default to generic if detection fails
     echo "generic"
 }
 
-# Cloud provider-specific device detection
+find_aws_bottlerocket_devices() {
+    local nvme_devices=()
+    local BOTTLEROCKET_ROOT="/.bottlerocket/rootfs"
+
+    mapfile -t SSD_NVME_DEVICE_LIST < <(lsblk --json --output-all | \
+        jq -r '.blockdevices[] | select(.model // empty | contains("Amazon EC2 NVMe Instance Storage")) | .path')
+
+    for device in "${SSD_NVME_DEVICE_LIST[@]}"; do
+        nvme_devices+=("$BOTTLEROCKET_ROOT$device")
+    done
+
+    echo "${nvme_devices[@]}"
+}
+
+find_aws_standard_devices() {
+    lsblk --json --output-all | \
+        jq -r '.blockdevices[] | select(.model // empty | contains("Amazon EC2 NVMe Instance Storage")) | .path'
+}
+
+find_aws_devices() {
+    local nvme_devices=()
+
+    # Check if we're running in Bottlerocket
+    if [[ -d "/.bottlerocket" ]]; then
+        # Use mapfile to properly handle the output
+        mapfile -t nvme_devices < <(find_aws_bottlerocket_devices)
+    else
+        # Use mapfile to properly handle the output
+        mapfile -t nvme_devices < <(find_aws_standard_devices)
+    fi
+
+    echo "${nvme_devices[@]}"
+}
+
+find_generic_devices() {
+    lsblk --json --output-all | \
+        jq -r '.blockdevices[] | select(.name | startswith("nvme")) | select(.mountpoint == null and (.children | length == 0)) | .path'
+}
+
 find_nvme_devices() {
     local cloud=$1
     local nvme_devices=()
 
     case $cloud in
         aws)
-            # Handle both standard Linux and Bottlerocket paths
-            if [ -d "/.bottlerocket" ]; then
-                # Bottlerocket specific path
-                BOTTLEROCKET_ROOT="/.bottlerocket/rootfs"
-                mapfile -t SSD_NVME_DEVICE_LIST < <(lsblk --json --output-all | jq -r '.blockdevices[] | select(.model // empty | contains("Amazon EC2 NVMe Instance Storage")) | .path')
-                for device in "${SSD_NVME_DEVICE_LIST[@]}"; do
-                    nvme_devices+=("$BOTTLEROCKET_ROOT$device")
-                done
-            else
-                # Standard EC2 instances
-                mapfile -t nvme_devices < <(lsblk --json --output-all | jq -r '.blockdevices[] | select(.model // empty | contains("Amazon EC2 NVMe Instance Storage")) | .path')
-            fi
+            # Use mapfile to properly handle the output
+            mapfile -t nvme_devices < <(find_aws_devices)
             ;;
-        # Add more cloud providers here
+        # Add more cloud providers here as we support them
+        # gcp)
+        #     mapfile -t nvme_devices < <(find_gcp_devices)
+        #     ;;
+        # azure)
+        #     mapfile -t nvme_devices < <(find_azure_devices)
+        #     ;;
         *)
-            # Generic approach - find all NVMe devices that are not mounted and don't have children (partitions)
-            mapfile -t nvme_devices < <(lsblk --json --output-all | jq -r '.blockdevices[] | select(.name | startswith("nvme")) | select(.mountpoint == null and (.children | length == 0)) | .path')
+            # Generic approach for any other cloud or environment
+            mapfile -t nvme_devices < <(find_generic_devices)
             ;;
     esac
 
@@ -60,7 +124,7 @@ find_nvme_devices() {
 setup_lvm() {
     local -a devices=("$@")
 
-    if [ ${#devices[@]} -eq 0 ]; then
+    if [[ ${#devices[@]} -eq 0 ]]; then
         echo "No suitable NVMe devices found"
         exit 1
     fi
@@ -89,12 +153,11 @@ setup_lvm() {
     return 0
 }
 
-# Main execution
 echo "Starting NVMe disk configuration..."
 
-# Detect cloud provider
+# Detect or use provided cloud provider
 CLOUD_PROVIDER=$(detect_cloud_provider)
-echo "Detected cloud provider: $CLOUD_PROVIDER"
+echo "Using cloud provider: $CLOUD_PROVIDER"
 
 # Find NVMe devices
 mapfile -t NVME_DEVICES < <(find_nvme_devices "$CLOUD_PROVIDER")
@@ -102,14 +165,7 @@ mapfile -t NVME_DEVICES < <(find_nvme_devices "$CLOUD_PROVIDER")
 # Setup LVM
 if setup_lvm "${NVME_DEVICES[@]}"; then
     echo "NVMe disk configuration completed successfully"
-    # Call taint management script to remove the taint
-    /usr/local/bin/manage-taints.sh remove
-
-    # Keep the container running
-    echo "Setup complete. Container will now stay running for monitoring purposes."
-    while true; do
-        sleep 3600
-    done
+    exit 0
 else
     echo "NVMe disk configuration failed"
     exit 1

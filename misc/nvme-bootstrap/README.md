@@ -10,7 +10,7 @@ Materialize requires fast, locally-attached NVMe storage for optimal performance
 
 1. Automatically detects NVMe instance store devices on your nodes
 2. Creates an LVM volume group from these devices
-3. Configures OpenEBS to provision persistent volumes from this storage
+3. Configures OpenEBS LVM Local-PV to provision persistent volumes from this storage
 4. Makes high-performance storage available to Materialize
 
 ## Prerequisites
@@ -36,10 +36,9 @@ module "materialize" {
   # Use an instance type with NVMe storage
   node_group_instance_types = ["r6gd.2xlarge"]
   node_group_ami_type       = "BOTTLEROCKET_ARM_64"
+  enable_nvme_storage       = true
 
-  # Disable Materialize Operator installation as it will require the storage class
-  # TODO: The module will support this configuration in the future
-  install_materialize_operator = false
+  install_materialize_operator = true
 
   # Other module parameters...
 }
@@ -54,6 +53,8 @@ The module handles creating the appropriate storage class and configuring Materi
 If you're setting up manually or need to customize the configuration, follow these steps:
 
 ### Step 1: Build and Push the Container Image
+
+> Note: This is temporary and will be replaced with a pre-built image which can be pulled from a public registry.
 
 ```bash
 # Clone the Materialize repository
@@ -70,32 +71,7 @@ docker build -t your-registry/nvme-bootstrap:latest .
 docker push your-registry/nvme-bootstrap:latest
 ```
 
-### Step 2: Install OpenEBS
-
-OpenEBS provides the CSI driver that interfaces with LVM to provide persistent storage:
-
-```bash
-# Add the OpenEBS Helm repository
-helm repo add openebs https://openebs.github.io/charts
-helm repo update
-
-# Create namespace for OpenEBS
-kubectl create namespace openebs
-
-# Install OpenEBS with only the necessary components
-helm install openebs openebs/openebs \
-  --namespace openebs \
-  --set engines.replicated.mayastor.enabled=false
-```
-
-Verify the installation:
-
-```bash
-# Check if the LVM controller is running
-kubectl get pods -n openebs -l role=openebs-lvm
-```
-
-### Step 3: Deploy the NVMe Bootstrap Components
+### Step 2: Deploy the NVMe Bootstrap Components
 
 ```bash
 # Navigate to the Kubernetes manifests directory
@@ -121,9 +97,35 @@ The DaemonSet will:
 3. Create the "instance-store-vg" volume group
 4. Make the storage available for OpenEBS
 
+### Step 3: Install OpenEBS
+
+OpenEBS provides the CSI driver that interfaces with LVM to provide persistent storage:
+
+```bash
+# Add the OpenEBS Helm repository
+helm repo add openebs https://openebs.github.io/charts
+helm repo update
+
+# Create namespace for OpenEBS
+kubectl create namespace openebs
+
+# Install OpenEBS with only the necessary components
+helm install openebs openebs/openebs \
+  --namespace openebs \
+  --set engines.replicated.mayastor.enabled=false
+```
+
+Verify the installation:
+
+```bash
+# Check if the LVM controller is running
+kubectl get pods -n openebs -l role=openebs-lvm
+```
+
 ### Step 4: Create and Test the Storage Class
 
 ```bash
+# TODO: remove this step once the Terraform module handles this
 # Create the StorageClass
 kubectl apply -f storageclass.yaml
 
@@ -139,9 +141,8 @@ A successful test shows your storage class is working correctly.
 To clean up the test resources:
 
 ```bash
-# Delete the test PVC and StorageClass
+# Delete the test PVC
 kubectl delete -f test-pvc.yaml
-kubectl delete -f storageclass.yaml
 ```
 
 ### Step 5: Configure Materialize to Use the Storage Class
@@ -246,19 +247,3 @@ kubectl get pvc -A | grep openebs-lvm-instance-store-ext4
   ```bash
   kubectl get serviceaccount nvme-setup-sa -n kube-system
   ```
-
-## Clean Up
-
-When you're done testing:
-
-```bash
-# Delete test resources
-kubectl delete -f test-pvc.yaml
-kubectl delete -f daemonset.yaml
-kubectl delete -f rbac.yaml
-kubectl delete -f storageclass.yaml
-
-# Delete OpenEBS if no longer needed
-helm uninstall openebs -n openebs
-kubectl delete namespace openebs
-```

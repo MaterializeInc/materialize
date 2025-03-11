@@ -23,16 +23,8 @@ spec:
     spec:
       serviceAccountName: nvme-setup-sa
       initContainers:
-      - name: apply-taint
-        image: bobbyiliev/nvme-bootstrap:latest
-        command: ["/usr/local/bin/manage-taints.sh", "add"]
-        env:
-        - name: NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
-      containers:
       - name: setup-nvme
+        # TODO: Change this once we have an official image
         image: bobbyiliev/nvme-bootstrap:latest
         securityContext:
           privileged: true
@@ -41,6 +33,8 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
+        - name: CLOUD_PROVIDER
+          value: "aws"
         volumeMounts:
         - name: host-dev
           mountPath: /dev
@@ -48,6 +42,18 @@ spec:
           mountPath: /sys
         - name: host-proc
           mountPath: /proc
+        command:
+        - "/bin/bash"
+        - "-c"
+        - |
+          # Run the disk configuration script with explicit cloud provider
+          /usr/local/bin/configure-disks.sh --cloud-provider aws
+
+          # Remove taint once configuration is complete
+          /usr/local/bin/manage-taints.sh remove
+      containers:
+      - name: pause
+        image: k8s.gcr.io/pause:3.7
       volumes:
       - name: host-dev
         hostPath:
@@ -62,9 +68,5 @@ spec:
       - key: disk-unconfigured
         operator: Exists
         effect: NoSchedule
-      - key: node-role.kubernetes.io/master
-        operator: Exists
-        effect: NoSchedule
-      - key: node-role.kubernetes.io/control-plane
-        operator: Exists
-        effect: NoSchedule
+      nodeSelector:
+        materialize.cloud/disk-config-required: "true"

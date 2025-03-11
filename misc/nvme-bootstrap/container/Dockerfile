@@ -26,5 +26,3 @@ COPY configure-disks.sh /usr/local/bin/configure-disks.sh
 COPY manage-taints.sh /usr/local/bin/manage-taints.sh
 
 RUN chmod +x /usr/local/bin/configure-disks.sh /usr/local/bin/manage-taints.sh
-
-ENTRYPOINT ["/usr/local/bin/configure-disks.sh"]
