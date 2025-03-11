@@ -11,33 +11,27 @@ menu:
 
 The Materialize Emulator is an all-in-one Docker image available on Docker Hub
 for testing and evaluation purposes. The Materialize Emulator is not
-representative of Materialize's performance and full feature set. To evaluate
-Materialize for production scenarios, sign up for a [free trial
-account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
-or [schedule a demo](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+representative of Materialize's performance and full feature set.
 
-{{< warning >}}
+{{< important >}}
 
-The Materialize Emulator is for <redb> testing/evaluation purposes only. It is
-not suitable for production deployments</redb>.
+The Materialize Emulator is <redb> not suitable for production workloads.</redb>.
 
-{{</ warning >}}
+{{</ important >}}
 
-### Materialize Emulator vs Materialize
+### Materialize Emulator
 
-|                               | Materialize Emulator                                       | Materialize                                                            |
-|-------------------------------|----------------------------------------------------|------------------------------------------------------------------------|
-|         | <i>The fastest option for prototyping or internal testing with Materialize.</i> | <i>Cloud-hosted SaaS solution for critical operational workloads.</i>|
-| **Production deployments**  | ❌ Not suitable due to performance and [license limitations](#license-and-privacy-policy). | ✅ |
-| **Performance**             | ❌ Limited. Services are bundled in a single container. | ✅ High. Services are scaled across many machines.|
-| **Dedicated support**       | ❌ | ✅ |
-| **Sample data**  | ✅ Quickstart data source. | ✅ Quickstart data source. |
-| **Data sources**  | ✅ Connect using configuration SQL. | ✅ Connect using a streamlined GUI. |
-| **Version upgrades**                 | ✅ Manual, with no data persistence.| ✅ Automated, with data persistence. |
-| **Use case isolation**               | ❌ | ✅ |
-| **Fault tolerance**                  | ❌ | ✅ |
-| **Horizontal scalability**           | ❌ | ✅ |
-| **GUI (Materialize Console)**      | ✅ | ✅ |
+Materialize Emulator is the easiest way to get started with Materialize, but is
+not suitable for full feature set evaluations or production workloads.
+
+| Materialize Emulator              | Details    |
+|-----------------------------------|------------|
+| **What is it**                    | A single Docker container version of Materialize. |
+| **Best For**                       | Prototyping and CI jobs. |
+| **Known Limitations**     | Not indicative of true Materialize performance. <br>Services are bundled in a single container. <br>No fault tolerance. <br>No data persistence. <br>No support for version upgrades. |
+| **Evaluation Experience**          | Download from Docker Hub. |
+| **Support**                        | [Materialize Community Slack channel](https://materialize.com/s/chat).|
+| **License/legal arrangement**      | [BSL/Materialize's privacy policy](#license-and-privacy-policy) |
 
 ### Prerequisites
 
@@ -101,9 +95,11 @@ not suitable for production deployments</redb>.
 
 - Join the [Materialize Community on Slack](https://materialize.com/s/chat).
 
-- To more fully evaluate Materialize and its features, sign up for a [free trial
-  account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
-  or [schedule a demo](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+- To fully evaluate Materialize Cloud, sign up for a [free trial Materialize
+  Cloud
+  account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
+  The full experience of Materialize is also available as a self-managed
+  offering. See [Self-managed Materialize](/self-managed/).
 
 ### Technical Support
 
