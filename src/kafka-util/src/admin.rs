@@ -18,7 +18,7 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic};
 use rdkafka::client::ClientContext;
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 
-/// Creates a Kafka topic and waits for it to be reported in the broker
+/// Creates a Kafka topic if it does not exist, and waits for it to be reported in the broker
 /// metadata.
 ///
 /// This function is a wrapper around [`AdminClient::create_topics`] that
@@ -35,34 +35,10 @@ use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 /// succeed.
 ///
 /// Returns a boolean indicating whether the topic already existed.
-pub async fn create_new_topic<'a, C>(
-    client: &'a AdminClient<C>,
-    admin_opts: &AdminOptions,
-    new_topic: &'a NewTopic<'a>,
-) -> Result<bool, CreateTopicError>
-where
-    C: ClientContext,
-{
-    create_topic_helper(client, admin_opts, new_topic, false).await
-}
-
-/// Like `create_new_topic` but allow topic to already exist
 pub async fn ensure_topic<'a, C>(
     client: &'a AdminClient<C>,
     admin_opts: &AdminOptions,
     new_topic: &'a NewTopic<'a>,
-) -> Result<bool, CreateTopicError>
-where
-    C: ClientContext,
-{
-    create_topic_helper(client, admin_opts, new_topic, true).await
-}
-
-async fn create_topic_helper<'a, C>(
-    client: &'a AdminClient<C>,
-    admin_opts: &AdminOptions,
-    new_topic: &'a NewTopic<'a>,
-    allow_existing: bool,
 ) -> Result<bool, CreateTopicError>
 where
     C: ClientContext,
@@ -75,7 +51,7 @@ where
     }
     let already_exists = match res.into_element() {
         Ok(_) => Ok(false),
-        Err((_, RDKafkaErrorCode::TopicAlreadyExists)) if allow_existing => Ok(true),
+        Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => Ok(true),
         Err((_, e)) => Err(CreateTopicError::Kafka(KafkaError::AdminOp(e))),
     }?;
 
