@@ -38,8 +38,11 @@ use mz_ore::error::ErrorExt;
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
+use crate::system_catalog_dumper::create_postgres_connection_string;
+
 mod k8s_resource_dumper;
 mod system_catalog_dumper;
+mod utils;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
@@ -107,10 +110,10 @@ async fn main() {
 }
 
 async fn run(context: Context) -> Result<(), anyhow::Error> {
-    let mut describe_handles = Vec::new();
+    let mut handles = Vec::new();
 
     for namespace in context.args.k8s_namespaces.clone() {
-        describe_handles.extend([
+        handles.extend([
             k8s_resource_dumper::spawn_dump_kubectl_describe_process::<Pod>(
                 context.clone(),
                 Some(namespace.clone()),
@@ -174,7 +177,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         ]);
     }
 
-    describe_handles.extend([
+    handles.extend([
         k8s_resource_dumper::spawn_dump_kubectl_describe_process::<Node>(context.clone(), None),
         k8s_resource_dumper::spawn_dump_kubectl_describe_process::<DaemonSet>(
             context.clone(),
@@ -216,10 +219,14 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
     k8s_resource_dumper::dump_cluster_resources(&context, &client).await;
 
     let _port_forward_handle;
+    let mut host_port: Option<i32> = None;
+    let mut target_port: Option<i32> = None;
     if !context.args.skip_port_forward {
         // Find the namespace, service name, local port, and target port.
         let port_forwarding_info =
             system_catalog_dumper::get_sql_port_forwarding_info(&client, &context.args).await?;
+        host_port = Some(port_forwarding_info.local_port);
+        target_port = Some(port_forwarding_info.target_port);
 
         _port_forward_handle = system_catalog_dumper::spawn_sql_port_forwarding_process(
             &port_forwarding_info,
@@ -230,11 +237,28 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
 
-    // TODO(debug_tool1): Use the forwarded port to dump the system catalog.
+    let catalog_dumper = match system_catalog_dumper::SystemCatalogDumper::new(
+        &context,
+        &create_postgres_connection_string(
+            context.args.sql_local_address.as_deref(),
+            host_port,
+            target_port,
+        ),
+    )
+    .await
+    {
+        Ok(dumper) => Some(dumper),
+        Err(e) => {
+            error!("Failed to dump system catalog: {}", e);
+            None
+        }
+    };
 
-    // Wait for all the describe processes to finish.
-    join_all(describe_handles).await;
+    if let Some(dumper) = catalog_dumper {
+        handles.extend(dumper.dump_all_relations());
+    }
 
+    join_all(handles).await;
     // TODO(debug_tool1): Compress files to ZIP
     Ok(())
 }
