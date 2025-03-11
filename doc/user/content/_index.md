@@ -15,7 +15,7 @@ to transform, deliver, and act on fast changing data.
 With self-managed Materialize, you can deploy and operate Materialize in your
 Kubernetes environment.
 
-{{% self-managed/self-managed-details %}}
+{{% self-managed/self-managed-editions-table %}}
 
 {{< callout >}}
 
