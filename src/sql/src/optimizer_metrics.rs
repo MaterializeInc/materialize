@@ -84,8 +84,12 @@ impl OptimizerMetrics {
                 object_type = object_type,
                 transform_times = serde_json::to_string(&transform_times)
                     .unwrap_or_else(|_| format!("{:?}", transform_times)),
+                threshold = format!(
+                    "{}ms",
+                    self.e2e_optimization_time_seconds_log_threshold.as_millis()
+                ),
                 duration = format!("{}ms", duration.as_millis()),
-                "optimizer took more than 500ms"
+                "slow optimization",
             );
         }
     }
