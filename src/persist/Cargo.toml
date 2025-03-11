@@ -40,6 +40,7 @@ deadpool-postgres = "0.10.3"
 differential-dataflow = "0.13.7"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures-util = "0.3.31"
+itertools = "0.12.1"
 md-5 = "0.10.5"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-dyncfg = { path = "../dyncfg" }

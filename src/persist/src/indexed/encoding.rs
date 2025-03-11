@@ -13,11 +13,12 @@
 // Ditto for Log* and the Log. The others are used internally in these top-level
 // structs.
 
-use arrow::array::{Array, ArrayRef, BinaryArray, Int64Array};
+use arrow::array::{Array, ArrayRef, AsArray, BinaryArray, Int64Array};
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, ToByteSlice};
+use arrow::datatypes::{DataType, Int64Type, ToByteSlice};
 use bytes::{BufMut, Bytes};
 use differential_dataflow::trace::Description;
+use itertools::Either;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -366,11 +367,15 @@ impl BlobTraceUpdates {
     }
 
     /// Concatenate the given records together, column-by-column.
+    ///
+    /// If `ensure_codec` is true, then we'll ensure the returned [`BlobTraceUpdates`] includes
+    /// [`Codec`] data, re-encoding structured data if necessary.
     pub fn concat<K: Codec, V: Codec>(
         mut updates: Vec<BlobTraceUpdates>,
         key_schema: &K::Schema,
         val_schema: &V::Schema,
         metrics: &ColumnarMetrics,
+        ensure_codec: bool,
     ) -> anyhow::Result<BlobTraceUpdates> {
         match updates.len() {
             0 => return Ok(BlobTraceUpdates::Row(ColumnarRecords::default())),
@@ -378,26 +383,55 @@ impl BlobTraceUpdates {
             _ => {}
         }
 
-        // TODO: skip this when we no longer require codec data.
-        let columnar: Vec<_> = updates
-            .iter_mut()
-            .map(|u| u.get_or_make_codec::<K, V>(key_schema, val_schema).clone())
-            .collect();
-        let records = ColumnarRecords::concat(&columnar, metrics);
-
-        let mut keys = Vec::with_capacity(records.len());
-        let mut vals = Vec::with_capacity(records.len());
+        // Always get or make our structured format.
+        let mut keys = Vec::with_capacity(updates.len());
+        let mut vals = Vec::with_capacity(updates.len());
         for updates in &mut updates {
             let structured = updates.get_or_make_structured::<K, V>(key_schema, val_schema);
             keys.push(structured.key.as_ref());
             vals.push(structured.val.as_ref());
         }
-        let ext = ColumnarRecordsStructuredExt {
+        let key_values = ColumnarRecordsStructuredExt {
             key: ::arrow::compute::concat(&keys)?,
             val: ::arrow::compute::concat(&vals)?,
         };
 
-        let out = Self::Both(records, ext);
+        // If necessary, ensure we have `Codec` data, which internally includes
+        // timestamps and diffs, otherwise get the timestamps and diffs separately.
+        let records = if ensure_codec {
+            let columnar: Vec<_> = updates
+                .iter_mut()
+                .map(|u| u.get_or_make_codec::<K, V>(key_schema, val_schema).clone())
+                .collect();
+            Either::Left(ColumnarRecords::concat(&columnar, metrics))
+        } else {
+            let mut timestamps: Vec<&dyn Array> = Vec::with_capacity(updates.len());
+            let mut diffs: Vec<&dyn Array> = Vec::with_capacity(updates.len());
+
+            for update in &updates {
+                timestamps.push(update.timestamps());
+                diffs.push(update.diffs());
+            }
+            let timestamps = ::arrow::compute::concat(&timestamps)?
+                .as_primitive_opt::<Int64Type>()
+                .ok_or_else(|| anyhow::anyhow!("timestamps changed Array type"))?
+                .clone();
+            let diffs = ::arrow::compute::concat(&diffs)?
+                .as_primitive_opt::<Int64Type>()
+                .ok_or_else(|| anyhow::anyhow!("diffs changed Array type"))?
+                .clone();
+
+            Either::Right((timestamps, diffs))
+        };
+
+        let out = match records {
+            Either::Left(codec) => Self::Both(codec, key_values),
+            Either::Right((timestamps, diffs)) => Self::Structured {
+                key_values,
+                timestamps,
+                diffs,
+            },
+        };
         metrics
             .arrow
             .concat_bytes
