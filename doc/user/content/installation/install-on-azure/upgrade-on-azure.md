@@ -12,7 +12,7 @@ To upgrade your Materialize instances, upgrade the Materialize operator first
 and then the Materialize instances. The following tutorial upgrades your
 Materialize deployment running on Azure Kubernetes Service (AKS)
 
-The tutorial assumes you have installed Materialize onAzure Kubernetes Service
+The tutorial assumes you have installed Materialize on Azure Kubernetes Service
 (AKS) using the instructions on [Install on
 Azure](/installation/install-on-azure/) (either from the examples/simple
 directory or the root).
@@ -116,6 +116,10 @@ If you want to use `jq` and do not have `jq` installed, install.
    ```bash
    cd terraform-azurerm-materialize/examples/simple
    ```
+
+1. Optional. You may need to update your [Materialize on Azure Terraform
+   modules](https://github.com/MaterializeInc/terraform-azurerm-materialize) to
+   upgrade.
 
 1. Optional. Create a virtual environment, specifying a path for the new virtual
    environment:
