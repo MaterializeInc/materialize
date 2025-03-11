@@ -120,6 +120,7 @@ impl Context {
             refresh_schedule: desc.refresh_schedule,
             debug_name: desc.debug_name,
             time_dependence: desc.time_dependence,
+            heap_size_limit: desc.heap_size_limit,
         })
     }
 

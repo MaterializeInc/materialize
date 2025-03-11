@@ -25,10 +25,11 @@ use mz_compute_client::protocol::command::{
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
-    StatusResponse, SubscribeResponse,
+    ComputeResponse, CopyToResponse, DataflowLimitStatus, FrontiersResponse,
+    OperatorHydrationStatus, PeekResponse, StatusResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dyncfgs::ENABLE_COMPUTE_HEAP_SIZE_LIMIT;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::plan::LirId;
 use mz_dyncfg::ConfigSet;
@@ -66,6 +67,7 @@ use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
+use crate::logging::LoggingHandles;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
@@ -176,6 +178,14 @@ pub struct ComputeState {
     /// replica can drop diffs associated with timestamps beyond the replica expiration.
     /// The replica will panic if such dataflows are not dropped before the replica has expired.
     pub replica_expiration: Antichain<Timestamp>,
+
+    /// The interval for rounding logging timestamps.
+    logging_interval: Duration,
+
+    /// The handles to inject updates for logging dataflows. Only available if logging is enabled.
+    pub logging_handles: LoggingHandles,
+    /// Shared set of collections exceeding their heap size limit.
+    pub dataflows_exceeding_heap_size_limit: Rc<RefCell<BTreeSet<usize>>>,
 }
 
 impl ComputeState {
@@ -220,6 +230,9 @@ impl ComputeState {
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
+            logging_interval: Duration::ZERO,
+            logging_handles: LoggingHandles::default(),
+            dataflows_exceeding_heap_size_limit: Rc::default(),
         }
     }
 
@@ -489,6 +502,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 expiration_datetime = ?dataflow_expiration.as_option().map(|t| mz_ore::now::to_datetime(t.into())),
                 plan_until = ?dataflow.until.elements(),
                 until = ?until.elements(),
+                heap_size_limit = ?dataflow.heap_size_limit,
                 "creating dataflow",
             );
         } else {
@@ -502,6 +516,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 expiration_datetime = ?dataflow_expiration.as_option().map(|t| mz_ore::now::to_datetime(t.into())),
                 plan_until = ?dataflow.until.elements(),
                 until = ?until.elements(),
+                heap_size_limit = ?dataflow.heap_size_limit,
                 "creating dataflow",
             );
         };
@@ -511,11 +526,14 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             .chain(dataflow.copy_to_ids())
             .collect();
 
+        let dataflow_id = self.timely_worker.next_dataflow_index();
+
         // Initialize compute and logging state for each object.
         for object_id in dataflow.export_ids() {
             let is_subscribe_or_copy = subscribe_copy_ids.contains(&object_id);
             let metrics = self.compute_state.metrics.for_collection(object_id);
-            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of.clone(), metrics);
+            let mut collection =
+                CollectionState::new(is_subscribe_or_copy, as_of.clone(), metrics, dataflow_id);
 
             if let Some(logger) = self.compute_state.compute_logger.clone() {
                 let logging = CollectionLogging::new(
@@ -547,6 +565,14 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 .insert(id, Rc::clone(&suspension_token));
         }
 
+        if ENABLE_COMPUTE_HEAP_SIZE_LIMIT.get(&self.compute_state.worker_config)
+            && dataflow.is_transient()
+        {
+            for id in dataflow.export_ids() {
+                self.handle_set_heap_size_limit(id, dataflow.heap_size_limit);
+            }
+        }
+
         crate::render::build_compute_dataflow(
             self.timely_worker,
             self.compute_state,
@@ -575,6 +601,25 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             self.compute_state
                 .traces
                 .allow_compaction(id, frontier.borrow());
+        }
+    }
+
+    /// Handles an update to a heap memory limit for a collection.
+    fn handle_set_heap_size_limit(&mut self, id: GlobalId, limit: Option<u64>) {
+        let collection = self
+            .compute_state
+            .collections
+            .get_mut(&id)
+            .expect("collection must exist");
+
+        let handle = &mut self.compute_state.logging_handles.heap_size_limits_handle;
+        let time = *handle.time();
+        if let Some(limit) = collection.heap_size_limit {
+            handle.send(((collection.dataflow_id, limit), time, -1));
+        }
+        collection.heap_size_limit = limit;
+        if let Some(limit) = collection.heap_size_limit {
+            handle.send(((collection.dataflow_id, limit), time, 1));
         }
     }
 
@@ -646,6 +691,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             is_subscribe_or_copy: collection.is_subscribe_or_copy,
         };
         self.compute_state.dropped_collections.push((id, dropped));
+
+        if let Some(limit) = collection.heap_size_limit {
+            let handle = &mut self.compute_state.logging_handles.heap_size_limits_handle;
+            let time = *handle.time();
+            handle.send(((collection.dataflow_id, limit), time, -1));
+        }
     }
 
     /// Initializes timely dataflow logging and publishes as a view.
@@ -658,7 +709,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             traces,
             dataflow_index,
             compute_logger: logger,
-        } = logging::initialize(self.timely_worker, &config);
+        } = logging::initialize(
+            self.timely_worker,
+            &config,
+            Rc::clone(&self.compute_state.dataflows_exceeding_heap_size_limit),
+            &mut self.compute_state.logging_handles,
+        );
 
         let mut log_index_ids = config.index_logs;
         for (log, trace) in traces {
@@ -672,7 +728,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             let is_subscribe_or_copy = false;
             let as_of = Antichain::from_elem(Timestamp::MIN);
             let metrics = self.compute_state.metrics.for_collection(id);
-            let mut collection = CollectionState::new(is_subscribe_or_copy, as_of, metrics);
+            let mut collection =
+                CollectionState::new(is_subscribe_or_copy, as_of, metrics, dataflow_index);
 
             let logging =
                 CollectionLogging::new(id, logger.clone(), dataflow_index, std::iter::empty());
@@ -694,6 +751,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         );
 
         self.compute_state.compute_logger = Some(logger);
+        self.compute_state.logging_interval = config.interval;
     }
 
     /// Send progress information to the controller.
@@ -950,6 +1008,42 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         for (sink_id, response) in responses.drain(..) {
             self.send_compute_response(ComputeResponse::CopyToResponse(sink_id, response));
         }
+    }
+
+    /// Process reported limit violations.
+    ///
+    /// Reports any dataflows that have exceeded their heap size limit to the controller.
+    pub fn process_limits(&self) {
+        let mut borrow = self
+            .compute_state
+            .dataflows_exceeding_heap_size_limit
+            .borrow_mut();
+        for dataflow_id in std::mem::take(&mut *borrow) {
+            // We don't have a mapping of dataflow ID to global ID, so scan instead.
+            for (&collection_id, state) in self.compute_state.collections.iter() {
+                if state.dataflow_id == dataflow_id {
+                    let status = DataflowLimitStatus { collection_id };
+                    self.send_compute_response(ComputeResponse::Status(
+                        StatusResponse::DataflowLimitExceeded(status),
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Advance handles to logging dataflows.
+    ///
+    /// Advances the handles based on the current system time.
+    pub fn advance_handles(&mut self) {
+        // We try to tick time rounded to the logging interval.
+        let interval_ms = std::cmp::max(1, self.compute_state.logging_interval.as_millis());
+        let interval_ms = u64::try_from(interval_ms).expect("must fit");
+        // TODO: Is it correct to use the system time?
+        let now = mz_ore::now::SYSTEM_TIME();
+        let time_ms = ((now / interval_ms) + 1) * interval_ms;
+        let new_time_ms: Timestamp = time_ms.try_into().expect("must fit");
+
+        self.compute_state.logging_handles.advance_to(new_time_ms);
     }
 
     /// Send a response to the coordinator.
@@ -1639,6 +1733,10 @@ pub struct CollectionState {
     logging: Option<CollectionLogging>,
     /// Metrics tracked for this collection.
     metrics: CollectionMetrics,
+    /// The dataflow ID of the dataflow that hosts this collection.
+    pub dataflow_id: usize,
+    /// The heap size limit for this dataflow, in bytes.
+    pub heap_size_limit: Option<u64>,
 }
 
 impl CollectionState {
@@ -1646,6 +1744,7 @@ impl CollectionState {
         is_subscribe_or_copy: bool,
         as_of: Antichain<Timestamp>,
         metrics: CollectionMetrics,
+        dataflow_id: usize,
     ) -> Self {
         Self {
             reported_frontiers: ReportedFrontiers::new(),
@@ -1657,6 +1756,8 @@ impl CollectionState {
             compute_probe: None,
             logging: None,
             metrics,
+            dataflow_id,
+            heap_size_limit: None,
         }
     }
 

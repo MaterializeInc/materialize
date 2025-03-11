@@ -14,6 +14,7 @@ mod differential;
 pub(super) mod initialize;
 mod reachability;
 mod timely;
+mod watchdog;
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -26,6 +27,7 @@ use ::timely::dataflow::channels::pact::Pipeline;
 use ::timely::dataflow::channels::pushers::buffer::Session;
 use ::timely::dataflow::channels::pushers::{Counter, Tee};
 use ::timely::dataflow::operators::capture::{Event, EventLink, EventPusher};
+use ::timely::dataflow::operators::input::Handle;
 use ::timely::dataflow::operators::Operator;
 use ::timely::dataflow::StreamCore;
 use ::timely::progress::Timestamp as TimelyTimestamp;
@@ -154,6 +156,20 @@ impl<C, const N: usize> EventQueue<C, N> {
 struct SharedLoggingState {
     /// Activators for arrangement heap size operators.
     arrangement_size_activators: BTreeMap<usize, Activator>,
+}
+
+/// Handles to logging inputs.
+#[derive(Default)]
+pub(crate) struct LoggingHandles {
+    /// Handle to provide heap size limits per dataflow.
+    pub heap_size_limits_handle: Handle<Timestamp, Update<(usize, u64)>>,
+}
+
+impl LoggingHandles {
+    /// Advance the time of all handles to `time`.
+    pub(crate) fn advance_to(&mut self, time: Timestamp) {
+        self.heap_size_limits_handle.advance_to(time);
+    }
 }
 
 /// Helper to pack collections of [`Datum`]s into key and value row.
