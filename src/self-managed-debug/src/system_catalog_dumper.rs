@@ -15,7 +15,17 @@
 
 //! Dumps catalog information to files.
 
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use futures::TryStreamExt;
+use mz_tls_util::make_tls;
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
+use tokio_postgres::{Client as PgClient, Config as PgConfig};
+use tokio_util::io::StreamReader;
 
 use k8s_openapi::api::core::v1::Service;
 use kube::{Api, Client};
@@ -23,7 +33,8 @@ use mz_ore::retry::{self, RetryResult};
 use mz_ore::task::{self, JoinHandle};
 use tracing::{error, info};
 
-use crate::Args;
+use crate::utils::format_base_path;
+use crate::{Args, Context};
 
 #[derive(Debug, Clone)]
 pub struct SqlPortForwardingInfo {
@@ -205,4 +216,578 @@ pub fn spawn_sql_port_forwarding_process(
             error!("{}", err);
         }
     })
+}
+
+#[derive(Debug, Clone)]
+pub enum RelationCategory {
+    /// For relations that belong in the `mz_introspection` schema.
+    /// These relations require a replica name to be specified.
+    Introspection,
+    /// For relations that are retained metric objects that we'd also like to get the SUBSCRIBE output for.
+    Retained,
+    /// Other relations that we want to do a SELECT * FROM on.
+    Basic,
+}
+
+#[derive(Debug, Clone)]
+pub struct Relation {
+    pub name: &'static str,
+    pub category: RelationCategory,
+}
+
+const RELATIONS: &[Relation] = &[
+    // Basic object information
+    Relation {
+        name: "mz_audit_events",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_databases",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_schemas",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_tables",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_sources",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_sinks",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_views",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_materialized_views",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_secrets",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_connections",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_roles",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_subscriptions",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_object_fully_qualified_names",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_sessions",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_object_history",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_object_lifetimes",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_object_dependencies",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_object_transitive_dependencies",
+        category: RelationCategory::Basic,
+    },
+    // Compute
+    Relation {
+        name: "mz_clusters",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_indexes",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_cluster_replicas",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_cluster_replica_sizes",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_cluster_replica_statuses",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_cluster_replica_metrics_history",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_compute_hydration_times",
+        category: RelationCategory::Retained,
+    },
+    Relation {
+        name: "mz_materialization_dependencies",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_cluster_replica_status_history",
+        category: RelationCategory::Basic,
+    },
+    // Freshness
+    Relation {
+        name: "mz_wallclock_global_lag_recent_history",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_global_frontiers",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_cluster_replica_frontiers",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_materialization_lag",
+        category: RelationCategory::Basic,
+    },
+    // Sources/sinks
+    Relation {
+        name: "mz_source_statistics_with_history",
+        category: RelationCategory::Retained,
+    },
+    Relation {
+        name: "mz_sink_statistics",
+        category: RelationCategory::Retained,
+    },
+    Relation {
+        name: "mz_source_statuses",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_sink_statuses",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_source_status_history",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_sink_status_history",
+        category: RelationCategory::Basic,
+    },
+    // Refresh every information
+    Relation {
+        name: "mz_materialized_view_refresh_strategies",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_cluster_schedules",
+        category: RelationCategory::Basic,
+    },
+    // Persist
+    Relation {
+        name: "mz_recent_storage_usage",
+        category: RelationCategory::Basic,
+    },
+    // Introspection relations
+    Relation {
+        name: "mz_arrangement_sharing_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_arrangement_sharing",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_arrangement_sizes_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_dataflow_channels",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_dataflow_operators",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_dataflow_global_ids",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_dataflow_operator_dataflows_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_dataflow_operator_dataflows",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_dataflow_operator_reachability_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_dataflow_operator_reachability",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_dataflow_operator_parents_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_dataflow_operator_parents",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_compute_exports",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_dataflow_arrangement_sizes",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_expected_group_size_advice",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_compute_frontiers",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_dataflow_channel_operators_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_dataflow_channel_operators",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_compute_import_frontiers",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_message_counts_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_message_counts",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_active_peeks",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_compute_operator_durations_histogram_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_compute_operator_durations_histogram",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_records_per_dataflow_operator_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_records_per_dataflow_operator",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_records_per_dataflow_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_records_per_dataflow",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_peek_durations_histogram_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_peek_durations_histogram",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_dataflow_shutdown_durations_histogram_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_dataflow_shutdown_durations_histogram",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_scheduling_elapsed_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_scheduling_elapsed",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_scheduling_parks_histogram_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_scheduling_parks_histogram",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_compute_lir_mapping_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_lir_mapping",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_compute_error_counts",
+        category: RelationCategory::Introspection,
+    },
+    Relation {
+        name: "mz_compute_error_counts_per_worker",
+        category: RelationCategory::Introspection,
+    },
+    // Relations that are redundant with some of the above, but
+    // are used by the Console.
+    Relation {
+        name: "mz_cluster_replica_metrics_history",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_webhook_sources",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_cluster_replica_history",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_source_statistics",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_cluster_deployment_lineage",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_show_indexes",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_relations",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_frontiers",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_console_cluster_utilization_overview",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_columns",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_kafka_sources",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_kafka_sinks",
+        category: RelationCategory::Basic,
+    },
+];
+
+const TIMEOUT: Duration = Duration::from_secs(60);
+
+#[derive(Debug, Clone)]
+pub struct ClusterReplica {
+    // TODO (debug_tool1): Use this when scraping introspection relations
+    pub _cluster_name: String,
+    pub _replica_name: String,
+}
+
+pub struct SystemCatalogDumper<'n> {
+    context: &'n Context,
+    pg_client: Arc<PgClient>,
+    // TODO (debug_tool1): Use this when scraping introspection relations
+    _cluster_replicas: Vec<ClusterReplica>,
+    _pg_conn_handle: JoinHandle<Result<(), tokio_postgres::Error>>,
+}
+
+impl<'n> SystemCatalogDumper<'n> {
+    pub async fn new(context: &'n Context, connection_string: &str) -> Result<Self, anyhow::Error> {
+        let (pg_client, pg_conn) = retry::Retry::default()
+            .max_duration(TIMEOUT)
+            .retry_async_canceling(|_| async move {
+                let pg_config = &mut PgConfig::from_str(connection_string)?;
+                pg_config.connect_timeout(TIMEOUT);
+                let tls = make_tls(pg_config)?;
+                pg_config.connect(tls).await.map_err(|e| anyhow::anyhow!(e))
+            })
+            .await?;
+
+        info!("Connected to PostgreSQL server at {}...", connection_string);
+
+        let handle = task::spawn(|| "postgres-connection", pg_conn);
+
+        // Set search path to system catalog tables
+        pg_client
+            .execute(
+                "SET search_path = mz_internal, mz_catalog, mz_introspection",
+                &[],
+            )
+            .await?;
+
+        let cluster_replicas = match pg_client
+            .query("SELECT c.name as cluster_name, cr.name as replica_name FROM mz_clusters AS c JOIN mz_cluster_replicas AS cr ON c.id = cr.cluster_id;", &[])
+            .await
+            {
+                Ok(rows) => rows.into_iter()
+                            .map(|row| ClusterReplica {
+                                _cluster_name: row.get::<_, String>("cluster_name"),
+                                _replica_name: row.get::<_, String>("replica_name"),
+                            })
+                            .collect::<Vec<_>>(),
+            Err(e) => {
+                error!("Failed to get replica names: {}", e);
+                vec![]
+            }
+        };
+
+        Ok(Self {
+            context,
+            pg_client: Arc::new(pg_client),
+            _cluster_replicas: cluster_replicas,
+            _pg_conn_handle: handle,
+        })
+    }
+
+    pub fn dump_relation(&self, relation: &Relation) -> JoinHandle<()> {
+        let start_time = self.context.start_time.clone();
+        let pg_client = Arc::clone(&self.pg_client);
+        let relation_name = relation.name.to_string();
+        let relation_category = relation.category.clone();
+
+        task::spawn(|| "dump-relation", async move {
+            if let Err(err) = retry::Retry::default()
+                .max_duration(Duration::from_secs(60))
+                .retry_async_canceling(|retry_state| {
+                    if retry_state.i > 0 && retry_state.next_backoff.is_some() {
+                        info!(
+                            "Retrying {} in {:?}",
+                            relation_name,
+                            retry_state.next_backoff.unwrap()
+                        );
+                    }
+
+                    let start_time = start_time.clone();
+                    let pg_client = Arc::clone(&pg_client);
+                    let relation_name = relation_name.clone();
+                    let relation_category = relation_category.clone();
+
+                    async move {
+                        match relation_category {
+                            RelationCategory::Introspection => {
+                                // TODO (debug_tool1): Create different outputs depending on the relation category
+                                return Ok::<(), anyhow::Error>(());
+                            }
+                            _ => {}
+                        }
+                        // TODO: Change None based on relation category
+                        let file_path = format_file_path(start_time, None);
+                        let file_name =
+                            file_path.join(relation_name.as_str()).with_extension("csv");
+                        tokio::fs::create_dir_all(&file_path).await?;
+
+                        let mut file = tokio::fs::File::create(&file_name).await?;
+
+                        // We query the column names to write the header row of the CSV file.
+                        // TODO (SangJunBak): Use `WITH (HEADER TRUE)` once database-issues#2846 is implemented.
+                        let column_names = pg_client
+                            .query(&format!("SHOW COLUMNS FROM {}", relation_name), &[])
+                            .await?
+                            .into_iter()
+                            .map(|row| row.get::<_, String>("name"))
+                            .collect::<Vec<_>>();
+
+                        file.write_all((column_names.join(",") + "\n").as_bytes())
+                            .await?;
+
+                        // Stream data rows to CSV
+                        let copy_stream = pg_client
+                            .copy_out(&format!(
+                                "COPY (SELECT * FROM {}) TO STDOUT WITH (FORMAT CSV)",
+                                relation_name
+                            ))
+                            .await?
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+
+                        let copy_stream = std::pin::pin!(copy_stream);
+                        let mut reader = StreamReader::new(copy_stream);
+                        tokio::io::copy(&mut reader, &mut file).await?;
+
+                        info!("Copied {} to {}", relation_name, file_name.display());
+                        Ok::<(), anyhow::Error>(())
+                    }
+                })
+                .await
+            {
+                error!("Failed to dump relation {}: {}", relation_name, err);
+            }
+        })
+    }
+
+    pub fn dump_all_relations(&self) -> Vec<JoinHandle<()>> {
+        RELATIONS
+            .iter()
+            .map(|relation| self.dump_relation(relation))
+            .collect()
+    }
+}
+
+fn format_file_path(date_time: DateTime<Utc>, replica_name: Option<&str>) -> PathBuf {
+    let path = format_base_path(date_time).join("system-catalog");
+    if let Some(replica_name) = replica_name {
+        path.join(replica_name)
+    } else {
+        path
+    }
+}
+
+pub fn create_postgres_connection_string(
+    host_address: Option<&str>,
+    host_port: Option<i32>,
+    target_port: Option<i32>,
+) -> String {
+    let host_address = host_address.unwrap_or("127.0.0.1");
+    let host_port = host_port.unwrap_or(6877);
+    let user = match target_port {
+        // We assume that if the target port is 6877, we are connecting to the
+        // internal SQL port.
+        Some(6877) => "mz_system",
+        _ => "materialize",
+    };
+
+    format!(
+        "postgres://{}:materialize@{}:{}",
+        user, host_address, host_port
+    )
 }
