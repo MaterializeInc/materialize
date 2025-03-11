@@ -105,7 +105,7 @@ bb
   FORMAT JSON ENVELOPE DEBEZIUM
 
 ! ALTER SINK sink1 SET (SIZE = '1')
-contains:Expected one of SNAPSHOT or VERSION
+contains:Expected one of PARTITION or SNAPSHOT or VERSION
 
 > CREATE SINK sink2
   IN CLUSTER storage

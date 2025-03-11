@@ -1216,6 +1216,7 @@ impl_display_t!(CreateSubsourceStatement);
 pub enum CreateSinkOptionName {
     Snapshot,
     Version,
+    PartitionStrategy,
 }
 
 impl AstDisplay for CreateSinkOptionName {
@@ -1226,6 +1227,9 @@ impl AstDisplay for CreateSinkOptionName {
             }
             CreateSinkOptionName::Version => {
                 f.write_str("VERSION");
+            }
+            CreateSinkOptionName::PartitionStrategy => {
+                f.write_str("PARTITION STRATEGY");
             }
         }
     }
@@ -1241,6 +1245,7 @@ impl WithOptionName for CreateSinkOptionName {
         match self {
             CreateSinkOptionName::Snapshot => false,
             CreateSinkOptionName::Version => false,
+            CreateSinkOptionName::PartitionStrategy => false,
         }
     }
 }
