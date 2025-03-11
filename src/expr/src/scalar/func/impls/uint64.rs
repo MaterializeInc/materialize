@@ -152,6 +152,6 @@ impl<'a> EagerUnaryFunc<'a> for CastUint64ToNumeric {
 
 impl fmt::Display for CastUint64ToNumeric {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("bigint_to_numeric")
+        f.write_str("uint8_to_numeric")
     }
 }
