@@ -27,8 +27,8 @@ use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::{Concatenate, Enter, Operator};
-use timely::dataflow::{Scope, Stream, StreamCore};
+use timely::dataflow::operators::Operator;
+use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Scheduler;
 use timely::{Container, Data};
 use tracing::error;
@@ -305,7 +305,6 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
     scheduler: S,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
-    compute_event_streams: impl IntoIterator<Item = StreamCore<G, Column<(Duration, ComputeEvent)>>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 ) -> Return {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
@@ -325,12 +324,6 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                 }
             },
         );
-
-        let logs = compute_event_streams
-            .into_iter()
-            .map(|stream| stream.enter(scope))
-            .chain(std::iter::once(logs));
-        let logs = scope.concatenate(logs);
 
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
@@ -669,7 +662,7 @@ impl ExportState {
 }
 
 /// State for tracking arrangement sizes.
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct ArrangementSizeState {
     size: isize,
     capacity: isize,
