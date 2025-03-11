@@ -3,7 +3,7 @@ title: "Install on Azure"
 description: "Install Materialize on Azure Kubernetes Service (AKS) using Terraform"
 aliases:
   - /self-hosted/install-on-gcp/
-
+disable_list: true
 menu:
   main:
     parent: "installation"
