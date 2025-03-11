@@ -56,24 +56,16 @@ data.
 
 ## Snapshotting
 
-Snapshotting refers to the initial population of a source in Materialize. When
-you create a new source, Materialize takes a snapshot of the data from the
-upstream (i.e., external) system at a given offset and loads it into
-Materialize.
+When a new source is created, Materialize performs a sync of all data available
+in the external system before it starts ingesting new data — an operation known
+as _snapshotting_. Because the initial snapshot is persisted in the storage
+layer atomically (i.e., at the same ingestion timestamp), you are **not able to
+query the source until snapshotting is complete**.
 
-For the offset, Materialize chooses the latest available offset. For the
-available offset, Materialize uses:
-
-- Log Sequence Number (LSN) for PostgreSQL sources.
-
-- The number of transactions committed across all servers in the cluster for
-  MySQL sources.
-
-- Kafka message offset for Kafka sources.
-
-Materialize captures/commits a snapshot of all historical data up to that point.
-Snapshot is persisted in the storage layer, and all records in this initial load
-have the same ingestion timestamp.
+Depending on the volume of data in the initial snapshot and the size of the
+cluster the source is hosted in, this operation can take anywhere from a few
+minutes up to several hours, and might require more compute resources than
+steady-state.
 
 ### Duration
 
