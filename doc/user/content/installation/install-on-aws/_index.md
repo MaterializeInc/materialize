@@ -3,6 +3,7 @@ title: "Install on AWS"
 description: ""
 aliases:
   - /self-hosted/install-on-aws/
+disable_list: true
 menu:
   main:
     parent: "installation"
