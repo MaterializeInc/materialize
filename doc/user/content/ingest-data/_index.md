@@ -69,28 +69,24 @@ steady-state.
 
 ### Duration
 
-The snapshotting operation duration depends on the snapshot dataset size and the
-size of the Materialize cluster that is hosting the source. For very large
-sources that contain hundreds of GB of data, it can take up to an hour or even
-several hours to complete.
+The duration of the snapshotting operation depends on the volume of data in the
+initial snapshot and the size of the cluster the source is hosted in. To reduce
+the operational burden of snapshotting on the upstream system and guarantee
+you're only bringing in the volume of data you effectively need in Materialize,
+we recommend:
 
-{{% tip %}}
+- If possible, running source creation operations during **off-peak hours** to
+  minimize operational risk in both the upstream system and Materialize.
+  
+- **Limiting the volume of data** that is synced into Materialize on source
+  creation. This will help speed up snapshotting, as well as make data
+  exploration more lightweight. See [Limit the volume of data](#limit-the-volume-of-data)
+  for best practices.
 
-- If possible, schedule creating new sources during off-peak hours to mitigate
-  the impact of snapshotting on both the upstream system and the Materialize
-  cluster.
-
-- Consider using a larger cluster size during snapshotting. Once the
-  snapshottingis complete, you can downsize the cluster to align with the volume
-  of changes being replicated from your upstream in steady-state.
-
-- See also [Best practices](#best-practices).
-
-{{% /tip %}}
-
-If you create your source from the Materialize Console, the overview page for
-the source displays the snapshotting progress. Alternatively, you can run a
-query to monitor its progress. See [Monitoring the snapshotting progress](/ingest-data/monitoring-data-ingestion/#monitoring-the-snapshotting-progress).
+- **Overprovisioning the ingestion cluster** for snapshotting, then
+  right-sizing once the snapshot is complete and you have a better grasp on the
+  resource needs of your source(s) in steady-state. See [Limit the volume of
+  data](#use-a-larger-cluster-for-snapshotting) for best practices.
 
 ### Monitoring progress
 
