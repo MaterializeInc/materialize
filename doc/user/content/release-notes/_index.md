@@ -10,7 +10,7 @@ menu:
 
 ## 2025-03-11
 
-{{% self-managed/self-managed-details %}}
+{{% self-managed/self-managed-editions-table %}}
 
 ### Materialize Operator
 
