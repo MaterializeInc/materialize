@@ -6282,6 +6282,7 @@ dependencies = [
  "differential-dataflow",
  "fail",
  "futures-util",
+ "itertools 0.12.1",
  "md-5",
  "mz-aws-util",
  "mz-build-tools",
