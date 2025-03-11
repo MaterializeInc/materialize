@@ -20,7 +20,7 @@ arrives.
 
 Materialize dataflows act on collections of data. To provide fast access to the
 changes to individual records, the records can be stored in an indexed
-representation called [arrangements](https://materialize.com/docs/get-started/arrangements/#arrangements).
+representation called [arrangements](/get-started/arrangements/#arrangements).
 Arrangements can be manually created by users on views by creating an index on
 the view. But they are also used internally in dataflows, for instance, when
 joining relations.
@@ -28,7 +28,7 @@ joining relations.
 ### Translating SQL to dataflows
 
 To make these concepts a bit more tangible, let's look at the example from the
-[getting started guide](https://materialize.com/docs/get-started/quickstart/).
+[getting started guide](/get-started/quickstart/).
 
 ```mzsql
 CREATE SOURCE auction_house
@@ -49,7 +49,7 @@ CREATE INDEX num_bids_idx ON num_bids (item);
 The query of the materialized view joins the relations `bids` and `auctions`,
 groups by `auctions.item` and determines the number of bids per auction. To
 understand how this SQL query is translated to a dataflow, we can use
-[`EXPLAIN PLAN`](https://materialize.com/docs/sql/explain-plan/) to display the
+[`EXPLAIN PLAN`](/sql/explain-plan/) to display the
 plan used to evaluate the join.
 
 ```mzsql
@@ -86,7 +86,7 @@ operators (`Filter`, `Join`, `Project`). Others are specific to Materialize
 In general, a high level understanding of what these operators do is sufficient
 for effective debugging: `Filter` filters records, `Join` joins records from
 two or more inputs, `Map` applies a function to transform records, etc. You can
-find more details on these operators in the [`EXPLAIN PLAN` documentation](https://materialize.com/docs/sql/explain-plan/#operators-in-decorrelated-and-optimized-plans).
+find more details on these operators in the [`EXPLAIN PLAN` documentation](/sql/explain-plan/#reference-plan-operators).
 But it's not important to have a deep understanding of all these operators for
 effective debugging.
 

@@ -53,7 +53,7 @@ your clusters](/sql/alter-cluster/#resizing).
 
 {{</ note >}}
 
-Clusters are always "on", and you can adjust the [replication factor](https://materialize.com/docs/sql/create-cluster/#replication-factor)
+Clusters are always "on", and you can adjust the [replication factor](/sql/create-cluster/#replication-factor)
 for fault tolerance. See [Compute cost factors](#compute-cost-factors) for more
 information on the cost of increasing a cluster's replication factor.
 

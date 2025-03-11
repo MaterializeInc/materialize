@@ -48,7 +48,7 @@ SHOW NETWORK POLICIES;
 ```
 
 To see details for each rule in a network policy, you can query the
-[`mz_internal.mz_network_policy_rules`](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_network_policy_rules)
+[`mz_internal.mz_network_policy_rules`](/sql/system-catalog/mz_internal/#mz_network_policy_rules)
 system catalog table.
 
 ```mzsql

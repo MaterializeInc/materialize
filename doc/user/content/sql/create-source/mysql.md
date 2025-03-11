@@ -186,8 +186,8 @@ The following metadata is available for each source as a progress subsource:
 
 Field              | Type                                                    | Details
 -------------------|---------------------------------------------------------|--------------
-`source_id_lower`  | [`uuid`](https://materialize.com/docs/sql/types/uuid/)  | The lower-bound GTID `source_id` of the GTIDs covered by this range.
-`source_id_upper`  | [`uuid`](https://materialize.com/docs/sql/types/uuid/)  | The upper-bound GTID `source_id` of the GTIDs covered by this range.
+`source_id_lower`  | [`uuid`](/sql/types/uuid/)  | The lower-bound GTID `source_id` of the GTIDs covered by this range.
+`source_id_upper`  | [`uuid`](/sql/types/uuid/)  | The upper-bound GTID `source_id` of the GTIDs covered by this range.
 `transaction_id`   | [`uint8`](/sql/types/uint/#uint8-info)                  | The `transaction_id` of the next GTID possible from the GTID `source_id`s covered by this range.
 
 And can be queried using:

@@ -120,7 +120,7 @@ public class App {
 
 ## Insert data into tables
 
-**Basic Example:** [Insert a row](https://materialize.com/docs/sql/insert/) of data into a table named `countries` in Materialize:
+**Basic Example:** [Insert a row](/sql/insert/) of data into a table named `countries` in Materialize:
 
 ```java
 import java.sql.Connection;

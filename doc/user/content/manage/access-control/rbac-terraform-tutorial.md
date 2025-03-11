@@ -20,9 +20,9 @@ In this scenario, you are a DevOps engineer responsible for managing your Materi
 
 * Make sure you have a [Materialize account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation) and already have a password to connect with.
 
-* You should be familiar with setting up a [Terraform project in Materialize](https://materialize.com/docs/manage/terraform/).
+* You should be familiar with setting up a [Terraform project in Materialize](/manage/terraform/).
 
-* Have an understanding of permissions in Materialize. These grant resources in this tutorial are modeled after the [access-control tutorial](https://materialize.com/docs/manage/access-control/rbac-tutorial/).
+* Have an understanding of permissions in Materialize. These grant resources in this tutorial are modeled after the [access-control tutorial](/manage/access-control/rbac-tutorial/).
 
 ## Step 1. Create Role
 
@@ -347,9 +347,9 @@ To destroy the roles and objects you created, you can remove all resources from 
 
 For more information on RBAC in Materialize, review the reference documentation:
 
-* [`GRANT ROLE`](https://materialize.com/docs/sql/grant-role/)
-* [`CREATE ROLE`](https://materialize.com/docs/sql/create-role/)
-* [`GRANT PRIVILEGE`](https://materialize.com/docs/sql/grant-privilege/)
-* [`ALTER ROLE`](https://materialize.com/docs/sql/alter-role/)
-* [`REVOKE PRIVILEGE`](https://materialize.com/docs/sql/revoke-privilege/)
-* [`DROP ROLE`](https://materialize.com/docs/sql/drop-role/)
+* [`GRANT ROLE`](/sql/grant-role/)
+* [`CREATE ROLE`](/sql/create-role/)
+* [`GRANT PRIVILEGE`](/sql/grant-privilege/)
+* [`ALTER ROLE`](/sql/alter-role/)
+* [`REVOKE PRIVILEGE`](/sql/revoke-privilege/)
+* [`DROP ROLE`](/sql/drop-role/)
