@@ -92,17 +92,18 @@ If you create your source from the Materialize Console, the overview page for
 the source displays the snapshotting progress. Alternatively, you can run a
 query to monitor its progress. See [Monitoring the snapshotting progress](/ingest-data/monitoring-data-ingestion/#monitoring-the-snapshotting-progress).
 
-### CPU and memory utilization
+### Monitoring progress
 
-Snapshotting may require more compute resources from the Materialize cluster
-than steady-state. If there are signs of resource exhaustion (that is, the
-cluster restarts because it ran out of memory), resize the cluster.
+While snapshotting is taking place, you can monitor the progress of the
+operation in the **overview page** for the source in the [Materialize Console]
+(https://console.materialize.com/). Alternatively, you can manually keep track
+of using information from the system catalog. See [Monitoring the snapshotting
+progress](/ingest-data/monitoring-data-ingestion/#monitoring-the-snapshotting-progress)
+for guidance.
 
-{{% tip %}}
-Consider using a larger cluster size during snapshotting. Once the snapshotting
-operation is complete, you can downsize your source cluster to align with the
-volume of changes being replicated from your upstream in steady-state.
-{{% /tip %}}
+It's also important to **monitor CPU and memory utilization** for the cluster
+hosting the source during snapshotting. If there are signs of resource
+exhaustion, you may need to [resize the cluster](#use-a-larger-cluster-for-snapshotting).
 
 ### Queries during snapshotting
 
