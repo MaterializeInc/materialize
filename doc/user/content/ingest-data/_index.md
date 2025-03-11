@@ -70,30 +70,29 @@ steady-state.
 ### Duration
 
 The duration of the snapshotting operation depends on the volume of data in the
-initial snapshot and the size of the cluster the source is hosted in. To reduce
-the operational burden of snapshotting on the upstream system and guarantee
-you're only bringing in the volume of data you effectively need in Materialize,
-we recommend:
+initial snapshot and the size of the cluster where the source is hosted. To
+reduce the operational burden of snapshotting on the upstream system and ensure
+you are only bringing in the volume of data that you need in Materialize, we
+recommend:
 
 - If possible, running source creation operations during **off-peak hours** to
   minimize operational risk in both the upstream system and Materialize.
-  
+
 - **Limiting the volume of data** that is synced into Materialize on source
   creation. This will help speed up snapshotting, as well as make data
-  exploration more lightweight. See [Limit the volume of data](#limit-the-volume-of-data)
-  for best practices.
+  exploration more lightweight. See [Limit the volume of
+  data](#limit-the-volume-of-data) for best practices.
 
-- **Overprovisioning the ingestion cluster** for snapshotting, then
+- **Overprovisioning the source cluster** for snapshotting, then
   right-sizing once the snapshot is complete and you have a better grasp on the
-  resource needs of your source(s) in steady-state. See [Limit the volume of
-  data](#use-a-larger-cluster-for-snapshotting) for best practices.
+  steady-state resource needs of your source(s).
 
 ### Monitoring progress
 
 While snapshotting is taking place, you can monitor the progress of the
-operation in the **overview page** for the source in the [Materialize Console]
-(https://console.materialize.com/). Alternatively, you can manually keep track
-of using information from the system catalog. See [Monitoring the snapshotting
+operation in the **overview page** for the source in the [Materialize Console](/console/data/#sample-source-overview). Alternatively, you can manually keep
+track of using information from the system catalog. See [Monitoring the
+snapshotting
 progress](/ingest-data/monitoring-data-ingestion/#monitoring-the-snapshotting-progress)
 for guidance.
 
@@ -126,13 +125,13 @@ serializability](/get-started/isolation-level/#strict-serializable).
 
 In the Materialize Console, you can see a source's data freshness from the
 **Data Explorer** screen. Alternatively, you can run a query to monitor the lag.
-See [Monitoring the snapshotting progress](/ingest-data/monitoring-data-ingestion).
+See [Monitoring hydration/data freshness status](/ingest-data/monitoring-data-ingestion/#monitoring-hydrationdata-freshness-status).
 
-## Rehydration
+## Hydration
 
 When a cluster is restarted (such as after resizing), sources undergo
-rehydration.[^1] Rehydration refers to the reconstruction of in-memory state by
-reading data from the storage layer; rehydration does not require reading data
+hydration.[^1] Hydration refers to the reconstruction of in-memory state by
+reading data from the storage layer; hydration does not require reading data
 from the upstream system.
 
 {{% tip %}}
@@ -144,8 +143,8 @@ using the same cluster for sources and other objects, such as sinks, etc. See [B
 
 ### Process
 
-During rehydration, data from the storage layer is read to reconstruct the
-in-memory state of the object. As part of the rehydration process:
+During hydration, data from the storage layer is read to reconstruct the
+in-memory state of the object. As part of the hydration process:
 
 - Internal data structures are re-created.
 
@@ -154,12 +153,12 @@ in-memory state of the object. As part of the rehydration process:
 
 ### Duration
 
-For a source, the duration of its rehydration depends on the type and the size
+For a source, the duration of its hydration depends on the type and the size
 of the source; e.g., large `UPSERT` sources can take hours to complete.
 
-### Queries during rehydration
+### Queries during hydration
 
-During rehydration, queries usually block until the process has been completed.
+During hydration, queries usually block until the process has been completed.
 
 ## Best practices
 
@@ -190,9 +189,9 @@ ALTER CLUSTER <cluster_name> SET ( SIZE = <new_size> );
 
 {{% note %}}
 
-Resizing a cluster with sources requires the cluster to restart. This operation
-incurs downtime for the duration it takes for all objects in the cluster to
-[rehydrate](#rehydration).
+Resizing a cluster that hosts sources requires the cluster to restart. This
+operation incurs downtime for the duration it takes for all objects in the
+cluster to [hydrate](#hydration).
 
 {{% /note %}}
 
@@ -222,7 +221,7 @@ ALTER CLUSTER <cluster_name> SET ( SIZE = <new_size> );
 
 Resizing a cluster with sources requires the cluster to restart. This operation
 incurs downtime for the duration it takes for all objects in the cluster to
-[rehydrate](#rehydration).
+[hydrate](#hydration).
 
 {{% /note %}}
 
@@ -232,5 +231,5 @@ incurs downtime for the duration it takes for all objects in the cluster to
 - [Troubleshooting data ingestion](/ingest-data/troubleshooting)
 
 [^1]: Other objects, such as sinks, indexes, materialized views, etc., also
-undergo rehydration if their cluster is restarted.  If possible, use a dedicated
+undergo hydration if their cluster is restarted.  If possible, use a dedicated
 cluster just for sources.

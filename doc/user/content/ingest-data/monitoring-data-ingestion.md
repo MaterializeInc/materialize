@@ -36,12 +36,13 @@ exhaustion, you may need to [resize the cluster](/sql/alter-cluster/#alter-clust
 In the Materialize Console, the Overview page for the source displays the CPU
 and memory utilization. See image above.
 
-## Monitoring rehydration/data freshness status
+## Monitoring hydration/data freshness status
 
-To monitor the data freshness/rehydration status of a source (and its
+To monitor the hydration/data freshness status of a source (and its
 sub-sources), in the Materialize Console, you can go to the Workflow page of a
 source (or its sub-sources) to check for data freshness status; that is, whether
-the source is **Up to date** or **Lagging**. If lagging, the page also displays the lag amount.
+the source is **Up to date** or **Lagging**. If lagging, the page also displays
+the lag amount.
 
 ![Source workflow page](/images/monitoring/source-data-freshness-status.png
 "Materialize Console - Workflow page displays data freshness of a source")
