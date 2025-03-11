@@ -24,7 +24,7 @@ const ISSUER: &str = "Materialize, Inc.";
 const ANY_ENVIRONMENT_AUD: &str = "00000000-0000-0000-0000-000000000000";
 // list of public keys which are allowed to validate license keys. this is a
 // list to allow for key rotation if necessary.
-const PUBLIC_KEYS: &[&str] = &[];
+const PUBLIC_KEYS: &[&str] = &[include_str!("license_keys/production.pub")];
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum ExpirationBehavior {
