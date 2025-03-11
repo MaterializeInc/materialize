@@ -13,11 +13,44 @@ use std::iter;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
+use itertools::Itertools;
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic};
+use rdkafka::admin::{
+    AdminClient, AdminOptions, ConfigEntry, ConfigResource, NewTopic, OwnedResourceSpecifier,
+    ResourceSpecifier,
+};
 use rdkafka::client::ClientContext;
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
+use tracing::{info, warn};
+
+/// Get the current configuration for a particular topic.
+///
+/// Materialize may not have permission to list configs for the topic, so callers of this method
+/// should "fail open" if the configs are not available.
+pub async fn get_topic_config<'a, C>(
+    client: &'a AdminClient<C>,
+    admin_opts: &AdminOptions,
+    topic_name: &str,
+) -> anyhow::Result<Vec<ConfigEntry>>
+where
+    C: ClientContext,
+{
+    let ConfigResource { specifier, entries } = client
+        .describe_configs([&ResourceSpecifier::Topic(topic_name)], admin_opts)
+        .await?
+        .into_iter()
+        .exactly_one()??;
+
+    match specifier {
+        OwnedResourceSpecifier::Topic(name) if name.as_str() == topic_name => {}
+        unexpected => {
+            bail!("describe configs returned unexpected resource specifier: {unexpected:?}")
+        }
+    };
+
+    Ok(entries)
+}
 
 /// Creates a Kafka topic if it does not exist, and waits for it to be reported in the broker
 /// metadata.
@@ -60,6 +93,49 @@ where
 
     // We don't need to read in metadata / do any validation if the topic already exists.
     if already_exists {
+        match get_topic_config(client, admin_opts, new_topic.name).await {
+            Ok(actual_configs) => {
+                info!(
+                    topic = new_topic.name,
+                    "got configuration for existing topic: [{}]",
+                    actual_configs.iter().format_with(", ", |e, write| {
+                        write(&e.name)?;
+                        if let Some(val) = &e.value {
+                            write(&": ")?;
+                            write(val)?;
+                        }
+                        Ok(())
+                    })
+                );
+                for (config, expected) in &new_topic.config {
+                    match actual_configs.iter().find(|c| &c.name == config) {
+                        Some(ConfigEntry {
+                            value: Some(actual),
+                            ..
+                        }) => {
+                            if actual != expected {
+                                warn!(
+                                    topic = new_topic.name,
+                                    config, expected, actual, "unexpected value for config entry"
+                                )
+                            }
+                        }
+                        _ => {
+                            warn!(
+                                topic = new_topic.name,
+                                config, expected, "missing expected value for config entry"
+                            )
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                warn!(
+                    topic=new_topic.name,
+                    "unable to fetch actual topic config; configs may not match expected values: {error:#}"
+                )
+            }
+        };
         return Ok(true);
     }
 
