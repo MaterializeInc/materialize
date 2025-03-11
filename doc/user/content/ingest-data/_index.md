@@ -107,11 +107,12 @@ exhaustion, you may need to [resize the cluster](#use-a-larger-cluster-for-snaps
 
 ### Queries during snapshotting
 
-While a source is snapshotting, the source (and the associated subsources)
-cannot serve queries. That is, queries issued to the snapshotting source (and
-its subsources) will return after the snapshotting completes (unless the user
-breaks out of the query). If the user does not break out of the query, the
-returned query results will reflect the data from the snapshot.
+Because the initial snapshot is persisted atomically, you are **not able to
+query the source until snapshotting is complete**. This means that queries
+issued against (sub)sources undergoing snapshotting will hang until the
+operation completes. Once the initial snapshot has been ingested, you can start
+querying your (sub)sources and Materialize will continue ingesting any new data
+as it arrives, in real time.
 
 ## Running/steady-state
 
