@@ -7,6 +7,7 @@ menu:
   main:
     parent: "installation"
     identifier: "install-on-local-minikube"
+disable_list: true
 ---
 
 {{% self-managed/materialize-components-sentence %}}
