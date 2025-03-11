@@ -13,7 +13,7 @@ Materialize deployment running on GCP Google Kubernetes Engine (GKE).
 
 The tutorial assumes you have installed Materialize on GCP Google Kubernetes
 Engine (GKE). using the instructions on [Install on
-AWS](/installation/install-on-gcp/) (either from the examples/simple directory
+GCP](/installation/install-on-gcp/) (either from the examples/simple directory
 or the root).
 
 ## Version compatibility
@@ -171,6 +171,10 @@ If you want to use `jq` and do not have `jq` installed, install.
    ```bash
    cd terraform-google-materialize/examples/simple
    ```
+
+1. Optional. You may need to update your [Materialize on Google Cloud Terraform
+   modules](https://github.com/MaterializeInc/terraform-google-materialize) to
+   upgrade.
 
 1. Configure `kubectl` to connect to your EKS cluster, specifying:
 
