@@ -1019,17 +1019,33 @@ async fn determine_sink_progress(
                 )
             })?;
 
-        progress_search(
-            &progress_client_read_committed,
-            progress_record_fetch_timeout,
-            progress_topic,
-            partition,
-            lo,
-            hi,
-            progress_key,
-            child_token.clone(),
-            Arc::clone(&metrics)
-        )
+        // This topic might be long, but the desired offset will usually be right near the end.
+        // Instead of always scanning through the entire topic, we scan through exponentially-growing
+        // suffixes of it. (Because writes are ordered, the largest progress record in any suffix,
+        // if present, is the global max.) If we find it in one of our suffixes, we've saved at least
+        // an order of magnitude of work; if we don't, we've added at most a constant factor.
+        let mut start_indices = vec![lo];
+        let mut lookback = hi.saturating_sub(lo) / 10;
+        while lookback >= 1000 {
+            start_indices.push(hi - lookback);
+            lookback /= 10;
+        }
+        for lo in start_indices.into_iter().rev() {
+            if let Some(found) = progress_search(
+                &progress_client_read_committed,
+                progress_record_fetch_timeout,
+                progress_topic,
+                partition,
+                lo,
+                hi,
+                progress_key.clone(),
+                Weak::clone(&child_token),
+                Arc::clone(&metrics)
+            )? {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
     }).await.unwrap().check_ssh_status(&ctx);
     // Express interest to the computation until after we've received its result
     drop(parent_token);
