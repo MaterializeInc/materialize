@@ -1135,9 +1135,9 @@ mod pubsub_state {
     use crate::rpc::{PubSubSenderInternal, PubSubState};
     use crate::ShardId;
 
-    const SHARD_ID_0: LazyLock<ShardId> =
+    static SHARD_ID_0: LazyLock<ShardId> =
         LazyLock::new(|| ShardId::from_str("s00000000-0000-0000-0000-000000000000").unwrap());
-    const SHARD_ID_1: LazyLock<ShardId> =
+    static SHARD_ID_1: LazyLock<ShardId> =
         LazyLock::new(|| ShardId::from_str("s11111111-1111-1111-1111-111111111111").unwrap());
 
     const VERSIONED_DATA_0: VersionedData = VersionedData {

@@ -51,9 +51,9 @@ mod tests {
     }
 
     /// The file path used during the tests is where the SQL code resides.
-    const FILE_PATH: LazyLock<PathBuf> = LazyLock::new(|| temp_dir().join("foo.sql"));
+    static FILE_PATH: LazyLock<PathBuf> = LazyLock::new(|| temp_dir().join("foo.sql"));
     /// The SQL code written inside [FILE_PATH].
-    const FILE_SQL_CONTENT: LazyLock<String> =
+    static FILE_SQL_CONTENT: LazyLock<String> =
         LazyLock::new(|| "SELECT \t\t\t200, 200;".to_string());
 
     /// Tests the different capabilities of [Backend](mz_lsp::backend::Backend)

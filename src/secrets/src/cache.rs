@@ -19,7 +19,7 @@ use mz_repr::CatalogItemId;
 use crate::{CachingPolicy, SecretsReader};
 
 /// Default "time to live" for a single cache value, represented in __seconds__.
-pub const DEFAULT_TTL_SECS: AtomicU64 = AtomicU64::new(Duration::from_secs(300).as_secs());
+pub const DEFAULT_TTL_SECS: u64 = Duration::from_secs(300).as_secs();
 
 #[derive(Debug)]
 struct CachingParameters {
@@ -53,7 +53,7 @@ impl Default for CachingParameters {
     fn default() -> Self {
         CachingParameters {
             enabled: AtomicBool::new(true),
-            ttl_secs: DEFAULT_TTL_SECS,
+            ttl_secs: AtomicU64::new(DEFAULT_TTL_SECS),
         }
     }
 }

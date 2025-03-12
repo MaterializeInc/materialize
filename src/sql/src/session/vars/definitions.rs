@@ -914,9 +914,7 @@ pub static SENTRY_FILTERS: VarDefinition = VarDefinition::new_lazy(
 pub static WEBHOOKS_SECRETS_CACHING_TTL_SECS: VarDefinition = VarDefinition::new_lazy(
     "webhooks_secrets_caching_ttl_secs",
     lazy_value!(usize; || {
-        usize::cast_from(
-            mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed),
-        )
+        usize::cast_from(mz_secrets::cache::DEFAULT_TTL_SECS)
     }),
     "Sets the time-to-live for values in the Webhooks secrets cache.",
     false,
