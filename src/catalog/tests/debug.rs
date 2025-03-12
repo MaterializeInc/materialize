@@ -155,7 +155,7 @@ async fn test_persist_debug() {
     test_debug(state_builder).await;
 }
 
-async fn test_debug<'a>(state_builder: TestCatalogStateBuilder) {
+async fn test_debug(state_builder: TestCatalogStateBuilder) {
     let state_builder = state_builder.with_default_deploy_generation();
     let mut openable_state1 = state_builder.clone().unwrap_build().await;
     // Check initial empty trace.
@@ -340,7 +340,7 @@ async fn test_persist_debug_edit_fencing() {
     test_debug_edit_fencing(state_builder).await;
 }
 
-async fn test_debug_edit_fencing<'a>(state_builder: TestCatalogStateBuilder) {
+async fn test_debug_edit_fencing(state_builder: TestCatalogStateBuilder) {
     let mut state = state_builder
         .clone()
         .with_default_deploy_generation()
@@ -435,7 +435,7 @@ async fn test_persist_debug_delete_fencing() {
     test_debug_delete_fencing(state_builder).await;
 }
 
-async fn test_debug_delete_fencing<'a>(state_builder: TestCatalogStateBuilder) {
+async fn test_debug_delete_fencing(state_builder: TestCatalogStateBuilder) {
     let mut state = state_builder
         .clone()
         .with_default_deploy_generation()

@@ -123,18 +123,13 @@ where
     #[mz_ore::instrument(target = "optimizer", level = "debug", name = "optimize")]
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
         match mz_ore::panic::catch_unwind_str(AssertUnwindSafe(|| self.optimize(plan))) {
-            Ok(result) => {
-                match result.map_err(Into::into) {
-                    Err(OptimizerError::TransformError(TransformError::CallerShouldPanic(msg))) => {
-                        // Promote a `CallerShouldPanic` error from the result
-                        // to a proper panic. This is needed in order to ensure
-                        // that `mz_unsafe.mz_panic('forced panic')` calls still
-                        // panic the caller.
-                        panic!("{}", msg)
-                    }
-                    result => result,
-                }
+            Ok(Err(OptimizerError::TransformError(TransformError::CallerShouldPanic(msg)))) => {
+                // Promote a `CallerShouldPanic` error from the result to a proper panic. This is
+                // needed in order to ensure that `mz_unsafe.mz_panic('forced panic')` calls still
+                // panic the caller.
+                panic!("{msg}");
             }
+            Ok(result) => result,
             Err(panic) => {
                 let msg = format!("unexpected panic during query optimization: {panic}");
                 Err(OptimizerError::Internal(msg))

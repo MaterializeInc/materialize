@@ -198,7 +198,7 @@ impl ConfigFile {
     }
 
     /// Removes a profile from the configuration file.
-    pub async fn remove_profile<'a>(&self, name: &str) -> Result<(), Error> {
+    pub async fn remove_profile(&self, name: &str) -> Result<(), Error> {
         let mut editable = self.editable.clone();
         let profiles = editable["profiles"]
             .as_table_mut()
