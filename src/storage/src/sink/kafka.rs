@@ -106,7 +106,9 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::dyncfgs::KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS;
+use mz_storage_types::dyncfgs::{
+    KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, SINK_PROGRESS_SEARCH,
+};
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
     KafkaSinkConnection, KafkaSinkFormatType, SinkEnvelope, StorageSinkDesc,
@@ -944,6 +946,7 @@ async fn determine_sink_progress(
     let parent_token = Arc::new(());
     let child_token = Arc::downgrade(&parent_token);
     let task_name = format!("get_latest_ts:{sink_id}");
+    let sink_progress_search = SINK_PROGRESS_SEARCH.get(storage_configuration.config_set());
     let result = task::spawn_blocking(|| task_name, move || {
         let progress_topic = progress_topic.as_ref();
         // Ensure the progress topic has exactly one partition. Kafka only
@@ -1025,10 +1028,12 @@ async fn determine_sink_progress(
         // if present, is the global max.) If we find it in one of our suffixes, we've saved at least
         // an order of magnitude of work; if we don't, we've added at most a constant factor.
         let mut start_indices = vec![lo];
-        let mut lookback = hi.saturating_sub(lo) / 10;
-        while lookback >= 1000 {
-            start_indices.push(hi - lookback);
-            lookback /= 10;
+        if sink_progress_search {
+            let mut lookback = hi.saturating_sub(lo) / 10;
+            while lookback >= 20_000 {
+                start_indices.push(hi - lookback);
+                lookback /= 10;
+            }
         }
         for lo in start_indices.into_iter().rev() {
             if let Some(found) = progress_search(
