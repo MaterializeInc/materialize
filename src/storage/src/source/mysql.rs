@@ -106,7 +106,7 @@ impl SourceRender for MySqlSourceConnection {
     fn render<G: Scope<Timestamp = GtidPartition>>(
         self,
         scope: &mut G,
-        config: RawSourceCreationConfig,
+        config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (

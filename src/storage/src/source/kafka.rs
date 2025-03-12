@@ -183,7 +183,7 @@ impl SourceRender for KafkaSourceConnection {
     fn render<G: Scope<Timestamp = KafkaTimestamp>>(
         self,
         scope: &mut G,
-        config: RawSourceCreationConfig,
+        config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
@@ -1666,8 +1666,9 @@ fn spawn_metadata_thread<C: ConsumerContext>(
     topic: String,
     tx: mpsc::UnboundedSender<(mz_repr::Timestamp, MetadataUpdate)>,
 ) {
+    // Linux thread names are limited to 15 characters. Use a truncated ID to fit the name.
     thread::Builder::new()
-        .name(format!("kafka-metadata-{}", config.id))
+        .name(format!("kfk-mtdt-{}", config.id))
         .spawn(move || {
             trace!(
                 source_id = config.id.to_string(),
