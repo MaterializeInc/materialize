@@ -79,6 +79,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use crossbeam_channel::{RecvError, TryRecvError};
 use fail::fail_point;
@@ -96,6 +97,7 @@ use mz_storage_client::client::{
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
+use mz_storage_types::dyncfgs::STORAGE_SERVER_MAINTENANCE_INTERVAL;
 use mz_storage_types::oneshot_sources::OneshotIngestionDescription;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
@@ -237,6 +239,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 cluster_memory_limit,
             ),
             tracing_handle,
+            server_maintenance_interval: Duration::ZERO,
         };
 
         // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
@@ -353,6 +356,10 @@ pub struct StorageState {
 
     /// A process-global handle to tracing configuration.
     pub tracing_handle: Arc<TracingHandle>,
+
+    /// Interval at which to perform server maintenance tasks. Set to a zero interval to
+    /// perform maintenance with every `step_or_park` invocation.
+    pub server_maintenance_interval: Duration,
 }
 
 /// Extra context for a storage instance.
@@ -417,10 +424,31 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // The last time we reported statistics.
         let mut last_stats_time = Instant::now();
 
+        // The last time we did periodic maintenance.
+        let mut last_maintenance = std::time::Instant::now();
+
         let mut disconnected = false;
         while !disconnected {
             let config = &self.storage_state.storage_configuration;
             let stats_interval = config.parameters.statistics_collection_interval;
+
+            // Get the maintenance interval, default to zero if we don't have a compute state.
+            let maintenance_interval = self.storage_state.server_maintenance_interval;
+
+            let now = std::time::Instant::now();
+            // Determine if we need to perform maintenance, which is true if `maintenance_interval`
+            // time has passed since the last maintenance.
+            let sleep_duration;
+            if now >= last_maintenance + maintenance_interval {
+                last_maintenance = now;
+                sleep_duration = None;
+
+                self.report_frontier_progress(&response_tx);
+            } else {
+                // We didn't perform maintenance, sleep until the next maintenance interval.
+                let next_maintenance = last_maintenance + maintenance_interval;
+                sleep_duration = Some(next_maintenance.saturating_duration_since(now))
+            }
 
             // Ask Timely to execute a unit of work.
             //
@@ -436,7 +464,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
             // https://github.com/MaterializeInc/materialize/pull/13973#issuecomment-1200312212
             if command_rx.is_empty() && self.storage_state.async_worker.is_empty() {
                 // Make sure we wake up again to report any pending statistics updates.
-                let park_duration = stats_interval.saturating_sub(last_stats_time.elapsed());
+                let mut park_duration = stats_interval.saturating_sub(last_stats_time.elapsed());
+                if let Some(sleep_duration) = sleep_duration {
+                    park_duration = std::cmp::min(sleep_duration, park_duration);
+                }
                 self.timely_worker.step_or_park(Some(park_duration));
             } else {
                 self.timely_worker.step();
@@ -447,7 +478,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 self.send_storage_response(&response_tx, StorageResponse::DroppedId(id));
             }
 
-            self.report_frontier_progress(&response_tx);
             self.process_oneshot_ingestions(&response_tx);
 
             self.report_status_updates(&response_tx);
@@ -788,6 +818,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     .storage_configuration
                     .parameters
                     .dyncfg_updates = Default::default();
+
+                // Remember the maintenance interval locally to avoid reading it from the config set on
+                // every server iteration.
+                self.storage_state.server_maintenance_interval =
+                    STORAGE_SERVER_MAINTENANCE_INTERVAL
+                        .get(&self.storage_state.storage_configuration.config_set());
             }
             InternalStorageCommand::StatisticsUpdate { sources, sinks } => self
                 .storage_state
