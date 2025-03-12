@@ -4645,6 +4645,7 @@ pub fn unplan_create_cluster(
                 enable_letrec_fixpoint_analysis,
                 enable_reduce_reduction: _,
                 enable_join_prioritize_arranged,
+                extract_common_mfp_expressions: _,
             } = optimizer_feature_overrides;
             let features_extracted = ClusterFeatureExtracted {
                 // Seen is ignored when unplanning.

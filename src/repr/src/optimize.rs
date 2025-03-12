@@ -120,6 +120,8 @@ optimizer_feature_flags!({
     enable_reduce_reduction: bool,
     // See the feature flag of the same name.
     enable_join_prioritize_arranged: bool,
+    // Extract expressions in MFP::extract_common, making them available to sources.
+    extract_common_mfp_expressions: bool,
 });
 
 /// A trait used to implement layered config construction.

@@ -2199,6 +2199,12 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: false,
     },
+    {
+        name: extract_common_mfp_expressions,
+        desc: "Extract expressions from MFPs in order to reveal them to sources",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2215,6 +2221,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
             enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),
+            extract_common_mfp_expressions: vars.extract_common_mfp_expressions(),
         }
     }
 }
