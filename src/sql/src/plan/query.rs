@@ -942,7 +942,7 @@ fn handle_mutation_using_clause(
         // local import to not get confused with `mz_sql_parser::ast::visit::Visit`
         use mz_expr::visit::Visit;
         expr.visit_mut_post(&mut |e| {
-            if let HirScalarExpr::Column(c) = e {
+            if let HirScalarExpr::Column(c, _name) = e {
                 if c.column >= using_rel_arity {
                     c.level += 1;
                     c.column -= using_rel_arity;
@@ -2315,10 +2315,13 @@ fn plan_select_from_where(
                 }
             }
 
-            let mut scope_item = if let HirScalarExpr::Column(ColumnRef {
-                level: 0,
-                column: old_column,
-            }) = &expr
+            let mut scope_item = if let HirScalarExpr::Column(
+                ColumnRef {
+                    level: 0,
+                    column: old_column,
+                },
+                _name,
+            ) = &expr
             {
                 // If we later have `SELECT foo.*` then we have to find all
                 // the `foo` items in `from_scope` and figure out where they
@@ -2505,7 +2508,7 @@ fn plan_select_from_where(
                 }
                 ExpandedSelectItem::Expr(expr) => plan_expr(ecx, expr)?.type_as_any(ecx)?,
             };
-            if let HirScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
+            if let HirScalarExpr::Column(ColumnRef { level: 0, column }, _name) = expr {
                 // Simple column reference; no need to map on a new expression.
                 output_columns.push((column, column_name));
             } else {
@@ -2619,7 +2622,7 @@ fn plan_select_from_where(
                     // If the expression is a reference to an existing column,
                     // do not introduce a new column to support it.
                     let column = match expr {
-                        HirScalarExpr::Column(ColumnRef { level: 0, column }) => column,
+                        HirScalarExpr::Column(ColumnRef { level: 0, column }, _name) => column,
                         _ => {
                             map_exprs.push(expr);
                             arity + map_exprs.len() - 1
@@ -2812,7 +2815,7 @@ pub(crate) fn plan_order_by_exprs(
         // If the expression is a reference to an existing column,
         // do not introduce a new column to support it.
         let column = match expr {
-            HirScalarExpr::Column(ColumnRef { level: 0, column }) => column,
+            HirScalarExpr::Column(ColumnRef { level: 0, column }, _name) => column,
             _ => {
                 map_exprs.push(expr);
                 ecx.relation_type.arity() + map_exprs.len() - 1
@@ -3080,6 +3083,7 @@ fn plan_rows_from_internal<'a>(
             func: BinaryFunc::Eq,
             expr1: Box::new(HirScalarExpr::column(left_col)),
             expr2: Box::new(HirScalarExpr::column(right_col)),
+            name: None,
         };
         left_expr = left_expr
             .join(right_expr, on, JoinKind::FullOuter)
@@ -3089,6 +3093,7 @@ fn plan_rows_from_internal<'a>(
                     HirScalarExpr::column(left_col),
                     HirScalarExpr::column(right_col),
                 ],
+                name: None,
             }]);
 
         // Project off the previous iteration's coalesced column, but keep both of this
@@ -3250,14 +3255,17 @@ fn plan_table_function_internal(
     };
 
     if with_ordinality {
-        expr = expr.map(vec![HirScalarExpr::Windowing(WindowExpr {
-            func: WindowExprType::Scalar(ScalarWindowExpr {
-                func: ScalarWindowFunc::RowNumber,
+        expr = expr.map(vec![HirScalarExpr::Windowing(
+            WindowExpr {
+                func: WindowExprType::Scalar(ScalarWindowExpr {
+                    func: ScalarWindowFunc::RowNumber,
+                    order_by: vec![],
+                }),
+                partition_by: vec![],
                 order_by: vec![],
-            }),
-            partition_by: vec![],
-            order_by: vec![],
-        })]);
+            },
+            None,
+        )]);
         scope
             .items
             .push(ScopeItem::from_name(scope_name, "ordinality"));
@@ -3749,6 +3757,9 @@ fn plan_using_constraint(
         // Adjust the RHS reference to its post-join location.
         rhs.column += left_scope.len();
 
+        // TODO(mgree) !!! intern column_name
+        let column_ref_name = None;
+
         // Join keys must be resolved to same type.
         let mut exprs = coerce_homogeneous_exprs(
             &ecx.with_name(&format!(
@@ -3756,8 +3767,8 @@ fn plan_using_constraint(
                 column_name.as_str().quoted()
             )),
             vec![
-                CoercibleScalarExpr::Coerced(HirScalarExpr::Column(lhs)),
-                CoercibleScalarExpr::Coerced(HirScalarExpr::Column(rhs)),
+                CoercibleScalarExpr::Coerced(HirScalarExpr::Column(lhs, column_ref_name.clone())),
+                CoercibleScalarExpr::Coerced(HirScalarExpr::Column(rhs, column_ref_name.clone())),
             ],
             None,
         )?;
@@ -3781,6 +3792,7 @@ fn plan_using_constraint(
                 map_exprs.push(HirScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
                     exprs: vec![expr1.clone(), expr2.clone()],
+                    name: column_ref_name.clone(),
                 });
                 new_items.push(ScopeItem::from_column_name(column_name));
             }
@@ -3802,13 +3814,14 @@ fn plan_using_constraint(
 
             // Should be safe to use either `lhs` or `rhs` here since the column
             // is available in both scopes and must have the same type of the new item.
-            map_exprs.push(HirScalarExpr::Column(lhs));
+            map_exprs.push(HirScalarExpr::Column(lhs, column_ref_name.clone()));
         }
 
         join_exprs.push(HirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
             expr1: Box::new(expr1),
             expr2: Box::new(expr2),
+            name: None,
         });
     }
     both_scope.items.extend(new_items);
@@ -3851,7 +3864,7 @@ fn plan_expr_inner<'a>(
 ) -> Result<CoercibleScalarExpr, PlanError> {
     if let Some(i) = ecx.scope.resolve_expr(e) {
         // We've already calculated this expression.
-        return Ok(HirScalarExpr::Column(i).into());
+        return Ok(HirScalarExpr::Column(i, None).into());
     }
 
     match e {
@@ -3954,7 +3967,7 @@ fn plan_parameter(ecx: &ExprContext, n: usize) -> Result<CoercibleScalarExpr, Pl
         return Err(PlanError::UnknownParameter(n));
     }
     if ecx.param_types().borrow().contains_key(&n) {
-        Ok(HirScalarExpr::Parameter(n).into())
+        Ok(HirScalarExpr::Parameter(n, None).into())
     } else {
         Ok(CoercibleScalarExpr::Parameter(n))
     }
@@ -3999,6 +4012,7 @@ fn plan_not(ecx: &ExprContext, expr: &Expr<Aug>) -> Result<CoercibleScalarExpr, 
     Ok(HirScalarExpr::CallUnary {
         func: UnaryFunc::Not(expr_func::Not),
         expr: Box::new(plan_expr(&ecx, expr)?.type_as(&ecx, &ScalarType::Bool)?),
+        name: None,
     }
     .into())
 }
@@ -4069,6 +4083,7 @@ fn plan_homogenizing_function(
             plan_exprs(ecx, exprs)?,
             None,
         )?,
+        name: None,
     };
     Ok(expr.into())
 }
@@ -4178,6 +4193,7 @@ fn plan_subscript_array(
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ArrayIndex { offset },
         exprs,
+        name: None,
     }
     .into())
 }
@@ -4265,6 +4281,7 @@ fn plan_index_list(
         HirScalarExpr::CallVariadic {
             func: VariadicFunc::ListIndex,
             exprs,
+            name: None,
         },
     ))
 }
@@ -4302,6 +4319,7 @@ fn plan_slice_list(
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ListSliceLinear,
         exprs,
+        name: None,
     })
 }
 
@@ -4373,6 +4391,7 @@ fn plan_subscript_jsonb(
                 elem_type: ScalarType::String,
             },
             exprs,
+            name: None,
         },
         BinaryFunc::JsonbGetPath { stringify: false },
     );
@@ -4517,6 +4536,7 @@ where
     let aggregation_exprs: Vec<_> = iter::once(HirScalarExpr::CallVariadic {
         func: vector_create(elem_type.clone()),
         exprs: vec![HirScalarExpr::column(project_column)],
+        name: None,
     })
     .chain(
         planned_query
@@ -4550,6 +4570,7 @@ where
                             .collect(),
                     },
                     exprs: aggregation_exprs,
+                    name: None,
                 }),
                 distinct: false,
             }],
@@ -4560,8 +4581,9 @@ where
     // If `expr` has no rows, return an empty array/list rather than NULL.
     Ok(HirScalarExpr::CallBinary {
         func: binary_concat,
-        expr1: Box::new(HirScalarExpr::Select(Box::new(reduced_expr))),
+        expr1: Box::new(HirScalarExpr::Select(Box::new(reduced_expr), None)),
         expr2: Box::new(empty_literal(elem_type)),
+        name: None,
     }
     .into())
 }
@@ -4611,6 +4633,7 @@ fn plan_map_subquery(
             HirScalarExpr::column(key_column),
             HirScalarExpr::column(value_column),
         ],
+        name: None,
     })
     .chain(
         query
@@ -4641,6 +4664,7 @@ fn plan_map_subquery(
                             .collect(),
                     },
                     exprs: aggregation_exprs,
+                    name: None,
                 }),
                 distinct: false,
             }],
@@ -4652,7 +4676,7 @@ fn plan_map_subquery(
     let expr = HirScalarExpr::CallVariadic {
         func: VariadicFunc::Coalesce,
         exprs: vec![
-            HirScalarExpr::Select(Box::new(expr)),
+            HirScalarExpr::Select(Box::new(expr), None),
             HirScalarExpr::literal(
                 Datum::empty_map(),
                 ScalarType::Map {
@@ -4661,6 +4685,7 @@ fn plan_map_subquery(
                 },
             ),
         ],
+        name: None,
     };
 
     Ok(expr.into())
@@ -4769,6 +4794,7 @@ fn plan_array(
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ArrayCreate { elem_type },
         exprs,
+        name: None,
     }
     .into())
 }
@@ -4810,6 +4836,7 @@ fn plan_list(
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ListCreate { elem_type },
         exprs,
+        name: None,
     }
     .into())
 }
@@ -4857,6 +4884,7 @@ fn plan_map(
     let expr = HirScalarExpr::CallVariadic {
         func: VariadicFunc::MapBuild { value_type },
         exprs,
+        name: None,
     };
     Ok(expr.into())
 }
@@ -5031,6 +5059,7 @@ fn plan_aggregate_common(
             cond: Box::new(cond),
             then: Box::new(expr),
             els: Box::new(HirScalarExpr::literal(func.identity_datum(), expr_typ)),
+            name: None,
         };
     }
 
@@ -5062,6 +5091,7 @@ fn plan_aggregate_common(
         expr = HirScalarExpr::CallVariadic {
             func: VariadicFunc::RecordCreate { field_names },
             exprs,
+            name: None,
         };
     }
 
@@ -5082,13 +5112,19 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
         let i = ecx
             .scope
             .resolve_table_column(&ecx.qcx.outer_scopes, &table_name, &col_name)?;
-        return Ok(HirScalarExpr::Column(i));
+        // TODO(mgree) !!! intern column_name
+        let col_name_ref = None;
+        return Ok(HirScalarExpr::Column(i, col_name_ref));
     }
 
     // If the name is unqualified, first check if it refers to a column. Track any similar names
     // that might exist for a better error message.
     let similar_names = match ecx.scope.resolve_column(&ecx.qcx.outer_scopes, &col_name) {
-        Ok(i) => return Ok(HirScalarExpr::Column(i)),
+        Ok(i) => {
+            // TODO(mgree) !!! intern column_name
+            let col_name_ref = None;
+            return Ok(HirScalarExpr::Column(i, col_name_ref));
+        }
         Err(PlanError::UnknownColumn { similar, .. }) => similar,
         Err(e) => return Err(e),
     };
@@ -5114,7 +5150,11 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
         // returned a single column. Per PostgreSQL, this is a special case
         // that returns the value directly.
         // See: https://github.com/postgres/postgres/blob/22592e10b/src/backend/parser/parse_expr.c#L2519-L2524
-        [(column, item)] if item.from_single_column_function => Ok(HirScalarExpr::Column(*column)),
+        [(column, item)] if item.from_single_column_function => {
+            // TODO(mgree) !!! intern column_name
+            let col_name_ref = None;
+            return Ok(HirScalarExpr::Column(*column, col_name_ref));
+        }
         // The name refers to a normal table. Return a record containing all the
         // columns of the table.
         _ => {
@@ -5126,7 +5166,10 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
                         has_exists_column = Some(column);
                         None
                     } else {
-                        let expr = HirScalarExpr::Column(column);
+                        // TODO(mgree) !!! intern column_name
+                        let col_name_ref = None;
+
+                        let expr = HirScalarExpr::Column(column, col_name_ref);
                         let name = item.column_name.clone();
                         Some((expr, name))
                     }
@@ -5139,16 +5182,19 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
                 HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate { field_names },
                     exprs,
+                    name: None,
                 }
             };
             if let Some(has_exists_column) = has_exists_column {
                 Ok(HirScalarExpr::If {
                     cond: Box::new(HirScalarExpr::CallUnary {
                         func: UnaryFunc::IsNull(mz_expr::func::IsNull),
-                        expr: Box::new(HirScalarExpr::Column(has_exists_column)),
+                        expr: Box::new(HirScalarExpr::Column(has_exists_column, None)),
+                        name: None,
                     }),
                     then: Box::new(HirScalarExpr::literal_null(ecx.scalar_type(&expr))),
                     els: Box::new(expr),
+                    name: None,
                 })
             } else {
                 Ok(expr)
@@ -5234,14 +5280,17 @@ fn plan_function<'a>(
                 bail_unsupported!(IGNORE_NULLS_ERROR_MSG);
             }
 
-            return Ok(HirScalarExpr::Windowing(WindowExpr {
-                func: WindowExprType::Scalar(ScalarWindowExpr {
-                    func,
-                    order_by: col_orders,
-                }),
-                partition_by,
-                order_by: order_by_exprs,
-            }));
+            return Ok(HirScalarExpr::Windowing(
+                WindowExpr {
+                    func: WindowExprType::Scalar(ScalarWindowExpr {
+                        func,
+                        order_by: col_orders,
+                    }),
+                    partition_by,
+                    order_by: order_by_exprs,
+                },
+                None,
+            ));
         }
         Func::ValueWindow(impls) => {
             let (ignore_nulls, order_by_exprs, col_orders, window_frame, partition_by, scalar_args) =
@@ -5257,17 +5306,20 @@ fn plan_function<'a>(
                 }
             }
 
-            return Ok(HirScalarExpr::Windowing(WindowExpr {
-                func: WindowExprType::Value(ValueWindowExpr {
-                    func,
-                    args: Box::new(args_encoded),
-                    order_by: col_orders,
-                    window_frame,
-                    ignore_nulls, // (RESPECT NULLS is the default)
-                }),
-                partition_by,
-                order_by: order_by_exprs,
-            }));
+            return Ok(HirScalarExpr::Windowing(
+                WindowExpr {
+                    func: WindowExprType::Value(ValueWindowExpr {
+                        func,
+                        args: Box::new(args_encoded),
+                        order_by: col_orders,
+                        window_frame,
+                        ignore_nulls, // (RESPECT NULLS is the default)
+                    }),
+                    partition_by,
+                    order_by: order_by_exprs,
+                },
+                None,
+            ));
         }
         Func::Aggregate(_) => {
             if f.over.is_none() {
@@ -5327,15 +5379,18 @@ fn plan_function<'a>(
                     bail_unsupported!("DISTINCT in window aggregates");
                 }
 
-                return Ok(HirScalarExpr::Windowing(WindowExpr {
-                    func: WindowExprType::Aggregate(AggregateWindowExpr {
-                        aggregate_expr,
-                        order_by: col_orders,
-                        window_frame,
-                    }),
-                    partition_by,
-                    order_by: order_by_exprs,
-                }));
+                return Ok(HirScalarExpr::Windowing(
+                    WindowExpr {
+                        func: WindowExprType::Aggregate(AggregateWindowExpr {
+                            aggregate_expr,
+                            order_by: col_orders,
+                            window_frame,
+                        }),
+                        partition_by,
+                        order_by: order_by_exprs,
+                    },
+                    None,
+                ));
             }
         }
     };
@@ -5526,6 +5581,7 @@ fn plan_case<'a>(
             cond: Box::new(cexpr),
             then: Box::new(rexpr),
             els: Box::new(expr),
+            name: None,
         }
     }
     Ok(expr)
