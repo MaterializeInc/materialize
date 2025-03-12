@@ -432,7 +432,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
             let config = &self.storage_state.storage_configuration;
             let stats_interval = config.parameters.statistics_collection_interval;
 
-            // Get the maintenance interval, default to zero if we don't have a compute state.
             let maintenance_interval = self.storage_state.server_maintenance_interval;
 
             let now = std::time::Instant::now();
@@ -823,7 +822,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // every server iteration.
                 self.storage_state.server_maintenance_interval =
                     STORAGE_SERVER_MAINTENANCE_INTERVAL
-                        .get(&self.storage_state.storage_configuration.config_set());
+                        .get(self.storage_state.storage_configuration.config_set());
             }
             InternalStorageCommand::StatisticsUpdate { sources, sinks } => self
                 .storage_state

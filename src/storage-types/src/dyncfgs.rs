@@ -249,7 +249,7 @@ pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
     "Whether to use the new continual feedback upsert operator.",
 );
 
-/// The interval at which the compute server performs maintenance tasks.
+/// The interval at which the storage server performs maintenance tasks.
 pub const STORAGE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
     "storage_server_maintenance_interval",
     Duration::from_millis(10),
