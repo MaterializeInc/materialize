@@ -504,7 +504,9 @@ impl MapFilterProject {
     ///
     /// The argument `mfps` are mutated so that each are functionaly equivalent to their
     /// corresponding input, when composed atop the resulting `Self`.
-    pub fn extract_common(mfps: &mut [&mut Self]) -> Self {
+    ///
+    /// The `extract_exprs` argument is temporary, as we roll out the `extract_common_mfp_expressions` flag.
+    pub fn extract_common(mfps: &mut [&mut Self], extract_exprs: bool) -> Self {
         match mfps.len() {
             0 => {
                 panic!("Cannot call method on empty arguments");
@@ -514,18 +516,122 @@ impl MapFilterProject {
                 std::mem::replace(mfps[0], MapFilterProject::new(output_arity))
             }
             _ => {
+                // More generally, we convert each mfp to ANF, at which point we can
+                // repeatedly extract atomic expressions that depend only on input
+                // columns, migrate them to an input mfp, and repeat until no such
+                // expressions exist. At this point, we can also migrate predicates
+                // and then determine and push down projections.
+
                 // Prepare a return `Self`.
-                let input_arity = mfps[0].input_arity;
-                let mut result_mfp = MapFilterProject::new(input_arity);
+                let mut result_mfp = MapFilterProject::new(mfps[0].input_arity);
 
-                // Naive strategy:
-                // First, look for identical predicates and extract them.
-                // Then, look for unused columns and project them away.
+                if extract_exprs {
+                    // We convert each mfp to ANF, using `memoize_expressions`.
+                    for mfp in mfps.iter_mut() {
+                        mfp.memoize_expressions();
+                    }
 
-                // First, look for identical predicates and extract them.
-                // The trouble here is CSE, as predicates may not "look"
-                // identical despite being identical.
-                // unimplemented!()
+                    // We repeatedly extract common expressions, until none remain.
+                    let mut done = false;
+                    while !done {
+                        // We use references to determine common expressions, and must
+                        // introduce a scope here to drop the borrows before mutation.
+                        let common = {
+                            // The input arity may increase as we iterate, so recapture.
+                            let input_arity = result_mfp.projection.len();
+                            let mut prev: BTreeSet<_> = mfps[0]
+                                .expressions
+                                .iter()
+                                .filter(|e| e.support().iter().max() < Some(&input_arity))
+                                .collect();
+                            let mut next = BTreeSet::default();
+                            for mfp in mfps[1..].iter() {
+                                for expr in mfp.expressions.iter() {
+                                    if prev.contains(expr) {
+                                        next.insert(expr);
+                                    }
+                                }
+                                std::mem::swap(&mut prev, &mut next);
+                                next.clear();
+                            }
+                            prev.into_iter().cloned().collect::<Vec<_>>()
+                        };
+                        // Without new common expressions, we should terminate the loop.
+                        done = common.is_empty();
+
+                        // Migrate each expression in `common` to `result_mfp`.
+                        for expr in common.into_iter() {
+                            // Update each mfp by removing expr and updating column references.
+                            for mfp in mfps.iter_mut() {
+                                // With `expr` next in `result_mfp`, it is as if we are rotating it to
+                                // be the first expression in `mfp`, and then removing it from `mfp` and
+                                // increasing the input arity of `mfp`.
+                                let arity = result_mfp.projection.len();
+                                let found =
+                                    mfp.expressions.iter().position(|e| e == &expr).unwrap();
+                                let index = arity + found;
+                                // Column references change due to the rotation from `index` to `arity`.
+                                let action = |c: &mut usize| {
+                                    if arity <= *c && *c < index {
+                                        *c += 1;
+                                    } else if *c == index {
+                                        *c = arity;
+                                    }
+                                };
+                                // Rotate `expr` from `found` to first, and then snip.
+                                // Short circuit by simply removing and incrementing the input arity.
+                                mfp.input_arity += 1;
+                                mfp.expressions.remove(found);
+                                // Update column references in expressions, predicates, and projections.
+                                for e in mfp.expressions.iter_mut() {
+                                    e.visit_columns(action);
+                                }
+                                for (o, e) in mfp.predicates.iter_mut() {
+                                    e.visit_columns(action);
+                                    // Max out the offset for the predicate; optimization will correct.
+                                    *o = mfp.input_arity + mfp.expressions.len();
+                                }
+                                for c in mfp.projection.iter_mut() {
+                                    action(c);
+                                }
+                            }
+                            // Install the expression and update
+                            result_mfp.expressions.push(expr);
+                            result_mfp.projection.push(result_mfp.projection.len());
+                        }
+                    }
+                    // As before, but easier: predicates in common to all mfps.
+                    let common_preds: Vec<MirScalarExpr> = {
+                        let input_arity = result_mfp.projection.len();
+                        let mut prev: BTreeSet<_> = mfps[0]
+                            .predicates
+                            .iter()
+                            .map(|(_, e)| e)
+                            .filter(|e| e.support().iter().max() < Some(&input_arity))
+                            .collect();
+                        let mut next = BTreeSet::default();
+                        for mfp in mfps[1..].iter() {
+                            for (_, expr) in mfp.predicates.iter() {
+                                if prev.contains(expr) {
+                                    next.insert(expr);
+                                }
+                            }
+                            std::mem::swap(&mut prev, &mut next);
+                            next.clear();
+                        }
+                        // Expressions in common, that we will append to `result_mfp.expressions`.
+                        prev.into_iter().cloned().collect::<Vec<_>>()
+                    };
+                    for mfp in mfps.iter_mut() {
+                        mfp.predicates.retain(|(_, p)| !common_preds.contains(p));
+                        mfp.optimize();
+                    }
+                    result_mfp.predicates.extend(
+                        common_preds
+                            .into_iter()
+                            .map(|e| (result_mfp.projection.len(), e)),
+                    );
+                }
 
                 // Then, look for unused columns and project them away.
                 let mut common_demand = BTreeSet::new();
@@ -534,7 +640,7 @@ impl MapFilterProject {
                 }
                 // columns in `common_demand` must be retained, but others
                 // may be discarded.
-                let common_demand = (0..input_arity)
+                let common_demand = (0..result_mfp.projection.len())
                     .filter(|x| common_demand.contains(x))
                     .collect::<Vec<_>>();
                 let remap = common_demand
@@ -549,6 +655,7 @@ impl MapFilterProject {
                 result_mfp = result_mfp.project(common_demand);
 
                 // Return the resulting MFP.
+                result_mfp.optimize();
                 result_mfp
             }
         }

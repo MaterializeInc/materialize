@@ -427,6 +427,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 reoptimize_imported_views: v.reoptimize_imported_views,
                 enable_reduce_reduction: Default::default(),
                 enable_join_prioritize_arranged: v.enable_join_prioritize_arranged,
+                extract_common_mfp_expressions: Default::default(),
             },
         })
     }

@@ -784,7 +784,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         let mut dataflow = Self::lower_dataflow(desc, features)?;
 
         // Subsequently, we perform plan refinements for the dataflow.
-        Self::refine_source_mfps(&mut dataflow);
+        Self::refine_source_mfps(&mut dataflow, features.extract_common_mfp_expressions);
 
         if features.enable_consolidate_after_union_negate {
             Self::refine_union_negate_consolidation(&mut dataflow);
@@ -856,7 +856,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         level = "debug",
         fields(path.segment = "refine_source_mfps")
     )]
-    fn refine_source_mfps(dataflow: &mut DataflowDescription<Self>) {
+    fn refine_source_mfps(dataflow: &mut DataflowDescription<Self>, extract_exprs: bool) {
         // Extract MFPs from Get operators for sources, and extract what we can for the source.
         // For each source, we want to find `&mut MapFilterProject` for each `Get` expression.
         for (source_id, (source, _monotonic, _upper)) in dataflow.source_imports.iter_mut() {
@@ -893,7 +893,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
 
             if !identity_present && !mfps.is_empty() {
                 // Extract a common prefix `MapFilterProject` from `mfps`.
-                let common = MapFilterProject::extract_common(&mut mfps[..]);
+                let common = MapFilterProject::extract_common(&mut mfps[..], extract_exprs);
                 // Apply common expressions to the source's `MapFilterProject`.
                 let mut mfp = if let Some(mfp) = source.arguments.operators.take() {
                     MapFilterProject::compose(mfp, common)
