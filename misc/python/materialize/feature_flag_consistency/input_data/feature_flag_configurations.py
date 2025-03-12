@@ -24,6 +24,14 @@ def append_config(config_pair: FeatureFlagSystemConfigurationPair) -> None:
     FEATURE_FLAG_CONFIGURATION_PAIRS[config_pair.name] = config_pair
 
 
+# Test extract_common_mfp_expressions.
+# Assessment: "transient feature flag; testing because not testing is bad"
+append_config(
+    create_boolean_feature_flag_configuration_pair(
+        "extract_common_mfp_expressions", "extract_common_exprs"
+    )
+)
+
 # Test enable_equivalence_propagation enabled.
 # Assessment: "definitely good to include because it enables a super-complicated transform that does many things"
 append_config(
