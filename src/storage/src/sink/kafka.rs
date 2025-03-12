@@ -1047,10 +1047,10 @@ fn progress_search<C: ConsumerContext + 'static>(
     child_token: Weak<()>,
     metrics: Arc<KafkaSinkMetrics>,
 ) -> anyhow::Result<Option<ProgressRecord>> {
-    // Seek to the beginning of the progress topic.
+    // Seek to the beginning of the given range in the progress topic.
     let mut tps = TopicPartitionList::new();
     tps.add_partition(progress_topic, partition);
-    tps.set_partition_offset(progress_topic, partition, Offset::Beginning)?;
+    tps.set_partition_offset(progress_topic, partition, Offset::Offset(lo))?;
     progress_client_read_committed
         .assign(&tps)
         .with_context(|| {
