@@ -53,6 +53,8 @@ We should _not_ expect `NAMESCORE(q) = 1.0` for all queries `q`.
 In particular, window functions may significantly complicate our
 ability to keep track of names.
 
+We should not reimplement all of the `Analysis` framework for LIR.
+
 ## Solution Proposal
 
 We will need to keep track of more column name information. We propose
@@ -63,7 +65,7 @@ doing so in a few positions:
 2. Keep track of column names on `usize` column references in
    `*RelationExpr`.
 
-In both cases, we will work with `Option<Rc<String>>`, being careful
+In both cases, we will work with `Option<Rc<str>>`, being careful
 to generate a single reference for each string, i.e., we will do
 lightweight, reference-counted string internment to avoid tons of
 extra allocations.
@@ -75,17 +77,17 @@ column names, i.e.:
 
 ```rust
 pub enum HirScalarExpr {
-  Column(ColumnRef, Option<Rc<String>>),
+  Column(ColumnRef, Option<Rc<str>>),
   CallUnary {
     func: UnaryFunc,
     expr: Box<HirScalarExpr>,
-    name: Option<Rc<String>>>,
+    name: Option<Rc<str>>>,
   }
   // ...
 }
 
 impl HirScalarExpr {
-  pub fn name(&self) -> Option<Rc<String>> {
+  pub fn name(&self) -> Option<Rc<str>> {
     match self {
       HirScalarExpr::Column(_, name)
       | HirScalrExpr::CallUnary { name, .. }
@@ -114,7 +116,7 @@ the column name.
 pub enum HirRelationExpr {
     Project {
         input: Box<HirRelationExpr>,
-        outputs: Vec<(usize, Option<Rc<String>>)>,
+        outputs: Vec<(usize, Option<Rc<str>>)>,
     },
     // ...
 }
@@ -122,7 +124,7 @@ pub enum HirRelationExpr {
 pub enum MirRelationExpr {
     Project {
         input: Box<MirRelationExpr>,
-        outputs: Vec<(usize, Option<Rc<String>>)>,
+        outputs: Vec<(usize, Option<Rc<str>>)>,
     },
     // ...
 }
@@ -131,6 +133,19 @@ pub enum MirRelationExpr {
 The `Project` is the most critical, as projections appear at the top
 of nearly every `SELECT` query---the missing `succ_x` in the example
 above appears in a `Project`, for example.
+
+### The new `EXPLAIN AS TEXT` format requires names for LIR
+
+https://github.com/MaterializeInc/materialize/pull/31643 proposes a
+new `EXPLAIN AS TEXT` format based on LIR. We will very much want good
+column names in the new format, which means keeping track of names at
+the LIR level, too.
+
+We currently compute arity, names, and other metadata using the
+`Analysis` bottom-up framework. But `Analysis` is only defined for
+MIR. We should build simple, direct versions of these analyses for
+LIR---and we can generalize it to a lower-level `Analysis` framework
+if we later need it.
 
 ## Alternatives
 
