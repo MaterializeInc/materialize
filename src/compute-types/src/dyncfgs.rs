@@ -179,7 +179,7 @@ pub const COMPUTE_REPLICA_EXPIRATION_OFFSET: Config<Duration> = Config::new(
 /// optimization.
 pub const COMPUTE_APPLY_COLUMN_DEMANDS: Config<bool> = Config::new(
     "compute_apply_column_demands",
-    false,
+    true,
     "When enabled, passes applys column demands to the RelationDesc used to read out of Persist.",
 );
 
