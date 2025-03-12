@@ -297,12 +297,12 @@ where case_statement < '2023-10-02 15:55:31.918 UTC';
 ----
 Explained Query:
   Filter (#2 < 2023-10-02 15:55:31.918)
-    Map (case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end)
+    Map ((#1 - case when (#0 = 0) then 1 day else 2 days end))
       ReadStorage materialize.public.t
 
 Source materialize.public.t
-  filter=((case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end < 2023-10-02 15:55:31.918))
-  pushdown=((case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end < 2023-10-02 15:55:31.918))
+  filter=(((#1 - case when (#0 = 0) then 1 day else 2 days end) < 2023-10-02 15:55:31.918))
+  pushdown=(((#1 - case when (#0 = 0) then 1 day else 2 days end) < 2023-10-02 15:55:31.918))
 
 Target cluster: quickstart
 
@@ -317,12 +317,12 @@ select x, t from cte
 where case_statement < mz_now();
 ----
 Explained Query:
-  Filter (timestamp_to_mz_timestamp(case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end) < mz_now())
+  Filter (timestamp_to_mz_timestamp((#1 - case when (#0 = 0) then 1 day else 2 days end)) < mz_now())
     ReadStorage materialize.public.t
 
 Source materialize.public.t
-  filter=((timestamp_to_mz_timestamp(case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end) < mz_now()))
-  pushdown=((timestamp_to_mz_timestamp(case when (#0 = 0) then (#1 - 1 day) else (#1 - 2 days) end) < mz_now()))
+  filter=((timestamp_to_mz_timestamp((#1 - case when (#0 = 0) then 1 day else 2 days end)) < mz_now()))
+  pushdown=((timestamp_to_mz_timestamp((#1 - case when (#0 = 0) then 1 day else 2 days end)) < mz_now()))
 
 Target cluster: quickstart
 

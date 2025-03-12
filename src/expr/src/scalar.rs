@@ -1358,6 +1358,55 @@ impl MirScalarExpr {
                                 }
                                 _ => {}
                             }
+                        } else {
+                            // Equivalent expression structure would allow us to push the `If` into the expression.
+                            // For example, `IF <cond> THEN x = y ELSE x = z` becomes `x = IF <cond> THEN y ELSE z`.
+                            match (&mut **then, &mut **els) {
+                                (
+                                    MirScalarExpr::CallUnary { func: f1, expr: e1 },
+                                    MirScalarExpr::CallUnary { func: f2, expr: e2 },
+                                ) if f1 == f2 => {
+                                    *e = cond
+                                        .take()
+                                        .if_then_else(e1.take(), e2.take())
+                                        .call_unary(f1.clone());
+                                }
+                                (
+                                    MirScalarExpr::CallBinary {
+                                        func: f1,
+                                        expr1: e1a,
+                                        expr2: e2a,
+                                    },
+                                    MirScalarExpr::CallBinary {
+                                        func: f2,
+                                        expr1: e1b,
+                                        expr2: e2b,
+                                    },
+                                ) if f1 == f2 && e1a == e1b => {
+                                    *e = e1a.take().call_binary(
+                                        cond.take().if_then_else(e2a.take(), e2b.take()),
+                                        f1.clone(),
+                                    );
+                                }
+                                (
+                                    MirScalarExpr::CallBinary {
+                                        func: f1,
+                                        expr1: e1a,
+                                        expr2: e2a,
+                                    },
+                                    MirScalarExpr::CallBinary {
+                                        func: f2,
+                                        expr1: e1b,
+                                        expr2: e2b,
+                                    },
+                                ) if f1 == f2 && e2a == e2b => {
+                                    *e = cond
+                                        .take()
+                                        .if_then_else(e1a.take(), e1b.take())
+                                        .call_binary(e2a.take(), f1.clone());
+                                }
+                                _ => {}
+                            }
                         }
                     }
                 },
