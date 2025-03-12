@@ -173,7 +173,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
     committed_upper: &Stream<Child<'g, G, mz_repr::Timestamp>, ()>,
-    config: RawSourceCreationConfig,
+    config: &RawSourceCreationConfig,
     source_connection: C,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
@@ -226,12 +226,11 @@ where
 
     let mut reclocked_exports = BTreeMap::new();
 
-    let config = config.clone();
     let reclocked_exports2 = &mut reclocked_exports;
     let (health, source_tokens) = scope.parent.scoped("SourceTimeDomain", move |scope| {
         let (exports, source_upper, health_stream, source_tokens) = source_render_operator(
             scope,
-            config.clone(),
+            config,
             source_connection,
             probed_upper_tx,
             committed_upper,
@@ -288,7 +287,7 @@ impl<T: Timestamp> EventPusher<T, Vec<Infallible>> for FrontierCapture<T> {
 /// into the remap shard.
 fn source_render_operator<G, C>(
     scope: &mut G,
-    config: RawSourceCreationConfig,
+    config: &RawSourceCreationConfig,
     source_connection: C,
     probed_upper_tx: watch::Sender<Option<Probe<C::Time>>>,
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
@@ -315,7 +314,7 @@ where
     });
 
     let (exports, progress, health, stats, probes, tokens) =
-        source_connection.render(scope, config.clone(), resume_uppers, start_signal);
+        source_connection.render(scope, config, resume_uppers, start_signal);
 
     crate::source::statistics::process_statistics(
         scope.clone(),

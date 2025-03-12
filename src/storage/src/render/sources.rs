@@ -107,7 +107,7 @@ where
         scope,
         storage_state,
         resume_stream,
-        base_source_config.clone(),
+        &base_source_config,
         connection,
         start_signal,
     );
@@ -134,10 +134,10 @@ where
             export_id,
             ok_stream,
             data_config,
-            description.clone(),
+            &description,
             error_collections,
             storage_state,
-            base_source_config.clone(),
+            &base_source_config,
             starter.clone(),
         );
         needed_tokens.extend(extra_tokens);
@@ -156,10 +156,10 @@ fn render_source_stream<G, FromTime>(
     export_id: GlobalId,
     ok_source: Collection<G, SourceOutput<FromTime>, Diff>,
     data_config: SourceExportDataConfig,
-    description: IngestionDescription<CollectionMetadata>,
+    description: &IngestionDescription<CollectionMetadata>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
     storage_state: &crate::storage_state::StorageState,
-    base_source_config: RawSourceCreationConfig,
+    base_source_config: &RawSourceCreationConfig,
     rehydrated_token: impl std::any::Any + 'static,
 ) -> (
     Collection<G, Row, Diff>,
@@ -358,7 +358,7 @@ where
                     {
                         crate::upsert::rehydration_finished(
                             scope.clone(),
-                            &base_source_config,
+                            base_source_config,
                             rehydrated_token,
                             refine_antichain(&resume_upper),
                             &snapshot_progress,

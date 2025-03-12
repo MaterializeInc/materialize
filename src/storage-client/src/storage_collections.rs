@@ -2875,7 +2875,7 @@ where
                     trace!("new upper from txns shard: {:?}", upper);
                     let mut uppers = Vec::new();
                     for id in self.txns_shards.iter() {
-                        uppers.push((id.clone(), upper.clone()));
+                        uppers.push((*id, &upper));
                     }
                     self.update_write_frontiers(&uppers).await;
 
@@ -2891,8 +2891,8 @@ where
                         if shard_id == &handle.shard_id() {
                             // Still current, so process the update and enqueue
                             // again!
-                            let uppers = vec![(id, upper.clone())];
-                            self.update_write_frontiers(&uppers).await;
+                            let uppers = &[(id, &upper)];
+                            self.update_write_frontiers(uppers).await;
                             if !upper.is_empty() {
                                 let fut = gen_upper_future(id, handle, upper);
                                 upper_futures.push(fut.boxed());
@@ -3008,7 +3008,7 @@ where
     }
 
     #[instrument(level = "debug")]
-    async fn update_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<T>)]) {
+    async fn update_write_frontiers(&mut self, updates: &[(GlobalId, &Antichain<T>)]) {
         let mut read_capability_changes = BTreeMap::default();
 
         let mut self_collections = self.collections.lock().expect("lock poisoned");
@@ -3021,7 +3021,7 @@ where
                 continue;
             };
 
-            if PartialOrder::less_than(&collection.write_frontier, new_upper) {
+            if PartialOrder::less_than(&collection.write_frontier, *new_upper) {
                 collection.write_frontier.clone_from(new_upper);
             }
 

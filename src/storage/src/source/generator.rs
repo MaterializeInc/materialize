@@ -136,7 +136,7 @@ impl GeneratorKind {
     fn render<G: Scope<Timestamp = MzOffset>>(
         self,
         scope: &mut G,
-        config: RawSourceCreationConfig,
+        config: &RawSourceCreationConfig,
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
@@ -184,7 +184,7 @@ impl GeneratorKind {
             GeneratorKind::KeyValue(kv) => key_value::render(
                 kv,
                 scope,
-                config,
+                config.clone(),
                 committed_uppers,
                 start_signal,
                 output_map,
@@ -201,7 +201,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
     fn render<G: Scope<Timestamp = MzOffset>>(
         self,
         scope: &mut G,
-        config: RawSourceCreationConfig,
+        config: &RawSourceCreationConfig,
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
@@ -231,7 +231,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     as_of: MzOffset,
     up_to: MzOffset,
     scope: &G,
-    config: RawSourceCreationConfig,
+    config: &RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
@@ -266,6 +266,8 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     let (stats_output, stats_stream) = builder.new_output();
 
     let busy_signal = Arc::clone(&config.busy_signal);
+    let source_resume_uppers = config.source_resume_uppers.clone();
+    let responsible_for_unit = config.responsible_for(());
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
             let [mut cap, mut progress_cap, health_cap, stats_cap] = caps.try_into().unwrap();
@@ -273,7 +275,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
             // We only need this until we reported ourselves as Running.
             let mut health_cap = Some(health_cap);
 
-            if !config.responsible_for(()) {
+            if !responsible_for_unit {
                 // Emit 0, to mark this worker as having started up correctly.
                 stats_output.give(
                     &stats_cap,
@@ -286,8 +288,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
             }
 
             let resume_upper = Antichain::from_iter(
-                config
-                    .source_resume_uppers
+                source_resume_uppers
                     .values()
                     .flat_map(|f| f.iter().map(MzOffset::decode_row)),
             );

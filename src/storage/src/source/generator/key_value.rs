@@ -50,7 +50,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     Vec<PressOnDropButton>,
 ) {
     let (steady_state_stats_stream, stats_button) =
-        render_statistics_operator(scope, config.clone(), committed_uppers);
+        render_statistics_operator(scope, &config, committed_uppers);
 
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
@@ -515,7 +515,7 @@ impl UpdateProducer {
 
 pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
     scope: &G,
-    config: RawSourceCreationConfig,
+    config: &RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
 ) -> (Stream<G, ProgressStatisticsUpdate>, PressOnDropButton) {
     let id = config.id;
@@ -524,10 +524,10 @@ pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
 
     let (stats_output, stats_stream) = builder.new_output();
 
+    let offset_worker = config.responsible_for(0);
+
     let button = builder.build(move |caps| async move {
         let [stats_cap]: [_; 1] = caps.try_into().unwrap();
-
-        let offset_worker = config.responsible_for(0);
 
         if !offset_worker {
             // Emit 0, to mark this worker as having started up correctly.

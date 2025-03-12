@@ -126,7 +126,7 @@ impl SourceRender for PostgresSourceConnection {
     fn render<G: Scope<Timestamp = MzOffset>>(
         self,
         scope: &mut G,
-        config: RawSourceCreationConfig,
+        config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
