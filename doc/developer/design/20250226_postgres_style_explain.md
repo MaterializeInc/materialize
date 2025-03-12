@@ -119,6 +119,9 @@ are not completely faithful to the language above (e.g., `Map` and
 `Filter` are separate, when they will be combined in
 `Map/Filter/Project`).
 
+Arity is included in the Postgres style (cf. "width="), though we will
+hopefully not need it when we have good column names.
+
 ### TPC-H query 1
 
 The query:
@@ -181,18 +184,18 @@ New Materialize `EXPLAIN`:
 ```
   Finish
     Order by: l_returnflag, l_linestatus
-    ->  Project // { arity: 10 }
+    ->  Project (columns=10)
         Columns: l_returnflag..=sum, #9..=#11, count
-        -> Map // { arity: 12 }
+        -> Map (columns=12)
            (bigint_to_numeric(case when (count = 0) then null else count end), (sum_l_quantity / #8), (sum_l_extendedprice / #8), (sum_l_discount / #8))
-           -> Accumulable GroupAggregate // { arity: 8 }
+           -> Accumulable GroupAggregate (columns=8)
               Group Key: l_returnflag, l_linestatus
               Aggregates: sum(l_quantity), sum(l_extendedprice), sum((l_extendedprice * (1 - l_discount))), sum(((l_extendedprice * (1 - l_discount)) * (1 + l_tax))), count(*), sum(l_discount)
-              -> Project // { arity: 6 }
+              -> Project (columns=6)
                  Columns: l_quantity..=l_linestatus
-                 -> Filter // { arity: 16 }
+                 -> Filter (columns=16)
                     Predicates: date_to_timestamp(l_shipdate) <= 1998-10-02 00:00:00
-                      -> Index Scan using pk_lineitem_orderkey_linenumber on lineitem // { arity: 16 }
+                      -> Index Scan using pk_lineitem_orderkey_linenumber on lineitem (columns=16)
 
 Used Indexes:
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
@@ -253,21 +256,21 @@ Materialize `EXPLAIN`:
 
 ```
 Finish order_by=[#1{sum} desc nulls_first, #2{o_orderdate} asc nulls_last] output=[#0..=#3]
-  Project (#0{o_orderkey}, #3{sum}, #1{o_orderdate}, #2{o_shippriority}) // { arity: 4 }
-    Reduce group_by=[#0{o_orderkey}..=#2{o_shippriority}] aggregates=[sum((#3{l_extendedprice} * (1 - #4{l_discount})))] // { arity: 4 }
-      Project (#8{o_orderkey}, #12{o_orderdate}, #15{o_shippriority}, #22{l_extendedprice}, #23{l_discount}) // { arity: 5 }
-        Filter (#6{c_mktsegment} = "BUILDING") AND (#12{o_orderdate} < 1995-03-15) AND (#27{l_shipdate} > 1995-03-15) // { arity: 33 }
-          Join on=(#0{c_custkey} = #9{o_custkey} AND #8{o_orderkey} = #17{l_orderkey}) type=delta // { arity: 33 }
+  Project (#0{o_orderkey}, #3{sum}, #1{o_orderdate}, #2{o_shippriority}) (columns=4)
+    Reduce group_by=[#0{o_orderkey}..=#2{o_shippriority}] aggregates=[sum((#3{l_extendedprice} * (1 - #4{l_discount})))] (columns=4)
+      Project (#8{o_orderkey}, #12{o_orderdate}, #15{o_shippriority}, #22{l_extendedprice}, #23{l_discount}) (columns=5)
+        Filter (#6{c_mktsegment} = "BUILDING") AND (#12{o_orderdate} < 1995-03-15) AND (#27{l_shipdate} > 1995-03-15) (columns=33)
+          Join on=(#0{c_custkey} = #9{o_custkey} AND #8{o_orderkey} = #17{l_orderkey}) type=delta (columns=33)
             implementation
               %0:customer » %1:orders[#1]KAif » %2:lineitem[#0]KAif
               %1:orders » %0:customer[#0]KAef » %2:lineitem[#0]KAif
               %2:lineitem » %1:orders[#0]KAif » %0:customer[#0]KAef
-            ArrangeBy keys=[[#0{c_custkey}]] // { arity: 8 }
-              ReadIndex on=customer pk_customer_custkey=[delta join 1st input (full scan)] // { arity: 8 }
-            ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] // { arity: 9 }
-              ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
-            ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
-              ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] // { arity: 16 }
+            ArrangeBy keys=[[#0{c_custkey}]] (columns=8)
+              ReadIndex on=customer pk_customer_custkey=[delta join 1st input (full scan)] (columns=8)
+            ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] (columns=9)
+              ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] (columns=9)
+            ArrangeBy keys=[[#0{l_orderkey}]] (columns=16)
+              ReadIndex on=lineitem fk_lineitem_orderkey=[delta join lookup] (columns=16)
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (delta join 1st input (full scan))
@@ -283,32 +286,32 @@ New Materialize `EXPLAIN`:
 ```
 Finish
   Order by: sum desc nulls_first, o_orderdate
-  -> Project // { arity: 4 }
+  -> Project (columns=4)
      Columns: o_orderkey, sum, o_orderdate, o_shippriority
-     -> Reduce // { arity: 4 }
+     -> Reduce (columns=4)
         Group key: o_orderkey..=#2o_shippriority
         Aggregates: sum((l_extendedprice * (1 - l_discount)))
-        -> Project // { arity: 5 }
+        -> Project (columns=5)
            Columns: o_orderkey, o_orderdate, o_shippriority, l_extendedprice, l_discount
-           -> Filter // { arity: 33 }
+           -> Filter (columns=33)
               Predicates: (c_mktsegment = "BUILDING") AND (o_orderdate < 1995-03-15) AND (l_shipdate > 1995-03-15)
-              -> Delta Join // { arity: 33 }
+              -> Delta Join (columns=33)
                  Conditions: c_custkey = o_custkey AND o_orderkey = l_orderkey
                  Pipelines:
                    %0:customer » %1:orders[#1]KAif » %2:lineitem[#0]KAif
                    %1:orders » %0:customer[#0]KAef » %2:lineitem[#0]KAif
                    %2:lineitem » %1:orders[#0]KAif » %0:customer[#0]KAef
-                 -> Arranged // { arity: 8 }
+                 -> Arranged (columns=8)
                     Keys: [c_custkey]
-                    -> Index Scan using pk_customer_custkey on customer // { arity: 8 }
+                    -> Index Scan using pk_customer_custkey on customer (columns=8)
                        Delta join first input (full scan): pk_customer_custkey
-                 -> Arrange // { arity: 9 }
+                 -> Arrange (columns=9)
                     Keys: [o_orderkey], [o_custkey]
-                    -> Index Scan using pk_orders_orderkey, fk_orders_custkey on orders // { arity: 9 }
+                    -> Index Scan using pk_orders_orderkey, fk_orders_custkey on orders (columns=9)
                        Delta join lookup: pk_orders_orderkey, fk_orders_custkey
-                 -> Arrange // { arity: 16 }
+                 -> Arrange (columns=16)
                     Keys: [l_orderkey]
-                    -> Index Scan using fk_lineitem_orderkey on lineitem // { arity: 16 }
+                    -> Index Scan using fk_lineitem_orderkey on lineitem (columns=16)
                        Delta join lookup: fk_lineitem_orderkey
 
 Used Indexes:
