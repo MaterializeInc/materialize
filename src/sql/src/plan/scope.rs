@@ -465,6 +465,7 @@ impl Scope {
 
     /// Look to see if there is an already-calculated instance of this expr.
     /// Failing to find one is not an error, so this just returns Option
+    // TODO(mgree) !!! have resolve_expr return `ScopeItem::column_name` as well
     pub fn resolve_expr<'a>(&'a self, expr: &Expr<Aug>) -> Option<ColumnRef> {
         // Literal values should not be treated as "cached" because their types
         // in scope will have already been determined, but the type of the
