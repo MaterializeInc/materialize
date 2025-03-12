@@ -237,6 +237,8 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         if allow_writes {
             self.commands.push(StorageCommand::AllowWrites);
         }
+
+        self.reduced_count = self.commands.len();
     }
 }
 
