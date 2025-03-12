@@ -249,6 +249,13 @@ pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
     "Whether to use the new continual feedback upsert operator.",
 );
 
+/// The interval at which the storage server performs maintenance tasks.
+pub const STORAGE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
+    "storage_server_maintenance_interval",
+    Duration::from_millis(10),
+    "The interval at which the storage server performs maintenance tasks. Zero enables maintenance on every iteration.",
+);
+
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -277,4 +284,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_SINK_SNAPSHOT_FRONTIER)
         .add(&STORAGE_RECLOCK_TO_LATEST)
         .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
+        .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
 }
