@@ -267,7 +267,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 
     let busy_signal = Arc::clone(&config.busy_signal);
     let source_resume_uppers = config.source_resume_uppers.clone();
-    let responsible_for_unit = config.responsible_for(());
+    let is_active_worker = config.responsible_for(());
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
             let [mut cap, mut progress_cap, health_cap, stats_cap] = caps.try_into().unwrap();
@@ -275,7 +275,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
             // We only need this until we reported ourselves as Running.
             let mut health_cap = Some(health_cap);
 
-            if !responsible_for_unit {
+            if !is_active_worker {
                 // Emit 0, to mark this worker as having started up correctly.
                 stats_output.give(
                     &stats_cap,
