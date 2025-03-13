@@ -29,7 +29,7 @@ use uuid::Uuid;
 use mz_dyncfg::ConfigSet;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_ore::lgbytes::{LgBytes, MetricsRegion};
+use mz_ore::lgbytes::MetricsRegion;
 use mz_ore::metrics::MetricsRegistry;
 
 use crate::cfg::BlobKnobs;
@@ -268,15 +268,15 @@ impl Blob for AzureBlob {
             }
 
             // Spill our bytes to lgalloc, if they aren't already.
-            let lgbytes = match buffer {
-                PreSizedBuffer::Sized(region) => LgBytes::from(Arc::new(region)),
+            let lgbytes: Bytes = match buffer {
+                PreSizedBuffer::Sized(region) => region.into(),
                 // Now that we've collected all of the segments, we know the size of our region.
                 PreSizedBuffer::Unknown(segments) => {
                     let mut region = metrics.lgbytes.persist_azure.new_region(segments.len());
                     for segment in segments.into_segments() {
                         region.extend_from_slice(segment.as_ref());
                     }
-                    LgBytes::from(Arc::new(region))
+                    region.into()
                 }
             };
 
@@ -286,7 +286,7 @@ impl Blob for AzureBlob {
                 metrics.get_invalid_resp.inc();
             }
 
-            Ok(lgbytes.into())
+            Ok(lgbytes)
         }
 
         let mut requests = FuturesOrdered::new();

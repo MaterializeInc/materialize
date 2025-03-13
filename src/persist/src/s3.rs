@@ -33,7 +33,7 @@ use futures_util::{FutureExt, StreamExt};
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_ore::lgbytes::{LgBytes, MetricsRegion};
+use mz_ore::lgbytes::MetricsRegion;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
@@ -528,7 +528,7 @@ impl Blob for S3Blob {
                     // If we're writing into a single buffer we shouldn't have
                     // pushed anything else into our segments.
                     assert!(body_parts.is_empty());
-                    body_parts.push(LgBytes::from(Arc::new(body)).into());
+                    body_parts.push(body.into());
                 }
 
                 let body_elapsed = body_start.elapsed();
