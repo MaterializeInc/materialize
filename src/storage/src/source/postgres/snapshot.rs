@@ -359,7 +359,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         &config.config.connection_context.ssh_tunnel_manager,
                     )
                     .await?;
-                match mz_postgres_util::publication_info(&schema_client, &connection.publication)
+                match mz_postgres_util::publication_info(&schema_client, &connection.publication, Some(&reader_table_info.keys().copied().collect::<Vec<_>>()))
                     .await
                 {
                     // If the replication stream cannot be obtained in a definite way there is
