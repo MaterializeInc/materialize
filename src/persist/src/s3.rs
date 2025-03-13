@@ -944,59 +944,40 @@ impl S3Blob {
     where
         E: ProvideErrorMetadata,
     {
-        match err {
-            SdkError::ServiceError(e) => {
-                let label = if let Some(code) = e.err().code() {
-                    code
-                } else {
-                    "UnknownServiceError"
-                };
-                self.metrics
-                    .error_counts
-                    .with_label_values(&[op, label])
-                    .inc();
-            }
+        let code = match err {
+            SdkError::ServiceError(e) => match e.err().code() {
+                Some(code) => code,
+                None => "UnknownServiceError",
+            },
             SdkError::DispatchFailure(e) => {
                 let error_kind = if let Some(connector_error) = e.as_connector_error() {
                     connector_error.as_other()
                 } else {
                     e.as_other()
                 };
-                if let Some(error_kind) = error_kind {
-                    self.metrics
-                        .error_counts
-                        .with_label_values(&[op, error_kind.to_string().as_str()])
-                        .inc();
-                } else {
-                    self.metrics
-                        .error_counts
-                        .with_label_values(&[op, "UnknownDispatchFailure"])
-                        .inc();
+                match error_kind {
+                    Some(error_kind) => match error_kind {
+                        aws_config::retry::ErrorKind::TransientError => "TransientError",
+                        aws_config::retry::ErrorKind::ThrottlingError => "ThrottlingError",
+                        aws_config::retry::ErrorKind::ServerError => "ServerError",
+                        aws_config::retry::ErrorKind::ClientError => "ClientError",
+                        _ => "UnknownDispatchFailure",
+                    },
+                    None => "UnknownDispatchFailure",
                 }
             }
-            SdkError::ResponseError(_) => self
-                .metrics
-                .error_counts
-                .with_label_values(&[op, "ResponseError"])
-                .inc(),
-            SdkError::ConstructionFailure(_) => self
-                .metrics
-                .error_counts
-                .with_label_values(&[op, "ConstructionFailure"])
-                .inc(),
-            SdkError::TimeoutError(_) => self
-                .metrics
-                .error_counts
-                // There is some overlap with MetricsSleep. MetricsSleep is more granular
-                // but does not contain the operation.
-                .with_label_values(&[op, "TimeoutError"])
-                .inc(),
-            _ => self
-                .metrics
-                .error_counts
-                .with_label_values(&[op, "UnknownSdkError"])
-                .inc(), // an error was added at some point in the future, we aren't account for it
-        }
+            SdkError::ResponseError(_) => "ResponseError",
+            SdkError::ConstructionFailure(_) => "ConstructionFailure",
+            // There is some overlap with MetricsSleep. MetricsSleep is more granular
+            // but does not contain the operation.
+            SdkError::TimeoutError(_) => "TimeoutError",
+            // an error was added at some point in the future
+            _ => "UnknownSdkError",
+        };
+        self.metrics
+            .error_counts
+            .with_label_values(&[op, code])
+            .inc();
     }
 }
 
