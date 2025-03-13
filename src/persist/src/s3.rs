@@ -31,7 +31,7 @@ use bytes::Bytes;
 use futures_util::stream::FuturesOrdered;
 use futures_util::{FutureExt, StreamExt};
 use mz_dyncfg::{Config, ConfigSet};
-use mz_ore::bytes::{MaybeLgBytes, SegmentedBytes};
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::lgbytes::{LgBytes, MetricsRegion};
 use mz_ore::metrics::MetricsRegistry;
@@ -468,7 +468,7 @@ impl Blob for S3Blob {
 
                 // Request the body.
                 let body_start = Instant::now();
-                let mut body_parts = Vec::new();
+                let mut body_parts: Vec<Bytes> = Vec::new();
 
                 // Get the data into lgalloc at the absolute earliest possible
                 // point without (yet) having to fork the s3 client library.
@@ -507,9 +507,7 @@ impl Blob for S3Blob {
                         Some(buf) => buf.extend_from_slice(&data[..]),
                         // Fallback to spilling into lgalloc is quick as possible.
                         None if enable_s3_lgalloc => {
-                            body_parts.push(MaybeLgBytes::LgBytes(
-                                self.metrics.lgbytes.persist_s3.try_mmap(&data),
-                            ));
+                            body_parts.push(self.metrics.lgbytes.persist_s3.try_mmap(&data).into());
                         }
                         // If all else false just heap allocate.
                         None => {
@@ -520,7 +518,7 @@ impl Blob for S3Blob {
                             // TODO: Once we've validated the LgBytes path, change
                             // this fallback path to be a heap allocated LgBytes.
                             // Then we can remove the pub from MaybeLgBytes.
-                            body_parts.push(MaybeLgBytes::Bytes(data));
+                            body_parts.push(data);
                         }
                     }
                 }
@@ -530,7 +528,7 @@ impl Blob for S3Blob {
                     // If we're writing into a single buffer we shouldn't have
                     // pushed anything else into our segments.
                     assert!(body_parts.is_empty());
-                    body_parts.push(MaybeLgBytes::LgBytes(LgBytes::from(Arc::new(body))));
+                    body_parts.push(LgBytes::from(Arc::new(body)).into());
                 }
 
                 let body_elapsed = body_start.elapsed();

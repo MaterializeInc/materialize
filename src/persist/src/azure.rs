@@ -27,7 +27,7 @@ use url::Url;
 use uuid::Uuid;
 
 use mz_dyncfg::ConfigSet;
-use mz_ore::bytes::{MaybeLgBytes, SegmentedBytes};
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::lgbytes::{LgBytes, MetricsRegion};
 use mz_ore::metrics::MetricsRegistry;
@@ -238,7 +238,7 @@ impl Blob for AzureBlob {
         async fn fetch_chunk(
             response: GetBlobResponse,
             metrics: S3BlobMetrics,
-        ) -> Result<MaybeLgBytes, ExternalError> {
+        ) -> Result<Bytes, ExternalError> {
             let content_length = response.blob.properties.content_length;
 
             // Here we're being quite defensive. If `content_length` comes back
@@ -286,7 +286,7 @@ impl Blob for AzureBlob {
                 metrics.get_invalid_resp.inc();
             }
 
-            Ok(MaybeLgBytes::LgBytes(lgbytes))
+            Ok(lgbytes.into())
         }
 
         let mut requests = FuturesOrdered::new();
