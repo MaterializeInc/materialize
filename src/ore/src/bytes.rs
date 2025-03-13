@@ -167,6 +167,25 @@ impl<const N: usize> Buf for SegmentedBytes<N> {
             }
         }
     }
+
+    fn copy_to_bytes(&mut self, len: usize) -> Bytes {
+        // If possible, use the zero-copy implementation on individual segments.
+        if let Some((seg, _len)) = self.segments.first_mut() {
+            if len <= seg.len() {
+                self.len -= len;
+                return seg.copy_to_bytes(len);
+            }
+        }
+        // Otherwise, fall back to a generic implementation.
+        assert!(
+            len <= self.len(),
+            "tried to copy {len} bytes with {} remaining",
+            self.len()
+        );
+        let mut out = BytesMut::with_capacity(len);
+        out.put(self.take(len));
+        out.freeze()
+    }
 }
 
 #[cfg(feature = "parquet")]
@@ -721,9 +740,15 @@ mod tests {
 
             // Cap num_bytes at the size of contiguous.
             let num_bytes = contiguous.len() % num_bytes;
+            let remaining = contiguous.len() - num_bytes;
 
             let copied_c = contiguous.copy_to_bytes(num_bytes);
             let copied_s = segmented.copy_to_bytes(num_bytes);
+
+            assert_eq!(copied_c, copied_s);
+
+            let copied_c = contiguous.copy_to_bytes(remaining);
+            let copied_s = segmented.copy_to_bytes(remaining);
 
             assert_eq!(copied_c, copied_s);
         }
