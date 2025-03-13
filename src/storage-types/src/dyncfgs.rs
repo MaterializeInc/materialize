@@ -256,6 +256,13 @@ pub const STORAGE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
     "The interval at which the storage server performs maintenance tasks. Zero enables maintenance on every iteration.",
 );
 
+/// If set, iteratively search the progress topic for a progress record with increasing lookback.
+pub const SINK_PROGRESS_SEARCH: Config<bool> = Config::new(
+    "storage_sink_progress_search",
+    true,
+    "If set, iteratively search the progress topic for a progress record with increasing lookback.",
+);
+
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -285,4 +292,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_RECLOCK_TO_LATEST)
         .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
+        .add(&SINK_PROGRESS_SEARCH)
 }
