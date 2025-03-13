@@ -8105,7 +8105,8 @@ JOIN root_times r USING (id)",
 
 /**
  * This view is used to display the cluster utilization over 14 days bucketed by 8 hours.
- * It's specifically for the Console's environment overview page to speed up load times
+ * It's specifically for the Console's environment overview page to speed up load times.
+ * This query should be kept in sync with MaterializeInc/console/src/api/materialize/cluster/replicaUtilizationHistory.ts
  */
 pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW: LazyLock<BuiltinView> = LazyLock::new(|| {
     BuiltinView {
@@ -8143,70 +8144,87 @@ pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW: LazyLock<BuiltinView> = Lazy
     cluster_id
   FROM mz_catalog.mz_cluster_replicas
 ),
+replica_metrics_history AS (
+  SELECT
+    m.occurred_at,
+    m.replica_id,
+    r.size,
+    (SUM(m.cpu_nano_cores::float8) / s.cpu_nano_cores) / s.processes AS cpu_percent,
+    (SUM(m.memory_bytes::float8) / s.memory_bytes) / s.processes AS memory_percent,
+    (SUM(m.disk_bytes::float8) / s.disk_bytes) / s.processes AS disk_percent,
+    SUM(m.disk_bytes::float8) AS disk_bytes,
+    SUM(m.memory_bytes::float8) AS memory_bytes,
+    s.disk_bytes::numeric * s.processes AS total_disk_bytes,
+    s.memory_bytes::numeric * s.processes AS total_memory_bytes
+  FROM
+    replica_history AS r
+    INNER JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
+    INNER JOIN mz_internal.mz_cluster_replica_metrics_history AS m ON m.replica_id = r.replica_id
+  GROUP BY
+    m.occurred_at,
+    m.replica_id,
+    r.size,
+    s.cpu_nano_cores,
+    s.memory_bytes,
+    s.disk_bytes,
+    s.processes
+),
 replica_utilization_history_binned AS (
   SELECT m.occurred_at,
     m.replica_id,
-    m.process_id,
-    (m.cpu_nano_cores::float8 / s.cpu_nano_cores) AS cpu_percent,
-    (m.memory_bytes::float8 / s.memory_bytes) AS memory_percent,
-    (m.disk_bytes::float8 / s.disk_bytes) AS disk_percent,
-    m.disk_bytes::float8 AS disk_bytes,
-    m.memory_bytes::float8 AS memory_bytes,
-    s.disk_bytes AS total_disk_bytes,
-    s.memory_bytes AS total_memory_bytes,
-    r.size,
+    m.cpu_percent,
+    m.memory_percent,
+    m.memory_bytes,
+    m.disk_percent,
+    m.disk_bytes,
+    m.total_disk_bytes,
+    m.total_memory_bytes,
+    m.size,
     date_bin(
       '8 HOURS',
       occurred_at,
       '1970-01-01'::timestamp
     ) AS bucket_start
   FROM replica_history AS r
-    JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
-    JOIN mz_internal.mz_cluster_replica_metrics_history AS m ON m.replica_id = r.replica_id
+    JOIN replica_metrics_history AS m ON m.replica_id = r.replica_id
   WHERE mz_now() <= date_bin(
       '8 HOURS',
       occurred_at,
       '1970-01-01'::timestamp
     ) + INTERVAL '14 DAYS'
 ),
--- For each (replica, process_id, bucket), take the (replica, process_id, bucket) with the highest memory
+-- For each (replica, bucket), take the (replica, bucket) with the highest memory
 max_memory AS (
-  SELECT DISTINCT ON (bucket_start, replica_id, process_id) bucket_start,
+  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start,
     replica_id,
-    process_id,
     memory_percent,
     occurred_at
   FROM replica_utilization_history_binned
   OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
   ORDER BY bucket_start,
     replica_id,
-    process_id,
     COALESCE(memory_bytes, 0) DESC
 ),
 max_disk AS (
-  SELECT DISTINCT ON (bucket_start, replica_id, process_id) bucket_start,
+  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start,
     replica_id,
-    process_id,
     disk_percent,
     occurred_at
   FROM replica_utilization_history_binned
   OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
   ORDER BY bucket_start,
     replica_id,
-    process_id,
     COALESCE(disk_bytes, 0) DESC
 ),
 max_cpu AS (
-  SELECT DISTINCT ON (bucket_start, replica_id, process_id) bucket_start,
+  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start,
     replica_id,
-    process_id,
     cpu_percent,
     occurred_at
   FROM replica_utilization_history_binned
   OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
   ORDER BY bucket_start,
     replica_id,
-    process_id,
     COALESCE(cpu_percent, 0) DESC
 ),
 /*
@@ -8216,7 +8234,7 @@ max_cpu AS (
  values may not occur at the same time if the bucket interval is large.
  */
 max_memory_and_disk AS (
-  SELECT DISTINCT ON (bucket_start, replica_id, process_id) bucket_start,
+  SELECT DISTINCT ON (bucket_start, replica_id) bucket_start,
     replica_id,
     memory_percent,
     disk_percent,
@@ -8242,10 +8260,9 @@ max_memory_and_disk AS (
   OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
   ORDER BY bucket_start,
     replica_id,
-    process_id,
     COALESCE(memory_and_disk_percent, 0) DESC
 ),
--- For each (replica, process_id, bucket), get its offline events at that time
+-- For each (replica, bucket), get its offline events at that time
 replica_offline_event_history AS (
   SELECT date_bin(
       '8 HOURS',
