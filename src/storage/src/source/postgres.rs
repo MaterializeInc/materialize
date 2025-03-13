@@ -81,6 +81,7 @@
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::pin::pin;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -106,8 +107,11 @@ use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::{Concat, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use tokio::sync::mpsc;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::StreamExt;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::{Probe, ProgressStatisticsUpdate, SourceRender, StackedCollection};
@@ -115,6 +119,7 @@ use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
 mod snapshot;
+mod statistics;
 
 impl SourceRender for PostgresSourceConnection {
     type Time = MzOffset;
@@ -127,7 +132,7 @@ impl SourceRender for PostgresSourceConnection {
         self,
         scope: &mut G,
         config: &RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+        resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + Send + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
@@ -172,6 +177,24 @@ impl SourceRender for PostgresSourceConnection {
                 .insert(idx, output);
         }
 
+        // Both the `replication` and the `statistics` operator want to observe the `resume_uppers`
+        // stream, so spawn a task to "fork" it.
+        let (resume_uppers_tx_1, resume_uppers_rx_1) = mpsc::unbounded_channel();
+        let (resume_uppers_tx_2, resume_uppers_rx_2) = mpsc::unbounded_channel();
+        let resume_uppers_1 = UnboundedReceiverStream::new(resume_uppers_rx_1);
+        let resume_uppers_2 = UnboundedReceiverStream::new(resume_uppers_rx_2);
+        mz_ore::task::spawn(|| format!("resume-uppers-fork:{}", config.id), async move {
+            let mut resume_uppers = pin!(resume_uppers);
+            while let Some(upper) = resume_uppers.next().await {
+                let r1 = resume_uppers_tx_1.send(upper.clone());
+                let r2 = resume_uppers_tx_2.send(upper);
+
+                if r1.is_err() && r2.is_err() {
+                    break; // both receivers disconnected
+                }
+            }
+        });
+
         let metrics = config.metrics.get_postgres_source_metrics(config.id);
 
         let (snapshot_updates, rewinds, slot_ready, snapshot_stats, snapshot_err, snapshot_token) =
@@ -183,17 +206,19 @@ impl SourceRender for PostgresSourceConnection {
                 metrics.snapshot_metrics.clone(),
             );
 
-        let (repl_updates, uppers, stats_stream, probe_stream, repl_err, repl_token) =
-            replication::render(
-                scope.clone(),
-                config.clone(),
-                self,
-                table_info,
-                &rewinds,
-                &slot_ready,
-                resume_uppers,
-                metrics,
-            );
+        let (repl_updates, uppers, repl_err, repl_token) = replication::render(
+            scope.clone(),
+            config.clone(),
+            self.clone(),
+            table_info,
+            &rewinds,
+            &slot_ready,
+            resume_uppers_1,
+            metrics,
+        );
+
+        let (stats_stream, stats_err, probe_stream, stats_token) =
+            statistics::render(scope.clone(), config.clone(), self, resume_uppers_2);
 
         let stats_stream = stats_stream.concat(&snapshot_stats);
 
@@ -227,30 +252,33 @@ impl SourceRender for PostgresSourceConnection {
         // N.B. Note that we don't check ssh tunnel statuses here. We could, but immediately on
         // restart we are going to set the status to an ssh error correctly, so we don't do this
         // extra work.
-        let errs = snapshot_err.concat(&repl_err).map(move |err| {
-            // This update will cause the dataflow to restart
-            let err_string = err.display_with_causes().to_string();
-            let update = HealthStatusUpdate::halting(err_string.clone(), None);
+        let errs = snapshot_err
+            .concat(&repl_err)
+            .concat(&stats_err)
+            .map(move |err| {
+                // This update will cause the dataflow to restart
+                let err_string = err.display_with_causes().to_string();
+                let update = HealthStatusUpdate::halting(err_string.clone(), None);
 
-            let namespace = match err {
-                ReplicationError::Transient(err)
-                    if matches!(
-                        &*err,
-                        TransientError::PostgresError(PostgresError::Ssh(_))
-                            | TransientError::PostgresError(PostgresError::SshIo(_))
-                    ) =>
-                {
-                    StatusNamespace::Ssh
+                let namespace = match err {
+                    ReplicationError::Transient(err)
+                        if matches!(
+                            &*err,
+                            TransientError::PostgresError(PostgresError::Ssh(_))
+                                | TransientError::PostgresError(PostgresError::SshIo(_))
+                        ) =>
+                    {
+                        StatusNamespace::Ssh
+                    }
+                    _ => Self::STATUS_NAMESPACE,
+                };
+
+                HealthStatusMessage {
+                    id: None,
+                    namespace: namespace.clone(),
+                    update,
                 }
-                _ => Self::STATUS_NAMESPACE,
-            };
-
-            HealthStatusMessage {
-                id: None,
-                namespace: namespace.clone(),
-                update,
-            }
-        });
+            });
 
         let health = init.concat(&errs);
 
@@ -260,7 +288,7 @@ impl SourceRender for PostgresSourceConnection {
             health,
             stats_stream,
             probe_stream,
-            vec![snapshot_token, repl_token],
+            vec![snapshot_token, repl_token, stats_token],
         )
     }
 }

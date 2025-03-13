@@ -89,7 +89,7 @@ pub trait SourceRender {
         self,
         scope: &mut G,
         config: &RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
+        resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + Send + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,

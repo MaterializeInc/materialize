@@ -86,18 +86,16 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
-use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_postgres_util::PostgresError;
 use mz_postgres_util::{simple_query_opt, Client};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
-use mz_storage_types::dyncfgs::{PG_OFFSET_KNOWN_INTERVAL, PG_SCHEMA_VALIDATION_INTERVAL};
+use mz_storage_types::dyncfgs::PG_SCHEMA_VALIDATION_INTERVAL;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceTimestamp;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
-    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
-    PressOnDropButton,
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 use postgres_replication::protocol::{LogicalReplicationMessage, ReplicationMessage, TupleData};
@@ -105,13 +103,11 @@ use postgres_replication::LogicalReplicationStream;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::core::Map;
-use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 use tracing::{error, trace};
@@ -119,10 +115,7 @@ use tracing::{error, trace};
 use crate::metrics::source::postgres::PgSourceMetrics;
 use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, SourceOutputInfo, TransientError};
-use crate::source::probe;
-use crate::source::types::{
-    Probe, ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
-};
+use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
 use crate::source::RawSourceCreationConfig;
 
 /// Postgres epoch is 2000-01-01T00:00:00Z
@@ -153,8 +146,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, Infallible>,
-    Stream<G, ProgressStatisticsUpdate>,
-    Option<Stream<G, Probe<MzOffset>>>,
     Stream<G, ReplicationError>,
     PressOnDropButton,
 ) {
@@ -165,15 +156,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let (data_output, data_stream) = builder.new_output();
     let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (definite_error_handle, definite_errors) = builder.new_output();
-
-    let (stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-
-    // Yugabyte doesn't support LSN probing currently.
-    let probe_stream = match connection.connection.flavor {
-        PostgresFlavor::Vanilla => Some(probe_stream),
-        PostgresFlavor::Yugabyte => None,
-    };
 
     let mut rewind_input =
         builder.new_disconnected_input(rewind_stream, Exchange::new(move |_| slot_reader));
@@ -201,20 +183,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [data_cap_set, upper_cap_set, definite_error_cap_set, stats_cap, probe_cap]: &mut [_; 5] =
+            let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] =
                 caps.try_into().unwrap();
-
-            if !config.responsible_for("slot") {
-                // Emit 0, to mark this worker as having started up correctly.
-                stats_output.give(
-                    &stats_cap[0],
-                    ProgressStatisticsUpdate::SteadyState {
-                        offset_known: 0,
-                        offset_committed: 0,
-                    },
-                );
-                return Ok(());
-            }
 
             // Determine the slot lsn.
             let connection_config = connection
@@ -305,23 +275,27 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             // The overall resumption point for this source is the minimum of the resumption points
             // contributed by each of the outputs.
-            let resume_lsn = output_uppers.iter().flat_map(|f| f.elements()).map(|&lsn| {
-                // An output is either an output that has never had data committed to it or one
-                // that has and needs to resume. We differentiate between the two by checking
-                // whether an output wishes to "resume" from the minimum timestamp. In that case
-                // its contribution to the overal resumption point is the earliest point available
-                // in the slot. This information would normally be something that the storage
-                // controller figures out in the form of an as-of frontier, but at the moment the
-                // storage controller does not have visibility into what the replication slot is
-                // doing.
-                if lsn == MzOffset::from(0) {
-                    slot_metadata.confirmed_flush_lsn
-                } else {
-                    lsn
-                }
-            }).min();
+            let resume_lsn = output_uppers
+                .iter()
+                .flat_map(|f| f.elements())
+                .map(|&lsn| {
+                    // An output is either an output that has never had data committed to it or one
+                    // that has and needs to resume. We differentiate between the two by checking
+                    // whether an output wishes to "resume" from the minimum timestamp. In that case
+                    // its contribution to the overal resumption point is the earliest point available
+                    // in the slot. This information would normally be something that the storage
+                    // controller figures out in the form of an as-of frontier, but at the moment the
+                    // storage controller does not have visibility into what the replication slot is
+                    // doing.
+                    if lsn == MzOffset::from(0) {
+                        slot_metadata.confirmed_flush_lsn
+                    } else {
+                        lsn
+                    }
+                })
+                .min();
             let Some(resume_lsn) = resume_lsn else {
-                return Ok(())
+                return Ok(());
             };
             upper_cap_set.downgrade([&resume_lsn]);
             trace!(%id, "timely-{worker_id} replication reader started lsn={resume_lsn}");
@@ -376,10 +350,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 &connection.publication,
                 resume_lsn,
                 committed_uppers.as_mut(),
-                &stats_output,
-                &stats_cap[0],
-                &probe_output,
-                &probe_cap[0],
             )
             .await?;
 
@@ -413,7 +383,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // Run the periodic schema validation on a separate task using a separate client,
             // to prevent it from blocking the replication reading progress.
             let ssh_tunnel_manager = &config.config.connection_context.ssh_tunnel_manager;
-            let client = connection_config.connect("schema validation", ssh_tunnel_manager).await?;
+            let client = connection_config
+                .connect("schema validation", ssh_tunnel_manager)
+                .await?;
             let mut schema_errors = spawn_schema_validator(
                 client,
                 &config,
@@ -537,7 +509,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                     return Ok(());
                                 }
                                 Postgres(pg_error) => Err(TransientError::from(pg_error))?,
-                                Schema { oid, output_index, error } => {
+                                Schema {
+                                    oid,
+                                    output_index,
+                                    error,
+                                } => {
                                     if errored.contains(&output_index) {
                                         continue;
                                     }
@@ -610,8 +586,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     (
         replication_updates,
         upper_stream,
-        stats_stream,
-        probe_stream,
         errors,
         button.press_on_drop(),
     )
@@ -630,18 +604,6 @@ async fn raw_stream<'a>(
     publication: &'a str,
     resume_lsn: MzOffset,
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
-    stats_output: &'a AsyncOutputHandle<
-        MzOffset,
-        CapacityContainerBuilder<Vec<ProgressStatisticsUpdate>>,
-        Tee<MzOffset, Vec<ProgressStatisticsUpdate>>,
-    >,
-    stats_cap: &'a Capability<MzOffset>,
-    probe_output: &'a AsyncOutputHandle<
-        MzOffset,
-        CapacityContainerBuilder<Vec<Probe<MzOffset>>>,
-        Tee<MzOffset, Vec<Probe<MzOffset>>>,
-    >,
-    probe_cap: &'a Capability<MzOffset>,
 ) -> Result<
     Result<
         impl AsyncStream<
@@ -747,31 +709,7 @@ async fn raw_stream<'a>(
         slot_metadata.active_pid, wal_sender_timeout
     );
 
-    let (probe_tx, mut probe_rx) = watch::channel(None);
-    let config_set = Arc::clone(config.config.config_set());
-    let now_fn = config.now_fn.clone();
-    let max_lsn_task_handle =
-        mz_ore::task::spawn(|| format!("pg_current_wal_lsn:{}", config.id), async move {
-            let mut probe_ticker =
-                probe::Ticker::new(|| PG_OFFSET_KNOWN_INTERVAL.get(&config_set), now_fn);
-
-            while !probe_tx.is_closed() {
-                let probe_ts = probe_ticker.tick().await;
-                let probe_or_err = super::fetch_max_lsn(&*metadata_client)
-                    .await
-                    .map(|lsn| Probe {
-                        probe_ts,
-                        upstream_frontier: Antichain::from_elem(lsn),
-                    });
-                let _ = probe_tx.send(Some(probe_or_err));
-            }
-        })
-        .abort_on_drop();
-
     let stream = async_stream::try_stream!({
-        // Ensure we don't pre-drop the task
-        let _max_lsn_task_handle = max_lsn_task_handle;
-
         let mut uppers = pin!(uppers);
         let mut last_committed_upper = resume_lsn;
 
@@ -818,26 +756,6 @@ async fn raw_stream<'a>(
                         last_committed_upper = std::cmp::max(last_committed_upper, lsn);
                         Ok(())
                     }
-                    None => Ok(()),
-                },
-                Ok(()) = probe_rx.changed() => match &*probe_rx.borrow() {
-                    Some(Ok(probe)) => {
-                        if let Some(offset_known) = probe.upstream_frontier.as_option() {
-                            stats_output.give(
-                                stats_cap,
-                                ProgressStatisticsUpdate::SteadyState {
-                                    // Similar to the kafka source, we don't subtract 1 from the
-                                    // upper as we want to report the _number of bytes_ we have
-                                    // processed/in upstream.
-                                    offset_known: offset_known.offset,
-                                    offset_committed: last_committed_upper.offset,
-                                },
-                            );
-                        }
-                        probe_output.give(probe_cap, probe.clone());
-                        Ok(())
-                    },
-                    Some(Err(err)) => Err(anyhow::anyhow!("{err}").into()),
                     None => Ok(()),
                 },
                 else => return
