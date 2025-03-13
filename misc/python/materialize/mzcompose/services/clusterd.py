@@ -27,6 +27,7 @@ class Clusterd(Service):
         restart: str = "no",
         stop_grace_period: str = "120s",
         scratch_directory: str = "/scratch",
+        volumes: list[str] = [],
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -60,7 +61,7 @@ class Clusterd(Service):
                 "command": options,
                 "ports": [2100, 2101, 6878],
                 "environment": environment,
-                "volumes": DEFAULT_MZ_VOLUMES,
+                "volumes": volumes or DEFAULT_MZ_VOLUMES,
                 "restart": restart,
                 "stop_grace_period": stop_grace_period,
             }
