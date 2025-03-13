@@ -23,10 +23,11 @@
 //!
 
 #[cfg(feature = "parquet")]
-use std::io::{Read, Seek};
+use std::io::Seek;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use internal::SegmentedReader;
+use parquet::errors::ParquetError;
 use smallvec::SmallVec;
 
 #[cfg(feature = "parquet")]
@@ -206,16 +207,23 @@ impl parquet::file::reader::ChunkReader for SegmentedBytes {
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> parquet::errors::Result<Bytes> {
-        let mut reader = self.clone().reader();
-        reader.seek(std::io::SeekFrom::Start(start))?;
-
-        // TODO(parkmycar): Make this possible to achieve zero-copy.
-        //
-        // It's currently non-trivial to do this because LgBytes is not easily reference counted.
-        let mut buf = vec![0; length];
-        reader.read_exact(&mut buf)?;
-
-        Ok(Bytes::from(buf))
+        let start = usize::cast_from(start);
+        let mut buf = self.clone();
+        if start > buf.remaining() {
+            return Err(ParquetError::EOF(format!(
+                "seeking {start} bytes ahead, but only {} remaining",
+                buf.remaining()
+            )));
+        }
+        buf.advance(start);
+        if length > buf.remaining() {
+            return Err(ParquetError::EOF(format!(
+                "copying {length} bytes, but only {} remaining",
+                buf.remaining()
+            )));
+        }
+        let bytes = buf.copy_to_bytes(length);
+        Ok(bytes)
     }
 }
 
