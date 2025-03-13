@@ -12,8 +12,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
-use std::sync::LazyLock;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use futures::Future;
@@ -711,16 +709,8 @@ impl Coordinator {
 /// Convenience function for calculating the current upper bound that we want to
 /// prevent the global timestamp from exceeding.
 fn upper_bound(now: &mz_repr::Timestamp) -> mz_repr::Timestamp {
-    const TIMESTAMP_INTERVAL: LazyLock<mz_repr::Timestamp> = LazyLock::new(|| {
-        Duration::from_secs(5)
-            .as_millis()
-            .try_into()
-            .expect("5 seconds can fit into `Timestamp`")
-    });
-
+    const TIMESTAMP_INTERVAL_MS: u64 = 5000;
     const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
 
-    now.saturating_add(
-        TIMESTAMP_INTERVAL.saturating_mul(Timestamp::from(TIMESTAMP_INTERVAL_UPPER_BOUND)),
-    )
+    now.saturating_add(TIMESTAMP_INTERVAL_MS * TIMESTAMP_INTERVAL_UPPER_BOUND)
 }

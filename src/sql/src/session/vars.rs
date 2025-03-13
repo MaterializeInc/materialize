@@ -419,7 +419,7 @@ impl SessionVars {
             &WELCOME_MESSAGE,
         ]
         .into_iter()
-        .chain(SystemVars::SESSION_VARS.iter().map(|(_name, var)| *var))
+        .chain(SESSION_SYSTEM_VARS.iter().map(|(_name, var)| *var))
         .map(|var| (var.name, SessionVar::new(var.clone())))
         .collect();
 
@@ -1070,37 +1070,6 @@ impl Default for SystemVars {
 }
 
 impl SystemVars {
-    /// Set of [`SystemVar`]s that can also get set at a per-Session level.
-    ///
-    /// TODO(parkmycar): Instead of a separate list, make this a field on VarDefinition.
-    const SESSION_VARS: LazyLock<BTreeMap<&'static UncasedStr, &'static VarDefinition>> =
-        LazyLock::new(|| {
-            [
-                &APPLICATION_NAME,
-                &CLIENT_ENCODING,
-                &CLIENT_MIN_MESSAGES,
-                &CLUSTER,
-                &CLUSTER_REPLICA,
-                &CURRENT_OBJECT_MISSING_WARNINGS,
-                &DATABASE,
-                &DATE_STYLE,
-                &EXTRA_FLOAT_DIGITS,
-                &INTEGER_DATETIMES,
-                &INTERVAL_STYLE,
-                &REAL_TIME_RECENCY_TIMEOUT,
-                &SEARCH_PATH,
-                &STANDARD_CONFORMING_STRINGS,
-                &STATEMENT_TIMEOUT,
-                &IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
-                &TIMEZONE,
-                &TRANSACTION_ISOLATION,
-                &MAX_QUERY_RESULT_SIZE,
-            ]
-            .into_iter()
-            .map(|var| (UncasedStr::new(var.name()), var))
-            .collect()
-        });
-
     pub fn new() -> Self {
         let system_vars = vec![
             &MAX_KAFKA_CONNECTIONS,
@@ -1273,7 +1242,7 @@ impl SystemVars {
             // Include all of our feature flags.
             .chain(definitions::FEATURE_FLAGS.iter().copied())
             // Include the subset of Session variables we allow system defaults for.
-            .chain(Self::SESSION_VARS.values().copied())
+            .chain(SESSION_SYSTEM_VARS.values().copied())
             .cloned()
             // Include Persist configs.
             .chain(dyncfg_vars)
@@ -1341,7 +1310,7 @@ impl SystemVars {
         self.vars
             .values()
             .map(|v| v.as_var())
-            .filter(|v| !Self::SESSION_VARS.contains_key(UncasedStr::new(v.name())))
+            .filter(|v| !SESSION_SYSTEM_VARS.contains_key(UncasedStr::new(v.name())))
     }
 
     /// Returns an iterator over the configuration parameters and their current
@@ -1356,12 +1325,12 @@ impl SystemVars {
         self.vars
             .values()
             .map(|v| v.as_var())
-            .filter(|v| Self::SESSION_VARS.contains_key(UncasedStr::new(v.name())))
+            .filter(|v| SESSION_SYSTEM_VARS.contains_key(UncasedStr::new(v.name())))
     }
 
     /// Returns whether or not this parameter can be modified by a superuser.
     pub fn user_modifiable(&self, name: &str) -> bool {
-        Self::SESSION_VARS.contains_key(UncasedStr::new(name))
+        SESSION_SYSTEM_VARS.contains_key(UncasedStr::new(name))
             || name == ENABLE_RBAC_CHECKS.name()
             || name == NETWORK_POLICY.name()
     }
@@ -2331,6 +2300,37 @@ pub fn is_cluster_scheduling_var(name: &str) -> bool {
 pub fn is_http_config_var(name: &str) -> bool {
     name == WEBHOOK_CONCURRENT_REQUEST_LIMIT.name()
 }
+
+/// Set of [`SystemVar`]s that can also get set at a per-Session level.
+///
+/// TODO(parkmycar): Instead of a separate list, make this a field on VarDefinition.
+static SESSION_SYSTEM_VARS: LazyLock<BTreeMap<&'static UncasedStr, &'static VarDefinition>> =
+    LazyLock::new(|| {
+        [
+            &APPLICATION_NAME,
+            &CLIENT_ENCODING,
+            &CLIENT_MIN_MESSAGES,
+            &CLUSTER,
+            &CLUSTER_REPLICA,
+            &CURRENT_OBJECT_MISSING_WARNINGS,
+            &DATABASE,
+            &DATE_STYLE,
+            &EXTRA_FLOAT_DIGITS,
+            &INTEGER_DATETIMES,
+            &INTERVAL_STYLE,
+            &REAL_TIME_RECENCY_TIMEOUT,
+            &SEARCH_PATH,
+            &STANDARD_CONFORMING_STRINGS,
+            &STATEMENT_TIMEOUT,
+            &IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
+            &TIMEZONE,
+            &TRANSACTION_ISOLATION,
+            &MAX_QUERY_RESULT_SIZE,
+        ]
+        .into_iter()
+        .map(|var| (UncasedStr::new(var.name()), var))
+        .collect()
+    });
 
 // Provides a wrapper to express that a particular `ServerVar` is meant to be used as a feature
 /// flag.

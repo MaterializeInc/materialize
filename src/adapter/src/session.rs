@@ -715,7 +715,7 @@ impl<T: TimestampManipulation> Session<T> {
                     datums: Row::pack(params.iter().map(|(d, _t)| d)),
                     types: params.into_iter().map(|(_d, t)| t).collect(),
                 },
-                result_formats: result_formats.into_iter().map(Into::into).collect(),
+                result_formats,
                 state: PortalState::NotStarted,
                 logging,
             },

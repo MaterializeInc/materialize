@@ -114,21 +114,17 @@ const DEFAULT_ALLOCATOR_ID: u64 = 1;
 
 pub const DEFAULT_USER_NETWORK_POLICY_ID: NetworkPolicyId = NetworkPolicyId::User(1);
 pub const DEFAULT_USER_NETWORK_POLICY_NAME: &str = "default";
-pub const DEFAULT_USER_NETWORK_POLICY_RULES: LazyLock<
-    Vec<(
-        &str,
-        mz_sql::plan::NetworkPolicyRuleAction,
-        mz_sql::plan::NetworkPolicyRuleDirection,
-        &str,
-    )>,
-> = LazyLock::new(|| {
-    vec![(
-        "open_ingress",
-        mz_sql::plan::NetworkPolicyRuleAction::Allow,
-        mz_sql::plan::NetworkPolicyRuleDirection::Ingress,
-        "0.0.0.0/0",
-    )]
-});
+pub const DEFAULT_USER_NETWORK_POLICY_RULES: &[(
+    &str,
+    mz_sql::plan::NetworkPolicyRuleAction,
+    mz_sql::plan::NetworkPolicyRuleDirection,
+    &str,
+)] = &[(
+    "open_ingress",
+    mz_sql::plan::NetworkPolicyRuleAction::Allow,
+    mz_sql::plan::NetworkPolicyRuleDirection::Ingress,
+    "0.0.0.0/0",
+)];
 
 static DEFAULT_USER_NETWORK_POLICY_PRIVILEGES: LazyLock<Vec<MzAclItem>> = LazyLock::new(|| {
     vec![rbac::owner_privilege(
@@ -594,7 +590,6 @@ pub(crate) async fn initialize(
         DEFAULT_USER_NETWORK_POLICY_ID,
         DEFAULT_USER_NETWORK_POLICY_NAME.to_string(),
         DEFAULT_USER_NETWORK_POLICY_RULES
-            .clone()
             .into_iter()
             .map(|(name, action, direction, ip_str)| NetworkPolicyRule {
                 name: name.to_string(),

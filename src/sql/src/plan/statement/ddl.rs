@@ -172,7 +172,7 @@ mod connection;
 // more strict.
 const MAX_NUM_COLUMNS: usize = 256;
 
-const MANAGED_REPLICA_PATTERN: std::sync::LazyLock<regex::Regex> =
+static MANAGED_REPLICA_PATTERN: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"^r(\d)+$").unwrap());
 
 /// Given a relation desc and a column list, checks that:

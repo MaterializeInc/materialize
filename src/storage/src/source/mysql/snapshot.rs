@@ -502,7 +502,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 }
 
 /// Fetch the size of the snapshot on this worker.
-async fn fetch_snapshot_size<'a, Q>(
+async fn fetch_snapshot_size<Q>(
     conn: &mut Q,
     tables: Vec<(MySqlTableName, usize)>,
     metrics: MySqlSnapshotMetrics,

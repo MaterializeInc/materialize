@@ -175,6 +175,9 @@ WARN_CLIPPY_LINTS = [
     # We consistently don't use `mod.rs` files.
     "mod_module_files",
     "needless_pass_by_ref_mut",
+    # Helps prevent bugs caused by wrong usage of `const` instead of `static`
+    # to define global mutable values.
+    "borrow_interior_mutable_const",
 ]
 
 MESSAGE_LINT_MISSING = (
