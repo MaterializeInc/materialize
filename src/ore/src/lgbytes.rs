@@ -220,14 +220,12 @@ impl LgBytesOpMetrics {
         region
     }
 
-    /// Attempts to copy the given buf into an lgalloc managed file-based mapped
-    /// region, falling back to a heap allocation.
-    pub fn try_mmap<T: AsRef<[u8]>>(&self, buf: T) -> Bytes {
-        let buf = buf.as_ref();
-        let region = self
-            .try_mmap_region(buf)
-            .unwrap_or_else(|_| self.metrics_region(Region::Heap(buf.to_vec())));
-        Bytes::from(region)
+    /// Attempts to copy the given bytes into an lgalloc-managed file-based mapped
+    /// region. If that fails, we return the original bytes.
+    pub fn try_mmap_bytes(&self, buf: Bytes) -> Bytes {
+        self.try_mmap_region(buf.as_ref())
+            .map(Bytes::from)
+            .unwrap_or(buf)
     }
 
     /// Attempts to copy the given buf into an lgalloc managed file-based mapped region.

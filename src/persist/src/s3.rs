@@ -507,7 +507,7 @@ impl Blob for S3Blob {
                         Some(buf) => buf.extend_from_slice(&data[..]),
                         // Fallback to spilling into lgalloc is quick as possible.
                         None if enable_s3_lgalloc => {
-                            body_parts.push(self.metrics.lgbytes.persist_s3.try_mmap(&data).into());
+                            body_parts.push(self.metrics.lgbytes.persist_s3.try_mmap_bytes(data));
                         }
                         // If all else false just heap allocate.
                         None => {
