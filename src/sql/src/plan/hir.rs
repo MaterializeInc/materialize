@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
+use std::rc::Rc;
 use std::{fmt, mem};
 
 use itertools::Itertools;
@@ -189,30 +190,34 @@ pub enum HirScalarExpr {
     /// Unlike mz_expr::MirScalarExpr, we can nest HirRelationExprs via eg Exists. This means that a
     /// variable could refer to a column of the current input, or to a column of an outer relation.
     /// We use ColumnRef to denote the difference.
-    Column(ColumnRef),
-    Parameter(usize),
-    Literal(Row, ColumnType),
-    CallUnmaterializable(UnmaterializableFunc),
+    Column(ColumnRef, Option<Rc<str>>),
+    Parameter(usize, Option<Rc<str>>),
+    Literal(Row, ColumnType, Option<Rc<str>>),
+    CallUnmaterializable(UnmaterializableFunc, Option<Rc<str>>),
     CallUnary {
         func: UnaryFunc,
         expr: Box<HirScalarExpr>,
+        name: Option<Rc<str>>,
     },
     CallBinary {
         func: BinaryFunc,
         expr1: Box<HirScalarExpr>,
         expr2: Box<HirScalarExpr>,
+        name: Option<Rc<str>>,
     },
     CallVariadic {
         func: VariadicFunc,
         exprs: Vec<HirScalarExpr>,
+        name: Option<Rc<str>>,
     },
     If {
         cond: Box<HirScalarExpr>,
         then: Box<HirScalarExpr>,
         els: Box<HirScalarExpr>,
+        name: Option<Rc<str>>,
     },
     /// Returns true if `expr` returns any rows
-    Exists(Box<HirRelationExpr>),
+    Exists(Box<HirRelationExpr>, Option<Rc<str>>),
     /// Given `expr` with arity 1. If expr returns:
     /// * 0 rows, return NULL
     /// * 1 row, return the value of that row
@@ -222,8 +227,8 @@ pub enum HirScalarExpr {
     ///   If there are multiple `Select` expressions in a single SQL query, the result is that we take the product of all of them.
     ///   This is counter to the spec, but is consistent with eg postgres' treatment of multiple set-returning-functions
     ///   (see <https://tapoueh.org/blog/2017/10/set-returning-functions-and-postgresql-10/>).
-    Select(Box<HirRelationExpr>),
-    Windowing(WindowExpr),
+    Select(Box<HirRelationExpr>, Option<Rc<str>>),
+    Windowing(WindowExpr, Option<Rc<str>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -1720,11 +1725,11 @@ impl HirRelationExpr {
     }
 
     pub fn exists(self) -> HirScalarExpr {
-        HirScalarExpr::Exists(Box::new(self))
+        HirScalarExpr::Exists(Box::new(self), None)
     }
 
     pub fn select(self) -> HirScalarExpr {
-        HirScalarExpr::Select(Box::new(self))
+        HirScalarExpr::Select(Box::new(self), None)
     }
 
     pub fn join(
@@ -2159,9 +2164,9 @@ impl HirRelationExpr {
             self.visit_children(|scalar: &HirScalarExpr| {
                 if let Err(_) = scalar.visit_pre(&mut |scalar: &HirScalarExpr| {
                     result |= match scalar {
-                        Column(_)
-                        | Literal(_, _)
-                        | CallUnmaterializable(_)
+                        Column(..)
+                        | Literal(..)
+                        | CallUnmaterializable(..)
                         | If { .. }
                         | Parameter(..)
                         | Select(..)
@@ -2226,7 +2231,9 @@ impl VisitChildren<Self> for HirRelationExpr {
         VisitChildren::visit_children(self, |expr: &HirScalarExpr| {
             #[allow(deprecated)]
             Visit::visit_post_nolimit(expr, &mut |expr| match expr {
-                HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => f(expr.as_ref()),
+                HirScalarExpr::Exists(expr, _name) | HirScalarExpr::Select(expr, _name) => {
+                    f(expr.as_ref())
+                }
                 _ => (),
             });
         });
@@ -2313,7 +2320,9 @@ impl VisitChildren<Self> for HirRelationExpr {
         VisitChildren::visit_mut_children(self, |expr: &mut HirScalarExpr| {
             #[allow(deprecated)]
             Visit::visit_mut_post_nolimit(expr, &mut |expr| match expr {
-                HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => f(expr.as_mut()),
+                HirScalarExpr::Exists(expr, _name) | HirScalarExpr::Select(expr, _name) => {
+                    f(expr.as_mut())
+                }
                 _ => (),
             });
         });
@@ -2400,7 +2409,9 @@ impl VisitChildren<Self> for HirRelationExpr {
         // attached at the current node, and we want to visit them as well
         VisitChildren::try_visit_children(self, |expr: &HirScalarExpr| {
             Visit::try_visit_post(expr, &mut |expr| match expr {
-                HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => f(expr.as_ref()),
+                HirScalarExpr::Exists(expr, _name) | HirScalarExpr::Select(expr, _name) => {
+                    f(expr.as_ref())
+                }
                 _ => Ok(()),
             })
         })?;
@@ -2488,7 +2499,9 @@ impl VisitChildren<Self> for HirRelationExpr {
         // attached at the current node, and we want to visit them as well
         VisitChildren::try_visit_mut_children(self, |expr: &mut HirScalarExpr| {
             Visit::try_visit_mut_post(expr, &mut |expr| match expr {
-                HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => f(expr.as_mut()),
+                HirScalarExpr::Exists(expr, _name) | HirScalarExpr::Select(expr, _name) => {
+                    f(expr.as_mut())
+                }
                 _ => Ok(()),
             })
         })?;
@@ -2866,12 +2879,29 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
 }
 
 impl HirScalarExpr {
+    pub fn name(&self) -> Option<Rc<str>> {
+        use HirScalarExpr::*;
+        match self {
+            Column(_, name)
+            | Parameter(_, name)
+            | Literal(_, _, name)
+            | CallUnmaterializable(_, name)
+            | CallUnary { name, .. }
+            | CallBinary { name, .. }
+            | CallVariadic { name, .. }
+            | If { name, .. }
+            | Exists(_, name)
+            | Select(_, name)
+            | Windowing(_, name) => name.clone(),
+        }
+    }
+
     /// Replaces any parameter references in the expression with the
     /// corresponding datum in `params`.
     pub fn bind_parameters(&mut self, params: &Params) -> Result<(), PlanError> {
         #[allow(deprecated)]
         self.visit_recursively_mut(0, &mut |_: usize, e: &mut HirScalarExpr| {
-            if let HirScalarExpr::Parameter(n) = e {
+            if let HirScalarExpr::Parameter(n, name) = e {
                 let datum = match params.datums.iter().nth(*n - 1) {
                     None => sql_bail!("there is no parameter ${}", n),
                     Some(datum) => datum,
@@ -2879,7 +2909,11 @@ impl HirScalarExpr {
                 let scalar_type = &params.types[*n - 1];
                 let row = Row::pack([datum]);
                 let column_type = scalar_type.clone().nullable(datum.is_null());
-                *e = HirScalarExpr::Literal(row, column_type);
+                *e = HirScalarExpr::Literal(
+                    row,
+                    column_type,
+                    name.clone().or_else(|| Some(Rc::from(format!("${n}")))),
+                );
             }
             Ok(())
         })
@@ -2900,7 +2934,7 @@ impl HirScalarExpr {
         let _ = self.visit_recursively_mut(depth, &mut |depth: usize,
                                                         e: &mut HirScalarExpr|
          -> Result<(), ()> {
-            if let HirScalarExpr::Parameter(i) = e {
+            if let HirScalarExpr::Parameter(i, _name) = e {
                 *e = params[*i - 1].clone();
                 // Correct any column references in the parameter expression for
                 // its new depth.
@@ -2919,7 +2953,7 @@ impl HirScalarExpr {
         let mut contains = false;
         #[allow(deprecated)]
         self.visit_post_nolimit(&mut |e| {
-            if let Self::CallUnmaterializable(UnmaterializableFunc::MzNow) = e {
+            if let Self::CallUnmaterializable(UnmaterializableFunc::MzNow, _name) = e {
                 contains = true;
             }
         });
@@ -2928,15 +2962,18 @@ impl HirScalarExpr {
 
     /// Constructs a column reference in the current scope.
     pub fn column(index: usize) -> HirScalarExpr {
-        HirScalarExpr::Column(ColumnRef {
-            level: 0,
-            column: index,
-        })
+        HirScalarExpr::Column(
+            ColumnRef {
+                level: 0,
+                column: index,
+            },
+            None,
+        )
     }
 
     pub fn literal(datum: Datum, scalar_type: ScalarType) -> HirScalarExpr {
         let row = Row::pack([datum]);
-        HirScalarExpr::Literal(row, scalar_type.nullable(datum.is_null()))
+        HirScalarExpr::Literal(row, scalar_type.nullable(datum.is_null()), None)
     }
 
     pub fn literal_true() -> HirScalarExpr {
@@ -2973,11 +3010,11 @@ impl HirScalarExpr {
             )
             .expect("array constructed to be valid");
 
-        Ok(HirScalarExpr::Literal(row, scalar_type))
+        Ok(HirScalarExpr::Literal(row, scalar_type, None))
     }
 
     pub fn as_literal(&self) -> Option<Datum> {
-        if let HirScalarExpr::Literal(row, _column_type) = self {
+        if let HirScalarExpr::Literal(row, _column_type, _name) = self {
             Some(row.unpack_first())
         } else {
             None
@@ -3002,7 +3039,7 @@ impl HirScalarExpr {
         let mut worklist = vec![self];
         while let Some(expr) = worklist.pop() {
             match expr {
-                Self::Literal(_, _) => {
+                Self::Literal(..) => {
                     // leaf node, do nothing
                 }
                 Self::CallUnary { expr, .. } => {
@@ -3012,14 +3049,24 @@ impl HirScalarExpr {
                     func: _,
                     expr1,
                     expr2,
+                    name: _,
                 } => {
                     worklist.push(expr1);
                     worklist.push(expr2);
                 }
-                Self::CallVariadic { func: _, exprs } => {
+                Self::CallVariadic {
+                    func: _,
+                    exprs,
+                    name: _,
+                } => {
                     worklist.extend(exprs.iter());
                 }
-                Self::If { cond, then, els } => {
+                Self::If {
+                    cond,
+                    then,
+                    els,
+                    name: _,
+                } => {
                     worklist.push(cond);
                     worklist.push(then);
                     worklist.push(els);
@@ -3036,6 +3083,7 @@ impl HirScalarExpr {
         HirScalarExpr::CallUnary {
             func,
             expr: Box::new(self),
+            name: None,
         }
     }
 
@@ -3044,6 +3092,7 @@ impl HirScalarExpr {
             func,
             expr1: Box::new(self),
             expr2: Box::new(other),
+            name: None,
         }
     }
 
@@ -3051,6 +3100,7 @@ impl HirScalarExpr {
         HirScalarExpr::CallVariadic {
             func: VariadicFunc::Or,
             exprs: vec![self, other],
+            name: None,
         }
     }
 
@@ -3058,6 +3108,7 @@ impl HirScalarExpr {
         HirScalarExpr::CallVariadic {
             func: VariadicFunc::And,
             exprs: vec![self, other],
+            name: None,
         }
     }
 
@@ -3077,6 +3128,7 @@ impl HirScalarExpr {
             _ => HirScalarExpr::CallVariadic {
                 func: VariadicFunc::And,
                 exprs: args,
+                name: None,
             },
         }
     }
@@ -3089,6 +3141,7 @@ impl HirScalarExpr {
             _ => HirScalarExpr::CallVariadic {
                 func: VariadicFunc::Or,
                 exprs: args,
+                name: None,
             },
         }
     }
@@ -3111,7 +3164,7 @@ impl HirScalarExpr {
         let _ = self.visit_recursively(depth, &mut |depth: usize,
                                                     e: &HirScalarExpr|
          -> Result<(), ()> {
-            if let HirScalarExpr::Column(col) = e {
+            if let HirScalarExpr::Column(col, _name) = e {
                 f(depth, col)
             }
             Ok(())
@@ -3128,7 +3181,7 @@ impl HirScalarExpr {
         let _ = self.visit_recursively_mut(depth, &mut |depth: usize,
                                                         e: &mut HirScalarExpr|
          -> Result<(), ()> {
-            if let HirScalarExpr::Column(col) = e {
+            if let HirScalarExpr::Column(col, _name) = e {
                 f(depth, col)
             }
             Ok(())
@@ -3148,7 +3201,7 @@ impl HirScalarExpr {
         let _ = self.visit_recursively(0, &mut |depth: usize,
                                                 e: &HirScalarExpr|
          -> Result<(), ()> {
-            if let HirScalarExpr::Column(col) = e {
+            if let HirScalarExpr::Column(col, _name) = e {
                 if col.level == depth {
                     f(col.column)
                 }
@@ -3166,7 +3219,7 @@ impl HirScalarExpr {
         let _ = self.visit_recursively_mut(0, &mut |depth: usize,
                                                     e: &mut HirScalarExpr|
          -> Result<(), ()> {
-            if let HirScalarExpr::Column(col) = e {
+            if let HirScalarExpr::Column(col, _name) = e {
                 if col.level == depth {
                     f(&mut col.column)
                 }
@@ -3184,10 +3237,10 @@ impl HirScalarExpr {
         F: FnMut(usize, &HirScalarExpr) -> Result<(), E>,
     {
         match self {
-            HirScalarExpr::Literal(_, _)
-            | HirScalarExpr::Parameter(_)
-            | HirScalarExpr::CallUnmaterializable(_)
-            | HirScalarExpr::Column(_) => (),
+            HirScalarExpr::Literal(..)
+            | HirScalarExpr::Parameter(..)
+            | HirScalarExpr::CallUnmaterializable(..)
+            | HirScalarExpr::Column(..) => (),
             HirScalarExpr::CallUnary { expr, .. } => expr.visit_recursively(depth, f)?,
             HirScalarExpr::CallBinary { expr1, expr2, .. } => {
                 expr1.visit_recursively(depth, f)?;
@@ -3198,18 +3251,23 @@ impl HirScalarExpr {
                     expr.visit_recursively(depth, f)?;
                 }
             }
-            HirScalarExpr::If { cond, then, els } => {
+            HirScalarExpr::If {
+                cond,
+                then,
+                els,
+                name: _,
+            } => {
                 cond.visit_recursively(depth, f)?;
                 then.visit_recursively(depth, f)?;
                 els.visit_recursively(depth, f)?;
             }
-            HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
+            HirScalarExpr::Exists(expr, _name) | HirScalarExpr::Select(expr, _name) => {
                 #[allow(deprecated)]
                 expr.visit_scalar_expressions(depth + 1, &mut |e, depth| {
                     e.visit_recursively(depth, f)
                 })?;
             }
-            HirScalarExpr::Windowing(expr) => {
+            HirScalarExpr::Windowing(expr, _name) => {
                 expr.visit_expressions(&mut |e| e.visit_recursively(depth, f))?;
             }
         }
@@ -3223,10 +3281,10 @@ impl HirScalarExpr {
         F: FnMut(usize, &mut HirScalarExpr) -> Result<(), E>,
     {
         match self {
-            HirScalarExpr::Literal(_, _)
-            | HirScalarExpr::Parameter(_)
-            | HirScalarExpr::CallUnmaterializable(_)
-            | HirScalarExpr::Column(_) => (),
+            HirScalarExpr::Literal(..)
+            | HirScalarExpr::Parameter(..)
+            | HirScalarExpr::CallUnmaterializable(..)
+            | HirScalarExpr::Column(..) => (),
             HirScalarExpr::CallUnary { expr, .. } => expr.visit_recursively_mut(depth, f)?,
             HirScalarExpr::CallBinary { expr1, expr2, .. } => {
                 expr1.visit_recursively_mut(depth, f)?;
@@ -3237,18 +3295,23 @@ impl HirScalarExpr {
                     expr.visit_recursively_mut(depth, f)?;
                 }
             }
-            HirScalarExpr::If { cond, then, els } => {
+            HirScalarExpr::If {
+                cond,
+                then,
+                els,
+                name: _,
+            } => {
                 cond.visit_recursively_mut(depth, f)?;
                 then.visit_recursively_mut(depth, f)?;
                 els.visit_recursively_mut(depth, f)?;
             }
-            HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
+            HirScalarExpr::Exists(expr, _name) | HirScalarExpr::Select(expr, _name) => {
                 #[allow(deprecated)]
                 expr.visit_scalar_expressions_mut(depth + 1, &mut |e, depth| {
                     e.visit_recursively_mut(depth, f)
                 })?;
             }
-            HirScalarExpr::Windowing(expr) => {
+            HirScalarExpr::Windowing(expr, _name) => {
                 expr.visit_expressions_mut(&mut |e| e.visit_recursively_mut(depth, f))?;
             }
         }
@@ -3343,13 +3406,18 @@ impl VisitChildren<Self> for HirScalarExpr {
                     f(expr);
                 }
             }
-            If { cond, then, els } => {
+            If {
+                cond,
+                then,
+                els,
+                name: _,
+            } => {
                 f(cond);
                 f(then);
                 f(els);
             }
             Exists(..) | Select(..) => (),
-            Windowing(expr) => expr.visit_children(f),
+            Windowing(expr, _name) => expr.visit_children(f),
         }
     }
 
@@ -3370,13 +3438,18 @@ impl VisitChildren<Self> for HirScalarExpr {
                     f(expr);
                 }
             }
-            If { cond, then, els } => {
+            If {
+                cond,
+                then,
+                els,
+                name: _,
+            } => {
                 f(cond);
                 f(then);
                 f(els);
             }
             Exists(..) | Select(..) => (),
-            Windowing(expr) => expr.visit_mut_children(f),
+            Windowing(expr, _name) => expr.visit_mut_children(f),
         }
     }
 
@@ -3398,13 +3471,18 @@ impl VisitChildren<Self> for HirScalarExpr {
                     f(expr)?;
                 }
             }
-            If { cond, then, els } => {
+            If {
+                cond,
+                then,
+                els,
+                name: _,
+            } => {
                 f(cond)?;
                 f(then)?;
                 f(els)?;
             }
             Exists(..) | Select(..) => (),
-            Windowing(expr) => expr.try_visit_children(f)?,
+            Windowing(expr, _name) => expr.try_visit_children(f)?,
         }
         Ok(())
     }
@@ -3427,13 +3505,18 @@ impl VisitChildren<Self> for HirScalarExpr {
                     f(expr)?;
                 }
             }
-            If { cond, then, els } => {
+            If {
+                cond,
+                then,
+                els,
+                name: _,
+            } => {
                 f(cond)?;
                 f(then)?;
                 f(els)?;
             }
             Exists(..) | Select(..) => (),
-            Windowing(expr) => expr.try_visit_mut_children(f)?,
+            Windowing(expr, _name) => expr.try_visit_mut_children(f)?,
         }
         Ok(())
     }
@@ -3449,33 +3532,47 @@ impl AbstractExpr for HirScalarExpr {
         params: &BTreeMap<usize, ScalarType>,
     ) -> Self::Type {
         stack::maybe_grow(|| match self {
-            HirScalarExpr::Column(ColumnRef { level, column }) => {
+            HirScalarExpr::Column(ColumnRef { level, column }, _name) => {
                 if *level == 0 {
                     inner.column_types[*column].clone()
                 } else {
                     outers[*level - 1].column_types[*column].clone()
                 }
             }
-            HirScalarExpr::Parameter(n) => params[n].clone().nullable(true),
-            HirScalarExpr::Literal(_, typ) => typ.clone(),
-            HirScalarExpr::CallUnmaterializable(func) => func.output_type(),
-            HirScalarExpr::CallUnary { expr, func } => {
-                func.output_type(expr.typ(outers, inner, params))
-            }
-            HirScalarExpr::CallBinary { expr1, expr2, func } => func.output_type(
+            HirScalarExpr::Parameter(n, _name) => params[n].clone().nullable(true),
+            HirScalarExpr::Literal(_, typ, _name) => typ.clone(),
+            HirScalarExpr::CallUnmaterializable(func, _name) => func.output_type(),
+            HirScalarExpr::CallUnary {
+                expr,
+                func,
+                name: _,
+            } => func.output_type(expr.typ(outers, inner, params)),
+            HirScalarExpr::CallBinary {
+                expr1,
+                expr2,
+                func,
+                name: _,
+            } => func.output_type(
                 expr1.typ(outers, inner, params),
                 expr2.typ(outers, inner, params),
             ),
-            HirScalarExpr::CallVariadic { exprs, func } => {
-                func.output_type(exprs.iter().map(|e| e.typ(outers, inner, params)).collect())
-            }
-            HirScalarExpr::If { cond: _, then, els } => {
+            HirScalarExpr::CallVariadic {
+                exprs,
+                func,
+                name: _,
+            } => func.output_type(exprs.iter().map(|e| e.typ(outers, inner, params)).collect()),
+            HirScalarExpr::If {
+                cond: _,
+                then,
+                els,
+                name: _,
+            } => {
                 let then_type = then.typ(outers, inner, params);
                 let else_type = els.typ(outers, inner, params);
                 then_type.union(&else_type).unwrap()
             }
-            HirScalarExpr::Exists(_) => ScalarType::Bool.nullable(true),
-            HirScalarExpr::Select(expr) => {
+            HirScalarExpr::Exists(_, _name) => ScalarType::Bool.nullable(true),
+            HirScalarExpr::Select(expr, _name) => {
                 let mut outers = outers.to_vec();
                 outers.insert(0, inner.clone());
                 expr.typ(&outers, params)
@@ -3483,7 +3580,7 @@ impl AbstractExpr for HirScalarExpr {
                     .into_element()
                     .nullable(true)
             }
-            HirScalarExpr::Windowing(expr) => expr.func.typ(outers, inner, params),
+            HirScalarExpr::Windowing(expr, _name) => expr.func.typ(outers, inner, params),
         })
     }
 }

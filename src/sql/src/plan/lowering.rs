@@ -951,11 +951,17 @@ impl HirScalarExpr {
             }
 
             Ok::<MirScalarExpr, PlanError>(match self {
-                Column(col_ref) => SS::Column(col_map.get(&col_ref)),
-                Literal(row, typ) => SS::Literal(Ok(row), typ),
-                Parameter(_) => panic!("cannot decorrelate expression with unbound parameters"),
-                CallUnmaterializable(func) => SS::CallUnmaterializable(func),
-                CallUnary { func, expr } => SS::CallUnary {
+                Column(col_ref, _name) => SS::Column(col_map.get(&col_ref)),
+                Literal(row, typ, _name) => SS::Literal(Ok(row), typ),
+                Parameter(_, _name) => {
+                    panic!("cannot decorrelate expression with unbound parameters")
+                }
+                CallUnmaterializable(func, _name) => SS::CallUnmaterializable(func),
+                CallUnary {
+                    func,
+                    expr,
+                    name: _,
+                } => SS::CallUnary {
                     func,
                     expr: Box::new(expr.applied_to(
                         id_gen,
@@ -966,7 +972,12 @@ impl HirScalarExpr {
                         context,
                     )?),
                 },
-                CallBinary { func, expr1, expr2 } => SS::CallBinary {
+                CallBinary {
+                    func,
+                    expr1,
+                    expr2,
+                    name: _,
+                } => SS::CallBinary {
                     func,
                     expr1: Box::new(expr1.applied_to(
                         id_gen,
@@ -985,7 +996,11 @@ impl HirScalarExpr {
                         context,
                     )?),
                 },
-                CallVariadic { func, exprs } => SS::CallVariadic {
+                CallVariadic {
+                    func,
+                    exprs,
+                    name: _,
+                } => SS::CallVariadic {
                     func,
                     exprs: exprs
                         .into_iter()
@@ -994,7 +1009,12 @@ impl HirScalarExpr {
                         })
                         .collect::<Result<Vec<_>, _>>()?,
                 },
-                If { cond, then, els } => {
+                If {
+                    cond,
+                    then,
+                    els,
+                    name: _,
+                } => {
                     // The `If` case is complicated by the fact that we do not want to
                     // apply the `then` or `else` logic to tuples that respectively do
                     // not or do pass the `cond` test. Our strategy is to independently
@@ -1102,7 +1122,7 @@ impl HirScalarExpr {
 
                 // When the subquery would return 0 rows for some row in the outer query, `subquery.applied_to(get_inner)` will not have any corresponding row.
                 // Use `lookup` if you need to add default values for cases when the subquery returns 0 rows.
-                Exists(expr) => {
+                Exists(expr, _name) => {
                     let apply_requires_distinct_outer = true;
                     *inner = apply_existential_subquery(
                         id_gen,
@@ -1116,7 +1136,7 @@ impl HirScalarExpr {
                     SS::Column(inner.arity() - 1)
                 }
 
-                Select(expr) => {
+                Select(expr, _name) => {
                     let apply_requires_distinct_outer = true;
                     *inner = apply_scalar_subquery(
                         id_gen,
@@ -1129,7 +1149,7 @@ impl HirScalarExpr {
                     )?;
                     SS::Column(inner.arity() - 1)
                 }
-                Windowing(expr) => {
+                Windowing(expr, _name) => {
                     let partition_by = expr.partition_by;
                     let order_by = expr.order_by;
 
@@ -1535,7 +1555,7 @@ impl HirScalarExpr {
                         _ => None,
                     },
                     &mut |e| match e {
-                        HirScalarExpr::Select(expr) => {
+                        HirScalarExpr::Select(expr, _name) => {
                             let apply_requires_distinct_outer = false;
                             let subquery = apply_scalar_subquery(
                                 id_gen,
@@ -1550,7 +1570,7 @@ impl HirScalarExpr {
 
                             subqueries.push((e.clone(), subquery));
                         }
-                        HirScalarExpr::Exists(expr) => {
+                        HirScalarExpr::Exists(expr, _name) => {
                             let apply_requires_distinct_outer = false;
                             let subquery = apply_existential_subquery(
                                 id_gen,
@@ -1618,26 +1638,44 @@ impl HirScalarExpr {
         use HirScalarExpr::*;
 
         Ok(match self {
-            Column(ColumnRef { level: 0, column }) => SS::Column(column),
-            Literal(datum, typ) => SS::Literal(Ok(datum), typ),
-            CallUnmaterializable(func) => SS::CallUnmaterializable(func),
-            CallUnary { func, expr } => SS::CallUnary {
+            Column(ColumnRef { level: 0, column }, _name) => SS::Column(column),
+            Literal(datum, typ, _name) => SS::Literal(Ok(datum), typ),
+            CallUnmaterializable(func, _name) => SS::CallUnmaterializable(func),
+            CallUnary {
+                func,
+                expr,
+                name: _,
+            } => SS::CallUnary {
                 func,
                 expr: Box::new(expr.lower_uncorrelated()?),
             },
-            CallBinary { func, expr1, expr2 } => SS::CallBinary {
+            CallBinary {
+                func,
+                expr1,
+                expr2,
+                name: _,
+            } => SS::CallBinary {
                 func,
                 expr1: Box::new(expr1.lower_uncorrelated()?),
                 expr2: Box::new(expr2.lower_uncorrelated()?),
             },
-            CallVariadic { func, exprs } => SS::CallVariadic {
+            CallVariadic {
+                func,
+                exprs,
+                name: _,
+            } => SS::CallVariadic {
                 func,
                 exprs: exprs
                     .into_iter()
                     .map(|expr| expr.lower_uncorrelated())
                     .collect::<Result<_, _>>()?,
             },
-            If { cond, then, els } => SS::If {
+            If {
+                cond,
+                then,
+                els,
+                name: _,
+            } => SS::If {
                 cond: Box::new(cond.lower_uncorrelated()?),
                 then: Box::new(then.lower_uncorrelated()?),
                 els: Box::new(els.lower_uncorrelated()?),

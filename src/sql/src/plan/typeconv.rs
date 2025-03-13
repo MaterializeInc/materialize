@@ -937,6 +937,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
             HirScalarExpr::CallVariadic {
                 func: VariadicFunc::JsonbBuildObject,
                 exprs,
+                name: None,
             }
         }
         ref ty @ List {
@@ -1133,13 +1134,14 @@ pub fn plan_coerce<'a>(
                         .collect(),
                 },
                 exprs: out,
+                name: None,
             }
         }
 
         Parameter(n) => {
             let prev = ecx.param_types().borrow_mut().insert(n, coerce_to.clone());
             assert_none!(prev);
-            HirScalarExpr::Parameter(n)
+            HirScalarExpr::Parameter(n, None)
         }
     })
 }
@@ -1179,10 +1181,13 @@ pub fn plan_hypothetical_cast(
         allow_windows: false,
     };
 
-    let col_expr = HirScalarExpr::Column(ColumnRef {
-        level: 0,
-        column: 0,
-    });
+    let col_expr = HirScalarExpr::Column(
+        ColumnRef {
+            level: 0,
+            column: 0,
+        },
+        None,
+    );
 
     // Determine the `ScalarExpr` required to cast our column to the target
     // component type.
