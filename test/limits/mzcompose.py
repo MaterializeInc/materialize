@@ -26,6 +26,7 @@ from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -1551,6 +1552,8 @@ class PostgresTables(Generator):
         print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_tables = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=postgres://postgres:postgres@postgres")
         print("ALTER USER postgres WITH replication;")
         print("DROP SCHEMA IF EXISTS public CASCADE;")
@@ -1572,16 +1575,17 @@ class PostgresTables(Generator):
         )
         print(
             """> CREATE SOURCE p
-          IN CLUSTER single_replica_cluster
+          IN CLUSTER single_worker_cluster
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+          FOR ALL TABLES
           """
         )
-        for i in cls.all():
-            print(
-                f"""> CREATE TABLE t{i}
-              FROM SOURCE p (REFERENCE t{i})
-              """
-            )
+        # for i in cls.all():
+        #     print(
+        #         f"""> CREATE TABLE t{i}
+        #       FROM SOURCE p (REFERENCE t{i})
+        #       """
+        #     )
         for i in cls.all():
             cls.store_explain_and_run(f"SELECT * FROM t{i}")
             print(f"{i}")
@@ -1739,7 +1743,11 @@ MAX_NODES = 4
 SERVICES = [
     Zookeeper(),
     Kafka(),
-    Postgres(max_wal_senders=Generator.COUNT, max_replication_slots=Generator.COUNT),
+    Postgres(
+        max_wal_senders=Generator.COUNT,
+        max_replication_slots=Generator.COUNT,
+        volumes=["sourcedata_512Mb:/var/lib/postgresql/data"],
+    ),
     MySql(),
     SchemaRegistry(),
     # We create all sources, sinks and dataflows by default with SIZE '1'
@@ -1783,8 +1791,10 @@ SERVICES = [
             "secrets:/secrets",
         ],
     ),
+    Cockroach(in_memory=True),
     Materialized(
         memory="8G",
+        cpu=2,
         default_size=1,
         options=[
             # Enable TLS on the public port to verify that balancerd is connecting to the balancerd port.
@@ -1801,6 +1811,8 @@ SERVICES = [
             "secrets:/secrets",
         ],
         sanity_restart=False,
+        external_metadata_store=True,
+        metadata_store="cockroach",
     ),
     Mz(app_password=""),
 ]
@@ -1809,7 +1821,7 @@ for cluster_id in range(1, MAX_CLUSTERS + 1):
     for replica_id in range(1, MAX_REPLICAS + 1):
         for node_id in range(1, MAX_NODES + 1):
             SERVICES.append(
-                Clusterd(name=f"clusterd_{cluster_id}_{replica_id}_{node_id}")
+                Clusterd(name=f"clusterd_{cluster_id}_{replica_id}_{node_id}", cpu=2)
             )
 
 
@@ -1828,6 +1840,7 @@ service_names = [
     "clusterd_2_2_1",
     "clusterd_3_1_1",
     "clusterd_3_2_1",
+    "clusterd_4_1_1",
 ]
 
 
@@ -1867,6 +1880,17 @@ def setup(c: Composition, workers: int) -> None:
                 COMPUTECTL ADDRESSES ['clusterd_3_1_1:2101', 'clusterd_3_2_1:2101'],
                 COMPUTE ADDRESSES ['clusterd_3_1_1:2102', 'clusterd_3_2_1:2102'],
                 WORKERS {workers}
+            )
+        );
+        GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
+        DROP CLUSTER IF EXISTS single_worker_cluster CASCADE;
+        CREATE CLUSTER single_worker_cluster REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd_4_1_1:2100'],
+                STORAGE ADDRESSES ['clusterd_4_1_1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_4_1_1:2101'],
+                COMPUTE ADDRESSES ['clusterd_4_1_1:2102'],
+                WORKERS 1
             )
         );
         GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
