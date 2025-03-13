@@ -19,7 +19,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Instant;
 
-use bytes::Buf;
+use bytes::{Buf, Bytes};
 use lgalloc::AllocError;
 use prometheus::{Counter, CounterVec, Histogram, IntCounter, IntCounterVec};
 use tracing::debug;
@@ -34,6 +34,14 @@ use crate::region::Region;
 pub struct LgBytes {
     offset: usize,
     region: Arc<MetricsRegion<u8>>,
+}
+
+impl From<LgBytes> for Bytes {
+    fn from(bytes: LgBytes) -> Bytes {
+        // This will handle the drop correctly when the refcount goes to 0...
+        // see the rustdoc on this method for more details.
+        Bytes::from_owner(bytes)
+    }
 }
 
 /// A [Region] wrapper that increments metrics when it is dropped.
