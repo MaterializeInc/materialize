@@ -29,6 +29,7 @@ Add
 Added
 Address
 Addresses
+After
 Aggregate
 Aggregation
 Aligned
@@ -112,6 +113,7 @@ Createnetworkpolicy
 Createrole
 Creation
 Cross
+Cse
 Csv
 Current
 Cursor
@@ -342,6 +344,7 @@ Prioritize
 Privatelink
 Privileges
 Progress
+Projection
 Protobuf
 Protocol
 Public
@@ -368,6 +371,7 @@ Refresh
 Regex
 Region
 Registry
+Relation
 Rename
 Reoptimize
 Repeatable
