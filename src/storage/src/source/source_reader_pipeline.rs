@@ -290,7 +290,7 @@ fn source_render_operator<G, C>(
     config: &RawSourceCreationConfig,
     source_connection: C,
     probed_upper_tx: watch::Sender<Option<Probe<C::Time>>>,
-    resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
+    resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + Send + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
