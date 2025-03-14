@@ -11,7 +11,7 @@ menu:
 ## Syntax
 
 ```sql
-SHOW CREATE MATERIALIZED VIEW <view_name>
+SHOW [REDACTED] CREATE MATERIALIZED VIEW <view_name>
 ```
 
 For available materialized view names, see [`SHOW MATERIALIZED VIEWS`](/sql/show-materialized-views).

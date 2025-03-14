@@ -7676,6 +7676,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_show(&mut self) -> Result<ShowStatement<Raw>, ParserError> {
+        let redacted = self.parse_keyword(REDACTED);
+        if redacted && !self.peek_keyword(CREATE) {
+            return parser_err!(
+                self,
+                self.peek_pos(),
+                "SHOW REDACTED is only supported for SHOW REDACTED CREATE ..."
+            );
+        }
         if self.parse_one_of_keywords(&[COLUMNS, FIELDS]).is_some() {
             self.parse_show_columns()
         } else if self.parse_keyword(OBJECTS) {
@@ -7816,36 +7824,50 @@ impl<'a> Parser<'a> {
         } else if self.parse_keywords(&[CREATE, VIEW]) {
             Ok(ShowStatement::ShowCreateView(ShowCreateViewStatement {
                 view_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, MATERIALIZED, VIEW]) {
             Ok(ShowStatement::ShowCreateMaterializedView(
                 ShowCreateMaterializedViewStatement {
                     materialized_view_name: self.parse_raw_name()?,
+                    redacted,
                 },
             ))
         } else if self.parse_keywords(&[CREATE, SOURCE]) {
             Ok(ShowStatement::ShowCreateSource(ShowCreateSourceStatement {
                 source_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, TABLE]) {
             Ok(ShowStatement::ShowCreateTable(ShowCreateTableStatement {
                 table_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, SINK]) {
             Ok(ShowStatement::ShowCreateSink(ShowCreateSinkStatement {
                 sink_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, INDEX]) {
             Ok(ShowStatement::ShowCreateIndex(ShowCreateIndexStatement {
                 index_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, CONNECTION]) {
             Ok(ShowStatement::ShowCreateConnection(
                 ShowCreateConnectionStatement {
                     connection_name: self.parse_raw_name()?,
+                    redacted,
                 },
             ))
         } else if self.parse_keywords(&[CREATE, CLUSTER]) {
+            if redacted {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "SHOW REDACTED CREATE CLUSTER is not supported"
+                );
+            }
             Ok(ShowStatement::ShowCreateCluster(
                 ShowCreateClusterStatement {
                     cluster_name: RawClusterName::Unresolved(self.parse_identifier()?),

@@ -60,9 +60,12 @@ pub fn describe_show_create_view(
 
 pub fn plan_show_create_view(
     scx: &StatementContext,
-    ShowCreateViewStatement { view_name }: ShowCreateViewStatement<Aug>,
+    ShowCreateViewStatement {
+        view_name,
+        redacted,
+    }: ShowCreateViewStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    plan_show_create_item(scx, &view_name, CatalogItemType::View)
+    plan_show_create_item(scx, &view_name, CatalogItemType::View, redacted)
 }
 
 pub fn describe_show_create_materialized_view(
@@ -81,12 +84,14 @@ pub fn plan_show_create_materialized_view(
     scx: &StatementContext,
     ShowCreateMaterializedViewStatement {
         materialized_view_name,
+        redacted,
     }: ShowCreateMaterializedViewStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
     plan_show_create_item(
         scx,
         &materialized_view_name,
         CatalogItemType::MaterializedView,
+        redacted,
     )
 }
 
@@ -106,6 +111,7 @@ fn plan_show_create_item(
     scx: &StatementContext,
     name: &ResolvedItemName,
     expect_type: CatalogItemType,
+    redacted: bool,
 ) -> Result<ShowCreatePlan, PlanError> {
     let item = scx.get_item_by_resolved_name(name)?;
     let name = name.full_name_str();
@@ -124,7 +130,8 @@ fn plan_show_create_item(
     if item.item_type() != expect_type {
         sql_bail!("{name} is not a {expect_type}");
     }
-    let create_sql = humanize_sql_for_show_create(scx.catalog, item.id(), item.create_sql())?;
+    let create_sql =
+        humanize_sql_for_show_create(scx.catalog, item.id(), item.create_sql(), redacted)?;
     Ok(ShowCreatePlan {
         id: ObjectId::Item(item.id()),
         row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
@@ -133,9 +140,12 @@ fn plan_show_create_item(
 
 pub fn plan_show_create_table(
     scx: &StatementContext,
-    ShowCreateTableStatement { table_name }: ShowCreateTableStatement<Aug>,
+    ShowCreateTableStatement {
+        table_name,
+        redacted,
+    }: ShowCreateTableStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    plan_show_create_item(scx, &table_name, CatalogItemType::Table)
+    plan_show_create_item(scx, &table_name, CatalogItemType::Table, redacted)
 }
 
 pub fn describe_show_create_source(
@@ -152,9 +162,12 @@ pub fn describe_show_create_source(
 
 pub fn plan_show_create_source(
     scx: &StatementContext,
-    ShowCreateSourceStatement { source_name }: ShowCreateSourceStatement<Aug>,
+    ShowCreateSourceStatement {
+        source_name,
+        redacted,
+    }: ShowCreateSourceStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    plan_show_create_item(scx, &source_name, CatalogItemType::Source)
+    plan_show_create_item(scx, &source_name, CatalogItemType::Source, redacted)
 }
 
 pub fn describe_show_create_sink(
@@ -171,9 +184,12 @@ pub fn describe_show_create_sink(
 
 pub fn plan_show_create_sink(
     scx: &StatementContext,
-    ShowCreateSinkStatement { sink_name }: ShowCreateSinkStatement<Aug>,
+    ShowCreateSinkStatement {
+        sink_name,
+        redacted,
+    }: ShowCreateSinkStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    plan_show_create_item(scx, &sink_name, CatalogItemType::Sink)
+    plan_show_create_item(scx, &sink_name, CatalogItemType::Sink, redacted)
 }
 
 pub fn describe_show_create_index(
@@ -190,9 +206,12 @@ pub fn describe_show_create_index(
 
 pub fn plan_show_create_index(
     scx: &StatementContext,
-    ShowCreateIndexStatement { index_name }: ShowCreateIndexStatement<Aug>,
+    ShowCreateIndexStatement {
+        index_name,
+        redacted,
+    }: ShowCreateIndexStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    plan_show_create_item(scx, &index_name, CatalogItemType::Index)
+    plan_show_create_item(scx, &index_name, CatalogItemType::Index, redacted)
 }
 
 pub fn describe_show_create_connection(
@@ -236,9 +255,12 @@ pub fn describe_show_create_cluster(
 
 pub fn plan_show_create_connection(
     scx: &StatementContext,
-    ShowCreateConnectionStatement { connection_name }: ShowCreateConnectionStatement<Aug>,
+    ShowCreateConnectionStatement {
+        connection_name,
+        redacted,
+    }: ShowCreateConnectionStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    plan_show_create_item(scx, &connection_name, CatalogItemType::Connection)
+    plan_show_create_item(scx, &connection_name, CatalogItemType::Connection, redacted)
 }
 
 pub fn show_databases<'a>(
@@ -999,6 +1021,7 @@ fn humanize_sql_for_show_create(
     catalog: &dyn SessionCatalog,
     id: CatalogItemId,
     sql: &str,
+    redacted: bool,
 ) -> Result<String, PlanError> {
     use mz_sql_parser::ast::{CreateSourceConnection, MySqlConfigOptionName, PgConfigOptionName};
 
@@ -1153,5 +1176,9 @@ fn humanize_sql_for_show_create(
         _ => (),
     }
 
-    Ok(resolved.to_ast_string_stable())
+    if redacted {
+        Ok(resolved.to_ast_string_redacted())
+    } else {
+        Ok(resolved.to_ast_string_stable())
+    }
 }

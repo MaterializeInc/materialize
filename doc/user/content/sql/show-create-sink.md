@@ -11,7 +11,7 @@ menu:
 ## Syntax
 
 ```sql
-SHOW CREATE SINK <sink_name>
+SHOW [REDACTED] CREATE SINK <sink_name>
 ```
 
 For available sink names, see [`SHOW SINKS`](/sql/show-sinks).

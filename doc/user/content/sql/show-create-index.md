@@ -11,7 +11,7 @@ menu:
 ## Syntax
 
 ```sql
-SHOW CREATE INDEX <index_name>
+SHOW [REDACTED] CREATE INDEX <index_name>
 ```
 
 For available index names, see [`SHOW INDEXES`](/sql/show-indexes).
