@@ -67,12 +67,15 @@ where
 }
 
 /// Describes the context in which to print an AST.
+///
+/// TODO: Currently, only the simple format can be redacted, but, ideally, whether it's redacted and
+///       whether it's stable would be orthogonal settings.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FormatMode {
     /// Simple is the normal way of printing for human consumption. Identifiers are quoted only if
-    /// necessary and sensative information is redacted.
+    /// necessary and sensitive information is not redacted.
     Simple,
-    /// SimpleRedacted is like Simple, but strips out string and number literals.
+    /// SimpleRedacted is like Simple, but strips out literals, e.g. strings and numbers.
     /// This makes SQL queries be "usage data", rather than "customer data" according to our
     /// data management policy, allowing us to introspect it.
     SimpleRedacted,
