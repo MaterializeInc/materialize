@@ -182,7 +182,7 @@ impl<'a> SourceReferenceClient<'a> {
 
                 tables
                     .into_iter()
-                    .map(|desc| ReferenceMetadata::Postgres {
+                    .map(|(_oid, desc)| ReferenceMetadata::Postgres {
                         table: desc,
                         database: database.to_string(),
                     })

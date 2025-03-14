@@ -34,7 +34,7 @@ pub async fn get_schemas(client: &Client) -> Result<Vec<PostgresSchemaDesc>, Pos
 
 /// Fetches table schema information from an upstream Postgres source for tables
 /// that are part of a publication, given a connection string and the
-/// publication name.
+/// publication name. Returns a map from table OID to table schema information.
 ///
 /// The `oids` parameter controls for which tables to fetch schema information. If `None`,
 /// schema information for all tables in the publication is fetched. If `Some`, only
@@ -47,8 +47,8 @@ pub async fn get_schemas(client: &Client) -> Result<Vec<PostgresSchemaDesc>, Pos
 pub async fn publication_info(
     client: &Client,
     publication: &str,
-    oids: Option<&[u32]>,
-) -> Result<Vec<PostgresTableDesc>, PostgresError> {
+    oids: Option<&[Oid]>,
+) -> Result<BTreeMap<Oid, PostgresTableDesc>, PostgresError> {
     let server_version_num = client
         .query_one("SHOW server_version_num", &[])
         .await?
@@ -78,7 +78,7 @@ pub async fn publication_info(
                             c.relname = p.tablename AND n.nspname = p.schemaname
                 WHERE
                     p.pubname = $1
-                    AND c.oid = ANY($2)",
+                    AND c.oid = ANY ($2)",
                 &[&publication, &oids],
             )
             .await
@@ -126,18 +126,18 @@ pub async fn publication_info(
         WHERE a.attnum > 0::pg_catalog.int2
             AND NOT a.attisdropped
             AND {attgenerated}
-            AND a.attrelid =ANY($1)
+            AND a.attrelid = ANY ($1)
         ORDER BY a.attnum"
     );
 
     let table_oids = tables
         .iter()
         .map(|row| row.get("oid"))
-        .collect::<Vec<u32>>();
+        .collect::<Vec<Oid>>();
 
-    let mut columns: BTreeMap<u32, Vec<_>> = BTreeMap::new();
+    let mut columns: BTreeMap<Oid, Vec<_>> = BTreeMap::new();
     for row in client.query(&pg_columns, &[&table_oids]).await? {
-        let table_oid: u32 = row.get("table_oid");
+        let table_oid: Oid = row.get("table_oid");
         let name: String = row.get("name");
         let type_oid = row.get("typoid");
         let col_num = row
@@ -179,15 +179,15 @@ pub async fn publication_info(
                     pg_index
                     ON pg_index.indexrelid = pg_constraint.conindid
         WHERE
-            pg_constraint.conrelid =ANY($1)
+            pg_constraint.conrelid = ANY ($1)
                 AND
-            pg_constraint.contype =ANY (ARRAY['p', 'u']);"
+            pg_constraint.contype = ANY (ARRAY['p', 'u']);"
     );
 
-    let mut keys: BTreeMap<u32, BTreeSet<_>> = BTreeMap::new();
+    let mut keys: BTreeMap<Oid, BTreeSet<_>> = BTreeMap::new();
     for row in client.query(&pg_keys, &[&table_oids]).await? {
-        let table_oid: u32 = row.get("table_oid");
-        let oid: u32 = row.get("oid");
+        let table_oid: Oid = row.get("table_oid");
+        let oid: Oid = row.get("oid");
         let cols: Vec<i16> = row.get("conkey");
         let name: String = row.get("conname");
         let is_primary: bool = row.get("is_primary");
@@ -209,16 +209,17 @@ pub async fn publication_info(
     Ok(tables
         .into_iter()
         .map(|row| {
-            let oid: u32 = row.get("oid");
+            let oid: Oid = row.get("oid");
             let columns = columns.remove(&oid).unwrap_or_default();
             let keys = keys.remove(&oid).unwrap_or_default();
-            PostgresTableDesc {
+            let desc = PostgresTableDesc {
                 oid,
                 namespace: row.get("schemaname"),
                 name: row.get("tablename"),
                 columns,
                 keys,
-            }
+            };
+            (oid, desc)
         })
         .collect())
 }

@@ -971,13 +971,15 @@ fn extract_transaction<'a>(
                         // to check the current local schema against the current remote schema to
                         // ensure e.g. we haven't received a schema update with the same terminal
                         // column name which is actually a different column.
+                        let oids = std::iter::once(rel_id)
+                            .chain(table_info.keys().copied())
+                            .collect::<Vec<_>>();
                         let upstream_info = mz_postgres_util::publication_info(
                             metadata_client,
                             publication,
-                            Some(&[rel_id]),
+                            Some(&oids),
                         )
                         .await?;
-                        let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
                         for (output_index, output) in valid_outputs {
                             if let Err(err) =
@@ -1129,7 +1131,7 @@ fn spawn_schema_validator(
             )
             .await
             {
-                Ok(info) => info.into_iter().map(|t| (t.oid, t)).collect(),
+                Ok(info) => info,
                 Err(error) => {
                     let _ = tx.send(SchemaValidationError::Postgres(error));
                     continue;
