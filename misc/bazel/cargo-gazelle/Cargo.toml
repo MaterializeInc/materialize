@@ -23,7 +23,7 @@ md-5 = "0.10.5"
 proc-macro2 = "1.0.60"
 protobuf-parse = "3.7.1"
 quote = "1.0.38"
-syn = { version = "1.0.107", features = ["extra-traits", "full"] }
+syn = { version = "2.0.98", features = ["extra-traits", "full"] }
 serde = "1.0.218"
 serde_json = "1.0.125"
 tempfile = "3.18.0"
