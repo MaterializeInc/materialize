@@ -950,20 +950,22 @@ impl S3Blob {
                 None => "UnknownServiceError",
             },
             SdkError::DispatchFailure(e) => {
-                let error_kind = if let Some(connector_error) = e.as_connector_error() {
-                    connector_error.as_other()
-                } else {
-                    e.as_other()
-                };
-                match error_kind {
-                    Some(error_kind) => match error_kind {
+                if let Some(other_error) = e.as_other() {
+                    match other_error {
                         aws_config::retry::ErrorKind::TransientError => "TransientError",
                         aws_config::retry::ErrorKind::ThrottlingError => "ThrottlingError",
                         aws_config::retry::ErrorKind::ServerError => "ServerError",
                         aws_config::retry::ErrorKind::ClientError => "ClientError",
                         _ => "UnknownDispatchFailure",
-                    },
-                    None => "UnknownDispatchFailure",
+                    }
+                } else if e.is_timeout() {
+                    "TimeoutError"
+                } else if e.is_io() {
+                    "IOError"
+                } else if e.is_user() {
+                    "UserError"
+                } else {
+                    "UnknownDispathFailure"
                 }
             }
             SdkError::ResponseError(_) => "ResponseError",
