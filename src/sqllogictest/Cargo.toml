@@ -26,6 +26,7 @@ mz-catalog = { path = "../catalog" }
 mz-controller = { path = "../controller" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-environmentd = { path = "../environmentd", default-features = false }
+mz-license-keys = { path = "../license-keys" }
 mz-ore = { path = "../ore", features = ["async", "tracing"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
