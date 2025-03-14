@@ -1019,7 +1019,7 @@ fn humanize_sql_for_show_create(
         //
         // For instance, `DROP SOURCE` statements can leave dangling references
         // to subsources that must be filtered out here, that, due to catalog
-        // transaction limitations, can only be be cleaned up when a top-level
+        // transaction limitations, can only be cleaned up when a top-level
         // source is altered.
         Statement::CreateSource(stmt) => {
             // Collect all current subsource references.
@@ -1053,7 +1053,7 @@ fn humanize_sql_for_show_create(
                             // COLUMNS` values that refer to the table it
                             // ingests, which we'll handle below.
                             PgConfigOptionName::TextColumns => {}
-                            // Drop details, which does not rountrip.
+                            // Drop details, which does not roundtrip.
                             PgConfigOptionName::Details => return false,
                             _ => return true,
                         };
@@ -1086,7 +1086,7 @@ fn humanize_sql_for_show_create(
                             // ingests, which we'll handle below.
                             MySqlConfigOptionName::TextColumns
                             | MySqlConfigOptionName::ExcludeColumns => {}
-                            // Drop details, which does not rountrip.
+                            // Drop details, which does not roundtrip.
                             MySqlConfigOptionName::Details => return false,
                         };
 
@@ -1142,7 +1142,7 @@ fn humanize_sql_for_show_create(
                 match o.name {
                     CreateSubsourceOptionName::TextColumns => true,
                     CreateSubsourceOptionName::ExcludeColumns => true,
-                    // Drop details, which does not rountrip.
+                    // Drop details, which does not roundtrip.
                     CreateSubsourceOptionName::Details => false,
                     CreateSubsourceOptionName::ExternalReference => true,
                     CreateSubsourceOptionName::Progress => true,
