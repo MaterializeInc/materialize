@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
+chrono = { version = "0.4.40", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = ["test"], default-features = false }
