@@ -27,6 +27,12 @@ weight = 5
 #
 
 [[menu.main]]
+name = "SQL Server"
+parent = 'ingest-data'
+identifier = 'sql-server'
+weight = 15
+
+[[menu.main]]
 name = "CockroachDB"
 parent = 'ingest-data'
 identifier = 'crdb'
