@@ -11,7 +11,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
-use std::time::Duration;
+use std::sync::atomic::AtomicBool;
+use std::sync::{atomic, Arc};
+use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use differential_dataflow::lattice::Lattice;
@@ -19,6 +21,7 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
 use mz_cluster_client::ReplicaId;
 use mz_dyncfg::ConfigValHandle;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_ore::retry::{Retry, RetryState};
 use mz_ore::task::AbortOnDropHandle;
@@ -230,6 +233,22 @@ where
             self.update_paused_statuses();
         }
     }
+
+    /// Refresh the controller state metrics for this instance.
+    ///
+    /// We could also do state metric updates directly in response to state changes, but that would
+    /// mean littering the code with metric update calls. Encapsulating state metric maintenance in
+    /// a single method is less noisy.
+    ///
+    /// This method is invoked by `Controller::maintain`, which we expect to be called once per
+    /// second during normal operation.
+    pub(super) fn refresh_state_metrics(&self) {
+        let connected_replica_count = self.replicas.values().filter(|r| r.is_connected()).count();
+
+        self.metrics
+            .connected_replica_count
+            .set(u64::cast_from(connected_replica_count));
+    }
 }
 
 /// Replica-specific configuration.
@@ -252,6 +271,8 @@ pub struct Replica<T> {
     command_tx: mpsc::UnboundedSender<StorageCommand<T>>,
     /// A handle to the task that aborts it when the replica is dropped.
     task: AbortOnDropHandle<()>,
+    /// Flag reporting whether the replica connection has been established.
+    connected: Arc<AtomicBool>,
 }
 
 impl<T> Replica<T>
@@ -268,6 +289,7 @@ where
         response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let connected = Arc::new(AtomicBool::new(false));
 
         let task = mz_ore::task::spawn(
             || "storage-replica-{id}",
@@ -276,6 +298,7 @@ where
                 config: config.clone(),
                 epoch,
                 metrics: metrics.clone(),
+                connected: Arc::clone(&connected),
                 command_rx,
                 response_tx,
             }
@@ -286,6 +309,7 @@ where
             config,
             command_tx,
             task: task.abort_on_drop(),
+            connected,
         }
     }
 
@@ -299,6 +323,11 @@ where
     /// task has terminated.
     fn failed(&self) -> bool {
         self.task.is_finished()
+    }
+
+    /// Determine if the replica connection has been established.
+    pub(super) fn is_connected(&self) -> bool {
+        self.connected.load(atomic::Ordering::Relaxed)
     }
 }
 
@@ -314,6 +343,8 @@ struct ReplicaTask<T> {
     epoch: ClusterStartupEpoch,
     /// Replica metrics.
     metrics: ReplicaMetrics,
+    /// Flag to report successful replica connection.
+    connected: Arc<AtomicBool>,
     /// A channel upon which commands intended for the replica are delivered.
     command_rx: mpsc::UnboundedReceiver<StorageCommand<T>>,
     /// A channel upon which responses from the replica are delivered.
@@ -352,9 +383,17 @@ where
             let client_params = &self.config.grpc_client;
 
             async move {
+                let connect_start = Instant::now();
+
                 StorageGrpcClient::connect_partitioned(dests, version, client_params)
                     .await
+                    .inspect(|_| {
+                        self.metrics.observe_connect(connect_start.elapsed());
+                        self.connected.store(true, atomic::Ordering::Relaxed);
+                    })
                     .inspect_err(|error| {
+                        self.metrics.observe_connect_time(connect_start.elapsed());
+
                         let next_backoff = retry.next_backoff.unwrap();
                         if retry.i >= mz_service::retry::INFO_MIN_RETRIES {
                             info!(

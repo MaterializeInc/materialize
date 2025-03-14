@@ -3356,6 +3356,11 @@ where
     fn maintain(&mut self) {
         self.update_frontier_introspection();
         self.refresh_wallclock_lag();
+
+        // Perform instance maintenance work.
+        for instance in self.instances.values_mut() {
+            instance.refresh_state_metrics();
+        }
     }
 }
 
