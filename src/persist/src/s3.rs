@@ -22,7 +22,7 @@ use aws_config::sts::AssumeRoleProvider;
 use aws_config::timeout::TimeoutConfig;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::config::{AsyncSleep, Sleep};
-use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::Client as S3Client;
@@ -404,7 +404,10 @@ impl Blob for S3Blob {
         let first_part = match object {
             Ok(object) => object,
             Err(SdkError::ServiceError(err)) if err.err().is_no_such_key() => return Ok(None),
-            Err(err) => Err(anyhow!(err).context("s3 get meta err"))?,
+            Err(err) => {
+                self.update_error_metrics("GetObject", &err);
+                Err(anyhow!(err).context("s3 get meta err"))?
+            }
         };
 
         // Get the remaining number of parts
@@ -459,6 +462,7 @@ impl Blob for S3Blob {
                             .part_number(part_num)
                             .send()
                             .await
+                            .inspect_err(|err| self.update_error_metrics("GetObject", err))
                             .context("s3 get meta err")?;
                         min_header_elapsed
                             .observe(header_start.elapsed(), "s3 download part header");
@@ -544,7 +548,14 @@ impl Blob for S3Blob {
         let mut segments = vec![];
         while let Some(result) = body_futures.next().await {
             // Download failure, we failed to fetch the body from S3.
-            let mut part_body = result.context("s3 get body err")?;
+            let mut part_body = result
+                .inspect_err(|e| {
+                    self.metrics
+                        .error_counts
+                        .with_label_values(&["GetObjectStream", e.to_string().as_str()])
+                        .inc()
+                })
+                .context("s3 get body err")?;
 
             // Collect all of our segments.
             segments.append(&mut part_body);
@@ -581,6 +592,7 @@ impl Blob for S3Blob {
                 .set_continuation_token(continuation_token)
                 .send()
                 .await
+                .inspect_err(|err| self.update_error_metrics("ListObjectsV2", err))
                 .context("list bucket error")?;
             if let Some(contents) = resp.contents {
                 for object in contents.iter() {
@@ -659,9 +671,10 @@ impl Blob for S3Blob {
             },
             Err(SdkError::ServiceError(err)) if err.err().is_not_found() => return Ok(None),
             Err(err) => {
+                self.update_error_metrics("HeadObject", &err);
                 return Err(ExternalError::from(
                     anyhow!(err).context("s3 delete head err"),
-                ))
+                ));
             }
         };
         self.metrics.delete_object.inc();
@@ -672,6 +685,7 @@ impl Blob for S3Blob {
             .key(&path)
             .send()
             .await
+            .inspect_err(|err| self.update_error_metrics("DeleteObject", err))
             .context("s3 delete object err")?;
         Ok(Some(usize::cast_from(size_bytes)))
     }
@@ -694,6 +708,7 @@ impl Blob for S3Blob {
                 .max_keys(1)
                 .send()
                 .await
+                .inspect_err(|err| self.update_error_metrics("ListObjectVersions", err))
                 .context("listing object versions during restore")?;
 
             let current_delete = list_res
@@ -716,6 +731,7 @@ impl Blob for S3Blob {
                     .version_id(version)
                     .send()
                     .await
+                    .inspect_err(|err| self.update_error_metrics("DeleteObject", err))
                     .context("deleting a delete marker")?;
                 assert!(
                     deleted.delete_marker().unwrap_or(false),
@@ -756,6 +772,7 @@ impl S3Blob {
             .send()
             .instrument(part_span)
             .await
+            .inspect_err(|err| self.update_error_metrics("PutObject", err))
             .context("set single part")?;
         debug!(
             "s3 PutObject single done {}b / {:?}",
@@ -791,6 +808,7 @@ impl S3Blob {
             .send()
             .instrument(debug_span!("s3set_multi_start"))
             .await
+            .inspect_err(|err| self.update_error_metrics("CreateMultipartUpload", err))
             .context("create_multipart_upload err")?;
         let upload_id = upload_res
             .upload_id()
@@ -847,11 +865,23 @@ impl S3Blob {
         for (part_num, part_fut) in part_futs.into_iter() {
             let (this_part_elapsed, part_res) = part_fut
                 .await
+                .inspect(|_| {
+                    self.metrics
+                        .error_counts
+                        .with_label_values(&["UploadPart", "AsyncSpawnError"])
+                        .inc()
+                })
                 .map_err(|err| anyhow!(err).context("s3 spawn err"))?;
-            let part_res = part_res.context("s3 upload_part err")?;
-            let part_e_tag = part_res
-                .e_tag()
-                .ok_or_else(|| anyhow!("s3 upload part missing e_tag"))?;
+            let part_res = part_res
+                .inspect_err(|err| self.update_error_metrics("UploadPart", err))
+                .context("s3 upload_part err")?;
+            let part_e_tag = part_res.e_tag().ok_or_else(|| {
+                self.metrics
+                    .error_counts
+                    .with_label_values(&["UploadPart", "MissingEtag"])
+                    .inc();
+                anyhow!("s3 upload part missing e_tag")
+            })?;
             parts.push(
                 CompletedPart::builder()
                     .e_tag(part_e_tag)
@@ -892,6 +922,7 @@ impl S3Blob {
             .send()
             .instrument(debug_span!("s3set_multi_complete", num_parts = parts_len))
             .await
+            .inspect_err(|err| self.update_error_metrics("CompleteMultipartUpload", err))
             .context("complete_multipart_upload err")?;
         trace!(
             "s3 complete_multipart_upload took {:?}",
@@ -905,6 +936,48 @@ impl S3Blob {
             parts_len
         );
         Ok(())
+    }
+
+    fn update_error_metrics<E, R>(&self, op: &str, err: &SdkError<E, R>)
+    where
+        E: ProvideErrorMetadata,
+    {
+        let code = match err {
+            SdkError::ServiceError(e) => match e.err().code() {
+                Some(code) => code,
+                None => "UnknownServiceError",
+            },
+            SdkError::DispatchFailure(e) => {
+                if let Some(other_error) = e.as_other() {
+                    match other_error {
+                        aws_config::retry::ErrorKind::TransientError => "TransientError",
+                        aws_config::retry::ErrorKind::ThrottlingError => "ThrottlingError",
+                        aws_config::retry::ErrorKind::ServerError => "ServerError",
+                        aws_config::retry::ErrorKind::ClientError => "ClientError",
+                        _ => "UnknownDispatchFailure",
+                    }
+                } else if e.is_timeout() {
+                    "TimeoutError"
+                } else if e.is_io() {
+                    "IOError"
+                } else if e.is_user() {
+                    "UserError"
+                } else {
+                    "UnknownDispathFailure"
+                }
+            }
+            SdkError::ResponseError(_) => "ResponseError",
+            SdkError::ConstructionFailure(_) => "ConstructionFailure",
+            // There is some overlap with MetricsSleep. MetricsSleep is more granular
+            // but does not contain the operation.
+            SdkError::TimeoutError(_) => "TimeoutError",
+            // an error was added at some point in the future
+            _ => "UnknownSdkError",
+        };
+        self.metrics
+            .error_counts
+            .with_label_values(&[op, code])
+            .inc();
     }
 }
 
