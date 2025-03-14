@@ -411,8 +411,8 @@ impl Coordinator {
     /// during bootstrapping).
     ///
     /// The caller needs to provide a `CatalogItemId` and `GlobalId` for the sub-source.
-    pub(crate) async fn plan_subsource(
-        &mut self,
+    pub(crate) fn plan_subsource(
+        &self,
         session: &Session,
         params: &mz_sql::plan::Params,
         subsource_stmt: CreateSubsourceStatement<mz_sql::names::Aug>,
@@ -475,10 +475,8 @@ impl Coordinator {
             .allocate_user_ids(u64::cast_from(subsource_stmts.len()), id_ts)
             .await?;
         for subsource_stmt in subsource_stmts {
-            let (item_id, global_id) = ids.pop().unwrap();
-            let s = self
-                .plan_subsource(session, &params, subsource_stmt, item_id, global_id)
-                .await?;
+            let (item_id, global_id) = ids.pop().expect("allocated sufficient ids");
+            let s = self.plan_subsource(session, &params, subsource_stmt, item_id, global_id)?;
             subsource_plans.push(s);
         }
 
@@ -549,9 +547,8 @@ impl Coordinator {
         assert_none!(progress_stmt.of_source);
         let id_ts = self.get_catalog_write_ts().await;
         let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
-        let progress_plan = self
-            .plan_subsource(ctx.session(), &params, progress_stmt, item_id, global_id)
-            .await?;
+        let progress_plan =
+            self.plan_subsource(ctx.session(), &params, progress_stmt, item_id, global_id)?;
         let progress_full_name = self
             .catalog()
             .resolve_full_name(&progress_plan.plan.name, None);
@@ -615,10 +612,8 @@ impl Coordinator {
             .allocate_user_ids(u64::cast_from(subsource_stmts.len()), id_ts)
             .await?;
         for stmt in subsource_stmts {
-            let (item_id, global_id) = ids.pop().unwrap();
-            let plan = self
-                .plan_subsource(ctx.session(), &params, stmt, item_id, global_id)
-                .await?;
+            let (item_id, global_id) = ids.pop().expect("allocated sufficient ids");
+            let plan = self.plan_subsource(ctx.session(), &params, stmt, item_id, global_id)?;
             create_source_plans.push(plan);
         }
 

@@ -386,7 +386,7 @@ impl Catalog {
 
         let last_seen_version = txn
             .get_catalog_content_version()
-            .unwrap_or_else(|| "new")
+            .unwrap_or("new")
             .to_string();
 
         // Migrate item ASTs.
