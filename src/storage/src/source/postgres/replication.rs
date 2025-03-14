@@ -971,10 +971,15 @@ fn extract_transaction<'a>(
                         // to check the current local schema against the current remote schema to
                         // ensure e.g. we haven't received a schema update with the same terminal
                         // column name which is actually a different column.
-                        let upstream_info =
-                            mz_postgres_util::publication_info(metadata_client, publication)
-                                .await?;
-                        let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
+                        let oids = std::iter::once(rel_id)
+                            .chain(table_info.keys().copied())
+                            .collect::<Vec<_>>();
+                        let upstream_info = mz_postgres_util::publication_info(
+                            metadata_client,
+                            publication,
+                            Some(&oids),
+                        )
+                        .await?;
 
                         for (output_index, output) in valid_outputs {
                             if let Err(err) =
@@ -1119,14 +1124,19 @@ fn spawn_schema_validator(
 
             let validation_start = Instant::now();
 
-            let upstream_info =
-                match mz_postgres_util::publication_info(&*client, &publication).await {
-                    Ok(info) => info.into_iter().map(|t| (t.oid, t)).collect(),
-                    Err(error) => {
-                        let _ = tx.send(SchemaValidationError::Postgres(error));
-                        continue;
-                    }
-                };
+            let upstream_info = match mz_postgres_util::publication_info(
+                &*client,
+                &publication,
+                Some(&table_info.keys().copied().collect::<Vec<_>>()),
+            )
+            .await
+            {
+                Ok(info) => info,
+                Err(error) => {
+                    let _ = tx.send(SchemaValidationError::Postgres(error));
+                    continue;
+                }
+            };
 
             for (&oid, outputs) in table_info.iter() {
                 for (&output_index, output_info) in outputs {

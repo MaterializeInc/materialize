@@ -172,7 +172,7 @@ impl<'a> SourceReferenceClient<'a> {
                 publication,
                 database,
             } => {
-                let tables = mz_postgres_util::publication_info(client, publication).await?;
+                let tables = mz_postgres_util::publication_info(client, publication, None).await?;
 
                 if tables.is_empty() {
                     Err(PgSourcePurificationError::EmptyPublication(
@@ -182,7 +182,7 @@ impl<'a> SourceReferenceClient<'a> {
 
                 tables
                     .into_iter()
-                    .map(|desc| ReferenceMetadata::Postgres {
+                    .map(|(_oid, desc)| ReferenceMetadata::Postgres {
                         table: desc,
                         database: database.to_string(),
                     })
