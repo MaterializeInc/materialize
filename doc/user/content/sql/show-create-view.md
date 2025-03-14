@@ -11,7 +11,7 @@ menu:
 ## Syntax
 
 ```sql
-SHOW CREATE VIEW <view_name>
+SHOW [REDACTED] CREATE VIEW <view_name>
 ```
 
 For available view names, see [`SHOW VIEWS`](/sql/show-views).

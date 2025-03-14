@@ -11,7 +11,7 @@ menu:
 ## Syntax
 
 ```sql
-SHOW CREATE SOURCE <source_name>
+SHOW [REDACTED] CREATE SOURCE <source_name>
 ```
 
 For available source names, see [`SHOW SOURCES`](/sql/show-sources).

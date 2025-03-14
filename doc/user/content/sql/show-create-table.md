@@ -11,7 +11,7 @@ menu:
 ## Syntax
 
 ```sql
-SHOW CREATE TABLE <table_name>
+SHOW [REDACTED] CREATE TABLE <table_name>
 ```
 
 For available table names, see [`SHOW TABLES`](/sql/show-tables).

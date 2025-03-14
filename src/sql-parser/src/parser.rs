@@ -7720,9 +7720,24 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_show(&mut self) -> Result<ShowStatement<Raw>, ParserError> {
+        let redacted = self.parse_keyword(REDACTED);
         if self.parse_one_of_keywords(&[COLUMNS, FIELDS]).is_some() {
+            if redacted {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "SHOW REDACTED with COLUMNS or FIELD is not supported"
+                );
+            }
             self.parse_show_columns()
         } else if self.parse_keyword(OBJECTS) {
+            if redacted {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "SHOW REDACTED OBJECTS is not supported"
+                );
+            }
             let from = if self.parse_keywords(&[FROM]) {
                 Some(self.parse_schema_name()?)
             } else {
@@ -7734,6 +7749,14 @@ impl<'a> Parser<'a> {
                 filter: self.parse_show_statement_filter()?,
             }))
         } else if let Some(object_type) = self.parse_plural_object_type() {
+            if redacted {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "SHOW REDACTED is supported only for individual objects"
+                );
+            }
+
             let from = if object_type.lives_in_schema() {
                 if self.parse_keywords(&[FROM]) {
                     Some(self.parse_schema_name()?)
@@ -7838,15 +7861,43 @@ impl<'a> Parser<'a> {
                 filter: self.parse_show_statement_filter()?,
             }))
         } else if self.parse_keyword(CLUSTER) {
+            if redacted {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "SHOW REDACTED CLUSTER is not supported"
+                );
+            }
             Ok(ShowStatement::ShowVariable(ShowVariableStatement {
                 variable: ident!("cluster"),
             }))
         } else if self.parse_keyword(PRIVILEGES) {
+            if redacted {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "SHOW REDACTED PRIVILEGES is not supported"
+                );
+            }
             self.parse_show_privileges()
         } else if self.parse_keywords(&[DEFAULT, PRIVILEGES]) {
+            if redacted {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "SHOW REDACTED DEFAULT PRIVILEGES is not supported"
+                );
+            }
             self.parse_show_default_privileges()
         } else if self.parse_keyword(ROLE) {
             self.expect_keyword(MEMBERSHIP)?;
+            if redacted {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "SHOW REDACTED ROLE MEMBERSHIP is not supported"
+                );
+            }
             let role = if self.parse_keyword(FOR) {
                 Some(self.parse_identifier()?)
             } else {
@@ -7860,36 +7911,50 @@ impl<'a> Parser<'a> {
         } else if self.parse_keywords(&[CREATE, VIEW]) {
             Ok(ShowStatement::ShowCreateView(ShowCreateViewStatement {
                 view_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, MATERIALIZED, VIEW]) {
             Ok(ShowStatement::ShowCreateMaterializedView(
                 ShowCreateMaterializedViewStatement {
                     materialized_view_name: self.parse_raw_name()?,
+                    redacted,
                 },
             ))
         } else if self.parse_keywords(&[CREATE, SOURCE]) {
             Ok(ShowStatement::ShowCreateSource(ShowCreateSourceStatement {
                 source_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, TABLE]) {
             Ok(ShowStatement::ShowCreateTable(ShowCreateTableStatement {
                 table_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, SINK]) {
             Ok(ShowStatement::ShowCreateSink(ShowCreateSinkStatement {
                 sink_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, INDEX]) {
             Ok(ShowStatement::ShowCreateIndex(ShowCreateIndexStatement {
                 index_name: self.parse_raw_name()?,
+                redacted,
             }))
         } else if self.parse_keywords(&[CREATE, CONNECTION]) {
             Ok(ShowStatement::ShowCreateConnection(
                 ShowCreateConnectionStatement {
                     connection_name: self.parse_raw_name()?,
+                    redacted,
                 },
             ))
         } else if self.parse_keywords(&[CREATE, CLUSTER]) {
+            if redacted {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "SHOW REDACTED CREATE CLUSTER is not supported"
+                );
+            }
             Ok(ShowStatement::ShowCreateCluster(
                 ShowCreateClusterStatement {
                     cluster_name: RawClusterName::Unresolved(self.parse_identifier()?),
@@ -7897,12 +7962,33 @@ impl<'a> Parser<'a> {
             ))
         } else {
             let variable = if self.parse_keywords(&[TRANSACTION, ISOLATION, LEVEL]) {
+                if redacted {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        "SHOW REDACTED TRANSACTION ISOLATION LEVEL is not supported"
+                    );
+                }
                 ident!("transaction_isolation")
             } else if self.parse_keywords(&[TIME, ZONE]) {
+                if redacted {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        "SHOW REDACTED TIME ZONE is not supported"
+                    );
+                }
                 ident!("timezone")
             } else {
                 self.parse_identifier()?
             };
+            if redacted {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "SHOW REDACTED <variable> is not supported"
+                );
+            }
             Ok(ShowStatement::ShowVariable(ShowVariableStatement {
                 variable,
             }))

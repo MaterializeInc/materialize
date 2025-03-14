@@ -11,7 +11,7 @@ menu:
 ## Syntax
 
 ```sql
-SHOW CREATE CONNECTION <connection_name>
+SHOW [REDACTED] CREATE CONNECTION <connection_name>
 ```
 
 For available connection names, see [`SHOW CONNECTIONS`](/sql/show-connections).
