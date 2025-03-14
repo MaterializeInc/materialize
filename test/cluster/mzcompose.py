@@ -2827,6 +2827,15 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_peeks_total("canceled")
     assert count == 0, f"got {count}"
 
+    count = metrics.get_value("mz_compute_controller_connected_replica_count")
+    assert count == 1, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_replica_connects_total")
+    assert count == 1, f"got {count}"
+    duration = metrics.get_value(
+        "mz_compute_controller_replica_connect_wait_time_seconds_total"
+    )
+    assert duration > 0, f"got {duration}"
+
     # mz_dataflow_wallclock_lag_seconds_count
     count = metrics.get_wallclock_lag_count(index_id)
     assert count, f"got {count}"

@@ -518,6 +518,11 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     fn refresh_state_metrics(&self) {
         let unscheduled_collections_count =
             self.collections.values().filter(|c| !c.scheduled).count();
+        let connected_replica_count = self
+            .replicas
+            .values()
+            .filter(|r| r.client.is_connected())
+            .count();
 
         self.metrics
             .replica_count
@@ -537,6 +542,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         self.metrics
             .copy_to_count
             .set(u64::cast_from(self.copy_tos.len()));
+        self.metrics
+            .connected_replica_count
+            .set(u64::cast_from(connected_replica_count));
     }
 
     /// Refresh the `WallclockLagHistory` introspection and the `wallclock_lag_*_seconds` metrics
