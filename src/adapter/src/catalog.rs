@@ -771,6 +771,20 @@ impl Catalog {
             .err_into()
     }
 
+    /// Allocate `amount` many user IDs. See [`DurableCatalogState::allocate_user_ids`].
+    pub async fn allocate_user_ids(
+        &self,
+        amount: u64,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<Vec<(CatalogItemId, GlobalId)>, Error> {
+        self.storage()
+            .await
+            .allocate_user_ids(amount, commit_ts)
+            .await
+            .maybe_terminate("allocating user ids")
+            .err_into()
+    }
+
     pub async fn allocate_user_id_for_test(&self) -> Result<(CatalogItemId, GlobalId), Error> {
         let commit_ts = self.storage().await.current_upper().await;
         self.allocate_user_id(commit_ts).await

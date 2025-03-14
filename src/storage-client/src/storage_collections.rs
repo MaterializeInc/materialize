@@ -932,21 +932,24 @@ where
             changes.update(time.clone(), 1);
         }
 
-        let user_capabilities = self_collections
-            .iter_mut()
-            .filter(|(id, _c)| id.is_user())
-            .map(|(id, c)| {
-                let updates = c.read_capabilities.updates().cloned().collect_vec();
-                (*id, c.implied_capability.clone(), updates)
-            })
-            .collect_vec();
+        if tracing::span_enabled!(tracing::Level::TRACE) {
+            // Collecting `user_capabilities` is potentially slow, thus only do it when needed.
+            let user_capabilities = self_collections
+                .iter_mut()
+                .filter(|(id, _c)| id.is_user())
+                .map(|(id, c)| {
+                    let updates = c.read_capabilities.updates().cloned().collect_vec();
+                    (*id, c.implied_capability.clone(), updates)
+                })
+                .collect_vec();
 
-        trace!(
-            %from_id,
-            ?storage_dependencies,
-            ?read_capability,
-            ?user_capabilities,
-            "install_read_capabilities_inner");
+            trace!(
+                %from_id,
+                ?storage_dependencies,
+                ?read_capability,
+                ?user_capabilities,
+                "install_read_capabilities_inner");
+        }
 
         let mut storage_read_updates = storage_dependencies
             .iter()
@@ -959,21 +962,24 @@ where
             &mut storage_read_updates,
         );
 
-        let user_capabilities = self_collections
-            .iter_mut()
-            .filter(|(id, _c)| id.is_user())
-            .map(|(id, c)| {
-                let updates = c.read_capabilities.updates().cloned().collect_vec();
-                (*id, c.implied_capability.clone(), updates)
-            })
-            .collect_vec();
+        if tracing::span_enabled!(tracing::Level::TRACE) {
+            // Collecting `user_capabilities` is potentially slow, thus only do it when needed.
+            let user_capabilities = self_collections
+                .iter_mut()
+                .filter(|(id, _c)| id.is_user())
+                .map(|(id, c)| {
+                    let updates = c.read_capabilities.updates().cloned().collect_vec();
+                    (*id, c.implied_capability.clone(), updates)
+                })
+                .collect_vec();
 
-        trace!(
-            %from_id,
-            ?storage_dependencies,
-            ?read_capability,
-            ?user_capabilities,
-            "after install_read_capabilities_inner!");
+            trace!(
+                %from_id,
+                ?storage_dependencies,
+                ?read_capability,
+                ?user_capabilities,
+                "after install_read_capabilities_inner!");
+        }
 
         Ok(())
     }

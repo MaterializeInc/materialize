@@ -99,7 +99,7 @@ pub(crate) async fn migrate(
 ) -> Result<MigrateResult, anyhow::Error> {
     let catalog_version = tx.get_catalog_content_version();
     let catalog_version = match catalog_version {
-        Some(v) => Version::parse(&v)?,
+        Some(v) => Version::parse(v)?,
         None => Version::new(0, 0, 0),
     };
 

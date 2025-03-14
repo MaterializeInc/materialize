@@ -145,13 +145,14 @@ impl<'a> Transaction<'a> {
                 a.database_id == b.database_id && a.name == b.name
             })?,
             items: TableTransaction::new_with_uniqueness_fn(items, |a: &ItemValue, b| {
-                let a_type = a.item_type();
-                let b_type = b.item_type();
-                a.schema_id == b.schema_id
-                    && a.name == b.name
-                    && ((a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
+                a.schema_id == b.schema_id && a.name == b.name && {
+                    // `item_type` is slow, only compute if needed.
+                    let a_type = a.item_type();
+                    let b_type = b.item_type();
+                    (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
                         || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
-                        || (b_type == CatalogItemType::Type && a_type.conflicts_with_type()))
+                        || (b_type == CatalogItemType::Type && a_type.conflicts_with_type())
+                }
             })?,
             comments: TableTransaction::new(comments)?,
             roles: TableTransaction::new_with_uniqueness_fn(roles, |a: &RoleValue, b| {
@@ -199,9 +200,8 @@ impl<'a> Transaction<'a> {
     pub fn get_items(&self) -> impl Iterator<Item = Item> {
         self.items
             .items()
-            .clone()
             .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
             .sorted_by_key(|Item { id, .. }| *id)
     }
 
@@ -902,26 +902,28 @@ impl<'a> Transaction<'a> {
         // approach requires making sure that allocator always stays in-sync which can be
         // error-prone. If DDL starts slowing down, this is a good place to try and optimize.
         let mut allocated_oids = HashSet::with_capacity(
-            self.databases.items().len()
-                + self.schemas.items().len()
-                + self.roles.items().len()
-                + self.items.items().len()
-                + self.introspection_sources.items().len()
+            self.databases.len()
+                + self.schemas.len()
+                + self.roles.len()
+                + self.items.len()
+                + self.introspection_sources.len()
                 + temporary_oids.len(),
         );
-        allocated_oids.extend(
-            std::iter::empty()
-                .chain(self.databases.items().values().map(|value| value.oid))
-                .chain(self.schemas.items().values().map(|value| value.oid))
-                .chain(self.roles.items().values().map(|value| value.oid))
-                .chain(self.items.items().values().map(|value| value.oid))
-                .chain(
-                    self.introspection_sources
-                        .items()
-                        .values()
-                        .map(|value| value.oid),
-                ),
-        );
+        self.databases.for_values(|_, value| {
+            allocated_oids.insert(value.oid);
+        });
+        self.schemas.for_values(|_, value| {
+            allocated_oids.insert(value.oid);
+        });
+        self.roles.for_values(|_, value| {
+            allocated_oids.insert(value.oid);
+        });
+        self.items.for_values(|_, value| {
+            allocated_oids.insert(value.oid);
+        });
+        self.introspection_sources.for_values(|_, value| {
+            allocated_oids.insert(value.oid);
+        });
 
         let is_allocated = |oid| allocated_oids.contains(&oid) || temporary_oids.contains(&oid);
 
@@ -1820,10 +1822,10 @@ impl<'a> Transaction<'a> {
     }
 
     /// Get the value of a persisted setting.
-    fn get_setting(&self, name: String) -> Option<String> {
+    fn get_setting(&self, name: String) -> Option<&str> {
         self.settings
             .get(&SettingKey { name })
-            .map(|entry| entry.value)
+            .map(|entry| &*entry.value)
     }
 
     pub fn get_builtin_migration_shard(&self) -> Option<ShardId> {
@@ -2036,60 +2038,55 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn get_clusters(&self) -> impl Iterator<Item = Cluster> {
+    pub fn get_clusters(&self) -> impl Iterator<Item = Cluster> + use<'_> {
         self.clusters
             .items()
-            .clone()
             .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
     }
 
-    pub fn get_cluster_replicas(&self) -> impl Iterator<Item = ClusterReplica> {
+    pub fn get_cluster_replicas(&self) -> impl Iterator<Item = ClusterReplica> + use<'_> {
         self.cluster_replicas
             .items()
-            .clone()
             .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
     }
 
-    pub fn get_roles(&self) -> impl Iterator<Item = Role> {
+    pub fn get_roles(&self) -> impl Iterator<Item = Role> + use<'_> {
         self.roles
             .items()
-            .clone()
             .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
     }
 
-    pub fn get_network_policies(&self) -> impl Iterator<Item = NetworkPolicy> {
+    pub fn get_network_policies(&self) -> impl Iterator<Item = NetworkPolicy> + use<'_> {
         self.network_policies
             .items()
-            .clone()
             .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
     }
 
-    pub fn get_system_object_mappings(&self) -> impl Iterator<Item = SystemObjectMapping> {
+    pub fn get_system_object_mappings(
+        &self,
+    ) -> impl Iterator<Item = SystemObjectMapping> + use<'_> {
         self.system_gid_mapping
             .items()
-            .clone()
             .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
     }
 
-    pub fn get_schemas(&self) -> impl Iterator<Item = Schema> {
+    pub fn get_schemas(&self) -> impl Iterator<Item = Schema> + use<'_> {
         self.schemas
             .items()
-            .clone()
             .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
     }
 
-    pub fn get_system_configurations(&self) -> impl Iterator<Item = SystemConfiguration> {
+    pub fn get_system_configurations(&self) -> impl Iterator<Item = SystemConfiguration> + use<'_> {
         self.system_configurations
             .items()
-            .clone()
             .into_iter()
-            .map(|(k, v)| DurableType::from_key_value(k, v))
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
     }
 
     pub fn get_schema(&self, id: &SchemaId) -> Option<Schema> {
@@ -2102,21 +2099,21 @@ impl<'a> Transaction<'a> {
     pub fn get_introspection_source_indexes(
         &self,
         cluster_id: ClusterId,
-    ) -> BTreeMap<String, (GlobalId, u32)> {
+    ) -> BTreeMap<&str, (GlobalId, u32)> {
         self.introspection_sources
             .items()
             .into_iter()
             .filter(|(k, _v)| k.cluster_id == cluster_id)
-            .map(|(k, v)| (k.name, (v.global_id.into(), v.oid)))
+            .map(|(k, v)| (k.name.as_str(), (v.global_id.into(), v.oid)))
             .collect()
     }
 
-    pub fn get_catalog_content_version(&self) -> Option<String> {
+    pub fn get_catalog_content_version(&self) -> Option<&str> {
         self.settings
             .get(&SettingKey {
                 name: CATALOG_CONTENT_VERSION_KEY.to_string(),
             })
-            .map(|value| value.value)
+            .map(|value| &*value.value)
     }
 
     /// Commit the current operation within the transaction. This does not cause anything to be
@@ -2483,7 +2480,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
                 |(
                     StorageCollectionMetadataKey { id },
                     StorageCollectionMetadataValue { shard },
-                )| { (id, shard.clone()) },
+                )| { (*id, shard.clone()) },
             )
             .collect()
     }
@@ -2535,7 +2532,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
         self.unfinalized_shards
             .items()
             .into_iter()
-            .map(|(UnfinalizedShardKey { shard }, ())| shard)
+            .map(|(UnfinalizedShardKey { shard }, ())| *shard)
             .collect()
     }
 
@@ -2565,11 +2562,11 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
     }
 
     fn get_txn_wal_shard(&self) -> Option<ShardId> {
-        let items = self.txn_wal_shard.items();
-        items
-            .into_values()
+        self.txn_wal_shard
+            .values()
+            .iter()
             .next()
-            .map(|TxnWalShardValue { shard }| shard)
+            .map(|TxnWalShardValue { shard }| *shard)
     }
 
     fn write_txn_wal_shard(
@@ -2694,6 +2691,73 @@ struct TransactionUpdate<V> {
     diff: Diff,
 }
 
+/// Utility trait to check for plan validity.
+trait UniqueName {
+    /// Does the item have a unique name? If yes, we can check for name equality in validity
+    /// checking.
+    const HAS_UNIQUE_NAME: bool;
+    /// The unique name, only returns a meaningful name if [`Self::HAS_UNIQUE_NAME`] is `true`.
+    fn unique_name(&self) -> &str;
+}
+
+mod unique_name {
+    use crate::durable::objects::*;
+
+    use crate::durable::transaction::UniqueName;
+
+    macro_rules! impl_unique_name {
+        ($($t:ty),* $(,)?) => {
+            $(
+                impl UniqueName for $t {
+                    const HAS_UNIQUE_NAME: bool = true;
+                    fn unique_name(&self) -> &str {
+                        &self.name
+                    }
+                }
+            )*
+        };
+    }
+
+    macro_rules! impl_no_unique_name {
+        ($($t:ty),* $(,)?) => {
+            $(
+                impl UniqueName for $t {
+                    const HAS_UNIQUE_NAME: bool = false;
+                    fn unique_name(&self) -> &str {
+                       ""
+                    }
+                }
+            )*
+        };
+    }
+
+    impl_unique_name! {
+        ClusterReplicaValue,
+        ClusterValue,
+        DatabaseValue,
+        ItemValue,
+        NetworkPolicyValue,
+        RoleValue,
+        SchemaValue,
+    }
+
+    impl_no_unique_name!(
+        (),
+        ClusterIntrospectionSourceIndexValue,
+        CommentValue,
+        ConfigValue,
+        DefaultPrivilegesValue,
+        GidMappingValue,
+        IdAllocValue,
+        ServerConfigurationValue,
+        SettingValue,
+        SourceReferencesValue,
+        StorageCollectionMetadataValue,
+        SystemPrivilegesValue,
+        TxnWalShardValue,
+    );
+}
+
 /// TableTransaction emulates some features of a typical SQL transaction over
 /// table for a Collection.
 ///
@@ -2715,7 +2779,7 @@ struct TableTransaction<K, V> {
 impl<K, V> TableTransaction<K, V>
 where
     K: Ord + Eq + Clone + Debug,
-    V: Ord + Clone + Debug,
+    V: Ord + Clone + Debug + UniqueName,
 {
     /// Create a new TableTransaction with initial data.
     ///
@@ -2788,16 +2852,31 @@ where
 
     /// Verifies that no items in `self` violate `self.uniqueness_violation`.
     ///
-    /// Runtime is O(n^2), where n is the number of items in `self`. Prefer using
-    /// [`Self::verify_keys`].
+    /// Runtime is O(n^2), where n is the number of items in `self`, if [`V::HAS_UNIQUE_NAME`]
+    /// is false. Prefer using [`Self::verify_keys`].
     fn verify(&self) -> Result<(), DurableCatalogError> {
         if let Some(uniqueness_violation) = self.uniqueness_violation {
             // Compare each value to each other value and ensure they are unique.
-            let items = self.items();
-            for (i, vi) in items.values().enumerate() {
-                for (j, vj) in items.values().enumerate() {
-                    if i != j && uniqueness_violation(vi, vj) {
-                        return Err(DurableCatalogError::UniquenessViolation);
+            let items = self.values();
+            if V::HAS_UNIQUE_NAME {
+                let by_name: BTreeMap<_, _> = items
+                    .iter()
+                    .enumerate()
+                    .map(|(v, vi)| (vi.unique_name(), (v, vi)))
+                    .collect();
+                for (i, vi) in items.iter().enumerate() {
+                    if let Some((j, vj)) = by_name.get(vi.unique_name()) {
+                        if i != *j && uniqueness_violation(vi, *vj) {
+                            return Err(DurableCatalogError::UniquenessViolation);
+                        }
+                    }
+                }
+            } else {
+                for (i, vi) in items.iter().enumerate() {
+                    for (j, vj) in items.iter().enumerate() {
+                        if i != j && uniqueness_violation(vi, vj) {
+                            return Err(DurableCatalogError::UniquenessViolation);
+                        }
                     }
                 }
             }
@@ -2831,7 +2910,7 @@ where
             // Compare each value in `entries` to each value in `self` and ensure they are unique.
             for (ki, vi) in self.items() {
                 for (kj, vj) in &entries {
-                    if &ki != *kj && uniqueness_violation(&vi, vj) {
+                    if ki != *kj && uniqueness_violation(vi, vj) {
                         return Err(DurableCatalogError::UniquenessViolation);
                     }
                 }
@@ -2843,7 +2922,7 @@ where
 
     /// Iterates over the items viewable in the current transaction in arbitrary
     /// order and applies `f` on all key, value pairs.
-    fn for_values<F: FnMut(&K, &V)>(&self, mut f: F) {
+    fn for_values<'a, F: FnMut(&'a K, &'a V)>(&'a self, mut f: F) {
         let mut seen = BTreeSet::new();
         for k in self.pending.keys() {
             seen.insert(k);
@@ -2863,30 +2942,63 @@ where
     }
 
     /// Returns the current value of `k`.
-    fn get(&self, k: &K) -> Option<V> {
-        let mut updates = Vec::new();
+    fn get(&self, k: &K) -> Option<&V> {
+        let pending = self.pending.get(k).map(Vec::as_slice).unwrap_or_default();
+        let mut updates = Vec::with_capacity(pending.len() + 1);
         if let Some(initial) = self.initial.get(k) {
-            updates.push((initial.clone(), 1));
+            updates.push((initial, 1));
         }
-        if let Some(pending) = self.pending.get(k) {
-            updates.extend(
-                pending
-                    .into_iter()
-                    .map(|TransactionUpdate { value, ts: _, diff }| (value.clone(), diff.clone())),
-            );
-        }
+        updates.extend(
+            pending
+                .into_iter()
+                .map(|TransactionUpdate { value, ts: _, diff }| (value, *diff)),
+        );
+
         differential_dataflow::consolidation::consolidate(&mut updates);
         assert!(updates.len() <= 1);
         updates.into_iter().next().map(|(v, _)| v)
     }
 
-    /// Returns the items viewable in the current transaction.
-    fn items(&self) -> BTreeMap<K, V> {
+    /// Returns the items viewable in the current transaction. The items are
+    /// cloned, so this is an expensive operation. Prefer using [`Self::items`], or
+    /// [`Self::for_values`].
+    // Used by tests.
+    #[cfg(test)]
+    fn items_cloned(&self) -> BTreeMap<K, V> {
         let mut items = BTreeMap::new();
         self.for_values(|k, v| {
             items.insert(k.clone(), v.clone());
         });
         items
+    }
+
+    /// Returns the items viewable in the current transaction as references. Returns a map
+    /// of references, so this is cheaper than [`Self::items_cloned`] for keys and values with
+    /// heap-allocated data.
+    fn items(&self) -> BTreeMap<&K, &V> {
+        let mut items = BTreeMap::new();
+        self.for_values(|k, v| {
+            items.insert(k, v);
+        });
+        items
+    }
+
+    /// Returns the values viewable in the current transaction as references.
+    fn values(&self) -> BTreeSet<&V> {
+        let mut items = BTreeSet::new();
+        self.for_values(|_, v| {
+            items.insert(v);
+        });
+        items
+    }
+
+    /// Returns the number of items viewable in the current transaction.
+    fn len(&self) -> usize {
+        let mut count = 0;
+        self.for_values(|_, _| {
+            count += 1;
+        });
+        count
     }
 
     /// Iterates over the items viewable in the current transaction, and provides a
@@ -2979,7 +3091,7 @@ where
     /// Returns an error if the uniqueness check failed.
     fn update_by_key(&mut self, k: K, v: V, ts: Timestamp) -> Result<bool, DurableCatalogError> {
         if let Some(cur_v) = self.get(&k) {
-            if v != cur_v {
+            if v != *cur_v {
                 self.set(k, Some(v), ts)?;
             }
             Ok(true)
@@ -3001,7 +3113,7 @@ where
             .into_iter()
             .filter_map(|(k, v)| match self.get(&k) {
                 // Record if updating this entry would be a no-op.
-                Some(cur_v) => Some((cur_v == v, k, v)),
+                Some(cur_v) => Some((*cur_v == v, k, v)),
                 None => None,
             })
             .collect();
@@ -3025,7 +3137,7 @@ where
     ///
     /// DO NOT call this function in a loop, use [`Self::set_many`] instead.
     fn set(&mut self, k: K, v: Option<V>, ts: Timestamp) -> Result<Option<V>, DurableCatalogError> {
-        let prev = self.get(&k);
+        let prev = self.get(&k).cloned();
         let entry = self.pending.entry(k.clone()).or_default();
         let restore_len = entry.len();
 
@@ -3088,7 +3200,7 @@ where
         let mut restores = BTreeMap::new();
 
         for (k, v) in kvs {
-            let prev = self.get(&k);
+            let prev = self.get(&k).cloned();
             let entry = self.pending.entry(k.clone()).or_default();
             restores.insert(k.clone(), entry.len());
 
@@ -3241,11 +3353,11 @@ mod tests {
         table.insert(2i64.to_le_bytes().to_vec(), "v2".to_string());
         let mut table_txn =
             TableTransaction::new_with_uniqueness_fn(table.clone(), uniqueness_violation).unwrap();
-        assert_eq!(table_txn.items(), table);
+        assert_eq!(table_txn.items_cloned(), table);
         assert_eq!(table_txn.delete(|_k, _v| false, 0).len(), 0);
         assert_eq!(table_txn.delete(|_k, v| v == "v2", 1).len(), 1);
         assert_eq!(
-            table_txn.items(),
+            table_txn.items_cloned(),
             BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string())])
         );
         assert_eq!(
@@ -3264,7 +3376,7 @@ mod tests {
             .insert(3i64.to_le_bytes().to_vec(), "v4".to_string(), 4)
             .unwrap();
         assert_eq!(
-            table_txn.items(),
+            table_txn.items_cloned(),
             BTreeMap::from([
                 (1i64.to_le_bytes().to_vec(), "v3".to_string()),
                 (3i64.to_le_bytes().to_vec(), "v4".to_string()),

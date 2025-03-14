@@ -336,6 +336,24 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         Ok(ids)
     }
 
+    /// Allocates and returns `amount` many user [`CatalogItemId`] and [`GlobalId`].
+    ///
+    /// See [`Self::commit_transaction`] for details on `commit_ts`.
+    async fn allocate_user_ids(
+        &mut self,
+        amount: u64,
+        commit_ts: Timestamp,
+    ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
+        let ids = self
+            .allocate_id(USER_ITEM_ALLOC_KEY, amount, commit_ts)
+            .await?;
+        let ids = ids
+            .iter()
+            .map(|id| (CatalogItemId::User(*id), GlobalId::User(*id)))
+            .collect();
+        Ok(ids)
+    }
+
     /// Allocates and returns both a user [`CatalogItemId`] and [`GlobalId`].
     ///
     /// See [`Self::commit_transaction`] for details on `commit_ts`.

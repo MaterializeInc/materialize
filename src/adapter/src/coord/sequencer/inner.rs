@@ -409,16 +409,18 @@ impl Coordinator {
     /// Because of this, we have usually "missed" the opportunity to plan them
     /// through the normal statement execution life cycle (the exception being
     /// during bootstrapping).
+    ///
+    /// The caller needs to provide a `CatalogItemId` and `GlobalId` for the sub-source.
     pub(crate) async fn plan_subsource(
         &mut self,
         session: &Session,
         params: &mz_sql::plan::Params,
         subsource_stmt: CreateSubsourceStatement<mz_sql::names::Aug>,
+        item_id: CatalogItemId,
+        global_id: GlobalId,
     ) -> Result<CreateSourcePlanBundle, AdapterError> {
         let catalog = self.catalog().for_session(session);
         let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
-        let id_ts = self.get_catalog_write_ts().await;
-        let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
 
         let plan = self.plan_statement(
             session,
@@ -467,9 +469,15 @@ impl Coordinator {
         let ingestion_id = source.global_id();
         let subsource_stmts = generate_subsource_statements(&scx, source_name, subsources)?;
 
+        let id_ts = self.get_catalog_write_ts().await;
+        let mut ids = self
+            .catalog_mut()
+            .allocate_user_ids(u64::cast_from(subsource_stmts.len()), id_ts)
+            .await?;
         for subsource_stmt in subsource_stmts {
+            let (item_id, global_id) = ids.pop().unwrap();
             let s = self
-                .plan_subsource(session, &params, subsource_stmt)
+                .plan_subsource(session, &params, subsource_stmt, item_id, global_id)
                 .await?;
             subsource_plans.push(s);
         }
@@ -539,8 +547,10 @@ impl Coordinator {
         // guaranteeing that the shard ID is discoverable is to create this
         // collection first.
         assert_none!(progress_stmt.of_source);
+        let id_ts = self.get_catalog_write_ts().await;
+        let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
         let progress_plan = self
-            .plan_subsource(ctx.session(), &params, progress_stmt)
+            .plan_subsource(ctx.session(), &params, progress_stmt, item_id, global_id)
             .await?;
         let progress_full_name = self
             .catalog()
@@ -599,8 +609,16 @@ impl Coordinator {
         });
 
         // 3. Finally, plan all the subsources
+        let id_ts = self.get_catalog_write_ts().await;
+        let mut ids = self
+            .catalog_mut()
+            .allocate_user_ids(u64::cast_from(subsource_stmts.len()), id_ts)
+            .await?;
         for stmt in subsource_stmts {
-            let plan = self.plan_subsource(ctx.session(), &params, stmt).await?;
+            let (item_id, global_id) = ids.pop().unwrap();
+            let plan = self
+                .plan_subsource(ctx.session(), &params, stmt, item_id, global_id)
+                .await?;
             create_source_plans.push(plan);
         }
 
