@@ -1545,9 +1545,13 @@ class PostgresSources(Generator):
 
 
 class PostgresTables(Generator):
+    COUNT = 10000
+
     @classmethod
     def body(cls) -> None:
-        print("> SET statement_timeout='300s'")
+        print("$ set-sql-timeout duration=600s")
+        print("> SET statement_timeout='600s'")
+        print("> SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
