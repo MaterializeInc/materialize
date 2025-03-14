@@ -2703,12 +2703,10 @@ trait UniqueName {
 mod unique_name {
     use crate::durable::objects::*;
 
-    use crate::durable::transaction::UniqueName;
-
     macro_rules! impl_unique_name {
         ($($t:ty),* $(,)?) => {
             $(
-                impl UniqueName for $t {
+                impl crate::durable::transaction::UniqueName for $t {
                     const HAS_UNIQUE_NAME: bool = true;
                     fn unique_name(&self) -> &str {
                         &self.name
@@ -2721,7 +2719,7 @@ mod unique_name {
     macro_rules! impl_no_unique_name {
         ($($t:ty),* $(,)?) => {
             $(
-                impl UniqueName for $t {
+                impl crate::durable::transaction::UniqueName for $t {
                     const HAS_UNIQUE_NAME: bool = false;
                     fn unique_name(&self) -> &str {
                        ""
@@ -2756,6 +2754,11 @@ mod unique_name {
         SystemPrivilegesValue,
         TxnWalShardValue,
     );
+
+    #[cfg(test)]
+    mod test {
+        impl_no_unique_name!(String,);
+    }
 }
 
 /// TableTransaction emulates some features of a typical SQL transaction over
@@ -2930,7 +2933,7 @@ where
             // Deleted items don't exist so shouldn't be visited, but still suppress
             // visiting the key later.
             if let Some(v) = v {
-                f(k, &v);
+                f(k, v);
             }
         }
         for (k, v) in self.initial.iter() {
@@ -3318,12 +3321,20 @@ mod tests {
         )
         .unwrap();
 
-        table
+        // Ideally, we compare for errors here, but it's hard/impossible to implement PartialEq
+        // for DurableCatalogError.
+        assert!(table
             .insert(2i64.to_le_bytes().to_vec(), "b".to_string(), 0)
-            .unwrap();
-        table
+            .is_ok());
+        assert!(table
             .insert(3i64.to_le_bytes().to_vec(), "c".to_string(), 0)
-            .unwrap();
+            .is_ok());
+        assert!(table
+            .insert(1i64.to_le_bytes().to_vec(), "c".to_string(), 0)
+            .is_err());
+        assert!(table
+            .insert(4i64.to_le_bytes().to_vec(), "c".to_string(), 0)
+            .is_err());
     }
 
     #[mz_ore::test]
