@@ -1416,9 +1416,7 @@ pub enum PartDecodeFormat {
 impl PartDecodeFormat {
     /// Returns a default value for [`PartDecodeFormat`].
     pub const fn default() -> Self {
-        PartDecodeFormat::Row {
-            validate_structured: true,
-        }
+        PartDecodeFormat::Arrow
     }
 
     /// Parses a [`PartDecodeFormat`] from the provided string, falling back to the default if the
