@@ -840,6 +840,8 @@ fn generate_rbac_requirements(
             id,
             source: _,
             columns: _,
+            source_desc: _,
+            mfp: _,
             params: _,
             filter: _,
         }) => RbacRequirements {
