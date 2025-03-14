@@ -36,7 +36,7 @@ axum-core = { version = "0.4.5", default-features = false, features = ["tracing"
 base64 = { version = "0.21.5" }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 byteorder = { version = "1.5.0" }
-bytes = { version = "1.4.0", features = ["serde"] }
+bytes = { version = "1.10.1", features = ["serde"] }
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "wasmbind"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
@@ -173,7 +173,7 @@ axum-core = { version = "0.4.5", default-features = false, features = ["tracing"
 base64 = { version = "0.21.5" }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 byteorder = { version = "1.5.0" }
-bytes = { version = "1.4.0", features = ["serde"] }
+bytes = { version = "1.10.1", features = ["serde"] }
 cc = { version = "1.2.16", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "wasmbind"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
