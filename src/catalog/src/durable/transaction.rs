@@ -2855,8 +2855,8 @@ where
 
     /// Verifies that no items in `self` violate `self.uniqueness_violation`.
     ///
-    /// Runtime is O(n^2), where n is the number of items in `self`, if [`V::HAS_UNIQUE_NAME`]
-    /// is false. Prefer using [`Self::verify_keys`].
+    /// Runtime is O(n^2), where n is the number of items in `self`, if
+    /// [`UniqueName::HAS_UNIQUE_NAME`] is false for `V`. Prefer using [`Self::verify_keys`].
     fn verify(&self) -> Result<(), DurableCatalogError> {
         if let Some(uniqueness_violation) = self.uniqueness_violation {
             // Compare each value to each other value and ensure they are unique.
@@ -2976,8 +2976,7 @@ where
     }
 
     /// Returns the items viewable in the current transaction as references. Returns a map
-    /// of references, so this is cheaper than [`Self::items_cloned`] for keys and values with
-    /// heap-allocated data.
+    /// of references.
     fn items(&self) -> BTreeMap<&K, &V> {
         let mut items = BTreeMap::new();
         self.for_values(|k, v| {
@@ -3302,7 +3301,7 @@ where
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use mz_ore::assert_none;
+    use mz_ore::{assert_none, assert_ok};
 
     use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::PersistClient;
@@ -3323,12 +3322,8 @@ mod tests {
 
         // Ideally, we compare for errors here, but it's hard/impossible to implement PartialEq
         // for DurableCatalogError.
-        assert!(table
-            .insert(2i64.to_le_bytes().to_vec(), "b".to_string(), 0)
-            .is_ok());
-        assert!(table
-            .insert(3i64.to_le_bytes().to_vec(), "c".to_string(), 0)
-            .is_ok());
+        assert_ok!(table.insert(2i64.to_le_bytes().to_vec(), "b".to_string(), 0));
+        assert_ok!(table.insert(3i64.to_le_bytes().to_vec(), "c".to_string(), 0));
         assert!(table
             .insert(1i64.to_le_bytes().to_vec(), "c".to_string(), 0)
             .is_err());
