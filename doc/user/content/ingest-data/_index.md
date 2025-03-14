@@ -41,16 +41,7 @@ data.
 
 {{% tip %}}
 
-- If possible, dedicate a cluster just for sources.
-
-- When you create a new source, Materialize performs a one-time [snapshotting
-  operation](#snapshotting) to initially populate the source in Materialize.
-  Snapshotting is a resource-intensive operation that can require a significant
-  amount of CPU and memory. Consider using a larger cluster size during
-  snapshotting. Once the snapshotting operation is complete, you can downsize
-  the cluster to align with the steady-state ingestion.
-
-- See also [Best practices](#best-practices).
+If possible, dedicate a cluster just for sources.
 
 {{% /tip %}}
 
@@ -61,11 +52,6 @@ in the external system before it starts ingesting new data — an operation know
 as _snapshotting_. Because the initial snapshot is persisted in the storage
 layer atomically (i.e., at the same ingestion timestamp), you are **not able to
 query the source until snapshotting is complete**.
-
-Depending on the volume of data in the initial snapshot and the size of the
-cluster the source is hosted in, this operation can take anywhere from a few
-minutes up to several hours, and might require more compute resources than
-steady-state.
 
 ### Duration
 
@@ -83,22 +69,24 @@ recommend:
   exploration more lightweight. See [Limit the volume of
   data](#limit-the-volume-of-data) for best practices.
 
-- **Overprovisioning the source cluster** for snapshotting, then
-  right-sizing once the snapshot is complete and you have a better grasp on the
-  steady-state resource needs of your source(s).
+- **For upsert sources**, overprovisioning the source cluster for snapshotting,
+  then right-sizing once the snapshot is complete and you have a better grasp on
+  the steady-state resource needs of your upsert source(s). See [Best practices:
+  Upsert sources](#upsert-sources).
 
 ### Monitoring progress
 
 While snapshotting is taking place, you can monitor the progress of the
-operation in the **overview page** for the source in the [Materialize Console](/console/data/#sample-source-overview). Alternatively, you can manually keep
-track of using information from the system catalog. See [Monitoring the
+operation in the **overview page** for the source in the [Materialize
+Console](/console/data/#sample-source-overview). Alternatively, you can manually
+keep track of using information from the system catalog. See [Monitoring the
 snapshotting
 progress](/ingest-data/monitoring-data-ingestion/#monitoring-the-snapshotting-progress)
 for guidance.
 
 It's also important to **monitor CPU and memory utilization** for the cluster
 hosting the source during snapshotting. If there are signs of resource
-exhaustion, you may need to [resize the cluster](#use-a-larger-cluster-for-snapshotting).
+exhaustion, you may need to [resize the cluster](#use-a-larger-cluster-for-upsert-source-snapshotting).
 
 ### Queries during snapshotting
 
@@ -162,21 +150,43 @@ During hydration, queries usually block until the process has been completed.
 
 ## Best practices
 
-#### Scheduling
+The following lists some general best practice guidelines as well as additional
+guidelines for upsert sources.
+
+### Scheduling
 
 If possible, schedule creating new sources during off-peak hours to mitigate the
 impact of snapshotting on both the upstream system and the Materialize cluster.
 
-#### Dedicate a cluster for the sources
+### Dedicate a cluster for the sources
 
 If possible, dedicate a cluster just for sources. That is, avoid using the same
 cluster for sources and sinks/indexes/materialized views (and other compute objects).
 
-#### Use a larger cluster for snapshotting
+### Limit the volume of data
 
-Consider using a larger cluster size during snapshotting. Once the snapshotting
-operation is complete, you can downsize the cluster to align with the volume of
-changes being replicated from your upstream in steady-state.
+If possible, limit the volume of data that needs to be synced into Materialize
+on source creation. This will help speed up snapshotting as well as make data
+exploration more lightweight.
+
+For example, when creating a PostgreSQL source, you may want to create a
+publication with specific tables rather than for all tables in the database.
+
+### Upsert sources
+
+In addition to the general best practices, the following additional best
+practices apply to upsert sources.
+
+#### Use a larger cluster for upsert source snapshotting
+
+When you create a new source, Materialize performs a one-time [snapshotting
+operation](#snapshotting) to initially populate the source in Materialize. For
+upsert sources, snapshotting is a resource-intensive operation that can require
+a significant amount of CPU and memory.
+
+Consider using a larger cluster size during snapshotting for upsert sources.
+Once the snapshotting operation is complete, you can downsize the cluster to
+align with the steady-state ingestion.
 
 If the cluster hosting the source restarts during snapshotting (e.g., because it
 ran out of memory), you can scale up to a larger
@@ -197,15 +207,6 @@ cluster to [hydrate](#hydration).
 
 Once the initial snapshot has completed, you can resize the cluster.
 
-#### Limit the volume of data
-
-If possible, limit the volume of data that needs to be synced into Materialize
-on source creation. This will help speed up snapshotting as well as make data
-exploration more lightweight.
-
-For example, when creating a PostgreSQL source, you may want to create a
-publication with specific tables rather than for all tables in the database.
-
 #### Right-size the cluster for steady-state
 
 Once the initial snapshot has completed, you can
@@ -224,6 +225,7 @@ incurs downtime for the duration it takes for all objects in the cluster to
 [hydrate](#hydration).
 
 {{% /note %}}
+
 
 ## See also
 
