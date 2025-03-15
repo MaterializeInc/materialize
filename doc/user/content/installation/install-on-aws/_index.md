@@ -84,11 +84,14 @@ for evaluation purposes only. The modules deploy a sample infrastructure on AWS
 
 {{< tip >}}
 
-The tutorial uses the module found in the `examples/simple/`
-directory, which requires minimal user input. For more configuration options,
-you can run the modules at the [root of the
-repository](https://github.com/MaterializeInc/terraform-aws-materialize/)
-instead.
+The tutorial uses the `main.tf` found in the `examples/simple/` directory, which
+requires minimal user input. For more configuration options, you can run the
+`main.tf` file at [root of the
+repository](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
+instead. When running from the root, you must declare the required providers.
+See [Providers
+Configuration](/installation/install-on-aws/appendix-aws-provider-configuration/)
+for details.
 
 For details on the  `examples/simple/` infrastructure configuration (such as the
 node instance type, etc.), see the
@@ -111,13 +114,20 @@ node instance type, etc.), see the
    ```
 
    {{< tip >}}
+
    The tutorial uses the module found in the `examples/simple/` directory, which
-   requires minimal user input. For more configuration options, you can run the
-   modules at the [root of the repository](https://github.com/MaterializeInc/terraform-aws-materialize/) instead.
+   requires minimal user input. For more configuration options, you can run from
+   the [root of the
+   repository](https://github.com/MaterializeInc/terraform-aws-materialize/)
+   instead. When running from the root `main.tf`, you must declare the required
+   providers. See [Providers
+   Configuration](/installation/install-on-aws/appendix-aws-provider-configuration/)
+   for details.
 
    For details on the  `examples/simple/` infrastructure configuration (such as
    the node instance type, etc.), see the
    [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/examples/simple/main.tf).
+
    {{< /tip >}}
 
 1. Create a `terraform.tfvars` file (you can copy from the

@@ -5,6 +5,7 @@ menu:
   main:
     parent: "install-on-gcp"
     identifier: "upgrade-on-gcp"
+    weight: 10
 ---
 
 To upgrade your Materialize instances, upgrade the Materialize operator first
@@ -12,7 +13,7 @@ and then the Materialize instances. The following tutorial upgrades your
 Materialize deployment running on GCP Google Kubernetes Engine (GKE).
 
 The tutorial assumes you have installed Materialize on GCP Google Kubernetes
-Engine (GKE). using the instructions on [Install on
+Engine (GKE) using the instructions on [Install on
 GCP](/installation/install-on-gcp/) (either from the examples/simple directory
 or the root).
 
