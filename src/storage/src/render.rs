@@ -326,6 +326,15 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     storage_state,
                     base_source_config,
                 ),
+                GenericSourceConnection::SqlServer(c) => crate::render::sources::render_source(
+                    mz_scope,
+                    &debug_name,
+                    c,
+                    description.clone(),
+                    &feedback,
+                    storage_state,
+                    base_source_config,
+                ),
                 GenericSourceConnection::LoadGenerator(c) => crate::render::sources::render_source(
                     mz_scope,
                     &debug_name,

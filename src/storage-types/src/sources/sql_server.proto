@@ -1,0 +1,23 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+package mz_storage_types.sources.sql_server;
+
+import "repr/src/catalog_item_id.proto";
+import "storage-types/src/connections.proto";
+
+message ProtoSqlServerSource {
+  mz_repr.catalog_item_id.ProtoCatalogItemId catalog_id = 1;
+  mz_storage_types.connections.ProtoSqlServerConnectionDetails connection = 2;
+  ProtoSqlServerSourceExtras extras = 3;
+}
+
+message ProtoSqlServerSourceExtras {}

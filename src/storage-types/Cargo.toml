@@ -29,7 +29,10 @@ differential-dataflow = "0.13.7"
 hex = "0.4.3"
 http = "1.2.0"
 itertools = { version = "0.12.1" }
-mysql_async = { version = "0.35.1", default-features = false, features = ["minimal", "native-tls-tls"] }
+mysql_async = { version = "0.35.1", default-features = false, features = [
+    "minimal",
+    "native-tls-tls",
+] }
 mz-aws-util = { path = "../aws-util" }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
@@ -49,6 +52,7 @@ mz-secrets = { path = "../secrets" }
 mz-service = { path = "../service" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-sql-server-util = { path = "../sql-server-util" }
 mz-timely-util = { path = "../timely-util" }
 mz-tls-util = { path = "../tls-util" }
 mz-tracing = { path = "../tracing" }
@@ -62,6 +66,11 @@ regex = "1.10.6"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.125", features = ["preserve_order"] }
 thiserror = "2.0.12"
+tiberius = { version = "0.12", features = [
+    "rustls",
+    "sql-browser-tokio",
+    "tds73",
+], default-features = false }
 timely = "0.19.0"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-postgres = { version = "0.7.8", features = ["serde"] }

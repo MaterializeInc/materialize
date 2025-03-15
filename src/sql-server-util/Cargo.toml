@@ -13,9 +13,16 @@ workspace = true
 anyhow = "1.0.66"
 derivative = "2.2.0"
 futures = "0.3.31"
+mz-ore = { path = "../ore", features = ["async"] }
+mz-repr = { path = "../repr" }
+mz-ssh-util = { path = "../ssh-util" }
+proptest = { version = "1.6.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
+serde = { version = "1.0.218", features = ["derive"] }
 smallvec = { version = "1.14.0", features = ["union"] }
 static_assertions = "1.1"
-tiberius = { version = "0.12", default-features = false, features = ["tds73"] }
+thiserror = "2.0.11"
+tiberius = { version = "0.12", features = ["rustls", "sql-browser-tokio", "tds73"], default-features = false }
 tokio = { version = "1.44.1", features = ["net"] }
 tokio-util = { version = "0.7.4", features = ["compat"] }
 tracing = "0.1.37"

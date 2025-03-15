@@ -68,7 +68,7 @@ serde_json = { version = "1.0.125", features = ["raw_value"] }
 similar = "2.7.0"
 tempfile = "3.19.0"
 termcolor = "1.4.1"
-tiberius = { version = "0.12", default-features = false }
+tiberius = { version = "0.12", features = ["rustls", "sql-browser-tokio", "tds73"], default-features = false }
 time = "0.3.17"
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }

@@ -35,7 +35,8 @@ use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, CsrConnection, CsrConnectionHttpAuth,
     KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection,
-    MySqlSslMode, PostgresConnection, SshConnection, SshTunnel, TlsIdentity, Tunnel,
+    MySqlSslMode, PostgresConnection, SqlServerConnectionDetails, SshConnection, SshTunnel,
+    TlsIdentity, Tunnel,
 };
 
 use crate::names::Aug;
@@ -524,11 +525,43 @@ impl ConnectionOptionExtracted {
             CreateConnectionType::SqlServer => {
                 scx.require_feature_flag(&vars::ENABLE_SQL_SERVER_SOURCE)?;
 
-                // TODO(sql_server1)
-                return Err(PlanError::Unsupported {
-                    feature: "SQL SERVER".to_string(),
-                    discussion_no: None,
-                });
+                let aws_connection = get_aws_connection_reference(scx, &self)?;
+                // TODO(sql_server1): Support AWS connections for SQL Server. Nothing fundamental
+                // prevents this, just need to wire it up.
+                if aws_connection.is_some() {
+                    return Err(PlanError::Unsupported {
+                        feature: "AWS CONNECTION with SQL Server".to_string(),
+                        discussion_no: None,
+                    });
+                }
+
+                // TODO(sql_server1): Parse the encryption level from the create SQL.
+                let encryption = mz_sql_server_util::config::EncryptionLevel::None;
+
+                // 1433 is the default port for SQL Server instances running over TCP.
+                //
+                // See: <https://learn.microsoft.com/en-us/sql/database-engine/configure-windows/configure-a-server-to-listen-on-a-specific-tcp-port?view=sql-server-ver16>
+                let port = self.port.unwrap_or(1433_u16);
+                let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
+
+                ConnectionDetails::SqlServer(SqlServerConnectionDetails {
+                    host: self
+                        .host
+                        .ok_or_else(|| sql_err!("HOST option is required"))?,
+                    port,
+                    database: self
+                        .database
+                        .ok_or_else(|| sql_err!("DATABASE option is required"))?,
+                    user: self
+                        .user
+                        .ok_or_else(|| sql_err!("USER option is required"))?,
+                    password: self
+                        .password
+                        .ok_or_else(|| sql_err!("PASSWORD option is required"))
+                        .map(|pass| pass.into())?,
+                    tunnel,
+                    encryption,
+                })
             }
         };
 

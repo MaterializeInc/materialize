@@ -313,6 +313,7 @@ impl Coordinator {
                     match ingestion.desc.connection {
                         GenericSourceConnection::Postgres(_)
                         | GenericSourceConnection::MySql(_)
+                        | GenericSourceConnection::SqlServer(_)
                         | GenericSourceConnection::Kafka(_)
                         | GenericSourceConnection::LoadGenerator(_) => {
                             if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use mz_ccsr::ListError;
 use mz_repr::adt::system::Oid;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{ExternalReferences, UnresolvedItemName};
+use mz_sql_parser::ast::{ExternalReferences, Op, UnresolvedItemName};
 use mz_storage_types::errors::{ContextCreationError, CsrConnectError};
 
 use crate::names::{FullItemName, PartialItemName};
@@ -352,5 +352,36 @@ impl MySqlSourcePurificationError {
             )),
             _ => None,
         }
+    }
+}
+
+/// Logical errors detectable during purification for a SQL Server SOURCE.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum SqlServerSourcePurificationError {
+    #[error("{0} is not a SQL SERVER CONNECTION")]
+    NotSqlServerConnection(FullItemName),
+    #[error("Invalid SQL Server system replication settings")]
+    ReplicationSettingsError(Vec<(String, String, String)>),
+}
+
+impl SqlServerSourcePurificationError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::ReplicationSettingsError(settings) => Some(format!(
+                "Invalid SQL Server system replication settings: {}",
+                itertools::join(
+                    settings.iter().map(|(setting, expected, actual)| format!(
+                        "{}: expected {}, got {}",
+                        setting, expected, actual
+                    )),
+                    "; "
+                )
+            )),
+            _ => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        None
     }
 }
