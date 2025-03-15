@@ -497,7 +497,7 @@ Explained Query:
     With
       cte l0 =
         Project (#0, #3)
-          Filter (#6 <= 100) AND (#6 >= 0) AND (#3) IS NOT NULL
+          Filter (#7 <= 100) AND (#7 >= 0) AND (#3) IS NOT NULL
             Map (timestamp_tz_to_mz_timestamp(#0))
               ReadIndex on=mz_internal.mz_source_status_history mz_source_status_history_ind=[lookup value=("u6")]
     Return

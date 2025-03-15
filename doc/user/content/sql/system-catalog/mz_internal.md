@@ -1048,6 +1048,7 @@ messages and additional metadata helpful for debugging.
 | `status`       | [`text`]                        | The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
 | `error`        | [`text`]                        | If the sink is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
+| `replica_id`   | [`text`]                        | The ID of the replica that an instance of a sink is running on.                                                  |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_source_statistics_raw -->
 
@@ -1168,6 +1169,7 @@ messages and additional metadata helpful for debugging.
 | `status`       | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.    |
 | `error`        | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
+| `replica_id`   | [`text`]                        | The ID of the replica that an instance of a source is running on.                                                  |
 
 <!--
 ## `mz_statement_execution_history`

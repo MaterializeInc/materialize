@@ -301,7 +301,16 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
                 filter, root_dir=MZ_ROOT / "test" / "testdrive-old-kafka-src-syntax"
             )
         )
-    matching_files = [file for file in matching_files if file != "session.td"]
+
+    # Exclude status-history.td because we added the replica_id column. This a)
+    # makes it so we lose history across migrations and b) makes it hard to
+    # write a test because the column is present in the newest version but not
+    # older versions.
+    matching_files = [
+        file
+        for file in matching_files
+        if file != "session.td" and file != "status-history.td"
+    ]
 
     dependencies = [
         "fivetran-destination",

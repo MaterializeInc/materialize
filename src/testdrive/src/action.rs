@@ -358,7 +358,7 @@ impl State {
     pub async fn with_catalog_copy<F, T>(
         &self,
         system_parameter_defaults: BTreeMap<String, String>,
-        version: semver::Version,
+        build_info: &'static BuildInfo,
         bootstrap_args: &BootstrapArgs,
         enable_expression_cache_override: Option<bool>,
         f: F,
@@ -394,7 +394,7 @@ impl State {
                 SYSTEM_TIME.clone(),
                 self.materialize.environment_id.clone(),
                 system_parameter_defaults,
-                version,
+                build_info,
                 bootstrap_args,
                 enable_expression_cache_override,
             )
