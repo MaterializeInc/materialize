@@ -3561,98 +3561,134 @@ impl<T: AstInfo> AstDisplay for ShowColumnsStatement<T> {
 }
 impl_display_t!(ShowColumnsStatement);
 
-/// `SHOW CREATE VIEW <view>`
+/// `SHOW [REDACTED] CREATE VIEW <view>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateViewStatement<T: AstInfo> {
     pub view_name: T::ItemName,
+    pub redacted: bool,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateViewStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SHOW CREATE VIEW ");
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE VIEW ");
         f.write_node(&self.view_name);
     }
 }
 impl_display_t!(ShowCreateViewStatement);
 
-/// `SHOW CREATE MATERIALIZED VIEW <name>`
+/// `SHOW [REDACTED] CREATE MATERIALIZED VIEW <name>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateMaterializedViewStatement<T: AstInfo> {
     pub materialized_view_name: T::ItemName,
+    pub redacted: bool,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateMaterializedViewStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SHOW CREATE MATERIALIZED VIEW ");
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE MATERIALIZED VIEW ");
         f.write_node(&self.materialized_view_name);
     }
 }
 impl_display_t!(ShowCreateMaterializedViewStatement);
 
-/// `SHOW CREATE SOURCE <source>`
+/// `SHOW [REDACTED] CREATE SOURCE <source>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateSourceStatement<T: AstInfo> {
     pub source_name: T::ItemName,
+    pub redacted: bool,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateSourceStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SHOW CREATE SOURCE ");
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE SOURCE ");
         f.write_node(&self.source_name);
     }
 }
 impl_display_t!(ShowCreateSourceStatement);
 
-/// `SHOW CREATE TABLE <table>`
+/// `SHOW [REDACTED] CREATE TABLE <table>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateTableStatement<T: AstInfo> {
     pub table_name: T::ItemName,
+    pub redacted: bool,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateTableStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SHOW CREATE TABLE ");
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE TABLE ");
         f.write_node(&self.table_name);
     }
 }
 impl_display_t!(ShowCreateTableStatement);
 
-/// `SHOW CREATE SINK <sink>`
+/// `SHOW [REDACTED] CREATE SINK <sink>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateSinkStatement<T: AstInfo> {
     pub sink_name: T::ItemName,
+    pub redacted: bool,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateSinkStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SHOW CREATE SINK ");
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE SINK ");
         f.write_node(&self.sink_name);
     }
 }
 impl_display_t!(ShowCreateSinkStatement);
 
-/// `SHOW CREATE INDEX <index>`
+/// `SHOW [REDACTED] CREATE INDEX <index>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateIndexStatement<T: AstInfo> {
     pub index_name: T::ItemName,
+    pub redacted: bool,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateIndexStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SHOW CREATE INDEX ");
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE INDEX ");
         f.write_node(&self.index_name);
     }
 }
 impl_display_t!(ShowCreateIndexStatement);
 
+/// `SHOW [REDACTED] CREATE CONNECTION <connection>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateConnectionStatement<T: AstInfo> {
     pub connection_name: T::ItemName,
+    pub redacted: bool,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateConnectionStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SHOW CREATE CONNECTION ");
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE CONNECTION ");
         f.write_node(&self.connection_name);
     }
 }
