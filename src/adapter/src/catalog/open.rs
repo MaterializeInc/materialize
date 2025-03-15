@@ -386,7 +386,8 @@ impl Catalog {
 
         let last_seen_version = txn
             .get_catalog_content_version()
-            .unwrap_or_else(|| "new".to_string());
+            .unwrap_or("new")
+            .to_string();
 
         // Migrate item ASTs.
         let builtin_table_update = if !config.skip_migrations {
@@ -930,7 +931,7 @@ fn add_new_remove_old_builtin_introspection_source_migration(
         removed_indexes.extend(
             introspection_source_index_ids
                 .into_keys()
-                .map(|name| (cluster.id, name)),
+                .map(|name| (cluster.id, name.to_string())),
         );
     }
     txn.insert_introspection_source_indexes(new_indexes, &HashSet::new())?;
@@ -1090,7 +1091,7 @@ fn remove_invalid_config_param_role_defaults_migration(
 /// Cluster Replicas may be created ephemerally during an alter statement, these replicas
 /// are marked as pending and should be cleaned up on catalog opsn.
 fn remove_pending_cluster_replicas_migration(tx: &mut Transaction) -> Result<(), anyhow::Error> {
-    for replica in tx.get_cluster_replicas() {
+    for replica in tx.get_cluster_replicas().collect::<Vec<_>>() {
         if let mz_catalog::durable::ReplicaLocation::Managed { pending: true, .. } =
             replica.config.location
         {
