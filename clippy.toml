@@ -77,9 +77,11 @@ disallowed-methods = [
     { path = "differential_dataflow::operators::reduce::join::Join::antijoin", reason = "use the `differential_dataflow::operators::join::Join::join_core` function instead" },
     { path = "differential_dataflow::operators::reduce::join::Join::join_map", reason = "use the `differential_dataflow::operators::join::Join::join_core` function instead" },
     { path = "differential_dataflow::operators::reduce::join::Join::semijoin", reason = "use the `differential_dataflow::operators::join::Join::join_core` function instead" },
-
     # Prevent access to Timely APIs with untested semantics.
     { path = "timely::worker::Worker::drop_dataflow", reason = "Might break logging dataflows, check with #team-compute." },
+    # Panic when formatting the same value more than once, like our tracing macros do.
+    { path = "itertools::Itertools::format", reason = "panics when passed to tracing macros; consider the methods in mz_ore::str instead" },
+    { path = "itertools::Itertools::format_with", reason = "panics when passed to tracing macros; consider the methods in mz_ore::str instead" },
 ]
 
 disallowed-macros = [
