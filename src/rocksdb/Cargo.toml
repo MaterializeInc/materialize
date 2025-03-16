@@ -37,7 +37,7 @@ mz-build-tools = { path = "../build-tools", default-features = false }
 default = ["mz-build-tools/default", "workspace-hack"]
 
 [dev-dependencies]
-tempfile = "3.18.0"
+tempfile = "3.19.0"
 prometheus = { version = "0.13.3", default-features = false }
 
 [package.metadata.cargo-udeps.ignore]
