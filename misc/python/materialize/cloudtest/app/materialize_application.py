@@ -22,7 +22,8 @@ from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.cockroach import cockroach_resources
 from materialize.cloudtest.k8s.debezium import debezium_resources
 from materialize.cloudtest.k8s.environmentd import (
-    EnvironmentdService,
+    EnvironmentdAliasService,
+    EnvironmentdHelmChart,
     EnvironmentdStatefulSet,
     MaterializedAliasService,
 )
@@ -50,7 +51,8 @@ class MaterializeApplication(CloudtestApplicationBase):
         apply_node_selectors: bool = False,
     ) -> None:
         self.tag = tag
-        self.environmentd = EnvironmentdService()
+        self.environmentd = EnvironmentdHelmChart(tag)
+        self.environmentd_alias = EnvironmentdAliasService()
         self.materialized_alias = MaterializedAliasService()
         self.testdrive = TestdrivePod(
             release_mode=release_mode,
