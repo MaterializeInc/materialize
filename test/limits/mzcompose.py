@@ -1545,7 +1545,7 @@ class PostgresSources(Generator):
 
 
 class PostgresTables(Generator):
-    COUNT = 10000
+    COUNT = 2000
 
     @classmethod
     def body(cls) -> None:
@@ -1553,46 +1553,53 @@ class PostgresTables(Generator):
         print("> SET statement_timeout='600s'")
         print("> SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';")
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print(
+            f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10 * ADDITIONAL_POSTGRES};"
+        )
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_tables = {cls.COUNT * 10};")
+        print(f"ALTER SYSTEM SET max_tables = {cls.COUNT * 10 * ADDITIONAL_POSTGRES};")
         print("$ postgres-execute connection=mz_system")
-        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
-        print("$ postgres-execute connection=postgres://postgres:postgres@postgres")
-        print("ALTER USER postgres WITH replication;")
-        print("DROP SCHEMA IF EXISTS public CASCADE;")
-        print("DROP PUBLICATION IF EXISTS mz_source;")
-        print("CREATE SCHEMA public;")
-        for i in cls.all():
-            print(f"CREATE TABLE t{i} (c int);")
-            print(f"ALTER TABLE t{i} REPLICA IDENTITY FULL;")
-            print(f"INSERT INTO t{i} VALUES ({i});")
-        print("CREATE PUBLICATION mz_source FOR ALL TABLES;")
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10 * ADDITIONAL_POSTGRES};")
+        for i in range(1, ADDITIONAL_POSTGRES + 1):
+            print(
+                f"$ postgres-execute connection=postgres://postgres:postgres@postgres_{i}"
+            )
+            print("ALTER USER postgres WITH replication;")
+            print("DROP SCHEMA IF EXISTS public CASCADE;")
+            print(f"DROP PUBLICATION IF EXISTS mz_source_{i};")
+            print("CREATE SCHEMA public;")
+            for j in cls.all():
+                print(f"CREATE TABLE t{i}_{j} (c int);")
+                print(f"ALTER TABLE t{i}_{j} REPLICA IDENTITY FULL;")
+                print(f"INSERT INTO t{i}_{j} VALUES ({i * cls.COUNT + j});")
+            print(f"CREATE PUBLICATION mz_source_{i} FOR ALL TABLES;")
         print("> CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'")
-        print(
-            """> CREATE CONNECTION pg TO POSTGRES (
-                HOST postgres,
-                DATABASE postgres,
-                USER postgres,
-                PASSWORD SECRET pgpass
-            )"""
-        )
-        print(
-            """> CREATE SOURCE p
-          IN CLUSTER single_worker_cluster
-          FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-          FOR ALL TABLES
-          """
-        )
-        # for i in cls.all():
-        #     print(
-        #         f"""> CREATE TABLE t{i}
-        #       FROM SOURCE p (REFERENCE t{i})
-        #       """
-        #     )
-        for i in cls.all():
-            cls.store_explain_and_run(f"SELECT * FROM t{i}")
-            print(f"{i}")
+        for i in range(1, ADDITIONAL_POSTGRES + 1):
+            print(
+                f"""> CREATE CONNECTION pg_{i} TO POSTGRES (
+                    HOST postgres_{i},
+                    DATABASE postgres,
+                    USER postgres,
+                    PASSWORD SECRET pgpass
+                )"""
+            )
+            print(
+                f"""> CREATE SOURCE p_{i}
+                IN CLUSTER single_worker_cluster
+                FROM POSTGRES CONNECTION pg_{i} (PUBLICATION 'mz_source_{i}')
+                FOR ALL TABLES
+                """
+            )
+            # for j in cls.all():
+            #     print(
+            #         f"""> CREATE TABLE t{j}
+            #       FROM SOURCE p (REFERENCE t{j})
+            #       """
+            #     )
+        for i in range(1, ADDITIONAL_POSTGRES + 1):
+            for j in cls.all():
+                cls.store_explain_and_run(f"SELECT * FROM t{i}_{j}")
+                print(f"{i * cls.COUNT + j}")
 
 
 class PostgresTablesOldSyntax(Generator):
@@ -1743,6 +1750,7 @@ def app_password(email: str) -> str:
 MAX_CLUSTERS = 8
 MAX_REPLICAS = 4
 MAX_NODES = 4
+ADDITIONAL_POSTGRES = 20
 
 SERVICES = [
     Zookeeper(),
@@ -1819,6 +1827,15 @@ SERVICES = [
         metadata_store="cockroach",
     ),
     Mz(app_password=""),
+] + [
+    Postgres(
+        name=f"postgres_{i}",
+        # ports=[f"{5432+i}"],
+        max_wal_senders=Generator.COUNT,
+        max_replication_slots=Generator.COUNT,
+        # volumes=["sourcedata_512Mb:/var/lib/postgresql/data"],
+    )
+    for i in range(1, ADDITIONAL_POSTGRES + 1)
 ]
 
 for cluster_id in range(1, MAX_CLUSTERS + 1):
@@ -1845,7 +1862,7 @@ service_names = [
     "clusterd_3_1_1",
     "clusterd_3_2_1",
     "clusterd_4_1_1",
-]
+] + [f"postgres_{i}" for i in range(1, ADDITIONAL_POSTGRES + 1)]
 
 
 def setup(c: Composition, workers: int) -> None:
