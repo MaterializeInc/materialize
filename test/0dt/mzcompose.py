@@ -965,6 +965,14 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
+
+        start_time = time.time()
+        result = c.sql_query("SELECT 1", service="mz_new")
+        elapsed = time.time() - start_time
+        print(f"bootstrapping (checked via SELECT 1) took {elapsed} seconds")
+        duration = time.time() - start_time
+        assert result[0][0] == 1, f"Wrong result: {result}"
+
         start_time = time.time()
         result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
