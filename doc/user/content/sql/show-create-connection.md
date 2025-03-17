@@ -14,6 +14,8 @@ menu:
 SHOW [REDACTED] CREATE CONNECTION <connection_name>
 ```
 
+{{< yaml-table data="show_create_redacted_option" >}}
+
 For available connection names, see [`SHOW CONNECTIONS`](/sql/show-connections).
 
 ## Examples
