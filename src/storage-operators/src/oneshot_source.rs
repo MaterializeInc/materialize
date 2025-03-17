@@ -482,8 +482,9 @@ where
                         match result {
                             Ok(Some(row)) => row_handle.give(&capability, Ok(row)),
                             Ok(None) => {
-                                let err = StorageErrorXKind::MfpFiltered.with_context("decode");
-                                row_handle.give(&capability, Err(err))
+                                // We only expect the provided MFP to map rows from the source data
+                                // and project default values.
+                                mz_ore::soft_panic_or_log!("oneshot source MFP filtered out data!");
                             }
                             Err(e) => {
                                 let err = StorageErrorXKind::MfpEvalError(e.to_string().into())
@@ -1030,8 +1031,6 @@ pub enum StorageErrorXKind {
     MissingSize,
     #[error("object is missing the required '{0}' field")]
     MissingField(Arc<str>),
-    #[error("[internal error] the supplied mfp filtered out a row, it is only supposed to map and project")]
-    MfpFiltered,
     #[error("failed while evaluating the provided mfp: '{0}'")]
     MfpEvalError(Arc<str>),
     #[error("something went wrong: {0}")]
