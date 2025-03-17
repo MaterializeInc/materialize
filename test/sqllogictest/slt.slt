@@ -30,3 +30,11 @@ SELECT * FROM t ORDER BY a
 3
 3
 4
+
+query III colnames
+SELECT 1 AS "column name with spaces!", 2 AS "nospaces", 3 AS "space again";
+----
+column␠name␠with␠spaces! nospaces space␠again
+1
+2
+3
