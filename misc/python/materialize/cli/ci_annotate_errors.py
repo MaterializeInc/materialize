@@ -76,6 +76,7 @@ ERROR_RE = re.compile(
     | was\ provided\ more\ than\ once,\ but\ cannot\ be\ used\ multiple\ times
     | (^|\ )fatal: # used in frontegg-mock
     | [Oo]ut\ [Oo]f\ [Mm]emory
+    | memory\ allocation\ of\ [0-9]+\ bytes\ failed
     | cannot\ migrate\ from\ catalog
     | halting\ process: # Rust unwrap
     | fatal\ runtime\ error: # stack overflow
