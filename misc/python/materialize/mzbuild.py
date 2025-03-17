@@ -371,19 +371,10 @@ class CargoBuild(CargoPreImage):
         assert (
             rd.bazel
         ), "Programming error, tried to invoke Bazel when it is not enabled."
+        assert not rd.coverage, "Bazel doesn't support building with coverage."
 
         rustflags = []
-        cflags = []
-
-        if rd.coverage:
-            assert (
-                rd.sanitizer == Sanitizer.none
-            ), "cannot get coverage and run a sanitizer at the same time"
-            rustflags += rustc_flags.coverage
-        elif rd.sanitizer != Sanitizer.none:
-            rustflags += rustc_flags.sanitizer[rd.sanitizer]
-            cflags += rustc_flags.sanitizer_cflags[rd.sanitizer]
-        else:
+        if rd.sanitizer == Sanitizer.none:
             rustflags += ["--cfg=tokio_unstable"]
 
         extra_env = {
@@ -406,6 +397,8 @@ class CargoBuild(CargoPreImage):
 
         # Add extra Bazel config flags.
         bazel_build.extend(rd.bazel_config())
+        # Add flags for the Sanitizer
+        bazel_build.extend(rd.sanitizer.bazel_flags())
 
         return bazel_build
 
