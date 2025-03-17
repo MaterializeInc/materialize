@@ -16,7 +16,7 @@ aws-credential-types = { version = "1.2.1" }
 aws-sigv4 = { version = "1.2.0" }
 aws-types = "1.1.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
+indexmap = { version = "2.7.1", default-features = false, features = ["std"] }
 itertools = "0.12.1"
 maplit = "1.0.2"
 mz-cloud-resources = { path = "../cloud-resources" }
