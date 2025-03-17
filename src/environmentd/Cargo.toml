@@ -123,7 +123,7 @@ bytes = "1.10.1"
 datadriven = "0.8.0"
 fallible-iterator = "0.2.0"
 http-body-util = "0.1.2"
-insta = { version = "1.41", features = ["json"] }
+insta = { version = "1.42", features = ["json"] }
 itertools = "0.12.1"
 jsonwebtoken = "9.3.1"
 mz-environmentd = { path = "../environmentd", features = ["test"] }
