@@ -326,6 +326,18 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             upper_cap_set.downgrade([&resume_lsn]);
             trace!(%id, "timely-{worker_id} replication reader started lsn={resume_lsn}");
 
+            // Emitting an initial probe before we start waiting for rewinds ensures that we will
+            // have a timestamp binding in the remap collection while the snapshot is processed.
+            // This is important because otherwise the snapshot updates would need to be buffered
+            // in the reclock operator, instead of being spilled to S3 in the persist sink.
+            //
+            // Note that we need to fetch the probe LSN _after_ having created the replication
+            // slot, to make sure the fetched LSN will be included in the replication stream.
+            let probe_ts = (config.now_fn)().into();
+            let max_lsn = super::fetch_max_lsn(&*metadata_client).await?;
+            let probe = Probe { probe_ts, upstream_frontier: Antichain::from_elem(max_lsn) };
+            probe_output.give(&probe_cap[0], probe);
+
             let mut rewinds = BTreeMap::new();
             while let Some(event) = rewind_input.next().await {
                 if let AsyncEvent::Data(_, data) = event {
