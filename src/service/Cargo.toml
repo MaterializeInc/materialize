@@ -15,7 +15,7 @@ async-stream = "0.3.3"
 async-trait = "0.1.83"
 clap = { version = "4.5.23", features = ["env", "derive"] }
 crossbeam-channel = "0.5.14"
-futures = "0.3.30"
+futures = "0.3.31"
 http = "1.2.0"
 hyper-util = "0.1.6"
 itertools = "0.12.1"

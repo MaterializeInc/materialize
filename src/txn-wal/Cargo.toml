@@ -13,7 +13,7 @@ workspace = true
 async-trait = "0.1.83"
 bytes = { version = "1.10.1" }
 differential-dataflow = "0.13.7"
-futures = "0.3.30"
+futures = "0.3.31"
 itertools = { version = "0.12.1" }
 mz-ore = { path = "../ore", features = ["process"] }
 mz-dyncfg = { path = "../dyncfg" }

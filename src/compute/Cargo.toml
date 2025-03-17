@@ -18,7 +18,7 @@ crossbeam-channel = "0.5.14"
 dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow = "0.13.7"
 differential-dogs3 = "0.1.7"
-futures = "0.3.30"
+futures = "0.3.31"
 itertools = "0.12.1"
 lgalloc = "0.5"
 mz-cluster = { path = "../cluster" }
