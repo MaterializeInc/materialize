@@ -63,7 +63,7 @@ subtle = "2.6.1"
 timely = "0.19.0"
 tracing = "0.1.37"
 uncased = "0.9.7"
-uuid = { version = "1.15.1", features = ["v5"] }
+uuid = { version = "1.16.0", features = ["v5"] }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
