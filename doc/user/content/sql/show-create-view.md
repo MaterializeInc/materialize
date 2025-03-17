@@ -11,8 +11,10 @@ menu:
 ## Syntax
 
 ```sql
-SHOW CREATE VIEW <view_name>
+SHOW [REDACTED] CREATE VIEW <view_name>
 ```
+
+{{< yaml-table data="show_create_redacted_option" >}}
 
 For available view names, see [`SHOW VIEWS`](/sql/show-views).
 

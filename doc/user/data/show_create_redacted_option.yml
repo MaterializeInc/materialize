@@ -1,0 +1,7 @@
+columns:
+  - column: Option
+  - column: Description
+
+rows:
+  - Option: "**REDACTED**"
+    Description: "If specified, literals will be redacted."
