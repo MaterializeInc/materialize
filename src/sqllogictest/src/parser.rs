@@ -286,30 +286,47 @@ impl<'a> Parser<'a> {
                     Output::Values(vec![])
                 } else {
                     let mut vals: Vec<String> = output_str.lines().map(|s| s.to_owned()).collect();
-                    if let Mode::Cockroach = self.mode {
-                        let mut rows: Vec<Vec<String>> = vec![];
-                        for line in vals {
-                            let cols = split_cols(&line, types.len());
-                            if sort != Sort::No && cols.len() != types.len() {
-                                // We can't check this condition for
-                                // Sort::No, because some tests use strings
-                                // with whitespace that look like extra
-                                // columns. (Note that these tests never
-                                // use any of the sorting options.)
-                                bail!(
-                                    "col len ({}) did not match declared col len ({})",
-                                    cols.len(),
-                                    types.len()
+                    match self.mode {
+                        Mode::Standard => {
+                            if !multiline {
+                                vals = vals.into_iter().map(|val| val.replace('⏎', "\n")).collect();
+                            }
+                        }
+                        Mode::Cockroach => {
+                            let mut rows: Vec<Vec<String>> = vec![];
+                            for line in vals {
+                                let cols = split_cols(&line, types.len());
+                                if sort != Sort::No && cols.len() != types.len() {
+                                    // We can't check this condition for
+                                    // Sort::No, because some tests use strings
+                                    // with whitespace that look like extra
+                                    // columns. (Note that these tests never
+                                    // use any of the sorting options.)
+                                    bail!(
+                                        "col len ({}) did not match declared col len ({})",
+                                        cols.len(),
+                                        types.len()
+                                    );
+                                }
+                                rows.push(
+                                    cols.into_iter()
+                                        .map(|col| {
+                                            let mut col = col.replace('␠', " ");
+                                            if !multiline {
+                                                col = col.replace('⏎', "\n");
+                                            }
+                                            col
+                                        })
+                                        .collect(),
                                 );
                             }
-                            rows.push(cols.into_iter().map(|col| col.replace('␠', " ")).collect());
-                        }
-                        if sort == Sort::Row {
-                            rows.sort();
-                        }
-                        vals = rows.into_iter().flatten().collect();
-                        if sort == Sort::Value {
-                            vals.sort();
+                            if sort == Sort::Row {
+                                rows.sort();
+                            }
+                            vals = rows.into_iter().flatten().collect();
+                            if sort == Sort::Value {
+                                vals.sort();
+                            }
                         }
                     }
                     Output::Values(vals)
@@ -321,6 +338,7 @@ impl<'a> Parser<'a> {
             output: Ok(QueryOutput {
                 types,
                 sort,
+                multiline,
                 label,
                 column_names,
                 mode: self.mode,
