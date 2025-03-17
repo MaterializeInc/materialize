@@ -93,7 +93,7 @@ mz-build-tools = { path = "../build-tools", default-features = false }
 async-trait = "0.1.83"
 axum = "0.7.5"
 clap = { version = "4.5.23", features = ["derive", "env"] }
-humantime = "2.1.0"
+humantime = "2.2.0"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 itertools = "0.12.1"
