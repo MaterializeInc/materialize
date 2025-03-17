@@ -26,14 +26,14 @@ pub(crate) fn doc_display<'a, T: AstDisplay>(v: &T, _debug: &str) -> RcDoc<'a, (
         "UNKNOWN PRETTY TYPE in {}: {}, {}",
         _debug,
         std::any::type_name::<T>(),
-        v.to_ast_string()
+        v.to_ast_string_simple()
     );
     doc_display_pass(v)
 }
 
 // Use when the AstDisplay trait is what we want.
 fn doc_display_pass<'a, T: AstDisplay>(v: &T) -> RcDoc<'a, ()> {
-    RcDoc::text(v.to_ast_string())
+    RcDoc::text(v.to_ast_string_simple())
 }
 
 pub(crate) fn doc_create_source<T: AstInfo>(v: &CreateSourceStatement<T>) -> RcDoc {
@@ -251,7 +251,7 @@ pub(crate) fn doc_create_materialized_view<T: AstInfo>(
     if let Some(cluster) = &v.in_cluster {
         docs.push(RcDoc::text(format!(
             "IN CLUSTER {}",
-            cluster.to_ast_string()
+            cluster.to_ast_string_simple()
         )));
     }
     if !v.with_options.is_empty() {
@@ -281,7 +281,7 @@ fn doc_view_definition<T: AstInfo>(v: &ViewDefinition<T>) -> RcDoc {
 pub(crate) fn doc_insert<T: AstInfo>(v: &InsertStatement<T>) -> RcDoc {
     let mut first = vec![RcDoc::text(format!(
         "INSERT INTO {}",
-        v.table_name.to_ast_string()
+        v.table_name.to_ast_string_simple()
     ))];
     if !v.columns.is_empty() {
         first.push(bracket(
@@ -597,7 +597,10 @@ pub fn doc_expr<T: AstInfo>(v: &Expr<T>) -> RcDoc {
         }
         Expr::Cast { expr, data_type } => {
             let doc = doc_expr(expr);
-            RcDoc::concat([doc, RcDoc::text(format!("::{}", data_type.to_ast_string()))])
+            RcDoc::concat([
+                doc,
+                RcDoc::text(format!("::{}", data_type.to_ast_string_simple())),
+            ])
         }
         Expr::Nested(ast) => bracket("(", doc_expr(ast), ")"),
         Expr::Function(fun) => doc_function(fun),
@@ -713,7 +716,7 @@ fn doc_function<T: AstInfo>(v: &Function<T>) -> RcDoc {
             }
             let name = format!(
                 "{}({}",
-                v.name.to_ast_string(),
+                v.name.to_ast_string_simple(),
                 if v.distinct { "DISTINCT " } else { "" }
             );
             bracket(name, comma_separate(doc_expr, args), ")")

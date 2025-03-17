@@ -244,7 +244,7 @@ pub(super) fn generate_source_export_statement_values(
                     let mut full_name = purified_export.external_reference.0.clone();
                     full_name.push(name);
                     unsupported_cols.push((
-                        UnresolvedItemName(full_name).to_ast_string(),
+                        UnresolvedItemName(full_name).to_ast_string_simple(),
                         mz_repr::adt::system::Oid(c.type_oid),
                     ));
                     continue;
@@ -374,7 +374,10 @@ pub(super) async fn purify_source_exports(
     if requested_exports.is_empty() {
         sql_bail!(
             "[internal error]: Postgres reference {} did not match any tables",
-            requested_references.as_ref().unwrap().to_ast_string()
+            requested_references
+                .as_ref()
+                .unwrap()
+                .to_ast_string_simple()
         );
     }
 

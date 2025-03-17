@@ -524,7 +524,7 @@ impl AstDisplay for ResolvedItemName {
 
 impl std::fmt::Display for ResolvedItemName {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(self.to_ast_string().as_str())
+        f.write_str(self.to_ast_string_simple().as_str())
     }
 }
 
@@ -547,7 +547,7 @@ impl AstDisplay for ResolvedColumnReference {
 
 impl std::fmt::Display for ResolvedColumnReference {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(self.to_ast_string().as_str())
+        f.write_str(self.to_ast_string_simple().as_str())
     }
 }
 
@@ -794,7 +794,7 @@ impl ResolvedDataType {
 
 impl fmt::Display for ResolvedDataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(self.to_ast_string().as_str())
+        f.write_str(self.to_ast_string_simple().as_str())
     }
 }
 
