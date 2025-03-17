@@ -980,7 +980,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         duration = time.time() - start_time
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            duration < 8
+            duration < 2
         ), f"Took {duration}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
 
