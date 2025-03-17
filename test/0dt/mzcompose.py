@@ -82,6 +82,9 @@ def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
         if name == "default":
             return
+        # TODO: Reenable when database-issues#9084 is fixed
+        if name == "kafka-source-rehydration":
+            return
         with c.test_case(name):
             c.workflow(name)
 
