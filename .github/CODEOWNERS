@@ -121,7 +121,7 @@
 /src/sql/src/plan/lowering.rs       @MaterializeInc/cluster
 /src/sql-lexer                      @MaterializeInc/adapter
 /src/sql-parser                     @MaterializeInc/adapter
-/src/sqllogictest                   @MaterializeInc/adapter
+/src/sqllogictest                   @MaterializeInc/testing @ggevay
 /src/ssh-util                       @MaterializeInc/cluster
 /src/storage                        @MaterializeInc/cluster
 /src/storage-client                 @MaterializeInc/cluster
