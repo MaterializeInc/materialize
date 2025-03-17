@@ -650,7 +650,7 @@ impl fmt::Display for PlanError {
                 write!(f, "cannot drop {object_type} {object_name}{reason}")
             }
             Self::InvalidOptionValue { option_name, err } => write!(f, "invalid {} option value: {}", option_name, err),
-            Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string()),
+            Self::UnexpectedDuplicateReference { name } => write!(f, "unexpected multiple references to {}", name.to_ast_string_simple()),
             Self::RecursiveTypeMismatch(name, declared, inferred) => {
                 let declared = separated(", ", declared);
                 let inferred = separated(", ", inferred);

@@ -606,10 +606,10 @@ macro_rules! generate_extracted_config {
                             $(
                                 $option_name => {
                                     if !$allow_multiple && !extracted.seen.insert(option.name.clone()) {
-                                        sql_bail!("{} specified more than once", option.name.to_ast_string());
+                                        sql_bail!("{} specified more than once", option.name.to_ast_string_simple());
                                     }
                                     let val: $t = $crate::plan::with_options::TryFromValue::try_from_value(option.value)
-                                        .map_err(|e| sql_err!("invalid {}: {}", option.name.to_ast_string(), e))?;
+                                        .map_err(|e| sql_err!("invalid {}: {}", option.name.to_ast_string_simple(), e))?;
                                     generate_extracted_config!(
                                         @ifexpr $allow_multiple,
                                         extracted.[<$option_name:snake>].push(val),
