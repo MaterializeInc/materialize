@@ -860,7 +860,7 @@ query TT
 SHOW CREATE VIEW v1;
 ----
 materialize.public.v1
-CREATE VIEW "materialize"."public"."v1" AS SELECT "x".* FROM "materialize"."public"."t1" JOIN "materialize"."public"."t2" USING ("f1") AS "x" WHERE "x"."f1" = 3
+CREATE VIEW⏎    materialize.public.v1⏎    AS⏎        SELECT x.*⏎        FROM materialize.public.t1 JOIN materialize.public.t2 USING(f1) AS x⏎        WHERE x.f1 = 3;
 
 mode cockroach
 

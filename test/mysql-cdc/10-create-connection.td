@@ -44,7 +44,7 @@ mysq   mysql
 > SHOW CREATE CONNECTION mysq
 name   create_sql
 ---------------------------------
-materialize.public.mysq   "CREATE CONNECTION \"materialize\".\"public\".\"mysq\" TO MYSQL (HOST = \"mysql\", PASSWORD = SECRET \"materialize\".\"public\".\"mysqlpass\", USER = \"root\")"
+materialize.public.mysq "CREATE CONNECTION materialize.public.mysq TO MYSQL (HOST = mysql, PASSWORD = SECRET materialize.public.mysqlpass, USER = root);"
 
 #
 # Error checking

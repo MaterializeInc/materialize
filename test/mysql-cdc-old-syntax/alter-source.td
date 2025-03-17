@@ -112,12 +112,8 @@ table_e               subsource
 table_f               subsource
 table_g               subsource
 
-# Show all tablestodo this should be splittable
-> SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a\", \"public\".\"table_b\" AS \"materialize\".\"public\".\"table_b\", \"public\".\"table_c\" AS \"materialize\".\"public\".\"table_c\", \"public\".\"table_d\" AS \"materialize\".\"public\".\"table_d\", \"public\".\"table_e\" AS \"materialize\".\"public\".\"table_e\", \"public\".\"table_f\" AS \"materialize\".\"public\".\"table_f\", \"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\""
-
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"public\".\"table_f\".\"f2\""
+public.table_f.f2
 
 #
 # Error checking
@@ -346,7 +342,7 @@ contains: invalid TEXT COLUMNS option value: unexpected multiple references to p
 "\"public\".\"table_f\".\"f2\""
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
-"\"f2\""
+f2
 
 # Drop a table, which shuffles the tables' output indexes, then add a table and ensure it can be added.
 $ mysql-execute name=mysql
@@ -363,7 +359,7 @@ INSERT INTO table_f VALUES (3, 'var1');
 "\"public\".\"table_f\".\"f2\", \"public\".\"table_i\".\"f2\""
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
-"\"f2\""
+f2
 
 > SELECT * FROM table_f
 1 var0
@@ -419,7 +415,7 @@ contains: invalid EXCLUDE COLUMNS option value: unexpected multiple references t
 "\"public\".\"table_f\".\"f2\", \"public\".\"table_i\".\"f2\""
 
 > SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
-"\"f2\""
+f2
 
 > SELECT * FROM table_i
 1

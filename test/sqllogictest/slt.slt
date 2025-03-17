@@ -39,6 +39,9 @@ column␠name␠with␠spaces! nospaces space␠again
 2
 3
 
+statement ok
+CREATE MATERIALIZED VIEW mv1 AS SELECT 1;
+
 mode standard
 
 query TT
@@ -59,6 +62,27 @@ with
 newline
 EOF
 
+query TT
+SHOW CREATE MATERIALIZED VIEW mv1;
+----
+materialize.public.mv1
+CREATE MATERIALIZED VIEW materialize.public.mv1⏎    IN CLUSTER quickstart⏎    WITH (REFRESH = ON COMMIT)⏎    AS SELECT 1;
+
+query T
+SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv1);
+----
+CREATE MATERIALIZED VIEW materialize.public.mv1⏎    IN CLUSTER quickstart⏎    WITH (REFRESH = ON COMMIT)⏎    AS SELECT 1;
+
+simple multiline,conn=mz_catalog_server,user=mz_support
+SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv1);
+----
+CREATE MATERIALIZED VIEW materialize.public.mv1
+    IN CLUSTER quickstart
+    WITH (REFRESH = ON COMMIT)
+    AS SELECT 1;
+EOF
+COMPLETE 1
+
 mode cockroach
 
 query TT
@@ -76,3 +100,23 @@ result
 with
 newline
 EOF
+
+query TT
+SHOW CREATE MATERIALIZED VIEW mv1;
+----
+materialize.public.mv1  CREATE␠MATERIALIZED␠VIEW␠materialize.public.mv1⏎␠␠␠␠IN␠CLUSTER␠quickstart⏎␠␠␠␠WITH␠(REFRESH␠=␠ON␠COMMIT)⏎␠␠␠␠AS␠SELECT␠1;
+
+query T
+SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv1);
+----
+CREATE MATERIALIZED VIEW materialize.public.mv1⏎    IN CLUSTER quickstart⏎    WITH (REFRESH = ON COMMIT)⏎    AS SELECT 1;
+
+simple multiline,conn=mz_catalog_server,user=mz_support
+SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW mv1);
+----
+CREATE MATERIALIZED VIEW materialize.public.mv1
+    IN CLUSTER quickstart
+    WITH (REFRESH = ON COMMIT)
+    AS SELECT 1;
+EOF
+COMPLETE 1

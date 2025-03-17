@@ -155,22 +155,20 @@ pub trait AstDisplay {
         W: fmt::Write;
 
     fn to_ast_string_simple(&self) -> String {
-        let mut buf = String::new();
-        let mut f = AstFormatter::new(&mut buf, FormatMode::Simple);
-        self.fmt(&mut f);
-        buf
+        self.to_ast_string(FormatMode::Simple)
     }
 
     fn to_ast_string_stable(&self) -> String {
-        let mut buf = String::new();
-        let mut f = AstFormatter::new(&mut buf, FormatMode::Stable);
-        self.fmt(&mut f);
-        buf
+        self.to_ast_string(FormatMode::Stable)
     }
 
     fn to_ast_string_redacted(&self) -> String {
+        self.to_ast_string(FormatMode::SimpleRedacted)
+    }
+
+    fn to_ast_string(&self, format_mode: FormatMode) -> String {
         let mut buf = String::new();
-        let mut f = AstFormatter::new(&mut buf, FormatMode::SimpleRedacted);
+        let mut f = AstFormatter::new(&mut buf, format_mode);
         self.fmt(&mut f);
         buf
     }

@@ -129,15 +129,11 @@ table_e               subsource
 table_f               subsource
 table_g               subsource
 
-# Show all tablestodo this should be splittable
-> SELECT regexp_match(create_sql, 'FOR TABLES \((.+?)\) EXPOSE')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"postgres\".\"public\".\"table_a\" AS \"materialize\".\"public\".\"table_a\", \"postgres\".\"public\".\"table_b\" AS \"materialize\".\"public\".\"table_b\", \"postgres\".\"public\".\"table_c\" AS \"materialize\".\"public\".\"table_c\", \"postgres\".\"public\".\"table_d\" AS \"materialize\".\"public\".\"table_d\", \"postgres\".\"public\".\"table_e\" AS \"materialize\".\"public\".\"table_e\", \"postgres\".\"public\".\"table_f\" AS \"materialize\".\"public\".\"table_f\", \"postgres\".\"public\".\"table_g\" AS \"materialize\".\"public\".\"table_g\""
-
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE mz_source);
-"\"postgres\".\"public\".\"table_f\".\"f2\""
+postgres.public.table_f.f2
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_f);
-"\"f2\""
+f2
 
 #
 # State checking
@@ -363,7 +359,7 @@ INSERT INTO table_f VALUES (3, 'var1');
 "\"postgres\".\"public\".\"table_f\".\"f2\", \"postgres\".\"public\".\"table_i\".\"f2\""
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE SOURCE table_i);
-"\"f2\""
+f2
 
 > SELECT * FROM table_f
 1 var0
