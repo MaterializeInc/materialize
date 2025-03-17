@@ -2231,7 +2231,7 @@ impl<'a> RewriteBuffer<'a> {
         self.append(
             &names
                 .iter()
-                .map(|name| name.as_str().replace('␠', " "))
+                .map(|name| name.as_str().replace(' ', "␠"))
                 .collect::<Vec<_>>()
                 .join(" "),
         );
