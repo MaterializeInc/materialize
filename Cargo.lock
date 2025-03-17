@@ -1602,7 +1602,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -4598,7 +4598,7 @@ dependencies = [
  "serde",
  "serde_json",
  "socket2 0.5.8",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-native-tls",
  "tokio-util",
@@ -4668,7 +4668,7 @@ dependencies = [
  "serde_json",
  "tabled",
  "termcolor",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "time",
  "tokio",
  "toml",
@@ -4754,7 +4754,7 @@ dependencies = [
  "sha2",
  "smallvec",
  "static_assertions",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "timely",
  "tokio",
  "tokio-postgres",
@@ -4893,7 +4893,7 @@ dependencies = [
  "hyper-tls 0.5.0",
  "mz-ore",
  "pin-project",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "uuid",
  "workspace-hack",
@@ -5028,7 +5028,7 @@ dependencies = [
  "serde_plain",
  "sha2",
  "static_assertions",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "timely",
  "tokio",
  "tracing",
@@ -5123,7 +5123,7 @@ dependencies = [
  "mz-frontegg-client",
  "reqwest 0.11.24",
  "serde",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "url",
  "workspace-hack",
@@ -5317,7 +5317,7 @@ dependencies = [
  "prost-build",
  "serde",
  "serde_json",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "timely",
  "tokio",
  "tokio-stream",
@@ -5576,7 +5576,7 @@ dependencies = [
  "stacker",
  "sysctl",
  "tempfile",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "timely",
  "tokio",
  "tokio-postgres",
@@ -5710,7 +5710,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "socket2 0.5.8",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-postgres",
  "tokio-stream",
@@ -5743,7 +5743,7 @@ dependencies = [
  "reqwest-retry",
  "serde",
  "serde_json",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tracing",
  "uuid",
@@ -5760,7 +5760,7 @@ dependencies = [
  "reqwest 0.11.24",
  "serde",
  "serde_json",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "url",
  "uuid",
@@ -5875,7 +5875,7 @@ dependencies = [
  "rdkafka",
  "serde",
  "serde_json",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tracing",
  "url",
@@ -5986,7 +5986,7 @@ dependencies = [
  "mz-ore",
  "paste",
  "prometheus",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-util",
  "tracing",
@@ -6022,7 +6022,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tonic-build",
  "tracing",
@@ -6173,7 +6173,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-postgres",
  "tower-http",
@@ -6227,7 +6227,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "stacker",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-native-tls",
  "tokio-openssl",
@@ -6359,7 +6359,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "timely",
  "tokio",
  "tokio-metrics",
@@ -6575,7 +6575,7 @@ dependencies = [
  "prost",
  "prost-build",
  "serde",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-postgres",
  "tonic-build",
@@ -6711,7 +6711,7 @@ dependencies = [
  "smallvec",
  "static_assertions",
  "strsim",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "timely",
  "tokio-postgres",
  "tracing",
@@ -6752,7 +6752,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tracing",
  "workspace-hack",
@@ -6975,7 +6975,7 @@ dependencies = [
  "serde",
  "serde_json",
  "static_assertions",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-postgres",
  "tracing",
@@ -7017,7 +7017,7 @@ dependencies = [
  "phf",
  "serde",
  "smallvec",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tracing",
  "uncased",
  "unicode-width 0.2.0",
@@ -7032,7 +7032,7 @@ dependencies = [
  "mz-ore",
  "mz-sql-parser",
  "pretty",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "workspace-hack",
 ]
 
@@ -7121,7 +7121,7 @@ dependencies = [
  "serde_json",
  "ssh-key",
  "tempfile",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -7196,7 +7196,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "timely",
  "tokio",
  "tokio-postgres",
@@ -7339,7 +7339,7 @@ dependencies = [
  "sentry",
  "serde",
  "smallvec",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "timely",
  "tokio",
  "tokio-stream",
@@ -7408,7 +7408,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "timely",
  "tokio",
  "tokio-postgres",
@@ -7569,7 +7569,7 @@ dependencies = [
  "openssl",
  "openssl-sys",
  "postgres-openssl",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
  "tokio-postgres",
  "tracing",
@@ -7981,7 +7981,7 @@ dependencies = [
  "openssh-mux-client",
  "shell-escape",
  "tempfile",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
  "tokio",
 ]
 
@@ -8010,7 +8010,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9879168afb48a235200e30d93df320b7191568cda8621df02f145c1c0f1af95a"
 dependencies = [
  "ssh_format_error",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -9211,7 +9211,7 @@ checksum = "dd6f9d3d47bdd2ad6945c5015a226ec6155d0bcdfd8f7cd29f86b71f8de99d2b"
 dependencies = [
  "getrandom 0.2.10",
  "libredox",
- "thiserror 2.0.11",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -10543,11 +10543,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.11"
+version = "2.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d452f284b73e6d76dd36758a0c8684b1d5be31f92b89d07fd5822175732206fc"
+checksum = "567b8a2dae586314f7be2a752ec7474332959c6460e02bde30d702a66d488708"
 dependencies = [
- "thiserror-impl 2.0.11",
+ "thiserror-impl 2.0.12",
 ]
 
 [[package]]
@@ -10563,9 +10563,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.11"
+version = "2.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26afc1baea8a989337eeb52b6e72a039780ce45c3edfcc9c5b9d112feeb173c2"
+checksum = "7f7cf42b4507d8ea322120659672cf1b9dbb93f8f2d4ecfd6e51350ff5b17a1d"
 dependencies = [
  "proc-macro2",
  "quote",
