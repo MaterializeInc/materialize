@@ -195,7 +195,7 @@ contains:unknown catalog item 'nonexistent'
 > SHOW CREATE VIEW test1
 name                      create_sql
 --------------------------------------------------------------------------------------------------
-materialize.public.test1  "CREATE VIEW \"materialize\".\"public\".\"test1\" AS SELECT 42 AS \"a\""
+materialize.public.test1  "CREATE VIEW materialize.public.test1 AS SELECT 42 AS a;"
 
 ! CREATE VIEW test1 AS SELECT 43 AS b
 contains:view "materialize.public.test1" already exists
