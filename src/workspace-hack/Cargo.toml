@@ -108,7 +108,7 @@ proc-macro2 = { version = "1.0.93", features = ["span-locations"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.14.7", default-features = false, features = ["serde"] }
 prost-types = { version = "0.13.5" }
-quote = { version = "1.0.38" }
+quote = { version = "1.0.40" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
 rand_core = { version = "0.6.2", default-features = false, features = ["std"] }
@@ -247,7 +247,7 @@ proptest-derive = { version = "0.5.1", default-features = false, features = ["bo
 prost = { version = "0.13.5", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.14.7", default-features = false, features = ["serde"] }
 prost-types = { version = "0.13.5" }
-quote = { version = "1.0.38" }
+quote = { version = "1.0.40" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
 rand_core = { version = "0.6.2", default-features = false, features = ["std"] }
