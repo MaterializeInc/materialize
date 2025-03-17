@@ -73,7 +73,7 @@ url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.16.0", features = ["serde"] }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
-thiserror = "2.0.11"
+thiserror = "2.0.12"
 tracing = { version = "0.1.37" }
 
 # for the tracing feature
