@@ -5,8 +5,8 @@
 # wheels for a wide variety of platforms, including M1 Macs.
 
 black==24.4.2
-boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.37.9
-boto3==1.37.9
+boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.37.13
+boto3==1.37.13
 click==8.1.3
 cryptography==44.0.2
 colored==2.3.0
@@ -18,7 +18,7 @@ ipympl==0.9.7
 ipywidgets==8.1.5
 junit-xml==1.9
 junitparser==3.2.0
-jupyterlab==4.3.5
+jupyterlab==4.3.6
 jupyter-black==0.4.0
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
@@ -37,8 +37,8 @@ pdoc==15.0.1
 pg8000@git+https://github.com/tlocke/pg8000@46c00021ade1d19466b07ed30392386c5f0a6b8e
 prettytable==3.15.1
 psutil==7.0.0
-psycopg==3.2.5
-psycopg-binary==3.2.5
+psycopg==3.2.6
+psycopg-binary==3.2.6
 # pydantic >= 2.9 causes pdoc 15.0.1 to fail: UserWarning: Error parsing type annotation dict[str, Any] | None for pydantic.main.BaseModel.__pydantic_extra__: 'function' object is not subscriptable
 # See also https://github.com/mitmproxy/pdoc/issues/741
 pydantic==2.8.2
@@ -67,7 +67,7 @@ types-setuptools==75.8.2.20250305
 types-toml==0.10.8.20240310
 typing-extensions==4.12.2
 xxhash==3.5.0
-yamllint==1.35.1
+yamllint==1.36.1
 confluent-kafka==2.6.1
 fastavro==1.10.0
 websocket-client==1.8.0
