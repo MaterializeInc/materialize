@@ -14,6 +14,8 @@ menu:
 SHOW [REDACTED] CREATE SOURCE <source_name>
 ```
 
+{{< yaml-table data="show_create_redacted_option" >}}
+
 For available source names, see [`SHOW SOURCES`](/sql/show-sources).
 
 ## Examples
