@@ -58,7 +58,7 @@ flate2 = { version = "1.1.0", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
-futures-executor = { version = "0.3.30" }
+futures-executor = { version = "0.3.31" }
 futures-io = { version = "0.3.31" }
 futures-sink = { version = "0.3.31" }
 futures-task = { version = "0.3.31" }
@@ -195,7 +195,7 @@ flate2 = { version = "1.1.0", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
-futures-executor = { version = "0.3.30" }
+futures-executor = { version = "0.3.31" }
 futures-io = { version = "0.3.31" }
 futures-sink = { version = "0.3.31" }
 futures-task = { version = "0.3.31" }

@@ -36,7 +36,7 @@ async-trait = "0.1.83"
 bytes = { version = "1.10.1", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive"] }
 differential-dataflow = "0.13.7"
-futures = "0.3.30"
+futures = "0.3.31"
 futures-util = "0.3"
 h2 = "0.3.13"
 hex = "0.4.3"
