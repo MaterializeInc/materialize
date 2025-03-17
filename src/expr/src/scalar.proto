@@ -456,6 +456,7 @@ message ProtoUnaryFunc {
     ProtoToCharTimestamp to_char_timestamp_tz = 332;
     google.protobuf.Empty cast_date_to_mz_timestamp = 333;
     google.protobuf.Empty bit_count_bytes = 334;
+    google.protobuf.Empty reverse = 335;
   }
 }
 

@@ -3444,6 +3444,9 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String, String, String) => VariadicFunc::RegexpReplace => String, 2285;
             // TODO: PostgreSQL supports additional five and six argument forms of this function which
             // allow controlling where to start the replacement and how many replacements to make.
+        },
+        "reverse" => Scalar {
+            params!(String) => UnaryFunc::Reverse(func::Reverse) => String, 3062;
         }
     };
 

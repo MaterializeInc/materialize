@@ -461,6 +461,9 @@
   - signature: 'upper(s: str) -> str'
     description: Convert `s` to uppercase.
 
+  - signature: 'reverse(s: str) -> str'
+    description: Reverse the characters in `s`.
+
 - type: Scalar
   description: Scalar functions take a list of scalar expressions
   functions:
