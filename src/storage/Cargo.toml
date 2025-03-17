@@ -72,7 +72,7 @@ rdkafka = { version = "0.29.0", features = [
 regex = { version = "1.10.6" }
 rocksdb = { version = "0.22.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
 seahash = "4"
-serde = { version = "1.0.218", features = ["derive"] }
+serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.125" }
 serde_bytes = { version = "0.11.17" }
 sha2 = "0.10.8"
