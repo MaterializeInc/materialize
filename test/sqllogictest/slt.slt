@@ -38,3 +38,41 @@ column␠name␠with␠spaces! nospaces space␠again
 1
 2
 3
+
+mode standard
+
+query TT
+SELECT 'result' || chr(10) || 'with' || chr(10) || 'newline', 'no newline in this one, but there are spaces'
+UNION
+SELECT 'one' || chr(10) || 'more' || chr(10) || 'row (with spaces)', 'easy'
+----
+one⏎more⏎row (with spaces)
+easy
+result⏎with⏎newline
+no newline in this one, but there are spaces
+
+query T multiline
+SELECT 'result' || chr(10) || 'with' || chr(10) || 'newline';
+----
+result
+with
+newline
+EOF
+
+mode cockroach
+
+query TT
+SELECT 'result' || chr(10) || 'with' || chr(10) || 'newline', 'no newline in this one, but there are spaces'
+UNION
+SELECT 'one' || chr(10) || 'more' || chr(10) || 'row (with spaces)', 'easy'
+----
+one⏎more⏎row␠(with␠spaces)  easy
+result⏎with⏎newline  no␠newline␠in␠this␠one,␠but␠there␠are␠spaces
+
+query T multiline
+SELECT 'result' || chr(10) || 'with' || chr(10) || 'newline';
+----
+result
+with
+newline
+EOF
