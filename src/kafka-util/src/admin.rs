@@ -16,6 +16,7 @@ use anyhow::{anyhow, bail};
 use itertools::Itertools;
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
+use mz_ore::str::separated;
 use rdkafka::admin::{
     AdminClient, AdminOptions, ConfigEntry, ConfigResource, NewTopic, OwnedResourceSpecifier,
     ResourceSpecifier,
@@ -98,14 +99,13 @@ where
                 info!(
                     topic = new_topic.name,
                     "got configuration for existing topic: [{}]",
-                    actual_configs.iter().format_with(", ", |e, write| {
-                        write(&e.name)?;
-                        if let Some(val) = &e.value {
-                            write(&": ")?;
-                            write(val)?;
-                        }
-                        Ok(())
-                    })
+                    separated(
+                        ", ",
+                        actual_configs.iter().map(|e| {
+                            let kv = [&*e.name, e.value.as_ref().map_or("<none>", |v| &*v)];
+                            separated(": ", kv)
+                        })
+                    )
                 );
                 for (config, expected) in &new_topic.config {
                     match actual_configs.iter().find(|c| &c.name == config) {
