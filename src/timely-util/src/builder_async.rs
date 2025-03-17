@@ -23,6 +23,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll, Waker};
+use std::time::{Duration, Instant};
 
 use differential_dataflow::containers::{Columnation, TimelyStack};
 use futures_util::task::ArcWake;
@@ -62,6 +63,8 @@ pub struct OperatorBuilder<G: Scope> {
     shutdown_handle: ButtonHandle,
     /// A button to coordinate shutdown of this operator among workers.
     shutdown_button: Button,
+    /// Time quantum to schedule repeatedly schedule the future, if it's ready to be polled
+    time_quantum: Duration,
 }
 
 /// A helper trait abstracting over an input handle. It facilitates keeping around type erased
@@ -414,6 +417,10 @@ impl<T: Timestamp, CB: ContainerBuilder> OutputIndex
     }
 }
 
+/// The default time quantum for async operators in milliseconds.
+pub static GLOBAL_ASYNC_OPERATOR_TIME_QUANTUM_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 impl<G: Scope> OperatorBuilder<G> {
     /// Allocates a new generic async operator builder from its containing scope.
     pub fn new(name: String, mut scope: G) -> Self {
@@ -437,7 +444,16 @@ impl<G: Scope> OperatorBuilder<G> {
             output_flushes: Default::default(),
             shutdown_handle,
             shutdown_button,
+            time_quantum: Duration::from_millis(
+                GLOBAL_ASYNC_OPERATOR_TIME_QUANTUM_MS.load(Ordering::Relaxed),
+            ),
         }
+    }
+
+    /// Set the time quantum to a specific value, instead of using the default
+    /// ([`GLOBAL_ASYNC_OPERATOR_TIME_QUANTUM_MS`]).
+    pub fn set_time_quantum(&mut self, time_quantum: Duration) {
+        self.time_quantum = time_quantum;
     }
 
     /// Adds a new input that is connected to the specified output, returning the async input handle to use.
@@ -598,10 +614,20 @@ impl<G: Scope> OperatorBuilder<G> {
                         if operator_waker.task_ready.load(Ordering::SeqCst) {
                             let waker = futures_util::task::waker_ref(&operator_waker);
                             let mut cx = Context::from_waker(&waker);
-                            operator_waker.task_ready.store(false, Ordering::SeqCst);
-                            if Pin::new(fut).poll(&mut cx).is_ready() {
-                                // We're done with logic so deallocate the task
-                                logic_fut = None;
+                            let mut once = true;
+                            let now = Instant::now();
+                            let mut fut = Pin::new(fut);
+                            'repeat: while once
+                                || (operator_waker.task_ready.load(Ordering::SeqCst)
+                                    && now.elapsed() < self.time_quantum)
+                            {
+                                once = false;
+                                operator_waker.task_ready.store(false, Ordering::SeqCst);
+                                if fut.as_mut().poll(&mut cx).is_ready() {
+                                    // We're done with logic so deallocate the task
+                                    logic_fut = None;
+                                    break 'repeat;
+                                }
                             }
                             // Flush all the outputs before exiting
                             for flush in output_flushes.iter_mut() {

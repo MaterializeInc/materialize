@@ -222,33 +222,43 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
     "Round observed timestamps to slack.",
 );
 
+/// The time quantum for async operator builders.
+///
+/// Set to 0 to disable time quantums.
+pub const BUILDER_ASYNC_OPERATOR_TIME_QUANTUM: Config<Duration> = Config::new(
+    "builder_async_operator_time_quantum",
+    Duration::from_millis(10),
+    "Time quantum for async operator builders. Set to 0 to disable time quantums.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
-        .add(&ENABLE_MZ_JOIN_CORE)
+        .add(&BUILDER_ASYNC_OPERATOR_TIME_QUANTUM)
+        .add(&COMPUTE_APPLY_COLUMN_DEMANDS)
+        .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
+        .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
+        .add(&COMPUTE_REPLICA_EXPIRATION_OFFSET)
+        .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)
+        .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
+        .add(&COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO)
+        .add(&COPY_TO_S3_MULTIPART_PART_SIZE_BYTES)
+        .add(&COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO)
+        .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
+        .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
+        .add(&ENABLE_COLUMNAR_LGALLOC)
+        .add(&ENABLE_COLUMNATION_LGALLOC)
+        .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
+        .add(&ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION)
+        .add(&ENABLE_COMPUTE_REPLICA_EXPIRATION)
         .add(&ENABLE_CORRECTION_V2)
-        .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
+        .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
+        .add(&ENABLE_MZ_JOIN_CORE)
+        .add(&HYDRATION_CONCURRENCY)
         .add(&LGALLOC_BACKGROUND_INTERVAL)
         .add(&LGALLOC_FILE_GROWTH_DAMPENER)
         .add(&LGALLOC_LOCAL_BUFFER_BYTES)
         .add(&LGALLOC_SLOW_CLEAR_BYTES)
-        .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
-        .add(&ENABLE_COLUMNATION_LGALLOC)
-        .add(&ENABLE_COLUMNAR_LGALLOC)
-        .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)
-        .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
-        .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
-        .add(&HYDRATION_CONCURRENCY)
-        .add(&COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO)
-        .add(&COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO)
-        .add(&COPY_TO_S3_MULTIPART_PART_SIZE_BYTES)
-        .add(&ENABLE_COMPUTE_REPLICA_EXPIRATION)
-        .add(&COMPUTE_REPLICA_EXPIRATION_OFFSET)
-        .add(&COMPUTE_APPLY_COLUMN_DEMANDS)
-        .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
-        .add(&ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION)
-        .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
-        .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
-        .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
+        .add(&LINEAR_JOIN_YIELDING)
 }

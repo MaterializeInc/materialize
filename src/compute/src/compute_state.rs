@@ -307,6 +307,13 @@ impl ComputeState {
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
+
+        // Set the default async operator time quantum. Only applied here, but will apply to both
+        // compute and storage because of shared global state.
+        mz_timely_util::builder_async::GLOBAL_ASYNC_OPERATOR_TIME_QUANTUM_MS.store(
+            BUILDER_ASYNC_OPERATOR_TIME_QUANTUM.get(config).as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 
     /// Apply the provided replica expiration `offset` by converting it to a frontier relative to
