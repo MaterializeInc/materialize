@@ -183,15 +183,22 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         // `metrics.reset()` here, since otherwise the command history would appear empty for a
         // brief amount of time.
 
+        // Reset reduced count, and carefully update when pushing commands. Note that some commands
+        // appear to be unary, but encode multiple changes in their values, for example
+        // `AllowCompaction`.
+        self.reduced_count = 0;
+
         let count = u64::from(create_timely_command.is_some());
         self.metrics.create_timely_count.set(count);
         if let Some(create_timely_command) = create_timely_command {
+            self.reduced_count += 1;
             self.commands.push(create_timely_command);
         }
 
         let count = u64::from(!final_configuration.all_unset());
         self.metrics.update_configuration_count.set(count);
         if !final_configuration.all_unset() {
+            self.reduced_count += 1;
             self.commands
                 .push(StorageCommand::UpdateConfiguration(final_configuration));
         }
@@ -199,6 +206,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         let count = u64::cast_from(run_ingestions.len());
         self.metrics.run_ingestions_count.set(count);
         if !run_ingestions.is_empty() {
+            self.reduced_count += run_ingestions.len();
             self.commands
                 .push(StorageCommand::RunIngestions(run_ingestions));
         }
@@ -206,6 +214,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         let count = u64::cast_from(run_sinks.len());
         self.metrics.run_sinks_count.set(count);
         if !run_sinks.is_empty() {
+            self.reduced_count += run_sinks.len();
             self.commands.push(StorageCommand::RunSinks(run_sinks));
         }
 
@@ -214,6 +223,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         //
         // TODO(cf2): Record metrics on the number of OneshotIngestion commands.
         if !final_oneshot_ingestions.is_empty() {
+            self.reduced_count += final_oneshot_ingestions.len();
             let oneshots = final_oneshot_ingestions.into_values().collect();
             self.commands
                 .push(StorageCommand::RunOneshotIngestion(oneshots));
@@ -222,6 +232,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         let count = u64::cast_from(allow_compaction.len());
         self.metrics.allow_compaction_count.set(count);
         if !allow_compaction.is_empty() {
+            self.reduced_count += allow_compaction.len();
             let updates = allow_compaction.into_iter().collect();
             self.commands.push(StorageCommand::AllowCompaction(updates));
         }
@@ -229,16 +240,16 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         let count = u64::from(initialization_complete);
         self.metrics.initialization_complete_count.set(count);
         if initialization_complete {
+            self.reduced_count += 1;
             self.commands.push(StorageCommand::InitializationComplete);
         }
 
         let count = u64::from(allow_writes);
         self.metrics.allow_writes_count.set(count);
         if allow_writes {
+            self.reduced_count += 1;
             self.commands.push(StorageCommand::AllowWrites);
         }
-
-        self.reduced_count = self.commands.len();
     }
 }
 
