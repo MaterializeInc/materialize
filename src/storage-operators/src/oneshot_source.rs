@@ -69,12 +69,13 @@ use bytes::Bytes;
 use differential_dataflow::Hashable;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
+use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::oneshot_sources::{
@@ -143,6 +144,7 @@ where
         source,
         format,
         filter,
+        shape,
     } = request;
 
     let source = match source {
@@ -163,11 +165,11 @@ where
 
     let format = match format {
         ContentFormat::Csv(params) => {
-            let format = CsvDecoder::new(params, &collection_meta.relation_desc);
+            let format = CsvDecoder::new(params, &shape.source_desc);
             FormatKind::Csv(format)
         }
         ContentFormat::Parquet => {
-            let format = ParquetFormat::new(collection_meta.relation_desc.clone());
+            let format = ParquetFormat::new(shape.source_desc);
             FormatKind::Parquet(format)
         }
     };
@@ -192,8 +194,12 @@ where
         &work_stream,
     );
     // Parse chunks of records into Rows.
-    let (rows_stream, decode_token) =
-        render_decode_chunk(scope.clone(), format.clone(), &records_stream);
+    let (rows_stream, decode_token) = render_decode_chunk(
+        scope.clone(),
+        format.clone(),
+        &records_stream,
+        shape.source_mfp,
+    );
     // Stage the Rows in Persist.
     let (batch_stream, batch_token) = render_stage_batches_operator(
         scope.clone(),
@@ -261,19 +267,12 @@ where
         let work = source.list().await.context("list");
         match work {
             Ok(objects) => {
-                let names = objects.iter().map(|(o, _check)| o.name());
-                let found: String = itertools::intersperse(names, ", ").collect();
-                tracing::info!(%worker_id, %found, "listed objects");
-
-                let filtered: Vec<_> = objects
+                let (include, exclude): (Vec<_>, Vec<_>) = objects
                     .into_iter()
-                    .filter(|(o, _check)| filter.filter::<S>(o))
-                    .collect();
-                let names = filtered.iter().map(|(o, _check)| o.name());
-                let returning: String = itertools::intersperse(names, ", ").collect();
-                tracing::info!(%worker_id, %returning, "filtered objects");
+                    .partition(|(o, _checksum)| filter.filter::<S>(o));
+                tracing::info!(%worker_id, ?include, ?exclude, "listed objects");
 
-                filtered
+                include
                     .into_iter()
                     .for_each(|object| start_handle.give(&start_cap, Ok(object)))
             }
@@ -434,6 +433,7 @@ pub fn render_decode_chunk<G, F>(
     scope: G,
     format: F,
     record_chunks: &TimelyStream<G, Result<F::RecordChunk, StorageErrorX>>,
+    mfp: SafeMfpPlan,
 ) -> (
     TimelyStream<G, Result<Row, StorageErrorX>>,
     PressOnDropButton,
@@ -449,6 +449,10 @@ where
 
     let shutdown = builder.build(move |caps| async move {
         let [_row_cap] = caps.try_into().unwrap();
+
+        let mut datum_vec = DatumVec::default();
+        let row_arena = RowArena::default();
+        let mut row_buf = Row::default();
 
         while let Some(event) = record_chunk_handle.next().await {
             let (capability, maybe_chunks) = match event {
@@ -468,9 +472,28 @@ where
             .context("decode chunk");
 
             match result {
-                Ok(rows) => rows
-                    .into_iter()
-                    .for_each(|row| row_handle.give(&capability, Ok(row))),
+                Ok(rows) => {
+                    // For each row of source data, we pass it through an MFP to re-arrange column
+                    // orders and/or fill in default values for missing columns.
+                    for row in rows {
+                        let mut datums = datum_vec.borrow_with(&row);
+                        let result = mfp.evaluate_into(&mut *datums, &row_arena, &mut row_buf);
+
+                        match result {
+                            Ok(Some(row)) => row_handle.give(&capability, Ok(row)),
+                            Ok(None) => {
+                                // We only expect the provided MFP to map rows from the source data
+                                // and project default values.
+                                mz_ore::soft_panic_or_log!("oneshot source MFP filtered out data!");
+                            }
+                            Err(e) => {
+                                let err = StorageErrorXKind::MfpEvalError(e.to_string().into())
+                                    .with_context("decode");
+                                row_handle.give(&capability, Err(err))
+                            }
+                        }
+                    }
+                }
                 Err(err) => row_handle.give(&capability, Err(err)),
             }
         }
@@ -635,6 +658,9 @@ pub trait OneshotObject {
     /// Name of the object, including any extensions.
     fn name(&self) -> &str;
 
+    /// Path of the object within the remote source.
+    fn path(&self) -> &str;
+
     /// Size of this object in bytes.
     fn size(&self) -> usize;
 
@@ -759,6 +785,13 @@ impl OneshotObject for ObjectKind {
         match self {
             ObjectKind::Http(object) => object.name(),
             ObjectKind::AwsS3(object) => object.name(),
+        }
+    }
+
+    fn path(&self) -> &str {
+        match self {
+            ObjectKind::Http(object) => object.path(),
+            ObjectKind::AwsS3(object) => object.path(),
         }
     }
 
@@ -949,8 +982,8 @@ impl ObjectFilter {
     pub fn filter<S: OneshotSource>(&self, object: &S::Object) -> bool {
         match self {
             ObjectFilter::None => true,
-            ObjectFilter::Files(files) => files.contains(object.name()),
-            ObjectFilter::Pattern(pattern) => pattern.matches(object.name()),
+            ObjectFilter::Files(files) => files.contains(object.path()),
+            ObjectFilter::Pattern(pattern) => pattern.matches(object.path()),
         }
     }
 }
@@ -998,6 +1031,8 @@ pub enum StorageErrorXKind {
     MissingSize,
     #[error("object is missing the required '{0}' field")]
     MissingField(Arc<str>),
+    #[error("failed while evaluating the provided mfp: '{0}'")]
+    MfpEvalError(Arc<str>),
     #[error("something went wrong: {0}")]
     Generic(String),
 }

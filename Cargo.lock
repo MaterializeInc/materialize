@@ -7306,6 +7306,7 @@ dependencies = [
  "arrow",
  "async-compression",
  "async-stream",
+ "aws-sdk-s3",
  "aws-smithy-types",
  "aws-types",
  "bytes",
