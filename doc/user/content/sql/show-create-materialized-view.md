@@ -14,6 +14,8 @@ menu:
 SHOW [REDACTED] CREATE MATERIALIZED VIEW <view_name>
 ```
 
+{{< yaml-table data="show_create_redacted_option" >}}
+
 For available materialized view names, see [`SHOW MATERIALIZED VIEWS`](/sql/show-materialized-views).
 
 ## Examples

@@ -14,6 +14,8 @@ menu:
 SHOW [REDACTED] CREATE SINK <sink_name>
 ```
 
+{{< yaml-table data="show_create_redacted_option" >}}
+
 For available sink names, see [`SHOW SINKS`](/sql/show-sinks).
 
 ## Examples
