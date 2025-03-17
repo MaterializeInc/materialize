@@ -21,7 +21,7 @@ mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
 mz-service = { path = "../service" }
 regex = "1.10.6"
 timely = "0.19.0"
-tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "net"] }
+tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "net"] }
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

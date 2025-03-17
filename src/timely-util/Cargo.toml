@@ -24,7 +24,7 @@ num-traits = "0.2"
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.218", features = ["derive"] }
 timely = "0.19.0"
-tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread", "time"] }
 tracing = "0.1.37"
 uuid = { version = "1.16.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }

@@ -49,7 +49,7 @@ serde = { version = "1.0.218", features = ["derive"] }
 smallvec = { version = "1.14.0", features = ["union"] }
 timely = "0.19.0"
 thiserror = "2.0.12"
-tokio = { version = "1.38.0", features = ["fs", "rt", "sync", "test-util", "time"] }
+tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-stream = "0.1.17"
 tokio-util = { version = "0.7.13", features = ["io"] }
 tracing = "0.1.37"
