@@ -19,12 +19,13 @@ use std::fmt::Write;
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, ScalarType};
-use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
     CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
     ShowCreateClusterStatement, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement,
     ShowObjectType, SystemObjectType, UnresolvedItemName, WithOptionValue,
 };
+use mz_sql_pretty::PrettyConfig;
 use query::QueryContext;
 
 use crate::ast::visit_mut::VisitMut;
@@ -1182,9 +1183,15 @@ fn humanize_sql_for_show_create(
         _ => (),
     }
 
-    if redacted {
-        Ok(resolved.to_ast_string_redacted())
-    } else {
-        Ok(resolved.to_ast_string_stable())
-    }
+    Ok(mz_sql_pretty::to_pretty(
+        &resolved,
+        PrettyConfig {
+            width: mz_sql_pretty::DEFAULT_WIDTH,
+            format_mode: if redacted {
+                FormatMode::SimpleRedacted
+            } else {
+                FormatMode::Simple
+            },
+        },
+    ))
 }

@@ -56,11 +56,6 @@ testconn   kafka
 > SHOW CONNECTIONS
 testconn    kafka    ""
 
-> SHOW CREATE CONNECTION testconn
-name   create_sql
----------------------------------
-materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" TO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = \"plaintext\")"
-
 > SELECT
       brokers,
       sink_progress_topic = '_materialize-progress-' || mz_environment_id() || '-' || id

@@ -6961,6 +6961,7 @@ dependencies = [
  "mz-secrets",
  "mz-sql-lexer",
  "mz-sql-parser",
+ "mz-sql-pretty",
  "mz-ssh-util",
  "mz-storage-types",
  "mz-tracing",
