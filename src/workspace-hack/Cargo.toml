@@ -33,7 +33,6 @@ aws-smithy-runtime-api = { version = "1.7.3", features = ["client", "http-02x", 
 aws-smithy-types = { version = "1.2.13", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.7.5", features = ["ws"] }
 axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
-base64 = { version = "0.21.5" }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
@@ -170,7 +169,6 @@ aws-smithy-runtime-api = { version = "1.7.3", features = ["client", "http-02x", 
 aws-smithy-types = { version = "1.2.13", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.7.5", features = ["ws"] }
 axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
-base64 = { version = "0.21.5" }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
