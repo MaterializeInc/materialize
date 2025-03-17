@@ -436,9 +436,12 @@ def _bazel_command(
     args: argparse.Namespace, config: BuildConfig | None, subcommands: list[str]
 ) -> list[str]:
     command = ["bazel"] + subcommands
+    sanitizer = rustc_flags.Sanitizer[args.sanitizer]
 
     if args.release:
         command += ["--config=optimized"]
+    if sanitizer != rustc_flags.Sanitizer.none:
+        command += sanitizer.bazel_flags()
     if config:
         command += remote_cache_arg(config)
 
