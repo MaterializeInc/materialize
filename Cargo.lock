@@ -5866,6 +5866,7 @@ dependencies = [
  "crossbeam",
  "fancy-regex",
  "futures",
+ "itertools 0.12.1",
  "mz-avro",
  "mz-build-tools",
  "mz-ccsr",
