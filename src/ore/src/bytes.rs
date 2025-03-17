@@ -27,6 +27,7 @@ use std::io::Seek;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use internal::SegmentedReader;
+#[cfg(feature = "parquet")]
 use parquet::errors::ParquetError;
 use smallvec::SmallVec;
 
