@@ -50,7 +50,7 @@ smallvec = { version = "1.14.0", optional = true }
 stacker = { version = "0.1.19", optional = true }
 sentry = { version = "0.29.1", optional = true, features = ["debug-images"] }
 serde = { version = "1.0.218", features = ["derive"] }
-tokio = { version = "1.38.0", features = [
+tokio = { version = "1.44.1", features = [
     "io-util",
     "net",
     "rt-multi-thread",
@@ -101,7 +101,7 @@ mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
 proptest = { version = "1.6.0", default-features = false, features = ["std"] }
 scopeguard = "1.2.0"
 serde_json = "1.0.125"
-tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.2"
 tracing-subscriber = "0.3.19"
 

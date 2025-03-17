@@ -41,7 +41,7 @@ prometheus = { version = "0.13.3", default-features = false }
 serde = { version = "1.0.218", features = ["derive", "rc"] }
 serde_json = "1.0.125"
 timely = "0.19.0"
-tokio = { version = "1.38.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
+tokio = { version = "1.44.1", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tracing = "0.1.37"
 url = "2.3.1"
 uuid = { version = "1.16.0", features = ["v4"] }
