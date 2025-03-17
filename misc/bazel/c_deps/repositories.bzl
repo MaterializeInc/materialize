@@ -35,6 +35,7 @@ def c_repositories():
         integrity = BZIP2_INTEGRITY,
         strip_prefix = "bzip2-{0}".format(BZIP2_VERSION),
         urls = [
+            "https://mirror.bazel.build/sourceware.org/pub/bzip2/bzip2-{0}.tar.gz".format(BZIP2_VERSION),
             "https://sourceware.org/pub/bzip2/bzip2-{0}.tar.gz".format(BZIP2_VERSION),
         ],
     )
