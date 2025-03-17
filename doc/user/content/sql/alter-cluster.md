@@ -140,17 +140,18 @@ Depending on the type of objects in a cluster, a resizing operation might incur
   all objects in the cluster to hydrate.
 
 * For clusters that **do not contain sources or sinks**, it's possible to avoid
-  downtime by performing a [graceful cluster resizing](#graceful-cluster-resizing).
+  downtime by performing a [zero-downtime cluster
+  resizing](#zero-downtime-cluster-resizing).
 
-#### Graceful cluster resizing
+#### Zero-downtime cluster resizing
 
 {{< private-preview />}}
 
 For clusters that do not contain sources or sinks, you can use the `WAIT UNTIL
-READY` option to perform a graceful resizing, which incurs **no downtime**.
-Instead of restarting the cluster, this approach spins up an additional cluster
-replica under the covers with the desired new size, waits for the replica to be
-hydrated, and then replaces the original replica.
+READY` option to perform a zero-downtime resizing, which incurs **no
+downtime**. Instead of restarting the cluster, this approach spins up an
+additional cluster replica under the covers with the desired new size, waits
+for the replica to be hydrated, and then replaces the original replica.
 
 ```sql
 ALTER CLUSTER c1
@@ -255,9 +256,9 @@ or `1`.
 ### Resizing
 
 - For clusters **without any sources or sinks**, you can alter the cluster size
-  with **no downtime** (i.e., [graceful cluster
-  resizing](#graceful-cluster-resizing)) by running the `ALTER CLUSTER` command
-  with the `WAIT UNTIL READY` [option](#with-options):
+  with **no downtime** (i.e., [zero-downtime cluster
+  resizing](#zero-downtime-cluster-resizing)) by running the `ALTER CLUSTER`
+  command with the `WAIT UNTIL READY` [option](#with-options):
 
   ```mzsql
   ALTER CLUSTER c1
@@ -265,9 +266,9 @@ or `1`.
   ````
 
 - For clusters **with sources or sinks**, it's not yet possible to perform
-  graceful cluster resizing. This means that resizing clusters with sources or
-  sinks requires a cluster **restart**, which incurs **downtime**. You can
-  alter the cluster size by running the `ALTER CLUSTER` command:
+  zero-downtime cluster resizing. This means that resizing clusters with
+  sources or sinks requires a cluster **restart**, which incurs **downtime**.
+  You can alter the cluster size by running the `ALTER CLUSTER` command:
 
   ```mzsql
   ALTER CLUSTER c1 SET (SIZE '100cc');
