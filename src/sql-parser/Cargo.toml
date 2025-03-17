@@ -18,7 +18,7 @@ itertools = "0.12.1"
 mz-ore = { path = "../ore", default-features = false, features = ["stack", "test"] }
 mz-sql-lexer = { path = "../sql-lexer", default-features = false }
 phf = { version = "0.11.1", features = ["uncased"] }
-serde = { version = "1.0.218", features = ["derive"] }
+serde = { version = "1.0.219", features = ["derive"] }
 smallvec = { version = "1.14.0", features = ["union"] }
 thiserror = "2.0.12"
 tracing = "0.1.37"
