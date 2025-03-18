@@ -21,7 +21,7 @@ create table origins(id int, category_id int);
 # Regression test for database-issues#2558
 # Ignoring the plan on purpose. We just want to check we can handle the query.
 statement ok
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     (SELECT max(timestamp_col)
        FROM events

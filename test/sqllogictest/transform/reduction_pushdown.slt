@@ -15,7 +15,7 @@ CREATE TABLE y (f0 int2, f1 string);
 
 # `ReductionPushdown` pushes the Distinct from after the Join into both join inputs.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT DISTINCT *
 FROM x, y
 WHERE x.f1 = y.f1
@@ -47,7 +47,7 @@ EOF
 
 # `ReductionPushdown` pushes the Distinct from after the Join into both join inputs.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c0(f0 int4, f1 string, f2 int2, f3 string) AS (
     (SELECT DISTINCT *
@@ -108,7 +108,7 @@ statement ok
 CREATE MATERIALIZED VIEW pk3 AS SELECT DISTINCT ON (f1) f1 , f2 FROM t3 WHERE f1 IS NOT NULL AND f2 IS NOT NULL;
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT FROM(SELECT) a JOIN(t2 JOIN pk1 ON NULL) ON(NULL) UNION SELECT FROM(SELECT AVG(a.f2) f2 FROM t2 a RIGHT JOIN t2 USING(f1) WHERE a.f2 IS NULL) a WHERE NULLIF(a.f2, 1) NOT IN(SELECT c FROM(SELECT 0 c FROM pk1 JOIN(SELECT f2 FROM pk1) b ON NULLIF(b.f2, b.f2) < b.f2) d);
 ----
 Explained Query:

@@ -249,7 +249,7 @@ CREATE TABLE region (
 
 # Query 01
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     ol_number,
     sum(ol_quantity) AS sum_qty,
@@ -263,12 +263,12 @@ GROUP BY ol_number
 ORDER BY ol_number
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
-    Project (#0..=#2, #6, #7, #5) // { arity: 6 }
-      Map ((bigint_to_numeric(#1) / bigint_to_numeric(case when (#3 = 0) then null else #3 end)), (#2 / bigint_to_numeric(case when (#4 = 0) then null else #4 end))) // { arity: 8 }
-        Reduce group_by=[#0] aggregates=[sum(#1), sum(#2), count(#1), count(#2), count(*)] // { arity: 6 }
-          Project (#3, #7, #8) // { arity: 3 }
-            Filter (date_to_timestamp(#6) > 2007-01-02 00:00:00) // { arity: 10 }
+  Finish order_by=[#0{ol_number} asc nulls_last] output=[#0..=#5]
+    Project (#0{ol_number}..=#2{sum_ol_amount}, #6, #7, #5{count}) // { arity: 6 }
+      Map ((bigint_to_numeric(#1{sum_ol_quantity}) / bigint_to_numeric(case when (#3{count_ol_quantity} = 0) then null else #3{count_ol_quantity} end)), (#2{sum_ol_amount} / bigint_to_numeric(case when (#4{count_ol_amount} = 0) then null else #4{count_ol_amount} end))) // { arity: 8 }
+        Reduce group_by=[#0{ol_number}] aggregates=[sum(#1{ol_quantity}), sum(#2{ol_amount}), count(#1{ol_quantity}), count(#2{ol_amount}), count(*)] // { arity: 6 }
+          Project (#3{ol_number}, #7{ol_quantity}, #8{ol_amount}) // { arity: 3 }
+            Filter (date_to_timestamp(#6{ol_delivery_d}) > 2007-01-02 00:00:00) // { arity: 10 }
               ReadIndex on=orderline fk_orderline_order=[*** full scan ***] // { arity: 10 }
 
 Used Indexes:
@@ -280,7 +280,7 @@ EOF
 
 # Query 02
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT su_suppkey, su_name, n_name, i_id, i_name, su_address, su_phone, su_comment
 FROM
     item, supplier, stock, nation, region,
@@ -306,17 +306,17 @@ AND s_quantity = m_s_quantity
 ORDER BY n_name, su_name, i_id
 ----
 Explained Query:
-  Finish order_by=[#2 asc nulls_last, #1 asc nulls_last, #3 asc nulls_last] output=[#0..=#7]
+  Finish order_by=[#2{n_name} asc nulls_last, #1{su_name} asc nulls_last, #3{i_id} asc nulls_last] output=[#0..=#7]
     With
       cte l0 =
-        ArrangeBy keys=[[#0]] // { arity: 1 }
-          Project (#0) // { arity: 1 }
-            Filter like["EUROP%"](padchar(#1)) // { arity: 3 }
+        ArrangeBy keys=[[#0{r_regionkey}]] // { arity: 1 }
+          Project (#0{r_regionkey}) // { arity: 1 }
+            Filter like["EUROP%"](padchar(#1{r_name})) // { arity: 3 }
               ReadStorage materialize.public.region // { arity: 3 }
     Return // { arity: 8 }
-      Project (#2, #3, #27, #0, #1, #4, #6, #7) // { arity: 8 }
-        Filter (#10) IS NOT NULL // { arity: 32 }
-          Join on=(#0 = #8 = #30 AND #2 = #25 AND #5 = #26 AND #10 = #31 AND #28 = #29) type=delta // { arity: 32 }
+      Project (#2{su_suppkey}, #3{su_name}, #27{n_name}, #0{i_id}, #1{i_name}, #4{su_address}, #6{su_phone}, #7{su_comment}) // { arity: 8 }
+        Filter (#10{s_quantity}) IS NOT NULL // { arity: 32 }
+          Join on=(#0{i_id} = #8{s_i_id} = #30{s_i_id} AND #2{su_suppkey} = #25{s_su_suppkey} AND #5{su_nationkey} = #26{n_nationkey} AND #10{s_quantity} = #31{min_s_quantity} AND #28{n_regionkey} = #29{r_regionkey}) type=delta // { arity: 32 }
             implementation
               %0:item » %5[#0]UKA » %2:stock[#0]KA » %1:supplier[#0]UK » %3:nation[#0]UK » %4:l0[#0]UKlf
               %1:supplier » %3:nation[#0]UK » %4:l0[#0]UKlf » %2:stock[#17]KA » %5[#0]UKA » %0:item[#0]UKlf
@@ -324,42 +324,42 @@ Explained Query:
               %3:nation » %4:l0[#0]UKlf » %1:supplier[#3]KA » %2:stock[#17]KA » %5[#0]UKA » %0:item[#0]UKlf
               %4:l0 » %3:nation[#2]KA » %1:supplier[#3]KA » %2:stock[#17]KA » %5[#0]UKA » %0:item[#0]UKlf
               %5 » %0:item[#0]UKlf » %2:stock[#0]KA » %1:supplier[#0]UK » %3:nation[#0]UK » %4:l0[#0]UKlf
-            ArrangeBy keys=[[#0]] // { arity: 2 }
-              Project (#0, #2) // { arity: 2 }
-                Filter like["%b"](padchar(#4)) // { arity: 5 }
+            ArrangeBy keys=[[#0{i_id}]] // { arity: 2 }
+              Project (#0{i_id}, #2{i_name}) // { arity: 2 }
+                Filter like["%b"](padchar(#4{i_data})) // { arity: 5 }
                   ReadStorage materialize.public.item // { arity: 5 }
-            ArrangeBy keys=[[#0], [#3]] // { arity: 6 }
-              Project (#0..=#4, #6) // { arity: 6 }
+            ArrangeBy keys=[[#0{su_suppkey}], [#3{su_nationkey}]] // { arity: 6 }
+              Project (#0{su_suppkey}..=#4{su_phone}, #6{su_comment}) // { arity: 6 }
                 ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
-            ArrangeBy keys=[[#0], [#17]] // { arity: 18 }
+            ArrangeBy keys=[[#0{s_i_id}], [#17{s_su_suppkey}]] // { arity: 18 }
               ReadIndex on=stock fk_stock_item=[delta join lookup] fk_stock_supplier=[delta join lookup] // { arity: 18 }
-            ArrangeBy keys=[[#0], [#2]] // { arity: 3 }
-              Project (#0..=#2) // { arity: 3 }
+            ArrangeBy keys=[[#0{n_nationkey}], [#2{n_regionkey}]] // { arity: 3 }
+              Project (#0{n_nationkey}..=#2{n_regionkey}) // { arity: 3 }
                 ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
             Get l0 // { arity: 1 }
-            ArrangeBy keys=[[#0]] // { arity: 2 }
-              Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }
-                Project (#0, #2) // { arity: 2 }
-                  Join on=(#17 = #18 AND #19 = #20 AND #21 = #22) type=delta // { arity: 23 }
+            ArrangeBy keys=[[#0{s_i_id}]] // { arity: 2 }
+              Reduce group_by=[#0{s_i_id}] aggregates=[min(#1{s_quantity})] // { arity: 2 }
+                Project (#0{s_i_id}, #2{s_quantity}) // { arity: 2 }
+                  Join on=(#17{s_su_suppkey} = #18{su_suppkey} AND #19{su_nationkey} = #20{n_nationkey} AND #21{n_regionkey} = #22{r_regionkey}) type=delta // { arity: 23 }
                     implementation
                       %0:stock » %1:supplier[#0]UK » %2:nation[#0]UK » %3:l0[#0]UKlf
                       %1:supplier » %2:nation[#0]UK » %3:l0[#0]UKlf » %0:stock[#17]KA
                       %2:nation » %3:l0[#0]UKlf » %1:supplier[#1]KA » %0:stock[#17]KA
                       %3:l0 » %2:nation[#1]KA » %1:supplier[#1]KA » %0:stock[#17]KA
-                    ArrangeBy keys=[[#17]] // { arity: 18 }
+                    ArrangeBy keys=[[#17{s_su_suppkey}]] // { arity: 18 }
                       ReadIndex on=stock fk_stock_supplier=[delta join 1st input (full scan)] // { arity: 18 }
-                    ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
-                      Project (#0, #3) // { arity: 2 }
+                    ArrangeBy keys=[[#0{su_suppkey}], [#1{su_nationkey}]] // { arity: 2 }
+                      Project (#0{su_suppkey}, #3{su_nationkey}) // { arity: 2 }
                         ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
-                    ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
-                      Project (#0, #2) // { arity: 2 }
+                    ArrangeBy keys=[[#0{n_nationkey}], [#1{n_regionkey}]] // { arity: 2 }
+                      Project (#0{n_nationkey}, #2{n_regionkey}) // { arity: 2 }
                         ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
                     Get l0 // { arity: 1 }
 
 Source materialize.public.item
-  filter=(like["%b"](padchar(#4)))
+  filter=(like["%b"](padchar(#4{i_data})))
 Source materialize.public.region
-  filter=(like["EUROP%"](padchar(#1)))
+  filter=(like["EUROP%"](padchar(#1{r_name})))
 
 Used Indexes:
   - materialize.public.fk_stock_item (delta join lookup)
@@ -373,7 +373,7 @@ EOF
 
 # Query 03
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT ol_o_id, ol_w_id, ol_d_id, sum(ol_amount) AS revenue, o_entry_d
 FROM customer, neworder, "order", orderline
 WHERE c_state LIKE 'A%'
@@ -391,27 +391,27 @@ GROUP BY ol_o_id, ol_w_id, ol_d_id, o_entry_d
 ORDER BY revenue DESC, o_entry_d
 ----
 Explained Query:
-  Finish order_by=[#3 desc nulls_first, #4 asc nulls_last] output=[#0..=#4]
-    Project (#0..=#2, #4, #3) // { arity: 5 }
-      Reduce group_by=[#2, #1, #0, #3] aggregates=[sum(#4)] // { arity: 5 }
-        Project (#1..=#3, #10, #19) // { arity: 5 }
-          Join on=(#0 = #9 AND #1 = #4 = #7 = #12 AND #2 = #5 = #8 = #13 AND #3 = #6 = #11) type=delta // { arity: 21 }
+  Finish order_by=[#3{sum_ol_amount} desc nulls_first, #4{o_entry_d} asc nulls_last] output=[#0..=#4]
+    Project (#0{no_o_id}..=#2{c_d_id}, #4{sum_ol_amount}, #3{o_entry_d}) // { arity: 5 }
+      Reduce group_by=[#2{no_o_id}, #1{c_w_id}, #0{c_d_id}, #3{o_entry_d}] aggregates=[sum(#4{ol_amount})] // { arity: 5 }
+        Project (#1{c_d_id}..=#3{no_o_id}, #10{o_entry_d}, #19{ol_amount}) // { arity: 5 }
+          Join on=(#0{c_id} = #9{o_c_id} AND #1{c_d_id} = #4{no_d_id} = #7{o_d_id} = #12{ol_d_id} AND #2{c_w_id} = #5{no_w_id} = #8{o_w_id} = #13{ol_w_id} AND #3{no_o_id} = #6{o_id} = #11{ol_o_id}) type=delta // { arity: 21 }
             implementation
               %0:customer » %2:order[#2, #1, #3]KKKAif » %1:neworder[#0..=#2]UKKK » %3:orderline[#2, #1, #0]KKKA
               %1:neworder » %2:order[#0..=#2]UKKKif » %0:customer[#0..=#2]UKKKlf » %3:orderline[#2, #1, #0]KKKA
               %2:order » %0:customer[#0..=#2]UKKKlf » %1:neworder[#0..=#2]UKKK » %3:orderline[#2, #1, #0]KKKA
               %3:orderline » %2:order[#0..=#2]UKKKif » %0:customer[#0..=#2]UKKKlf » %1:neworder[#0..=#2]UKKK
-            ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
-              Project (#0..=#2) // { arity: 3 }
-                Filter like["A%"](padchar(#9)) // { arity: 22 }
+            ArrangeBy keys=[[#0{c_id}..=#2{c_w_id}]] // { arity: 3 }
+              Project (#0{c_id}..=#2{c_w_id}) // { arity: 3 }
+                Filter like["A%"](padchar(#9{c_state})) // { arity: 22 }
                   ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
-            ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+            ArrangeBy keys=[[#0{no_o_id}..=#2{no_w_id}]] // { arity: 3 }
               ReadStorage materialize.public.neworder // { arity: 3 }
-            ArrangeBy keys=[[#0..=#2], [#2, #1, #3]] // { arity: 5 }
-              Project (#0..=#4) // { arity: 5 }
-                Filter (#3) IS NOT NULL AND (date_to_timestamp(#4) > 2007-01-02 00:00:00) // { arity: 8 }
+            ArrangeBy keys=[[#0{o_id}..=#2{o_w_id}], [#2{o_w_id}, #1{o_d_id}, #3{o_c_id}]] // { arity: 5 }
+              Project (#0{o_id}..=#4{o_entry_d}) // { arity: 5 }
+                Filter (#3{o_c_id}) IS NOT NULL AND (date_to_timestamp(#4{o_entry_d}) > 2007-01-02 00:00:00) // { arity: 8 }
                   ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
-            ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
+            ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]] // { arity: 10 }
               ReadIndex on=orderline fk_orderline_order=[delta join lookup] // { arity: 10 }
 
 Source materialize.public.neworder
@@ -427,7 +427,7 @@ EOF
 
 # Query 04
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT o_ol_cnt, count(*) AS order_count
 FROM "order"
 WHERE o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
@@ -444,32 +444,32 @@ GROUP BY o_ol_cnt
 ORDER BY o_ol_cnt
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last] output=[#0, #1]
+  Finish order_by=[#0{o_ol_cnt} asc nulls_last] output=[#0, #1]
     With
       cte l0 =
-        Project (#0..=#2, #4, #6) // { arity: 5 }
+        Project (#0{o_id}..=#2{o_w_id}, #4{o_entry_d}, #6{o_ol_cnt}) // { arity: 5 }
           Filter (#8 < 2012-01-02 00:00:00) AND (#8 >= 2007-01-02 00:00:00) // { arity: 9 }
-            Map (date_to_timestamp(#4)) // { arity: 9 }
+            Map (date_to_timestamp(#4{o_entry_d})) // { arity: 9 }
               ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
     Return // { arity: 2 }
-      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-        Project (#4) // { arity: 1 }
-          Join on=(#0 = #5 AND #1 = #6 AND #2 = #7 AND #3 = #8) type=differential // { arity: 9 }
+      Reduce group_by=[#0{o_ol_cnt}] aggregates=[count(*)] // { arity: 2 }
+        Project (#4{o_ol_cnt}) // { arity: 1 }
+          Join on=(#0{o_id} = #5{o_id} AND #1{o_d_id} = #6{o_d_id} AND #2{o_w_id} = #7{o_w_id} AND #3{o_entry_d} = #8{o_entry_d}) type=differential // { arity: 9 }
             implementation
               %1[#0..=#3]UKKKKA » %0:l0[#0..=#3]UKKKKiif
-            ArrangeBy keys=[[#0..=#3]] // { arity: 5 }
+            ArrangeBy keys=[[#0{o_id}..=#3{o_entry_d}]] // { arity: 5 }
               Get l0 // { arity: 5 }
-            ArrangeBy keys=[[#0..=#3]] // { arity: 4 }
-              Distinct project=[#0..=#3] // { arity: 4 }
-                Project (#0..=#3) // { arity: 4 }
-                  Filter (#10 >= #3) // { arity: 14 }
-                    Join on=(#0 = #4 AND #1 = #5 AND #2 = #6) type=differential // { arity: 14 }
+            ArrangeBy keys=[[#0{o_id}..=#3{o_entry_d}]] // { arity: 4 }
+              Distinct project=[#0{o_id}..=#3{o_entry_d}] // { arity: 4 }
+                Project (#0{o_id}..=#3{o_entry_d}) // { arity: 4 }
+                  Filter (#10{ol_delivery_d} >= #3{o_entry_d}) // { arity: 14 }
+                    Join on=(#0{o_id} = #4{ol_o_id} AND #1{o_d_id} = #5{ol_d_id} AND #2{o_w_id} = #6{ol_w_id}) type=differential // { arity: 14 }
                       implementation
                         %0:l0[#2, #1, #0]UKKKiif » %1:orderline[#2, #1, #0]KKKAiif
-                      ArrangeBy keys=[[#2, #1, #0]] // { arity: 4 }
-                        Project (#0..=#3) // { arity: 4 }
+                      ArrangeBy keys=[[#2{o_w_id}, #1{o_d_id}, #0{o_id}]] // { arity: 4 }
+                        Project (#0{o_id}..=#3{o_entry_d}) // { arity: 4 }
                           Get l0 // { arity: 5 }
-                      ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
+                      ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]] // { arity: 10 }
                         ReadIndex on=orderline fk_orderline_order=[differential join] // { arity: 10 }
 
 Used Indexes:
@@ -482,7 +482,7 @@ EOF
 
 # Query 05
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     n_name,
     sum(ol_amount) AS revenue
@@ -505,10 +505,10 @@ GROUP BY n_name
 ORDER BY revenue DESC
 ----
 Explained Query:
-  Finish order_by=[#1 desc nulls_first] output=[#0, #1]
-    Reduce group_by=[#1] aggregates=[sum(#0)] // { arity: 2 }
-      Project (#16, #24) // { arity: 2 }
-        Join on=(#0 = #7 AND #1 = #5 = #9 AND #2 = #6 = #10 = #19 AND #3 = #22 = #23 AND #4 = #8 AND #12 = #18 AND #20 = #21 AND #25 = #26) type=delta // { arity: 27 }
+  Finish order_by=[#1{sum_ol_amount} desc nulls_first] output=[#0, #1]
+    Reduce group_by=[#1{n_name}] aggregates=[sum(#0{ol_amount})] // { arity: 2 }
+      Project (#16{ol_amount}, #24{n_name}) // { arity: 2 }
+        Join on=(#0{c_id} = #7{o_c_id} AND #1{c_d_id} = #5{o_d_id} = #9{ol_d_id} AND #2{c_w_id} = #6{o_w_id} = #10{ol_w_id} = #19{s_w_id} AND #3{c_n_nationkey} = #22{su_nationkey} = #23{n_nationkey} AND #4{o_id} = #8{ol_o_id} AND #12{ol_i_id} = #18{s_i_id} AND #20{s_su_suppkey} = #21{su_suppkey} AND #25{n_regionkey} = #26{r_regionkey}) type=delta // { arity: 27 }
           implementation
             %0:customer » %5:nation[#0]UK » %6:region[#0]UKef » %1:order[#2, #1, #3]KKKAif » %2:orderline[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %4:supplier[#0, #1]UKK
             %1:order » %0:customer[#0..=#2]UKKK » %5:nation[#0]UK » %6:region[#0]UKef » %2:orderline[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %4:supplier[#0, #1]UKK
@@ -517,32 +517,32 @@ Explained Query:
             %4:supplier » %5:nation[#0]UK » %6:region[#0]UKef » %0:customer[#3]KA » %1:order[#2, #1, #3]KKKAif » %2:orderline[#2, #1, #0]KKKA » %3:stock[#0..=#2]UKKK
             %5:nation » %6:region[#0]UKef » %0:customer[#3]KA » %1:order[#2, #1, #3]KKKAif » %2:orderline[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %4:supplier[#0, #1]UKK
             %6:region » %5:nation[#2]KA » %0:customer[#3]KA » %1:order[#2, #1, #3]KKKAif » %2:orderline[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %4:supplier[#0, #1]UKK
-          ArrangeBy keys=[[#0..=#2], [#3]] // { arity: 4 }
-            Project (#0..=#2, #21) // { arity: 4 }
-              Filter (#21) IS NOT NULL // { arity: 22 }
+          ArrangeBy keys=[[#0{c_id}..=#2{c_w_id}], [#3{c_n_nationkey}]] // { arity: 4 }
+            Project (#0{c_id}..=#2{c_w_id}, #21{c_n_nationkey}) // { arity: 4 }
+              Filter (#21{c_n_nationkey}) IS NOT NULL // { arity: 22 }
                 ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
-          ArrangeBy keys=[[#0..=#2], [#2, #1, #3]] // { arity: 4 }
-            Project (#0..=#3) // { arity: 4 }
-              Filter (#3) IS NOT NULL AND (date_to_timestamp(#4) >= 2007-01-02 00:00:00) // { arity: 8 }
+          ArrangeBy keys=[[#0{o_id}..=#2{o_w_id}], [#2{o_w_id}, #1{o_d_id}, #3{o_c_id}]] // { arity: 4 }
+            Project (#0{o_id}..=#3{o_c_id}) // { arity: 4 }
+              Filter (#3{o_c_id}) IS NOT NULL AND (date_to_timestamp(#4{o_entry_d}) >= 2007-01-02 00:00:00) // { arity: 8 }
                 ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
-          ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
+          ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]] // { arity: 10 }
             ReadIndex on=orderline fk_orderline_order=[delta join lookup] // { arity: 10 }
-          ArrangeBy keys=[[#0, #1], [#0..=#2]] // { arity: 3 }
-            Project (#0, #1, #17) // { arity: 3 }
+          ArrangeBy keys=[[#0{s_i_id}, #1{s_w_id}], [#0{s_i_id}..=#2{s_su_suppkey}]] // { arity: 3 }
+            Project (#0{s_i_id}, #1{s_w_id}, #17{s_su_suppkey}) // { arity: 3 }
               ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
-          ArrangeBy keys=[[#0], [#0, #1]] // { arity: 2 }
-            Project (#0, #3) // { arity: 2 }
+          ArrangeBy keys=[[#0{su_suppkey}], [#0{su_suppkey}, #1{su_nationkey}]] // { arity: 2 }
+            Project (#0{su_suppkey}, #3{su_nationkey}) // { arity: 2 }
               ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
-          ArrangeBy keys=[[#0], [#2]] // { arity: 3 }
-            Project (#0..=#2) // { arity: 3 }
+          ArrangeBy keys=[[#0{n_nationkey}], [#2{n_regionkey}]] // { arity: 3 }
+            Project (#0{n_nationkey}..=#2{n_regionkey}) // { arity: 3 }
               ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter (#1 = "EUROPE") // { arity: 3 }
+          ArrangeBy keys=[[#0{r_regionkey}]] // { arity: 1 }
+            Project (#0{r_regionkey}) // { arity: 1 }
+              Filter (#1{r_name} = "EUROPE") // { arity: 3 }
                 ReadStorage materialize.public.region // { arity: 3 }
 
 Source materialize.public.region
-  filter=((#1 = "EUROPE"))
+  filter=((#1{r_name} = "EUROPE"))
 
 Used Indexes:
   - materialize.public.fk_customer_district (*** full scan ***)
@@ -558,7 +558,7 @@ EOF
 
 # Query 06
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT sum(ol_amount) AS revenue
 FROM orderline
 WHERE ol_delivery_d >= TIMESTAMP '1999-01-01 00:00:00.000000'
@@ -568,10 +568,10 @@ AND ol_quantity BETWEEN 1 AND 100000
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[sum(#0)] // { arity: 1 }
-        Project (#8) // { arity: 1 }
-          Filter (#10 < 2020-01-01 00:00:00) AND (#7 <= 100000) AND (#7 >= 1) AND (#10 >= 1999-01-01 00:00:00) // { arity: 11 }
-            Map (date_to_timestamp(#6)) // { arity: 11 }
+      Reduce aggregates=[sum(#0{ol_amount})] // { arity: 1 }
+        Project (#8{ol_amount}) // { arity: 1 }
+          Filter (#10 < 2020-01-01 00:00:00) AND (#7{ol_quantity} <= 100000) AND (#7{ol_quantity} >= 1) AND (#10 >= 1999-01-01 00:00:00) // { arity: 11 }
+            Map (date_to_timestamp(#6{ol_delivery_d})) // { arity: 11 }
               ReadIndex on=orderline fk_orderline_order=[*** full scan ***] // { arity: 10 }
   Return // { arity: 1 }
     Union // { arity: 1 }
@@ -593,7 +593,7 @@ EOF
 
 # Query 07
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     su_nationkey AS supp_nation,
     substr(c_state, 1, 1) AS cust_nation,
@@ -621,19 +621,19 @@ GROUP BY su_nationkey, substr(c_state, 1, 1), EXTRACT(year FROM o_entry_d)
 ORDER BY su_nationkey, cust_nation, l_year
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last, #2 asc nulls_last] output=[#0..=#3]
+  Finish order_by=[#0{su_nationkey} asc nulls_last, #1 asc nulls_last, #2 asc nulls_last] output=[#0..=#3]
     With
       cte l0 =
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Project (#0, #1) // { arity: 2 }
-            Filter ((#1 = "GERMANY") OR (#1 = "CAMBODIA")) // { arity: 4 }
+        ArrangeBy keys=[[#0{n_nationkey}]] // { arity: 2 }
+          Project (#0{n_nationkey}, #1{n_name}) // { arity: 2 }
+            Filter ((#1{n_name} = "GERMANY") OR (#1{n_name} = "CAMBODIA")) // { arity: 4 }
               ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
     Return // { arity: 4 }
-      Reduce group_by=[#0, substr(char_to_text(#3), 1, 1), extract_year_d(#2)] aggregates=[sum(#1)] // { arity: 4 }
-        Project (#1, #13, #19, #23) // { arity: 4 }
-          Filter (#29 <= 2012-01-02 00:00:00) AND (#29 >= 2007-01-02 00:00:00) AND (((#26 = "GERMANY") AND (#28 = "CAMBODIA")) OR ((#26 = "CAMBODIA") AND (#28 = "GERMANY"))) // { arity: 30 }
-            Map (date_to_timestamp(#11)) // { arity: 30 }
-              Join on=(#0 = #4 AND #1 = #25 AND #2 = #9 AND #3 = #10 AND #5 = #15 AND #6 = #16 = #21 AND #7 = #17 = #22 AND #18 = #20 AND #24 = #27) type=delta // { arity: 29 }
+      Reduce group_by=[#0{su_nationkey}, substr(char_to_text(#3{c_state}), 1, 1), extract_year_d(#2{o_entry_d})] aggregates=[sum(#1{ol_amount})] // { arity: 4 }
+        Project (#1{su_nationkey}, #13{ol_amount}, #19{o_entry_d}, #23{c_state}) // { arity: 4 }
+          Filter (#29 <= 2012-01-02 00:00:00) AND (#29 >= 2007-01-02 00:00:00) AND (((#26{n_name} = "GERMANY") AND (#28{n_name} = "CAMBODIA")) OR ((#26{n_name} = "CAMBODIA") AND (#28{n_name} = "GERMANY"))) // { arity: 30 }
+            Map (date_to_timestamp(#11{ol_delivery_d})) // { arity: 30 }
+              Join on=(#0{su_suppkey} = #4{s_su_suppkey} AND #1{su_nationkey} = #25{n_nationkey} AND #2{s_i_id} = #9{ol_i_id} AND #3{s_w_id} = #10{ol_supply_w_id} AND #5{ol_o_id} = #15{o_id} AND #6{ol_d_id} = #16{o_d_id} = #21{c_d_id} AND #7{ol_w_id} = #17{o_w_id} = #22{c_w_id} AND #18{o_c_id} = #20{c_id} AND #24{c_n_nationkey} = #27{n_nationkey}) type=delta // { arity: 29 }
                 implementation
                   %0:supplier » %5:l0[#0]UKef » %1:stock[#2]KA » %2:orderline[#5, #4]KKAiif » %3:order[#0..=#2]UKKK » %4:customer[#0..=#2]UKKK » %6:l0[#0]UKef
                   %1:stock » %0:supplier[#0]UK » %5:l0[#0]UKef » %2:orderline[#5, #4]KKAiif » %3:order[#0..=#2]UKKK » %4:customer[#0..=#2]UKKK » %6:l0[#0]UKef
@@ -642,21 +642,21 @@ Explained Query:
                   %4:customer » %6:l0[#0]UKef » %3:order[#2, #1, #3]KKKA » %2:orderline[#2, #1, #0]KKKAiif » %1:stock[#0, #1]UKK » %0:supplier[#0]UK » %5:l0[#0]UKef
                   %5:l0 » %0:supplier[#1]KA » %1:stock[#2]KA » %2:orderline[#5, #4]KKAiif » %3:order[#0..=#2]UKKK » %4:customer[#0..=#2]UKKK » %6:l0[#0]UKef
                   %6:l0 » %4:customer[#4]KA » %3:order[#2, #1, #3]KKKA » %2:orderline[#2, #1, #0]KKKAiif » %1:stock[#0, #1]UKK » %0:supplier[#0]UK » %5:l0[#0]UKef
-                ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
-                  Project (#0, #3) // { arity: 2 }
+                ArrangeBy keys=[[#0{su_suppkey}], [#1{su_nationkey}]] // { arity: 2 }
+                  Project (#0{su_suppkey}, #3{su_nationkey}) // { arity: 2 }
                     ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
-                ArrangeBy keys=[[#0, #1], [#2]] // { arity: 3 }
-                  Project (#0, #1, #17) // { arity: 3 }
+                ArrangeBy keys=[[#0{s_i_id}, #1{s_w_id}], [#2{s_su_suppkey}]] // { arity: 3 }
+                  Project (#0{s_i_id}, #1{s_w_id}, #17{s_su_suppkey}) // { arity: 3 }
                     ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
-                ArrangeBy keys=[[#2, #1, #0], [#5, #4]] // { arity: 10 }
+                ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}], [#5{ol_supply_w_id}, #4{ol_i_id}]] // { arity: 10 }
                   ReadIndex on=orderline fk_orderline_order=[delta join lookup] fk_orderline_stock=[delta join lookup] // { arity: 10 }
-                ArrangeBy keys=[[#0..=#2], [#2, #1, #3]] // { arity: 5 }
-                  Project (#0..=#4) // { arity: 5 }
-                    Filter (#3) IS NOT NULL // { arity: 8 }
+                ArrangeBy keys=[[#0{o_id}..=#2{o_w_id}], [#2{o_w_id}, #1{o_d_id}, #3{o_c_id}]] // { arity: 5 }
+                  Project (#0{o_id}..=#4{o_entry_d}) // { arity: 5 }
+                    Filter (#3{o_c_id}) IS NOT NULL // { arity: 8 }
                       ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
-                ArrangeBy keys=[[#0..=#2], [#4]] // { arity: 5 }
-                  Project (#0..=#2, #9, #21) // { arity: 5 }
-                    Filter (#21) IS NOT NULL // { arity: 22 }
+                ArrangeBy keys=[[#0{c_id}..=#2{c_w_id}], [#4{c_n_nationkey}]] // { arity: 5 }
+                  Project (#0{c_id}..=#2{c_w_id}, #9{c_state}, #21{c_n_nationkey}) // { arity: 5 }
+                    Filter (#21{c_n_nationkey}) IS NOT NULL // { arity: 22 }
                       ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
                 Get l0 // { arity: 2 }
                 Get l0 // { arity: 2 }
@@ -676,7 +676,7 @@ EOF
 
 # Query 08
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     EXTRACT(year FROM o_entry_d) AS l_year,
     sum(CASE WHEN n2.n_name = 'GERMANY' THEN ol_amount ELSE 0 END) / CASE WHEN sum(ol_amount) = 0 THEN 1 ELSE sum(ol_amount) END AS mkt_share
@@ -705,11 +705,11 @@ ORDER BY l_year
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0, #1]
     Project (#0, #3) // { arity: 2 }
-      Map ((#1 / case when (#2 = 0) then 1 else #2 end)) // { arity: 4 }
-        Reduce group_by=[extract_year_d(#1)] aggregates=[sum(case when (#2 = "GERMANY") then #0 else 0 end), sum(#0)] // { arity: 3 }
-          Project (#14, #20, #28) // { arity: 3 }
-            Filter (#0 < 1000) // { arity: 30 }
-              Join on=(#0 = #3 = #10 AND #1 = #5 AND #2 = #27 AND #4 = #11 AND #6 = #16 AND #7 = #17 = #22 AND #8 = #18 = #23 AND #19 = #21 AND #24 = #25 AND #26 = #29) type=delta // { arity: 30 }
+      Map ((#1{sum} / case when (#2{sum_ol_amount} = 0) then 1 else #2{sum_ol_amount} end)) // { arity: 4 }
+        Reduce group_by=[extract_year_d(#1{o_entry_d})] aggregates=[sum(case when (#2{n_name} = "GERMANY") then #0{ol_amount} else 0 end), sum(#0{ol_amount})] // { arity: 3 }
+          Project (#14{ol_amount}, #20{o_entry_d}, #28{n_name}) // { arity: 3 }
+            Filter (#0{i_id} < 1000) // { arity: 30 }
+              Join on=(#0{i_id} = #3{s_i_id} = #10{ol_i_id} AND #1{su_suppkey} = #5{s_su_suppkey} AND #2{su_nationkey} = #27{n_nationkey} AND #4{s_w_id} = #11{ol_supply_w_id} AND #6{ol_o_id} = #16{o_id} AND #7{ol_d_id} = #17{o_d_id} = #22{c_d_id} AND #8{ol_w_id} = #18{o_w_id} = #23{c_w_id} AND #19{o_c_id} = #21{c_id} AND #24{c_n_nationkey} = #25{n_nationkey} AND #26{n_regionkey} = #29{r_regionkey}) type=delta // { arity: 30 }
                 implementation
                   %0:item » %2:stock[#0]KAif » %1:supplier[#0]UK » %7:nation[#0]UK » %3:orderline[#5, #4]KKAif » %4:order[#0..=#2]UKKKiif » %5:customer[#0..=#2]UKKK » %6:nation[#0]UK » %8:region[#0]UKef
                   %1:supplier » %7:nation[#0]UK » %2:stock[#2]KAif » %0:item[#0]UKlif » %3:orderline[#5, #4]KKAif » %4:order[#0..=#2]UKKKiif » %5:customer[#0..=#2]UKKK » %6:nation[#0]UK » %8:region[#0]UKef
@@ -720,43 +720,43 @@ Explained Query:
                   %6:nation » %8:region[#0]UKef » %5:customer[#3]KA » %4:order[#2, #1, #3]KKKAiif » %3:orderline[#2, #1, #0]KKKAif » %2:stock[#0, #1]UKKif » %0:item[#0]UKlif » %1:supplier[#0]UK » %7:nation[#0]UK
                   %7:nation » %1:supplier[#1]KA » %2:stock[#2]KAif » %0:item[#0]UKlif » %3:orderline[#5, #4]KKAif » %4:order[#0..=#2]UKKKiif » %5:customer[#0..=#2]UKKK » %6:nation[#0]UK » %8:region[#0]UKef
                   %8:region » %6:nation[#1]KA » %5:customer[#3]KA » %4:order[#2, #1, #3]KKKAiif » %3:orderline[#2, #1, #0]KKKAif » %2:stock[#0, #1]UKKif » %0:item[#0]UKlif » %1:supplier[#0]UK » %7:nation[#0]UK
-                ArrangeBy keys=[[#0]] // { arity: 1 }
-                  Project (#0) // { arity: 1 }
-                    Filter (#0 < 1000) AND like["%b"](padchar(#4)) // { arity: 5 }
+                ArrangeBy keys=[[#0{i_id}]] // { arity: 1 }
+                  Project (#0{i_id}) // { arity: 1 }
+                    Filter (#0{i_id} < 1000) AND like["%b"](padchar(#4{i_data})) // { arity: 5 }
                       ReadStorage materialize.public.item // { arity: 5 }
-                ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
-                  Project (#0, #3) // { arity: 2 }
+                ArrangeBy keys=[[#0{su_suppkey}], [#1{su_nationkey}]] // { arity: 2 }
+                  Project (#0{su_suppkey}, #3{su_nationkey}) // { arity: 2 }
                     ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
-                ArrangeBy keys=[[#0], [#0, #1], [#2]] // { arity: 3 }
-                  Project (#0, #1, #17) // { arity: 3 }
-                    Filter (#0 < 1000) // { arity: 18 }
+                ArrangeBy keys=[[#0{s_i_id}], [#0{s_i_id}, #1{s_w_id}], [#2{s_su_suppkey}]] // { arity: 3 }
+                  Project (#0{s_i_id}, #1{s_w_id}, #17{s_su_suppkey}) // { arity: 3 }
+                    Filter (#0{s_i_id} < 1000) // { arity: 18 }
                       ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
-                ArrangeBy keys=[[#2, #1, #0], [#5, #4]] // { arity: 10 }
+                ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}], [#5{ol_supply_w_id}, #4{ol_i_id}]] // { arity: 10 }
                   ReadIndex on=orderline fk_orderline_order=[delta join lookup] fk_orderline_stock=[delta join lookup] // { arity: 10 }
-                ArrangeBy keys=[[#0..=#2], [#2, #1, #3]] // { arity: 5 }
-                  Project (#0..=#4) // { arity: 5 }
-                    Filter (#8 <= 2012-01-02 00:00:00) AND (#8 >= 2007-01-02 00:00:00) AND (#3) IS NOT NULL // { arity: 9 }
-                      Map (date_to_timestamp(#4)) // { arity: 9 }
+                ArrangeBy keys=[[#0{o_id}..=#2{o_w_id}], [#2{o_w_id}, #1{o_d_id}, #3{o_c_id}]] // { arity: 5 }
+                  Project (#0{o_id}..=#4{o_entry_d}) // { arity: 5 }
+                    Filter (#8 <= 2012-01-02 00:00:00) AND (#8 >= 2007-01-02 00:00:00) AND (#3{o_c_id}) IS NOT NULL // { arity: 9 }
+                      Map (date_to_timestamp(#4{o_entry_d})) // { arity: 9 }
                         ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
-                ArrangeBy keys=[[#0..=#2], [#3]] // { arity: 4 }
-                  Project (#0..=#2, #21) // { arity: 4 }
-                    Filter (#21) IS NOT NULL // { arity: 22 }
+                ArrangeBy keys=[[#0{c_id}..=#2{c_w_id}], [#3{c_n_nationkey}]] // { arity: 4 }
+                  Project (#0{c_id}..=#2{c_w_id}, #21{c_n_nationkey}) // { arity: 4 }
+                    Filter (#21{c_n_nationkey}) IS NOT NULL // { arity: 22 }
                       ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
-                ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
-                  Project (#0, #2) // { arity: 2 }
+                ArrangeBy keys=[[#0{n_nationkey}], [#1{n_regionkey}]] // { arity: 2 }
+                  Project (#0{n_nationkey}, #2{n_regionkey}) // { arity: 2 }
                     ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
-                ArrangeBy keys=[[#0]] // { arity: 2 }
-                  Project (#0, #1) // { arity: 2 }
+                ArrangeBy keys=[[#0{n_nationkey}]] // { arity: 2 }
+                  Project (#0{n_nationkey}, #1{n_name}) // { arity: 2 }
                     ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
-                ArrangeBy keys=[[#0]] // { arity: 1 }
-                  Project (#0) // { arity: 1 }
-                    Filter (#1 = "EUROPE") // { arity: 3 }
+                ArrangeBy keys=[[#0{r_regionkey}]] // { arity: 1 }
+                  Project (#0{r_regionkey}) // { arity: 1 }
+                    Filter (#1{r_name} = "EUROPE") // { arity: 3 }
                       ReadStorage materialize.public.region // { arity: 3 }
 
 Source materialize.public.item
-  filter=((#0 < 1000) AND like["%b"](padchar(#4)))
+  filter=((#0{i_id} < 1000) AND like["%b"](padchar(#4{i_data})))
 Source materialize.public.region
-  filter=((#1 = "EUROPE"))
+  filter=((#1{r_name} = "EUROPE"))
 
 Used Indexes:
   - materialize.public.fk_customer_district (*** full scan ***)
@@ -773,7 +773,7 @@ EOF
 
 # Query 09
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     n_name, EXTRACT(year FROM o_entry_d) AS l_year,
     sum(ol_amount) AS sum_profit
@@ -791,10 +791,10 @@ GROUP BY n_name, EXTRACT(year FROM o_entry_d)
 ORDER BY n_name, l_year DESC
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last, #1 desc nulls_first] output=[#0..=#2]
-    Reduce group_by=[#2, extract_year_d(#1)] aggregates=[sum(#0)] // { arity: 3 }
-      Project (#14, #19, #21) // { arity: 3 }
-        Join on=(#0 = #1 = #10 AND #2 = #11 AND #3 = #4 AND #5 = #20 AND #6 = #16 AND #7 = #17 AND #8 = #18) type=delta // { arity: 22 }
+  Finish order_by=[#0{n_name} asc nulls_last, #1 desc nulls_first] output=[#0..=#2]
+    Reduce group_by=[#2{n_name}, extract_year_d(#1{o_entry_d})] aggregates=[sum(#0{ol_amount})] // { arity: 3 }
+      Project (#14{ol_amount}, #19{o_entry_d}, #21{n_name}) // { arity: 3 }
+        Join on=(#0{i_id} = #1{s_i_id} = #10{ol_i_id} AND #2{s_w_id} = #11{ol_supply_w_id} AND #3{s_su_suppkey} = #4{su_suppkey} AND #5{su_nationkey} = #20{n_nationkey} AND #6{ol_o_id} = #16{o_id} AND #7{ol_d_id} = #17{o_d_id} AND #8{ol_w_id} = #18{o_w_id}) type=delta // { arity: 22 }
           implementation
             %0:item » %1:stock[#0]KA » %2:supplier[#0]UK » %5:nation[#0]UK » %3:orderline[#5, #4]KKA » %4:order[#0..=#2]UKKK
             %1:stock » %0:item[#0]UKlf » %2:supplier[#0]UK » %5:nation[#0]UK » %3:orderline[#5, #4]KKA » %4:order[#0..=#2]UKKK
@@ -802,27 +802,27 @@ Explained Query:
             %3:orderline » %4:order[#0..=#2]UKKK » %1:stock[#0, #1]UKK » %0:item[#0]UKlf » %2:supplier[#0]UK » %5:nation[#0]UK
             %4:order » %3:orderline[#2, #1, #0]KKKA » %1:stock[#0, #1]UKK » %0:item[#0]UKlf » %2:supplier[#0]UK » %5:nation[#0]UK
             %5:nation » %2:supplier[#1]KA » %1:stock[#2]KA » %0:item[#0]UKlf » %3:orderline[#5, #4]KKA » %4:order[#0..=#2]UKKK
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#0) // { arity: 1 }
-              Filter like["%BB"](padchar(#4)) // { arity: 5 }
+          ArrangeBy keys=[[#0{i_id}]] // { arity: 1 }
+            Project (#0{i_id}) // { arity: 1 }
+              Filter like["%BB"](padchar(#4{i_data})) // { arity: 5 }
                 ReadStorage materialize.public.item // { arity: 5 }
-          ArrangeBy keys=[[#0], [#0, #1], [#2]] // { arity: 3 }
-            Project (#0, #1, #17) // { arity: 3 }
+          ArrangeBy keys=[[#0{s_i_id}], [#0{s_i_id}, #1{s_w_id}], [#2{s_su_suppkey}]] // { arity: 3 }
+            Project (#0{s_i_id}, #1{s_w_id}, #17{s_su_suppkey}) // { arity: 3 }
               ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
-          ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
-            Project (#0, #3) // { arity: 2 }
+          ArrangeBy keys=[[#0{su_suppkey}], [#1{su_nationkey}]] // { arity: 2 }
+            Project (#0{su_suppkey}, #3{su_nationkey}) // { arity: 2 }
               ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
-          ArrangeBy keys=[[#2, #1, #0], [#5, #4]] // { arity: 10 }
+          ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}], [#5{ol_supply_w_id}, #4{ol_i_id}]] // { arity: 10 }
             ReadIndex on=orderline fk_orderline_order=[delta join lookup] fk_orderline_stock=[delta join lookup] // { arity: 10 }
-          ArrangeBy keys=[[#0..=#2]] // { arity: 4 }
-            Project (#0..=#2, #4) // { arity: 4 }
+          ArrangeBy keys=[[#0{o_id}..=#2{o_w_id}]] // { arity: 4 }
+            Project (#0{o_id}..=#2{o_w_id}, #4{o_entry_d}) // { arity: 4 }
               ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Project (#0, #1) // { arity: 2 }
+          ArrangeBy keys=[[#0{n_nationkey}]] // { arity: 2 }
+            Project (#0{n_nationkey}, #1{n_name}) // { arity: 2 }
               ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
 
 Source materialize.public.item
-  filter=(like["%BB"](padchar(#4)))
+  filter=(like["%BB"](padchar(#4{i_data})))
 
 Used Indexes:
   - materialize.public.fk_order_customer (*** full scan ***)
@@ -838,7 +838,7 @@ EOF
 
 # Query 10
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     c_id, c_last, sum(ol_amount) AS revenue, c_city, c_phone, n_name
 FROM customer, "order", orderline, nation
@@ -855,29 +855,29 @@ GROUP BY c_id, c_last, c_city, c_phone, n_name
 ORDER BY revenue DESC
 ----
 Explained Query:
-  Finish order_by=[#2 desc nulls_first] output=[#0..=#5]
-    Project (#0, #1, #5, #2..=#4) // { arity: 6 }
-      Reduce group_by=[#0..=#3, #5] aggregates=[sum(#4)] // { arity: 6 }
-        Project (#0, #3..=#5, #20, #23) // { arity: 6 }
-          Filter (#11 <= #18) // { arity: 24 }
-            Join on=(#0 = #10 AND #1 = #8 = #13 AND #2 = #9 = #14 AND #6 = #22 AND #7 = #12) type=delta // { arity: 24 }
+  Finish order_by=[#2{sum_ol_amount} desc nulls_first] output=[#0..=#5]
+    Project (#0{c_id}, #1{c_last}, #5{sum_ol_amount}, #2{c_city}..=#4{n_name}) // { arity: 6 }
+      Reduce group_by=[#0{c_id}..=#3{c_phone}, #5{n_name}] aggregates=[sum(#4{ol_amount})] // { arity: 6 }
+        Project (#0{c_id}, #3{c_last}..=#5{c_phone}, #20{ol_amount}, #23{n_name}) // { arity: 6 }
+          Filter (#11{o_entry_d} <= #18{ol_delivery_d}) // { arity: 24 }
+            Join on=(#0{c_id} = #10{o_c_id} AND #1{c_d_id} = #8{o_d_id} = #13{ol_d_id} AND #2{c_w_id} = #9{o_w_id} = #14{ol_w_id} AND #6{c_n_nationkey} = #22{n_nationkey} AND #7{o_id} = #12{ol_o_id}) type=delta // { arity: 24 }
               implementation
                 %0:customer » %3:nation[#0]UK » %1:order[#2, #1, #3]KKKAif » %2:orderline[#2, #1, #0]KKKA
                 %1:order » %0:customer[#0..=#2]UKKK » %3:nation[#0]UK » %2:orderline[#2, #1, #0]KKKA
                 %2:orderline » %1:order[#0..=#2]UKKKif » %0:customer[#0..=#2]UKKK » %3:nation[#0]UK
                 %3:nation » %0:customer[#6]KA » %1:order[#2, #1, #3]KKKAif » %2:orderline[#2, #1, #0]KKKA
-              ArrangeBy keys=[[#0..=#2], [#6]] // { arity: 7 }
-                Project (#0..=#2, #5, #8, #11, #21) // { arity: 7 }
-                  Filter (#21) IS NOT NULL // { arity: 22 }
+              ArrangeBy keys=[[#0{c_id}..=#2{c_w_id}], [#6{c_n_nationkey}]] // { arity: 7 }
+                Project (#0{c_id}..=#2{c_w_id}, #5{c_last}, #8{c_city}, #11{c_phone}, #21{c_n_nationkey}) // { arity: 7 }
+                  Filter (#21{c_n_nationkey}) IS NOT NULL // { arity: 22 }
                     ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
-              ArrangeBy keys=[[#0..=#2], [#2, #1, #3]] // { arity: 5 }
-                Project (#0..=#4) // { arity: 5 }
-                  Filter (#3) IS NOT NULL AND (date_to_timestamp(#4) >= 2007-01-02 00:00:00) // { arity: 8 }
+              ArrangeBy keys=[[#0{o_id}..=#2{o_w_id}], [#2{o_w_id}, #1{o_d_id}, #3{o_c_id}]] // { arity: 5 }
+                Project (#0{o_id}..=#4{o_entry_d}) // { arity: 5 }
+                  Filter (#3{o_c_id}) IS NOT NULL AND (date_to_timestamp(#4{o_entry_d}) >= 2007-01-02 00:00:00) // { arity: 8 }
                     ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
-              ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
+              ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]] // { arity: 10 }
                 ReadIndex on=orderline fk_orderline_order=[delta join lookup] // { arity: 10 }
-              ArrangeBy keys=[[#0]] // { arity: 2 }
-                Project (#0, #1) // { arity: 2 }
+              ArrangeBy keys=[[#0{n_nationkey}]] // { arity: 2 }
+                Project (#0{n_nationkey}, #1{n_name}) // { arity: 2 }
                   ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
 
 Used Indexes:
@@ -892,7 +892,7 @@ EOF
 
 # Query 11
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT s_i_id, sum(s_order_cnt) AS ordercount
 FROM stock, supplier, nation
 WHERE s_su_suppkey = su_suppkey
@@ -909,36 +909,36 @@ HAVING sum(s_order_cnt) > (
 ORDER BY ordercount DESC
 ----
 Explained Query:
-  Finish order_by=[#1 desc nulls_first] output=[#0, #1]
+  Finish order_by=[#1{sum_s_order_cnt} desc nulls_first] output=[#0, #1]
     With
       cte l0 =
-        Project (#0, #14) // { arity: 2 }
-          Join on=(#17 = #18 AND #19 = #20) type=delta // { arity: 21 }
+        Project (#0{s_i_id}, #14{s_order_cnt}) // { arity: 2 }
+          Join on=(#17{s_su_suppkey} = #18{su_suppkey} AND #19{su_nationkey} = #20{n_nationkey}) type=delta // { arity: 21 }
             implementation
               %0:stock » %1:supplier[#0]UK » %2:nation[#0]UKef
               %1:supplier » %2:nation[#0]UKef » %0:stock[#17]KA
               %2:nation » %1:supplier[#1]KA » %0:stock[#17]KA
-            ArrangeBy keys=[[#17]] // { arity: 18 }
+            ArrangeBy keys=[[#17{s_su_suppkey}]] // { arity: 18 }
               ReadIndex on=stock fk_stock_supplier=[delta join 1st input (full scan)] // { arity: 18 }
-            ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
-              Project (#0, #3) // { arity: 2 }
+            ArrangeBy keys=[[#0{su_suppkey}], [#1{su_nationkey}]] // { arity: 2 }
+              Project (#0{su_suppkey}, #3{su_nationkey}) // { arity: 2 }
                 ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Filter (#1 = "GERMANY") // { arity: 4 }
+            ArrangeBy keys=[[#0{n_nationkey}]] // { arity: 1 }
+              Project (#0{n_nationkey}) // { arity: 1 }
+                Filter (#1{n_name} = "GERMANY") // { arity: 4 }
                   ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
     Return // { arity: 2 }
-      Project (#0, #1) // { arity: 2 }
-        Filter (bigint_to_numeric(#1) > (bigint_to_numeric(#2) * 0.005)) // { arity: 3 }
+      Project (#0{s_i_id}, #1{sum_s_order_cnt}) // { arity: 2 }
+        Filter (bigint_to_numeric(#1{sum_s_order_cnt}) > (bigint_to_numeric(#2{sum_s_order_cnt}) * 0.005)) // { arity: 3 }
           CrossJoin type=differential // { arity: 3 }
             implementation
               %1[×]UA » %0[×]
             ArrangeBy keys=[[]] // { arity: 2 }
-              Reduce group_by=[#0] aggregates=[sum(#1)] // { arity: 2 }
+              Reduce group_by=[#0{s_i_id}] aggregates=[sum(#1{s_order_cnt})] // { arity: 2 }
                 Get l0 // { arity: 2 }
             ArrangeBy keys=[[]] // { arity: 1 }
-              Reduce aggregates=[sum(#0)] // { arity: 1 }
-                Project (#1) // { arity: 1 }
+              Reduce aggregates=[sum(#0{s_order_cnt})] // { arity: 1 }
+                Project (#1{s_order_cnt}) // { arity: 1 }
                   Get l0 // { arity: 2 }
 
 Used Indexes:
@@ -952,7 +952,7 @@ EOF
 
 # Query 12
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     o_ol_cnt,
     sum(CASE WHEN o_carrier_id = 1 OR o_carrier_id = 2 THEN 1 ELSE 0 END) AS high_line_count,
@@ -968,17 +968,17 @@ GROUP BY o_ol_cnt
 ORDER BY o_ol_cnt
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
-    Reduce group_by=[#1] aggregates=[sum(case when ((#0 = 1) OR (#0 = 2)) then 1 else 0 end), sum(case when ((#0 != 1) AND (#0 != 2)) then 1 else 0 end)] // { arity: 3 }
-      Project (#4, #5) // { arity: 2 }
-        Filter (date_to_timestamp(#12) < 2020-01-01 00:00:00) AND (#3 <= #12) // { arity: 16 }
-          Join on=(#0 = #6 AND #1 = #7 AND #2 = #8) type=differential // { arity: 16 }
+  Finish order_by=[#0{o_ol_cnt} asc nulls_last] output=[#0..=#2]
+    Reduce group_by=[#1{o_ol_cnt}] aggregates=[sum(case when ((#0{o_carrier_id} = 1) OR (#0{o_carrier_id} = 2)) then 1 else 0 end), sum(case when ((#0{o_carrier_id} != 1) AND (#0{o_carrier_id} != 2)) then 1 else 0 end)] // { arity: 3 }
+      Project (#4{o_carrier_id}, #5{o_ol_cnt}) // { arity: 2 }
+        Filter (date_to_timestamp(#12{ol_delivery_d}) < 2020-01-01 00:00:00) AND (#3{o_entry_d} <= #12{ol_delivery_d}) // { arity: 16 }
+          Join on=(#0{o_id} = #6{ol_o_id} AND #1{o_d_id} = #7{ol_d_id} AND #2{o_w_id} = #8{ol_w_id}) type=differential // { arity: 16 }
             implementation
               %0:order[#2, #1, #0]UKKK » %1:orderline[#2, #1, #0]KKKAif
-            ArrangeBy keys=[[#2, #1, #0]] // { arity: 6 }
-              Project (#0..=#2, #4..=#6) // { arity: 6 }
+            ArrangeBy keys=[[#2{o_w_id}, #1{o_d_id}, #0{o_id}]] // { arity: 6 }
+              Project (#0{o_id}..=#2{o_w_id}, #4{o_entry_d}..=#6{o_ol_cnt}) // { arity: 6 }
                 ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
-            ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
+            ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]] // { arity: 10 }
               ReadIndex on=orderline fk_orderline_order=[differential join] // { arity: 10 }
 
 Used Indexes:
@@ -991,7 +991,7 @@ EOF
 
 # Query 13
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     c_count, count(*) AS custdist
 FROM (
@@ -1006,34 +1006,34 @@ GROUP BY c_count
 ORDER BY custdist DESC, c_count DESC
 ----
 Explained Query:
-  Finish order_by=[#1 desc nulls_first, #0 desc nulls_first] output=[#0, #1]
+  Finish order_by=[#1{count} desc nulls_first, #0{count_o_id} desc nulls_first] output=[#0, #1]
     With
       cte l0 =
-        Project (#0..=#3) // { arity: 4 }
-          Filter (#8 > 8) // { arity: 11 }
-            Join on=(#0 = #6 AND #1 = #4 AND #2 = #5) type=differential // { arity: 11 }
+        Project (#0{c_id}..=#3{o_id}) // { arity: 4 }
+          Filter (#8{o_carrier_id} > 8) // { arity: 11 }
+            Join on=(#0{c_id} = #6{o_c_id} AND #1{c_d_id} = #4{o_d_id} AND #2{c_w_id} = #5{o_w_id}) type=differential // { arity: 11 }
               implementation
                 %0:customer[#2, #1, #0]UKKK » %1:order[#2, #1, #3]KKKAif
-              ArrangeBy keys=[[#2, #1, #0]] // { arity: 3 }
-                Project (#0..=#2) // { arity: 3 }
+              ArrangeBy keys=[[#2{c_w_id}, #1{c_d_id}, #0{c_id}]] // { arity: 3 }
+                Project (#0{c_id}..=#2{c_w_id}) // { arity: 3 }
                   ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
-              ArrangeBy keys=[[#2, #1, #3]] // { arity: 8 }
+              ArrangeBy keys=[[#2{o_w_id}, #1{o_d_id}, #3{o_c_id}]] // { arity: 8 }
                 ReadIndex on=order fk_order_customer=[differential join] // { arity: 8 }
     Return // { arity: 2 }
-      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-        Project (#1) // { arity: 1 }
-          Reduce group_by=[#0] aggregates=[count(#1)] // { arity: 2 }
+      Reduce group_by=[#0{count_o_id}] aggregates=[count(*)] // { arity: 2 }
+        Project (#1{count_o_id}) // { arity: 1 }
+          Reduce group_by=[#0{c_id}] aggregates=[count(#1{o_id})] // { arity: 2 }
             Union // { arity: 2 }
               Map (null) // { arity: 2 }
                 Union // { arity: 1 }
                   Negate // { arity: 1 }
-                    Project (#0) // { arity: 1 }
-                      Distinct project=[#0..=#2] // { arity: 3 }
-                        Project (#0..=#2) // { arity: 3 }
+                    Project (#0{c_id}) // { arity: 1 }
+                      Distinct project=[#0{c_id}..=#2{c_w_id}] // { arity: 3 }
+                        Project (#0{c_id}..=#2{c_w_id}) // { arity: 3 }
                           Get l0 // { arity: 4 }
-                  Project (#0) // { arity: 1 }
+                  Project (#0{c_id}) // { arity: 1 }
                     ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
-              Project (#0, #3) // { arity: 2 }
+              Project (#0{c_id}, #3{o_id}) // { arity: 2 }
                 Get l0 // { arity: 4 }
 
 Used Indexes:
@@ -1046,7 +1046,7 @@ EOF
 
 # Query 14
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     100.00 * sum(CASE WHEN i_data LIKE 'PR%' THEN ol_amount ELSE 0 END) / (1 + sum(ol_amount)) AS promo_revenue
 FROM orderline, item
@@ -1057,21 +1057,21 @@ AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[sum(case when like["PR%"](padchar(#1)) then #0 else 0 end), sum(#0)] // { arity: 2 }
-        Project (#8, #11) // { arity: 2 }
+      Reduce aggregates=[sum(case when like["PR%"](padchar(#1{i_data})) then #0{ol_amount} else 0 end), sum(#0{ol_amount})] // { arity: 2 }
+        Project (#8{ol_amount}, #11{i_data}) // { arity: 2 }
           Filter (#12 < 2020-01-02 00:00:00) AND (#12 >= 2007-01-02 00:00:00) // { arity: 13 }
-            Map (date_to_timestamp(#6)) // { arity: 13 }
-              Join on=(#4 = #10) type=differential // { arity: 12 }
+            Map (date_to_timestamp(#6{ol_delivery_d})) // { arity: 13 }
+              Join on=(#4{ol_i_id} = #10{i_id}) type=differential // { arity: 12 }
                 implementation
                   %1:item[#0]UK » %0:orderline[#4]KAiif
-                ArrangeBy keys=[[#4]] // { arity: 10 }
+                ArrangeBy keys=[[#4{ol_i_id}]] // { arity: 10 }
                   ReadIndex on=orderline fk_orderline_item=[differential join] // { arity: 10 }
-                ArrangeBy keys=[[#0]] // { arity: 2 }
-                  Project (#0, #4) // { arity: 2 }
+                ArrangeBy keys=[[#0{i_id}]] // { arity: 2 }
+                  Project (#0{i_id}, #4{i_data}) // { arity: 2 }
                     ReadStorage materialize.public.item // { arity: 5 }
   Return // { arity: 1 }
     Project (#2) // { arity: 1 }
-      Map (((100 * #0) / (1 + #1))) // { arity: 3 }
+      Map (((100 * #0{sum}) / (1 + #1{sum_ol_amount}))) // { arity: 3 }
         Union // { arity: 2 }
           Get l0 // { arity: 2 }
           Map (null, null) // { arity: 2 }
@@ -1093,7 +1093,7 @@ EOF
 
 # Query 15
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT su_suppkey, su_name, su_address, su_phone, total_revenue
 FROM
     supplier,
@@ -1124,37 +1124,37 @@ AND total_revenue = (
 ORDER BY su_suppkey
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last] output=[#0..=#4]
+  Finish order_by=[#0{su_suppkey} asc nulls_last] output=[#0..=#4]
     With
       cte l0 =
-        Reduce group_by=[#1] aggregates=[sum(#0)] // { arity: 2 }
-          Project (#8, #12) // { arity: 2 }
-            Filter (date_to_timestamp(#6) >= 2007-01-02 00:00:00) // { arity: 13 }
-              Join on=(#4 = #10 AND #5 = #11) type=differential // { arity: 13 }
+        Reduce group_by=[#1{s_su_suppkey}] aggregates=[sum(#0{ol_amount})] // { arity: 2 }
+          Project (#8{ol_amount}, #12{s_su_suppkey}) // { arity: 2 }
+            Filter (date_to_timestamp(#6{ol_delivery_d}) >= 2007-01-02 00:00:00) // { arity: 13 }
+              Join on=(#4{ol_i_id} = #10{s_i_id} AND #5{ol_supply_w_id} = #11{s_w_id}) type=differential // { arity: 13 }
                 implementation
                   %1:stock[#1, #0]UKK » %0:orderline[#5, #4]KKAif
-                ArrangeBy keys=[[#5, #4]] // { arity: 10 }
+                ArrangeBy keys=[[#5{ol_supply_w_id}, #4{ol_i_id}]] // { arity: 10 }
                   ReadIndex on=orderline fk_orderline_stock=[differential join] // { arity: 10 }
-                ArrangeBy keys=[[#1, #0]] // { arity: 3 }
-                  Project (#0, #1, #17) // { arity: 3 }
+                ArrangeBy keys=[[#1{s_w_id}, #0{s_i_id}]] // { arity: 3 }
+                  Project (#0{s_i_id}, #1{s_w_id}, #17{s_su_suppkey}) // { arity: 3 }
                     ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
     Return // { arity: 5 }
-      Project (#0..=#3, #5) // { arity: 5 }
-        Join on=(#0 = #4 AND #5 = #6) type=delta // { arity: 7 }
+      Project (#0{su_suppkey}..=#3{su_phone}, #5{sum_ol_amount}) // { arity: 5 }
+        Join on=(#0{su_suppkey} = #4{s_su_suppkey} AND #5{sum_ol_amount} = #6{max_sum_ol_amount}) type=delta // { arity: 7 }
           implementation
             %0:supplier » %1:l0[#0]UKA » %2[#0]UK
             %1:l0 » %0:supplier[#0]UK » %2[#0]UK
             %2 » %1:l0[#1]K » %0:supplier[#0]UK
-          ArrangeBy keys=[[#0]] // { arity: 4 }
-            Project (#0..=#2, #4) // { arity: 4 }
+          ArrangeBy keys=[[#0{su_suppkey}]] // { arity: 4 }
+            Project (#0{su_suppkey}..=#2{su_address}, #4{su_phone}) // { arity: 4 }
               ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
-          ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
-            Filter (#1) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{s_su_suppkey}], [#1{sum_ol_amount}]] // { arity: 2 }
+            Filter (#1{sum_ol_amount}) IS NOT NULL // { arity: 2 }
               Get l0 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Filter (#0) IS NOT NULL // { arity: 1 }
-              Reduce aggregates=[max(#0)] // { arity: 1 }
-                Project (#1) // { arity: 1 }
+          ArrangeBy keys=[[#0{max_sum_ol_amount}]] // { arity: 1 }
+            Filter (#0{max_sum_ol_amount}) IS NOT NULL // { arity: 1 }
+              Reduce aggregates=[max(#0{sum_ol_amount})] // { arity: 1 }
+                Project (#1{sum_ol_amount}) // { arity: 1 }
                   Get l0 // { arity: 2 }
 
 Used Indexes:
@@ -1168,7 +1168,7 @@ EOF
 
 # Query 16
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     i_name,
     substr(i_data, 1, 3) AS brand,
@@ -1184,48 +1184,48 @@ GROUP BY i_name, substr(i_data, 1, 3), i_price
 ORDER BY supplier_cnt DESC
 ----
 Explained Query:
-  Finish order_by=[#3 desc nulls_first] output=[#0..=#3]
+  Finish order_by=[#3{count_s_su_suppkey} desc nulls_first] output=[#0..=#3]
     With
       cte l0 =
-        Project (#17, #19..=#21) // { arity: 4 }
-          Join on=(#0 = #18) type=differential // { arity: 22 }
+        Project (#17{s_su_suppkey}, #19{i_name}..=#21{i_data}) // { arity: 4 }
+          Join on=(#0{s_i_id} = #18{i_id}) type=differential // { arity: 22 }
             implementation
               %1:item[#0]UKf » %0:stock[#0]KAf
-            ArrangeBy keys=[[#0]] // { arity: 18 }
+            ArrangeBy keys=[[#0{s_i_id}]] // { arity: 18 }
               ReadIndex on=stock fk_stock_item=[differential join] // { arity: 18 }
-            ArrangeBy keys=[[#0]] // { arity: 4 }
-              Project (#0, #2..=#4) // { arity: 4 }
-                Filter NOT(like["zz%"](padchar(#4))) // { arity: 5 }
+            ArrangeBy keys=[[#0{i_id}]] // { arity: 4 }
+              Project (#0{i_id}, #2{i_name}..=#4{i_data}) // { arity: 4 }
+                Filter NOT(like["zz%"](padchar(#4{i_data}))) // { arity: 5 }
                   ReadStorage materialize.public.item // { arity: 5 }
       cte l1 =
-        Distinct project=[#0] // { arity: 1 }
-          Project (#0) // { arity: 1 }
+        Distinct project=[#0{s_su_suppkey}] // { arity: 1 }
+          Project (#0{s_su_suppkey}) // { arity: 1 }
             Get l0 // { arity: 4 }
     Return // { arity: 4 }
-      Reduce group_by=[#1, substr(char_to_text(#3), 1, 3), #2] aggregates=[count(distinct #0)] // { arity: 4 }
-        Project (#0..=#3) // { arity: 4 }
-          Join on=(#0 = #4) type=differential // { arity: 5 }
+      Reduce group_by=[#1{i_name}, substr(char_to_text(#3{i_data}), 1, 3), #2{i_price}] aggregates=[count(distinct #0{s_su_suppkey})] // { arity: 4 }
+        Project (#0{s_su_suppkey}..=#3{i_data}) // { arity: 4 }
+          Join on=(#0{s_su_suppkey} = #4{s_su_suppkey}) type=differential // { arity: 5 }
             implementation
               %0:l0[#0]K » %1[#0]K
-            ArrangeBy keys=[[#0]] // { arity: 4 }
+            ArrangeBy keys=[[#0{s_su_suppkey}]] // { arity: 4 }
               Get l0 // { arity: 4 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
+            ArrangeBy keys=[[#0{s_su_suppkey}]] // { arity: 1 }
               Union // { arity: 1 }
                 Negate // { arity: 1 }
-                  Project (#0) // { arity: 1 }
-                    Join on=(#0 = #1) type=differential // { arity: 2 }
+                  Project (#0{s_su_suppkey}) // { arity: 1 }
+                    Join on=(#0{s_su_suppkey} = #1{su_suppkey}) type=differential // { arity: 2 }
                       implementation
                         %0:l1[#0]UKA » %1:supplier[#0]UKlf
-                      ArrangeBy keys=[[#0]] // { arity: 1 }
+                      ArrangeBy keys=[[#0{s_su_suppkey}]] // { arity: 1 }
                         Get l1 // { arity: 1 }
-                      ArrangeBy keys=[[#0]] // { arity: 1 }
-                        Project (#0) // { arity: 1 }
-                          Filter like["%bad%"](padchar(#6)) // { arity: 7 }
+                      ArrangeBy keys=[[#0{su_suppkey}]] // { arity: 1 }
+                        Project (#0{su_suppkey}) // { arity: 1 }
+                          Filter like["%bad%"](padchar(#6{su_comment})) // { arity: 7 }
                             ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
                 Get l1 // { arity: 1 }
 
 Source materialize.public.item
-  filter=(NOT(like["zz%"](padchar(#4))))
+  filter=(NOT(like["zz%"](padchar(#4{i_data}))))
 
 Used Indexes:
   - materialize.public.fk_stock_item (differential join)
@@ -1237,7 +1237,7 @@ EOF
 
 # Query 17
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     sum(ol_amount) / 2.0 AS avg_yearly
 FROM
@@ -1254,30 +1254,30 @@ AND ol_quantity < t.a
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#4]] // { arity: 10 }
+      ArrangeBy keys=[[#4{ol_i_id}]] // { arity: 10 }
         ReadIndex on=orderline fk_orderline_item=[differential join] // { arity: 10 }
     cte l1 =
-      Reduce aggregates=[sum(#0)] // { arity: 1 }
-        Project (#8) // { arity: 1 }
-          Filter (integer_to_numeric(#7) < (bigint_to_numeric(#11) / bigint_to_numeric(case when (#12 = 0) then null else #12 end))) // { arity: 13 }
-            Join on=(#4 = #10) type=differential // { arity: 13 }
+      Reduce aggregates=[sum(#0{ol_amount})] // { arity: 1 }
+        Project (#8{ol_amount}) // { arity: 1 }
+          Filter (integer_to_numeric(#7{ol_quantity}) < (bigint_to_numeric(#11{sum_ol_quantity}) / bigint_to_numeric(case when (#12{count_ol_quantity} = 0) then null else #12{count_ol_quantity} end))) // { arity: 13 }
+            Join on=(#4{ol_i_id} = #10{i_id}) type=differential // { arity: 13 }
               implementation
                 %1[#0]UKA » %0:l0[#4]KA
               Get l0 // { arity: 10 }
-              ArrangeBy keys=[[#0]] // { arity: 3 }
-                Reduce group_by=[#0] aggregates=[sum(#1), count(#1)] // { arity: 3 }
-                  Project (#0, #8) // { arity: 2 }
-                    Join on=(#0 = #5) type=differential // { arity: 11 }
+              ArrangeBy keys=[[#0{i_id}]] // { arity: 3 }
+                Reduce group_by=[#0{i_id}] aggregates=[sum(#1{ol_quantity}), count(#1{ol_quantity})] // { arity: 3 }
+                  Project (#0{i_id}, #8{ol_quantity}) // { arity: 2 }
+                    Join on=(#0{i_id} = #5{ol_i_id}) type=differential // { arity: 11 }
                       implementation
                         %0:item[#0]UKlf » %1:l0[#4]KAlf
-                      ArrangeBy keys=[[#0]] // { arity: 1 }
-                        Project (#0) // { arity: 1 }
-                          Filter like["%b"](padchar(#4)) // { arity: 5 }
+                      ArrangeBy keys=[[#0{i_id}]] // { arity: 1 }
+                        Project (#0{i_id}) // { arity: 1 }
+                          Filter like["%b"](padchar(#4{i_data})) // { arity: 5 }
                             ReadStorage materialize.public.item // { arity: 5 }
                       Get l0 // { arity: 10 }
   Return // { arity: 1 }
     Project (#1) // { arity: 1 }
-      Map ((#0 / 2)) // { arity: 2 }
+      Map ((#0{sum_ol_amount} / 2)) // { arity: 2 }
         Union // { arity: 1 }
           Get l1 // { arity: 1 }
           Map (null) // { arity: 1 }
@@ -1289,7 +1289,7 @@ Explained Query:
                 - ()
 
 Source materialize.public.item
-  filter=(like["%b"](padchar(#4)))
+  filter=(like["%b"](padchar(#4{i_data})))
 
 Used Indexes:
   - materialize.public.fk_orderline_item (differential join)
@@ -1300,7 +1300,7 @@ EOF
 
 # Query 18
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT c_last, c_id, o_id, o_entry_d, o_ol_cnt, sum(ol_amount)
 FROM customer, "order", orderline
 WHERE c_id = o_c_id
@@ -1314,24 +1314,24 @@ HAVING sum(ol_amount) > 200
 ORDER BY sum(ol_amount) DESC, o_entry_d
 ----
 Explained Query:
-  Finish order_by=[#5 desc nulls_first, #3 asc nulls_last] output=[#0..=#5]
-    Project (#4, #3, #0, #5..=#7) // { arity: 6 }
-      Filter (#7 > 200) // { arity: 8 }
-        Reduce group_by=[#4, #2, #1, #0, #3, #5, #6] aggregates=[sum(#7)] // { arity: 8 }
-          Project (#0..=#4, #8, #9, #18) // { arity: 8 }
-            Join on=(#0 = #7 AND #1 = #5 = #11 AND #2 = #6 = #12 AND #4 = #10) type=delta // { arity: 20 }
+  Finish order_by=[#5{sum_ol_amount} desc nulls_first, #3{o_entry_d} asc nulls_last] output=[#0..=#5]
+    Project (#4{c_last}, #3{c_id}, #0{o_id}, #5{o_entry_d}..=#7{sum_ol_amount}) // { arity: 6 }
+      Filter (#7{sum_ol_amount} > 200) // { arity: 8 }
+        Reduce group_by=[#4{o_id}, #2{c_w_id}, #1{c_d_id}, #0{c_id}, #3{c_last}, #5{o_entry_d}, #6{o_ol_cnt}] aggregates=[sum(#7{ol_amount})] // { arity: 8 }
+          Project (#0{c_id}..=#4{o_id}, #8{o_entry_d}, #9{o_ol_cnt}, #18{ol_amount}) // { arity: 8 }
+            Join on=(#0{c_id} = #7{o_c_id} AND #1{c_d_id} = #5{o_d_id} = #11{ol_d_id} AND #2{c_w_id} = #6{o_w_id} = #12{ol_w_id} AND #4{o_id} = #10{ol_o_id}) type=delta // { arity: 20 }
               implementation
                 %0:customer » %1:order[#2, #1, #3]KKKA » %2:orderline[#2, #1, #0]KKKA
                 %1:order » %0:customer[#0..=#2]UKKK » %2:orderline[#2, #1, #0]KKKA
                 %2:orderline » %1:order[#0..=#2]UKKK » %0:customer[#0..=#2]UKKK
-              ArrangeBy keys=[[#0..=#2]] // { arity: 4 }
-                Project (#0..=#2, #5) // { arity: 4 }
+              ArrangeBy keys=[[#0{c_id}..=#2{c_w_id}]] // { arity: 4 }
+                Project (#0{c_id}..=#2{c_w_id}, #5{c_last}) // { arity: 4 }
                   ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
-              ArrangeBy keys=[[#0..=#2], [#2, #1, #3]] // { arity: 6 }
-                Project (#0..=#4, #6) // { arity: 6 }
-                  Filter (#3) IS NOT NULL // { arity: 8 }
+              ArrangeBy keys=[[#0{o_id}..=#2{o_w_id}], [#2{o_w_id}, #1{o_d_id}, #3{o_c_id}]] // { arity: 6 }
+                Project (#0{o_id}..=#4{o_entry_d}, #6{o_ol_cnt}) // { arity: 6 }
+                  Filter (#3{o_c_id}) IS NOT NULL // { arity: 8 }
                     ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
-              ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
+              ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]] // { arity: 10 }
                 ReadIndex on=orderline fk_orderline_order=[delta join lookup] // { arity: 10 }
 
 Used Indexes:
@@ -1345,7 +1345,7 @@ EOF
 
 # Query 19
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT sum(ol_amount) AS revenue
 FROM orderline, item
 WHERE (
@@ -1374,19 +1374,19 @@ WHERE (
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[sum(#0)] // { arity: 1 }
-        Project (#8) // { arity: 1 }
-          Filter (#7 <= 10) AND (#7 >= 1) AND (#12 OR #13 OR #14 OR #15 OR #16) AND ((like["%a"](#17) AND (#12 OR #13 OR #14)) OR (like["%b"](#17) AND (#12 OR #13 OR #15)) OR (like["%c"](#17) AND (#12 OR #14 OR #16))) // { arity: 18 }
-            Map ((#2 = 1), (#2 = 2), (#2 = 3), (#2 = 4), (#2 = 5), padchar(#11)) // { arity: 18 }
-              Join on=(#4 = #10) type=differential // { arity: 12 }
+      Reduce aggregates=[sum(#0{ol_amount})] // { arity: 1 }
+        Project (#8{ol_amount}) // { arity: 1 }
+          Filter (#7{ol_quantity} <= 10) AND (#7{ol_quantity} >= 1) AND (#12 OR #13 OR #14 OR #15 OR #16) AND ((like["%a"](#17) AND (#12 OR #13 OR #14)) OR (like["%b"](#17) AND (#12 OR #13 OR #15)) OR (like["%c"](#17) AND (#12 OR #14 OR #16))) // { arity: 18 }
+            Map ((#2{ol_w_id} = 1), (#2{ol_w_id} = 2), (#2{ol_w_id} = 3), (#2{ol_w_id} = 4), (#2{ol_w_id} = 5), padchar(#11{i_data})) // { arity: 18 }
+              Join on=(#4{ol_i_id} = #10{i_id}) type=differential // { arity: 12 }
                 implementation
                   %1:item[#0]UKliif » %0:orderline[#4]KAeliiiif
-                ArrangeBy keys=[[#4]] // { arity: 10 }
+                ArrangeBy keys=[[#4{ol_i_id}]] // { arity: 10 }
                   ReadIndex on=orderline fk_orderline_item=[differential join] // { arity: 10 }
-                ArrangeBy keys=[[#0]] // { arity: 2 }
-                  Project (#0, #4) // { arity: 2 }
-                    Filter (#3 <= 400000) AND (#3 >= 1) AND (like["%a"](#5) OR like["%b"](#5) OR like["%c"](#5)) // { arity: 6 }
-                      Map (padchar(#4)) // { arity: 6 }
+                ArrangeBy keys=[[#0{i_id}]] // { arity: 2 }
+                  Project (#0{i_id}, #4{i_data}) // { arity: 2 }
+                    Filter (#3{i_price} <= 400000) AND (#3{i_price} >= 1) AND (like["%a"](#5) OR like["%b"](#5) OR like["%c"](#5)) // { arity: 6 }
+                      Map (padchar(#4{i_data})) // { arity: 6 }
                         ReadStorage materialize.public.item // { arity: 5 }
   Return // { arity: 1 }
     Union // { arity: 1 }
@@ -1400,8 +1400,8 @@ Explained Query:
             - ()
 
 Source materialize.public.item
-  filter=((#3 <= 400000) AND (#3 >= 1) AND (like["%a"](#5) OR like["%b"](#5) OR like["%c"](#5)))
-  map=(padchar(#4))
+  filter=((#3{i_price} <= 400000) AND (#3{i_price} >= 1) AND (like["%a"](#5) OR like["%b"](#5) OR like["%c"](#5)))
+  map=(padchar(#4{i_data}))
 
 Used Indexes:
   - materialize.public.fk_orderline_item (differential join)
@@ -1417,7 +1417,7 @@ EOF
 
 # Query 20
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT su_name, su_address
 FROM supplier, nation
 WHERE su_suppkey IN (
@@ -1434,54 +1434,54 @@ AND n_name = 'GERMANY'
 ORDER BY su_name
 ----
 Explained Query:
-  Finish order_by=[#0 asc nulls_last] output=[#0, #1]
+  Finish order_by=[#0{su_name} asc nulls_last] output=[#0, #1]
     With
       cte l0 =
-        Project (#0..=#2) // { arity: 3 }
-          Join on=(#3 = #7) type=differential // { arity: 8 }
+        Project (#0{su_suppkey}..=#2{su_address}) // { arity: 3 }
+          Join on=(#3{su_nationkey} = #7{n_nationkey}) type=differential // { arity: 8 }
             implementation
               %1:nation[#0]UKef » %0:supplier[#3]KAef
-            ArrangeBy keys=[[#3]] // { arity: 7 }
+            ArrangeBy keys=[[#3{su_nationkey}]] // { arity: 7 }
               ReadIndex on=supplier fk_supplier_nationkey=[differential join] // { arity: 7 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Filter (#1 = "GERMANY") // { arity: 4 }
+            ArrangeBy keys=[[#0{n_nationkey}]] // { arity: 1 }
+              Project (#0{n_nationkey}) // { arity: 1 }
+                Filter (#1{n_name} = "GERMANY") // { arity: 4 }
                   ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
     Return // { arity: 2 }
-      Project (#1, #2) // { arity: 2 }
-        Join on=(#0 = #3) type=differential // { arity: 4 }
+      Project (#1{su_name}, #2{su_address}) // { arity: 2 }
+        Join on=(#0{su_suppkey} = #3{su_suppkey}) type=differential // { arity: 4 }
           implementation
             %1[#0]UKA » %0:l0[#0]UK
-          ArrangeBy keys=[[#0]] // { arity: 3 }
+          ArrangeBy keys=[[#0{su_suppkey}]] // { arity: 3 }
             Get l0 // { arity: 3 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Distinct project=[#0] // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Filter (integer_to_bigint((2 * #3)) > #4) // { arity: 5 }
-                  Reduce group_by=[#0..=#3] aggregates=[sum(#4)] // { arity: 5 }
-                    Project (#0..=#3, #11) // { arity: 5 }
-                      Filter (date_to_timestamp(#10) > 2010-05-23 12:00:00) // { arity: 15 }
-                        Join on=(#0 = ((#1 * #2) % 10000) AND #1 = #8 = #14) type=delta // { arity: 15 }
+          ArrangeBy keys=[[#0{su_suppkey}]] // { arity: 1 }
+            Distinct project=[#0{su_suppkey}] // { arity: 1 }
+              Project (#0{su_suppkey}) // { arity: 1 }
+                Filter (integer_to_bigint((2 * #3{s_quantity})) > #4{sum_ol_quantity}) // { arity: 5 }
+                  Reduce group_by=[#0{su_suppkey}..=#3{s_quantity}] aggregates=[sum(#4{ol_quantity})] // { arity: 5 }
+                    Project (#0{su_suppkey}..=#3{s_quantity}, #11{ol_quantity}) // { arity: 5 }
+                      Filter (date_to_timestamp(#10{ol_delivery_d}) > 2010-05-23 12:00:00) // { arity: 15 }
+                        Join on=(#0{su_suppkey} = ((#1{s_i_id} * #2{s_w_id}) % 10000) AND #1{s_i_id} = #8{ol_i_id} = #14{i_id}) type=delta // { arity: 15 }
                           implementation
                             %0:l0 » %1:stock[((#0 * #1) % 10000)]K » %3:item[#0]UKlf » %2:orderline[#4]KAif
                             %1:stock » %3:item[#0]UKlf » %0:l0[#0]UK » %2:orderline[#4]KAif
                             %2:orderline » %3:item[#0]UKlf » %1:stock[#0]KA » %0:l0[#0]UK
                             %3:item » %2:orderline[#4]KAif » %1:stock[#0]KA » %0:l0[#0]UK
-                          ArrangeBy keys=[[#0]] // { arity: 1 }
-                            Project (#0) // { arity: 1 }
+                          ArrangeBy keys=[[#0{su_suppkey}]] // { arity: 1 }
+                            Project (#0{su_suppkey}) // { arity: 1 }
                               Get l0 // { arity: 3 }
-                          ArrangeBy keys=[[#0], [((#0 * #1) % 10000)]] // { arity: 3 }
-                            Project (#0..=#2) // { arity: 3 }
+                          ArrangeBy keys=[[#0{s_i_id}], [((#0{s_i_id} * #1{s_w_id}) % 10000)]] // { arity: 3 }
+                            Project (#0{s_i_id}..=#2{s_quantity}) // { arity: 3 }
                               ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
-                          ArrangeBy keys=[[#4]] // { arity: 10 }
+                          ArrangeBy keys=[[#4{ol_i_id}]] // { arity: 10 }
                             ReadIndex on=orderline fk_orderline_item=[delta join lookup] // { arity: 10 }
-                          ArrangeBy keys=[[#0]] // { arity: 1 }
-                            Project (#0) // { arity: 1 }
-                              Filter like["co%"](padchar(#4)) // { arity: 5 }
+                          ArrangeBy keys=[[#0{i_id}]] // { arity: 1 }
+                            Project (#0{i_id}) // { arity: 1 }
+                              Filter like["co%"](padchar(#4{i_data})) // { arity: 5 }
                                 ReadStorage materialize.public.item // { arity: 5 }
 
 Source materialize.public.item
-  filter=(like["co%"](padchar(#4)))
+  filter=(like["co%"](padchar(#4{i_data})))
 
 Used Indexes:
   - materialize.public.fk_orderline_item (delta join lookup)
@@ -1495,7 +1495,7 @@ EOF
 
 # Query 21
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     su_name, count(*) as numwait
 FROM
@@ -1521,57 +1521,57 @@ GROUP BY su_name
 ORDER BY numwait DESC, su_name
 ----
 Explained Query:
-  Finish order_by=[#1 desc nulls_first, #0 asc nulls_last] output=[#0, #1]
+  Finish order_by=[#1{count} desc nulls_first, #0{su_name} asc nulls_last] output=[#0, #1]
     With
       cte l0 =
-        Project (#1, #3..=#5, #9) // { arity: 5 }
-          Filter (#9 > #16) // { arity: 21 }
-            Join on=(#0 = #19 AND #2 = #20 AND #3 = #13 AND #4 = #14 AND #5 = #15 = #18 AND #7 = #17) type=delta // { arity: 21 }
+        Project (#1{su_name}, #3{ol_o_id}..=#5{ol_w_id}, #9{ol_delivery_d}) // { arity: 5 }
+          Filter (#9{ol_delivery_d} > #16{o_entry_d}) // { arity: 21 }
+            Join on=(#0{su_suppkey} = #19{s_su_suppkey} AND #2{su_nationkey} = #20{n_nationkey} AND #3{ol_o_id} = #13{o_id} AND #4{ol_d_id} = #14{o_d_id} AND #5{ol_w_id} = #15{o_w_id} = #18{s_w_id} AND #7{ol_i_id} = #17{s_i_id}) type=delta // { arity: 21 }
               implementation
                 %0:supplier » %4:nation[#0]UKef » %3:stock[#2]KA » %1:orderline[#4]KA » %2:order[#0..=#2]UKKK
                 %1:orderline » %2:order[#0..=#2]UKKK » %3:stock[#0, #1]UKK » %0:supplier[#0]UK » %4:nation[#0]UKef
                 %2:order » %1:orderline[#2, #1, #0]KKKA » %3:stock[#0, #1]UKK » %0:supplier[#0]UK » %4:nation[#0]UKef
                 %3:stock » %0:supplier[#0]UK » %4:nation[#0]UKef » %1:orderline[#4]KA » %2:order[#0..=#2]UKKK
                 %4:nation » %0:supplier[#2]KA » %3:stock[#2]KA » %1:orderline[#4]KA » %2:order[#0..=#2]UKKK
-              ArrangeBy keys=[[#0], [#2]] // { arity: 3 }
-                Project (#0, #1, #3) // { arity: 3 }
+              ArrangeBy keys=[[#0{su_suppkey}], [#2{su_nationkey}]] // { arity: 3 }
+                Project (#0{su_suppkey}, #1{su_name}, #3{su_nationkey}) // { arity: 3 }
                   ReadIndex on=supplier fk_supplier_nationkey=[*** full scan ***] // { arity: 7 }
-              ArrangeBy keys=[[#2, #1, #0], [#4]] // { arity: 10 }
+              ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}], [#4{ol_i_id}]] // { arity: 10 }
                 ReadIndex on=orderline fk_orderline_order=[delta join lookup] fk_orderline_item=[delta join lookup] // { arity: 10 }
-              ArrangeBy keys=[[#0..=#2]] // { arity: 4 }
-                Project (#0..=#2, #4) // { arity: 4 }
+              ArrangeBy keys=[[#0{o_id}..=#2{o_w_id}]] // { arity: 4 }
+                Project (#0{o_id}..=#2{o_w_id}, #4{o_entry_d}) // { arity: 4 }
                   ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
-              ArrangeBy keys=[[#0, #1], [#2]] // { arity: 3 }
-                Project (#0, #1, #17) // { arity: 3 }
+              ArrangeBy keys=[[#0{s_i_id}, #1{s_w_id}], [#2{s_su_suppkey}]] // { arity: 3 }
+                Project (#0{s_i_id}, #1{s_w_id}, #17{s_su_suppkey}) // { arity: 3 }
                   ReadIndex on=stock fk_stock_warehouse=[*** full scan ***] // { arity: 18 }
-              ArrangeBy keys=[[#0]] // { arity: 1 }
-                Project (#0) // { arity: 1 }
-                  Filter (#1 = "GERMANY") // { arity: 4 }
+              ArrangeBy keys=[[#0{n_nationkey}]] // { arity: 1 }
+                Project (#0{n_nationkey}) // { arity: 1 }
+                  Filter (#1{n_name} = "GERMANY") // { arity: 4 }
                     ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
       cte l1 =
-        Distinct project=[#0..=#3] // { arity: 4 }
-          Project (#1..=#4) // { arity: 4 }
+        Distinct project=[#0{ol_o_id}..=#3{ol_delivery_d}] // { arity: 4 }
+          Project (#1{ol_o_id}..=#4{ol_delivery_d}) // { arity: 4 }
             Get l0 // { arity: 5 }
     Return // { arity: 2 }
-      Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-        Project (#0) // { arity: 1 }
-          Join on=(#1 = #5 AND #2 = #6 AND #3 = #7 AND #4 = #8) type=differential // { arity: 9 }
+      Reduce group_by=[#0{su_name}] aggregates=[count(*)] // { arity: 2 }
+        Project (#0{su_name}) // { arity: 1 }
+          Join on=(#1{ol_o_id} = #5{ol_o_id} AND #2{ol_d_id} = #6{ol_d_id} AND #3{ol_w_id} = #7{ol_w_id} AND #4{ol_delivery_d} = #8{ol_delivery_d}) type=differential // { arity: 9 }
             implementation
               %0:l0[#1..=#4]KKKK » %1[#0..=#3]KKKK
-            ArrangeBy keys=[[#1..=#4]] // { arity: 5 }
+            ArrangeBy keys=[[#1{ol_o_id}..=#4{ol_delivery_d}]] // { arity: 5 }
               Get l0 // { arity: 5 }
-            ArrangeBy keys=[[#0..=#3]] // { arity: 4 }
+            ArrangeBy keys=[[#0{ol_o_id}..=#3{ol_delivery_d}]] // { arity: 4 }
               Union // { arity: 4 }
                 Negate // { arity: 4 }
-                  Distinct project=[#0..=#3] // { arity: 4 }
-                    Project (#0..=#3) // { arity: 4 }
-                      Filter (#10 > #3) // { arity: 14 }
-                        Join on=(#0 = #4 AND #1 = #5 AND #2 = #6) type=differential // { arity: 14 }
+                  Distinct project=[#0{ol_o_id}..=#3{ol_delivery_d}] // { arity: 4 }
+                    Project (#0{ol_o_id}..=#3{ol_delivery_d}) // { arity: 4 }
+                      Filter (#10{ol_delivery_d} > #3{ol_delivery_d}) // { arity: 14 }
+                        Join on=(#0{ol_o_id} = #4{ol_o_id} AND #1{ol_d_id} = #5{ol_d_id} AND #2{ol_w_id} = #6{ol_w_id}) type=differential // { arity: 14 }
                           implementation
                             %0:l1[#2, #1, #0]KKK » %1:orderline[#2, #1, #0]KKKA
-                          ArrangeBy keys=[[#2, #1, #0]] // { arity: 4 }
+                          ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]] // { arity: 4 }
                             Get l1 // { arity: 4 }
-                          ArrangeBy keys=[[#2, #1, #0]] // { arity: 10 }
+                          ArrangeBy keys=[[#2{ol_w_id}, #1{ol_d_id}, #0{ol_o_id}]] // { arity: 10 }
                             ReadIndex on=orderline fk_orderline_order=[differential join] // { arity: 10 }
                 Get l1 // { arity: 4 }
 
@@ -1589,7 +1589,7 @@ EOF
 
 # Query 22
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT
     substr(c_state, 1, 1) AS country,
     count(*) AS numcust,
@@ -1614,48 +1614,48 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
     With
       cte l0 =
-        Project (#0..=#2, #9, #16, #22) // { arity: 6 }
-          Map (substr(char_to_text(#11), 1, 1)) // { arity: 23 }
+        Project (#0{c_id}..=#2{c_w_id}, #9{c_state}, #16{c_balance}, #22) // { arity: 6 }
+          Map (substr(char_to_text(#11{c_phone}), 1, 1)) // { arity: 23 }
             ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
       cte l1 =
-        Project (#0..=#4) // { arity: 5 }
-          Filter (#4 > (#5 / bigint_to_numeric(case when (#6 = 0) then null else #6 end))) // { arity: 7 }
+        Project (#0{c_id}..=#4{c_balance}) // { arity: 5 }
+          Filter (#4{c_balance} > (#5{sum_c_balance} / bigint_to_numeric(case when (#6{count} = 0) then null else #6{count} end))) // { arity: 7 }
             CrossJoin type=differential // { arity: 7 }
               implementation
                 %1[×]UA » %0:l0[×]ef
               ArrangeBy keys=[[]] // { arity: 5 }
-                Project (#0..=#4) // { arity: 5 }
+                Project (#0{c_id}..=#4{c_balance}) // { arity: 5 }
                   Filter ((#5 = "1") OR (#5 = "2") OR (#5 = "3") OR (#5 = "4") OR (#5 = "5") OR (#5 = "6") OR (#5 = "7")) // { arity: 6 }
                     Get l0 // { arity: 6 }
               ArrangeBy keys=[[]] // { arity: 2 }
-                Reduce aggregates=[sum(#0), count(*)] // { arity: 2 }
-                  Project (#4) // { arity: 1 }
-                    Filter (#4 > 0) AND ((#5 = "1") OR (#5 = "2") OR (#5 = "3") OR (#5 = "4") OR (#5 = "5") OR (#5 = "6") OR (#5 = "7")) // { arity: 6 }
+                Reduce aggregates=[sum(#0{c_balance}), count(*)] // { arity: 2 }
+                  Project (#4{c_balance}) // { arity: 1 }
+                    Filter (#4{c_balance} > 0) AND ((#5 = "1") OR (#5 = "2") OR (#5 = "3") OR (#5 = "4") OR (#5 = "5") OR (#5 = "6") OR (#5 = "7")) // { arity: 6 }
                       Get l0 // { arity: 6 }
       cte l2 =
-        Project (#0..=#2) // { arity: 3 }
+        Project (#0{c_id}..=#2{c_w_id}) // { arity: 3 }
           Get l1 // { arity: 5 }
     Return // { arity: 3 }
-      Reduce group_by=[substr(char_to_text(#0), 1, 1)] aggregates=[count(*), sum(#1)] // { arity: 3 }
-        Project (#3, #4) // { arity: 2 }
-          Join on=(#0 = #5 AND #1 = #6 AND #2 = #7) type=differential // { arity: 8 }
+      Reduce group_by=[substr(char_to_text(#0{c_state}), 1, 1)] aggregates=[count(*), sum(#1{c_balance})] // { arity: 3 }
+        Project (#3{c_state}, #4{c_balance}) // { arity: 2 }
+          Join on=(#0{c_id} = #5{c_id} AND #1{c_d_id} = #6{c_d_id} AND #2{c_w_id} = #7{c_w_id}) type=differential // { arity: 8 }
             implementation
               %0:l1[#0..=#2]UKKK » %1[#0..=#2]KKK
-            ArrangeBy keys=[[#0..=#2]] // { arity: 5 }
+            ArrangeBy keys=[[#0{c_id}..=#2{c_w_id}]] // { arity: 5 }
               Get l1 // { arity: 5 }
-            ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+            ArrangeBy keys=[[#0{c_id}..=#2{c_w_id}]] // { arity: 3 }
               Union // { arity: 3 }
                 Negate // { arity: 3 }
-                  Project (#0..=#2) // { arity: 3 }
-                    Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) type=differential // { arity: 6 }
+                  Project (#0{c_id}..=#2{c_w_id}) // { arity: 3 }
+                    Join on=(#0{c_id} = #3{o_c_id} AND #1{c_d_id} = #4{o_d_id} AND #2{c_w_id} = #5{o_w_id}) type=differential // { arity: 6 }
                       implementation
                         %1[#0..=#2]UKKKA » %0:l2[#0..=#2]UKKK
-                      ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
+                      ArrangeBy keys=[[#0{c_id}..=#2{c_w_id}]] // { arity: 3 }
                         Get l2 // { arity: 3 }
-                      ArrangeBy keys=[[#0..=#2]] // { arity: 3 }
-                        Distinct project=[#2, #0, #1] // { arity: 3 }
-                          Project (#1..=#3) // { arity: 3 }
-                            Filter (#3) IS NOT NULL // { arity: 8 }
+                      ArrangeBy keys=[[#0{o_c_id}..=#2{o_w_id}]] // { arity: 3 }
+                        Distinct project=[#2{o_c_id}, #0{o_d_id}, #1{o_w_id}] // { arity: 3 }
+                          Project (#1{o_d_id}..=#3{o_c_id}) // { arity: 3 }
+                            Filter (#3{o_c_id}) IS NOT NULL // { arity: 8 }
                               ReadIndex on=order fk_order_customer=[*** full scan ***] // { arity: 8 }
                 Get l2 // { arity: 3 }
 

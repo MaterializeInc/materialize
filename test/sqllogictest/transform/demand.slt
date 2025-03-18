@@ -30,7 +30,7 @@ select x from (select x, 1/a from (select 2 as x), t);
 # call in the physical optimizer, because at the time of the first `Demand` call, the column that is later dummied in
 # the second call is still being used in a join constraint, but this join is then eliminated by `RedundantJoin`.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 select
   case when (((false)
           and (true))
@@ -118,7 +118,7 @@ EOF
 # Demand creates the `#0 + #0` from `#0 + #2`.
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c0(key int, a int) AS (
     SELECT * FROM c2

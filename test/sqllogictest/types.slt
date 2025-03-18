@@ -974,13 +974,13 @@ CREATE TABLE t1(key int, val int, n int NOT NULL);
 
 # coalesce's output type should be non-nullable when any of its input types are non-nullable
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(types, humanized expressions) AS VERBOSE TEXT FOR
 SELECT coalesce(key, 0)
 FROM t1;
 ----
 Explained Query:
   Project (#3) // { types: "(integer)" }
-    Map (coalesce(#0, 0)) // { types: "(integer?, integer?, integer, integer)" }
+    Map (coalesce(#0{key}, 0)) // { types: "(integer?, integer?, integer, integer)" }
       ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
 Source materialize.public.t1
@@ -990,13 +990,13 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(types, humanized expressions) AS VERBOSE TEXT FOR
 SELECT coalesce(key, n)
 FROM t1;
 ----
 Explained Query:
   Project (#3) // { types: "(integer)" }
-    Map (coalesce(#0, #2)) // { types: "(integer?, integer?, integer, integer)" }
+    Map (coalesce(#0{key}, #2{n})) // { types: "(integer?, integer?, integer, integer)" }
       ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
 Source materialize.public.t1
@@ -1006,16 +1006,16 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(types, humanized expressions) AS VERBOSE TEXT FOR
 SELECT coalesce(key, 0), sum(val)
 FROM t1
 GROUP BY key;
 ----
 Explained Query:
-  Project (#2, #1) // { types: "(integer, bigint?)" }
-    Map (coalesce(#0, 0)) // { types: "(integer?, bigint?, integer)" }
-      Reduce group_by=[#0] aggregates=[sum(#1)] // { types: "(integer?, bigint?)" }
-        Project (#0, #1) // { types: "(integer?, integer?)" }
+  Project (#2, #1{sum_val}) // { types: "(integer, bigint?)" }
+    Map (coalesce(#0{key}, 0)) // { types: "(integer?, bigint?, integer)" }
+      Reduce group_by=[#0{key}] aggregates=[sum(#1{val})] // { types: "(integer?, bigint?)" }
+        Project (#0{key}, #1{val}) // { types: "(integer?, integer?)" }
           ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
 Source materialize.public.t1
@@ -1026,13 +1026,13 @@ EOF
 
 # coalesce's output type should be nullable when all of its input types are nullable
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(types, humanized expressions) AS VERBOSE TEXT FOR
 SELECT coalesce(key, val)
 FROM t1;
 ----
 Explained Query:
   Project (#3) // { types: "(integer?)" }
-    Map (coalesce(#0, #1)) // { types: "(integer?, integer?, integer, integer?)" }
+    Map (coalesce(#0{key}, #1{val})) // { types: "(integer?, integer?, integer, integer?)" }
       ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
 Source materialize.public.t1
@@ -1042,13 +1042,13 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(types, humanized expressions) AS VERBOSE TEXT FOR
 SELECT coalesce(key, val + 5)
 FROM t1;
 ----
 Explained Query:
   Project (#3) // { types: "(integer?)" }
-    Map (coalesce(#0, (#1 + 5))) // { types: "(integer?, integer?, integer, integer?)" }
+    Map (coalesce(#0{key}, (#1{val} + 5))) // { types: "(integer?, integer?, integer, integer?)" }
       ReadStorage materialize.public.t1 // { types: "(integer?, integer?, integer)" }
 
 Source materialize.public.t1

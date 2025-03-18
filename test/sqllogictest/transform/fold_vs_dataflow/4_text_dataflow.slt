@@ -39,7 +39,7 @@ aBcDeF
 abcdef
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t_data
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM t_data
 WHERE f1 ILIKE (SELECT op_val FROM t_operator);
 ----
 Explained Query:
@@ -112,7 +112,7 @@ CDCDABCDef
 {CD}
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
  f1 || f4,
  UPPER(f1), LOWER(f1),

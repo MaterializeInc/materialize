@@ -84,7 +84,7 @@ EOF
 
 # Test catalog queries (index found based on cluster auto-routing).
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM mz_internal.mz_source_status_history
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM mz_internal.mz_source_status_history
 ----
 Explained Query (fast path):
   Project (#1, #0, #2..=#5)
@@ -479,7 +479,7 @@ CREATE INDEX t_a_b_idx ON T(a,b)
 
 # Test an IndexedFilter join WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions) AS VERBOSE TEXT FOR
 SELECT a, max(b)
 FROM t
 WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
@@ -499,7 +499,7 @@ EOF
 
 # Test an IndexedFilter join on fast path WITH(join implementations).
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions) AS VERBOSE TEXT FOR
 SELECT *
 FROM t
 WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
@@ -521,7 +521,7 @@ statement ok
 CREATE TABLE r(f0 INT, f1 INT, f2 INT, f3 INT, f4 INT, f5 INT, f6 INT, f7 INT, f8 INT, f9 INT, f10 INT, f11 INT, f12 INT, f13 INT, f14 INT, f15 INT, f16 INT);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT *
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT *
 FROM r AS r0, r AS r1
 WHERE
   r0.f0=r1.f0 AND
@@ -592,7 +592,7 @@ CREATE DEFAULT INDEX ON t;
 # EXPLAIN output is time-dependent, so we don't want show the output here, just
 # assert that the query doesn't fail.
 statement ok
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t WHERE a < mz_now();
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM t WHERE a < mz_now();
 
 # Regression test for materialize#19177
 # ---
@@ -610,11 +610,11 @@ statement ok
 CREATE TABLE t2(x text);
 
 statement ok
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t1, t2 WHERE t1.x || mz_internal.mz_session_id()  = t2.x || mz_internal.mz_session_id();
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM t1, t2 WHERE t1.x || mz_internal.mz_session_id()  = t2.x || mz_internal.mz_session_id();
 
 # Regression test for the join visitation part of materialize#19177
 statement ok
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM t1, t2 WHERE t1.x || mz_now()  = t2.x || mz_now();
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM t1, t2 WHERE t1.x || mz_now()  = t2.x || mz_now();
 
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, redacted) AS VERBOSE TEXT FOR

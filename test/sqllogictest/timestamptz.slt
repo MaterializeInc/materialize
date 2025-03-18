@@ -309,11 +309,11 @@ FF1 FF2 FF3 FF4 FF5 FF6  ff1 ff2 ff3 ff4 ff5 ff6  789 789012
 
 # Verify that the format string gets precompiled.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT to_char(ts, 'HH:MI:SS') FROM t
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT to_char(ts, 'HH:MI:SS') FROM t
 ----
 Explained Query:
   Project (#1)
-    Map (tochartstz[HH:MI:SS](#0))
+    Map (tochartstz[HH:MI:SS](#0{ts}))
       ReadStorage materialize.public.t
 
 Source materialize.public.t

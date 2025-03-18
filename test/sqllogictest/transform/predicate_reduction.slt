@@ -23,7 +23,7 @@ SELECT * FROM t1 WHERE f1 = 0 and (f1 = 0 or f1 = 1)
 NULL
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE f1 = 0 and (f1 = 0 or f1 = 1)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE f1 = 0 and (f1 = 0 or f1 = 1)
 ----
 Explained Query:
   Filter (#0 = 0) // { arity: 2 }
@@ -37,7 +37,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE f1 is null and (f1 is null or f1 = 1)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE f1 is null and (f1 is null or f1 = 1)
 ----
 Explained Query:
   Filter (#0) IS NULL // { arity: 2 }
@@ -62,7 +62,7 @@ NULL
 # other instances of `predicate` with `false`.
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE f1 is not null and (f1 is null or f1 = 1)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE f1 is not null and (f1 is null or f1 = 1)
 ----
 Explained Query:
   Filter (#0 = 1) // { arity: 2 }
@@ -99,7 +99,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE ((f1 is null)::int - 1)::string LIKE '1' and ((f1 is null) or not (((f1 is null)::int - 1)::string LIKE '1'))
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE ((f1 is null)::int - 1)::string LIKE '1' and ((f1 is null) or not (((f1 is null)::int - 1)::string LIKE '1'))
 ----
 Explained Query (fast path):
   Constant <empty>
@@ -118,7 +118,7 @@ statement ok
 INSERT INTO t2 VALUES (0, -1), (1, 5), (1, -2)
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t2 WHERE f1 + f2 > 0 and case when f1 + f2 > 0 then 1/f1 > 0 else false end;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t2 WHERE f1 + f2 > 0 and case when f1 + f2 > 0 then 1/f1 > 0 else false end;
 ----
 Explained Query:
   Project (#0, #1) // { arity: 2 }
@@ -135,7 +135,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t2 WHERE case when f1 + f2 > 0 then 1/f1 > 0 else false end and f1 + f2 > 0;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t2 WHERE case when f1 + f2 > 0 then 1/f1 > 0 else false end and f1 + f2 > 0;
 ----
 Explained Query:
   Project (#0, #1) // { arity: 2 }

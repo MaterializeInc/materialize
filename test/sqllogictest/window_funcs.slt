@@ -263,33 +263,33 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT f1 FROM t1
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT f1 FROM t1
 WHERE f1 IN (SELECT ROW_NUMBER() OVER () FROM t2);
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#0) // { arity: 1 }
+      Project (#0{f1}) // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 2 }
   Return // { arity: 1 }
-    Project (#0) // { arity: 1 }
-      Join on=(#0 = #1) type=differential // { arity: 2 }
+    Project (#0{f1}) // { arity: 1 }
+      Join on=(#0{f1} = #1) type=differential // { arity: 2 }
         implementation
           %1[#0]UKA » %0:l0[#0]K
-        ArrangeBy keys=[[#0]] // { arity: 1 }
+        ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
           Get l0 // { arity: 1 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Distinct project=[record_get[0](record_get[1](#0))] // { arity: 1 }
             Project (#1) // { arity: 1 }
               Filter (integer_to_bigint(record_get[0](record_get[1](#1))) = record_get[0](#1)) // { arity: 2 }
-                FlatMap unnest_list(#0) // { arity: 2 }
-                  Project (#1) // { arity: 1 }
-                    Reduce group_by=[#0] aggregates=[row_number[order_by=[]](row(list[row(#0, #1, #2)]))] // { arity: 2 }
+                FlatMap unnest_list(#0{row_number}) // { arity: 2 }
+                  Project (#1{row_number}) // { arity: 1 }
+                    Reduce group_by=[#0{f1}] aggregates=[row_number[order_by=[]](row(list[row(#0{f1}, #1{f1}, #2{f2})]))] // { arity: 2 }
                       CrossJoin type=differential // { arity: 3 }
                         implementation
                           %0[×] » %1:t2[×]
                         ArrangeBy keys=[[]] // { arity: 1 }
-                          Distinct project=[#0] // { arity: 1 }
+                          Distinct project=[#0{f1}] // { arity: 1 }
                             Get l0 // { arity: 1 }
                         ArrangeBy keys=[[]] // { arity: 2 }
                           ReadStorage materialize.public.t2 // { arity: 2 }
@@ -6026,7 +6026,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   sum(y-3) OVER (PARTITION BY 2*x, 3*y ORDER BY x+1, y+2 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
 FROM t7
@@ -6036,9 +6036,9 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#2]
     Project (#3..=#5)
       Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1))
-        FlatMap unnest_list(#0)
-          Project (#2)
-            Reduce group_by=[(2 * #0), (3 * #1)] aggregates=[window_agg[sum order_by=[#0 asc nulls_last, #1 asc nulls_last] rows between unbounded preceding and current row](row(row(row(#0, #1), (#1 - 3)), (#0 + 1), (#1 + 2)))]
+        FlatMap unnest_list(#0{window_agg})
+          Project (#2{window_agg})
+            Reduce group_by=[(2 * #0{x}), (3 * #1{y})] aggregates=[window_agg[sum order_by=[#0{x} asc nulls_last, #1{y} asc nulls_last] rows between unbounded preceding and current row](row(row(row(#0{x}, #1{y}), (#1{y} - 3)), (#0{x} + 1), (#1{y} + 2)))]
               ReadStorage materialize.public.t7
 
 Source materialize.public.t7
@@ -6876,7 +6876,7 @@ NULL  11  NULL  22  22  22  {22}
 # TODO: Add an optimization that eliminates a Map-FlatMap pair where the Map is just creating a 1-element list on which
 # the FlatMap is immediately calling `unnest_list`.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(keys) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(keys, humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   sum(sum(x)) OVER ()
 FROM t7;
@@ -6884,15 +6884,15 @@ FROM t7;
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[sum(#0)] // { keys: "([])" }
-        Project (#0) // { keys: "()" }
+      Reduce aggregates=[sum(#0{x})] // { keys: "([])" }
+        Project (#0{x}) // { keys: "()" }
           ReadStorage materialize.public.t7 // { keys: "()" }
   Return // { keys: "()" }
     Project (#2) // { keys: "()" }
       Map (record_get[0](#1)) // { keys: "()" }
         FlatMap unnest_list(#0) // { keys: "()" }
           Project (#1) // { keys: "([])" }
-            Map (list[row(bigint_to_numeric(#0), row(#0))]) // { keys: "([])" }
+            Map (list[row(bigint_to_numeric(#0{sum_x}), row(#0{sum_x}))]) // { keys: "([])" }
               Union // { keys: "([])" }
                 Get l0 // { keys: "([])" }
                 Map (null) // { keys: "()" }
@@ -6944,7 +6944,7 @@ INSERT INTO t9 VALUES (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13,
 # Still testing `AggregateExpr::on_unique`. Here, the uniqueness constraint on the table makes `ReduceElision` call
 # `on_unique`. There should be 0 Reduce operations in the plan.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(keys) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(keys, humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   sum(y) OVER (PARTITION BY x)
 FROM t9
@@ -6956,7 +6956,7 @@ Explained Query:
       Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1)) // { keys: "()" }
         FlatMap unnest_list(#0) // { keys: "()" }
           Project (#2) // { keys: "()" }
-            Map (list[row(integer_to_bigint(#1), row(#0, #1))]) // { keys: "([0])" }
+            Map (list[row(integer_to_bigint(#1{y}), row(#0{x}, #1{y}))]) // { keys: "([0])" }
               ReadStorage materialize.public.t9 // { keys: "([0])" }
 
 Source materialize.public.t9
@@ -7146,7 +7146,7 @@ NULL
 
 # Test `on_unique` for lag/lead
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   lag(x,y,100) OVER (PARTITION BY x ORDER BY y+y)
 FROM t9;
@@ -7156,7 +7156,7 @@ Explained Query:
     Map (record_get[0](#1))
       FlatMap unnest_list(#0)
         Project (#2)
-          Map (list[row(case when (#1) IS NULL then null else case when (#1 = 0) then #0 else 100 end end, row(#0, #1))])
+          Map (list[row(case when (#1{y}) IS NULL then null else case when (#1{y} = 0) then #0{x} else 100 end end, row(#0{x}, #1{y}))])
             ReadStorage materialize.public.t9
 
 Source materialize.public.t9
@@ -7197,7 +7197,7 @@ NULL
 
 # Test `on_unique` for `FusedValueWindowFunc`. There should be NO window function call in the following plan.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   x,
   y,
@@ -7216,7 +7216,7 @@ Explained Query:
       Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[0](#1), record_get[0](#5), record_get[1](#5), record_get[2](#5), record_get[3](#5), record_get[4](#5))
         FlatMap unnest_list(#0)
           Project (#3)
-            Map ((#1) IS NULL, list[row(row(case when #2 then null else case when (0 = (#1 - 2)) then #0 else 120 end end, #1, #1, case when #2 then null else case when (#1 = 0) then #0 else 100 end end, case when #2 then null else case when (#1 = 0) then #0 else 110 end end), row(#0, #1))])
+            Map ((#1{y}) IS NULL, list[row(row(case when #2 then null else case when (0 = (#1{y} - 2)) then #0{x} else 120 end end, #1{y}, #1{y}, case when #2 then null else case when (#1{y} = 0) then #0{x} else 100 end end, case when #2 then null else case when (#1{y} = 0) then #0{x} else 110 end end), row(#0{x}, #1{y}))])
               ReadStorage materialize.public.t9
 
 Source materialize.public.t9
@@ -7431,7 +7431,7 @@ where (case when (((select "collection_timestamp" from mz_internal.mz_storage_us
 ## Tests for window function fusion
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   *,
   lag(x)          OVER (ORDER BY x),
@@ -7454,26 +7454,26 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#14]
     Project (#3, #4, #16, #15, #14, #17, #13, #9, #11, #10, #18, #8, #7, #6, #5)
       Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[4](#2), record_get[5](#2), record_get[7](#2), record_get[8](#2), record_get[10](#2), record_get[12](#2), record_get[0](#1), record_get[0](#12), record_get[1](#12), record_get[2](#12), record_get[3](#12), (#3 * #4), (#3 + #4))
-        FlatMap unnest_list(#0)
+        FlatMap unnest_list(#0{fused_value_window_func})
           Reduce aggregates=[fused_value_window_func[lag[order_by=[#0 asc nulls_last]], last_value[order_by=[#0 asc nulls_last]], first_value[order_by=[#0 asc nulls_last]], lag[order_by=[#0 asc nulls_last]] order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[6](record_get[1](#0)), record_get[7](record_get[1](#0)), record_get[8](record_get[1](#0)), record_get[9](record_get[1](#0)), record_get[10](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(row(record_get[1](record_get[1](#0)), 1, null), record_get[0](record_get[1](#0)), record_get[0](record_get[1](#0)), row(record_get[0](record_get[1](#0)), 1, null))), record_get[0](record_get[1](#0))))]
             Project (#1)
-              FlatMap unnest_list(#0)
-                Project (#1)
+              FlatMap unnest_list(#0{lead})
+                Project (#1{lead})
                   Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[lead[order_by=[#0 asc nulls_first]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[6](record_get[1](#0)), record_get[7](record_get[1](#0)), record_get[8](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(record_get[0](record_get[1](#0)), 2, null)), -(record_get[1](record_get[1](#0)))))]
                     Project (#1)
-                      FlatMap unnest_list(#0)
-                        Project (#1)
+                      FlatMap unnest_list(#0{lead})
+                        Project (#1{lead})
                           Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[lead[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0))), row(record_get[0](record_get[1](#0)), 2, null)), -(record_get[1](record_get[1](#0)))))]
                             Project (#1)
-                              FlatMap unnest_list(#0)
-                                Project (#1)
+                              FlatMap unnest_list(#0{fused_value_window_func})
+                                Project (#1{fused_value_window_func})
                                   Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[fused_value_window_func[lag[order_by=[#0 asc nulls_last]], lag[order_by=[#0 asc nulls_last]] order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0))), row(row((record_get[0](record_get[1](#0)) + record_get[0](record_get[1](#0))), 2, null), row((record_get[0](record_get[1](#0)) + record_get[0](record_get[1](#0))), 1, null))), record_get[1](record_get[1](#0))))]
                                     Project (#1)
-                                      FlatMap unnest_list(#0)
+                                      FlatMap unnest_list(#0{fused_window_agg})
                                         Reduce aggregates=[fused_window_agg(row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(record_get[0](record_get[1](#0)), record_get[0](record_get[1](#0)))), record_get[0](record_get[1](#0))))]
                                           Project (#1)
-                                            FlatMap unnest_list(#0)
-                                              Reduce aggregates=[window_agg[max order_by=[#0 asc nulls_last]](row(row(row(#0, #1), #0), #1))]
+                                            FlatMap unnest_list(#0{window_agg})
+                                              Reduce aggregates=[window_agg[max order_by=[#0{x} asc nulls_last]](row(row(row(#0{x}, #1{y}), #0{x}), #1{y}))]
                                                 ReadStorage materialize.public.t7
 
 Source materialize.public.t7
@@ -7516,7 +7516,7 @@ ORDER BY x,y;
 # In the following query, currently we only fuse the two inner `lag`s.
 # In theory, we could also fuse the two `last_value`s.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   *,
   first_value(
@@ -7536,24 +7536,24 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#7]
     Project (#3, #4, #8, #9, #7, #6, #5, #10)
       Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[2](#2), record_get[3](#2), record_get[8](#2), record_get[0](#1), (#3 * #4), (#3 + #4))
-        FlatMap unnest_list(#0)
-          Project (#1)
+        FlatMap unnest_list(#0{first_value})
+          Project (#1{first_value})
             Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[first_value[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[4](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[6](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), record_get[6](record_get[1](#0))), record_get[1](record_get[1](#0))))]
               Project (#1)
-                FlatMap unnest_list(#0)
-                  Project (#1)
+                FlatMap unnest_list(#0{last_value})
+                  Project (#1{last_value})
                     Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[last_value[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[5](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0))), record_get[0](record_get[0](#0))), (record_get[1](record_get[1](#0)) + record_get[1](record_get[1](#0)))))]
                       Project (#1)
-                        FlatMap unnest_list(#0)
-                          Project (#1)
+                        FlatMap unnest_list(#0{fused_value_window_func})
+                          Project (#1{fused_value_window_func})
                             Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[fused_value_window_func[lag[order_by=[#0 asc nulls_last]], lag[order_by=[#0 asc nulls_last]] order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[2](record_get[1](#0)), record_get[3](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), row(row((record_get[0](record_get[1](#0)) * record_get[0](record_get[1](#0))), record_get[1](record_get[1](#0)), 2222), row((record_get[0](record_get[1](#0)) * record_get[0](record_get[1](#0))), record_get[1](record_get[1](#0)), 1111))), record_get[1](record_get[1](#0))))]
                               Project (#1)
-                                FlatMap unnest_list(#0)
-                                  Project (#1)
+                                FlatMap unnest_list(#0{last_value})
+                                  Project (#1{last_value})
                                     Reduce group_by=[record_get[0](record_get[1](#0))] aggregates=[last_value[order_by=[#0 asc nulls_last]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](#0)), (record_get[0](record_get[1](#0)) + record_get[1](record_get[1](#0)))), (record_get[1](record_get[1](#0)) + record_get[1](record_get[1](#0)))))]
                                       Project (#1)
-                                        FlatMap unnest_list(#0)
-                                          Reduce aggregates=[lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#1, 1, null)), #0))]
+                                        FlatMap unnest_list(#0{lag})
+                                          Reduce aggregates=[lag[order_by=[#0{x} asc nulls_last]](row(row(row(#0{x}, #1{y}), row(#1{y}, 1, null)), #0{x}))]
                                             ReadStorage materialize.public.t7
 
 Source materialize.public.t7
@@ -7591,7 +7591,7 @@ ORDER BY x,y;
 17  18  1111  306  2222  35  16  35
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   *,
   lag(x) OVER (),
@@ -7605,11 +7605,11 @@ Explained Query:
   Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] output=[#0..=#5]
     Project (#3, #4, #9, #8, #6, #5)
       Map (record_get[1](#1), record_get[0](#2), record_get[1](#2), record_get[3](#2), record_get[4](#2), record_get[0](#1), record_get[0](#7), record_get[1](#7))
-        FlatMap unnest_list(#0)
+        FlatMap unnest_list(#0{fused_value_window_func})
           Reduce aggregates=[fused_value_window_func[lag[order_by=[]], lag[order_by=[]] order_by=[]](row(row(row(record_get[0](record_get[1](#0)), record_get[1](record_get[1](#0)), record_get[0](#0), record_get[0](record_get[0](#0)), record_get[1](record_get[0](#0))), row(row(record_get[1](record_get[1](#0)), 1, null), row(record_get[0](record_get[1](#0)), 1, null)))))]
             Project (#1)
-              FlatMap unnest_list(#0)
-                Reduce aggregates=[fused_window_agg(row(row(row(#0, #1), row(#0, #0))))]
+              FlatMap unnest_list(#0{fused_window_agg})
+                Reduce aggregates=[fused_window_agg(row(row(row(#0{x}, #1{y}), row(#0{x}, #0{x}))))]
                   ReadStorage materialize.public.t7
 
 Source materialize.public.t7

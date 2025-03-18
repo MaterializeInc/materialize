@@ -249,7 +249,7 @@ mode standard
 # Verify that the plans for some simple non-correlated subqueries are sane.
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 1 }
@@ -270,18 +270,18 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
 ----
 Explained Query:
-  Project (#0, #0, #2) // { arity: 3 }
-    Join on=(#0 = #1) type=delta // { arity: 3 }
+  Project (#0{a}, #0{a}, #2{b}) // { arity: 3 }
+    Join on=(#0{a} = #1{a}) type=delta // { arity: 3 }
       implementation
         %0:t1 » %2[×]UA » %1:t3[#0]K
         %1:t3 » %2[×]UA » %0:t1[#0]K
         %2 » %0:t1[×] » %1:t3[#0]K
-      ArrangeBy keys=[[], [#0]] // { arity: 1 }
+      ArrangeBy keys=[[], [#0{a}]] // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 1 }
-      ArrangeBy keys=[[#0]] // { arity: 2 }
+      ArrangeBy keys=[[#0{a}]] // { arity: 2 }
         ReadStorage materialize.public.t3 // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 0 }
         Distinct project=[] // { arity: 0 }
@@ -297,21 +297,21 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
 ----
 Explained Query:
-  Project (#0, #0, #2) // { arity: 3 }
-    Join on=(#0 = #1 AND #2 = #3) type=delta // { arity: 4 }
+  Project (#0{a}, #0{a}, #2{b}) // { arity: 3 }
+    Join on=(#0{a} = #1{a} AND #2{b} = #3{b}) type=delta // { arity: 4 }
       implementation
         %0:t1 » %1:t3[#0]K » %2[#0]UKA
         %1:t3 » %2[#0]UKA » %0:t1[#0]K
         %2 » %1:t3[#1]K » %0:t1[#0]K
-      ArrangeBy keys=[[#0]] // { arity: 1 }
+      ArrangeBy keys=[[#0{a}]] // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 1 }
-      ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
+      ArrangeBy keys=[[#0{a}], [#1{b}]] // { arity: 2 }
         ReadStorage materialize.public.t3 // { arity: 2 }
-      ArrangeBy keys=[[#0]] // { arity: 1 }
-        Distinct project=[#0] // { arity: 1 }
+      ArrangeBy keys=[[#0{b}]] // { arity: 1 }
+        Distinct project=[#0{b}] // { arity: 1 }
           ReadStorage materialize.public.t2 // { arity: 1 }
 
 Source materialize.public.t1
@@ -327,7 +327,7 @@ EOF
 # 4 scalars that refer to other scalars in the map. If query planning optimizes away
 # this particular case, replace with another query that generates such a plan
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 SELECT age, ascii_num * 2 as result FROM (
   SELECT age, ascii(letter) AS ascii_num FROM (
     SELECT age, substr(replaced, 2, 1) AS letter FROM (
@@ -339,22 +339,22 @@ SELECT age, ascii_num * 2 as result FROM (
 )
 ----
 Explained Query:
-  Project (#3, #4) // { arity: 2 }
-    Map ((ascii(substr(replace(#1, "o", "i"), 2, 1)) * 2)) // { arity: 5 }
-      Join on=(#0 = #2) type=differential // { arity: 4 }
+  Project (#3{age}, #4) // { arity: 2 }
+    Map ((ascii(substr(replace(#1{likee}, "o", "i"), 2, 1)) * 2)) // { arity: 5 }
+      Join on=(#0{liker} = #2{peep}) type=differential // { arity: 4 }
         implementation
           %0:likes[#0]K » %1:age[#0]K
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Filter (#0) IS NOT NULL // { arity: 2 }
+        ArrangeBy keys=[[#0{liker}]] // { arity: 2 }
+          Filter (#0{liker}) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.likes // { arity: 2 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Filter (#0) IS NOT NULL // { arity: 2 }
+        ArrangeBy keys=[[#0{peep}]] // { arity: 2 }
+          Filter (#0{peep}) IS NOT NULL // { arity: 2 }
             ReadStorage materialize.public.age // { arity: 2 }
 
 Source materialize.public.likes
-  filter=((#0) IS NOT NULL)
+  filter=((#0{liker}) IS NOT NULL)
 Source materialize.public.age
-  filter=((#0) IS NOT NULL)
+  filter=((#0{peep}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -471,31 +471,31 @@ false
 true
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT b IN (SELECT a FROM x) FROM y
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT b IN (SELECT a FROM x) FROM y
 ----
 Explained Query:
   With
     cte l0 =
-      Distinct project=[#0] // { arity: 1 }
+      Distinct project=[#0{b}] // { arity: 1 }
         ReadStorage materialize.public.y // { arity: 1 }
     cte l1 =
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
+      Project (#0{b}) // { arity: 1 }
+        Join on=(#0{b} = #1{a}) type=differential // { arity: 2 }
           implementation
             %0:l0[#0]UKA » %1[#0]UKA
-          ArrangeBy keys=[[#0]] // { arity: 1 }
+          ArrangeBy keys=[[#0{b}]] // { arity: 1 }
             Get l0 // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Distinct project=[#0] // { arity: 1 }
+          ArrangeBy keys=[[#0{a}]] // { arity: 1 }
+            Distinct project=[#0{a}] // { arity: 1 }
               ReadStorage materialize.public.x // { arity: 1 }
   Return // { arity: 1 }
     Project (#2) // { arity: 1 }
-      Join on=(#0 = #1) type=differential // { arity: 3 }
+      Join on=(#0{b} = #1{b}) type=differential // { arity: 3 }
         implementation
           %0:y[#0]K » %1[#0]K
-        ArrangeBy keys=[[#0]] // { arity: 1 }
+        ArrangeBy keys=[[#0{b}]] // { arity: 1 }
           ReadStorage materialize.public.y // { arity: 1 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
+        ArrangeBy keys=[[#0{b}]] // { arity: 2 }
           Union // { arity: 2 }
             Map (true) // { arity: 2 }
               Get l1 // { arity: 1 }
@@ -513,32 +513,32 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT b != ALL(SELECT a FROM x) FROM y
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT b != ALL(SELECT a FROM x) FROM y
 ----
 Explained Query:
   With
     cte l0 =
-      Distinct project=[#0] // { arity: 1 }
+      Distinct project=[#0{b}] // { arity: 1 }
         ReadStorage materialize.public.y // { arity: 1 }
     cte l1 =
-      Project (#0) // { arity: 1 }
-        Join on=(#0 = #1) type=differential // { arity: 2 }
+      Project (#0{b}) // { arity: 1 }
+        Join on=(#0{b} = #1{a}) type=differential // { arity: 2 }
           implementation
             %0:l0[#0]UKA » %1[#0]UKA
-          ArrangeBy keys=[[#0]] // { arity: 1 }
+          ArrangeBy keys=[[#0{b}]] // { arity: 1 }
             Get l0 // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Distinct project=[#0] // { arity: 1 }
+          ArrangeBy keys=[[#0{a}]] // { arity: 1 }
+            Distinct project=[#0{a}] // { arity: 1 }
               ReadStorage materialize.public.x // { arity: 1 }
   Return // { arity: 1 }
     Project (#3) // { arity: 1 }
       Map (NOT(#2)) // { arity: 4 }
-        Join on=(#0 = #1) type=differential // { arity: 3 }
+        Join on=(#0{b} = #1{b}) type=differential // { arity: 3 }
           implementation
             %0:y[#0]K » %1[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 1 }
+          ArrangeBy keys=[[#0{b}]] // { arity: 1 }
             ReadStorage materialize.public.y // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
+          ArrangeBy keys=[[#0{b}]] // { arity: 2 }
             Union // { arity: 2 }
               Map (true) // { arity: 2 }
                 Get l1 // { arity: 1 }
@@ -557,17 +557,17 @@ EOF
 
 # Check that we correctly invert the filter here via De Morgan.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT b > ALL(SELECT a FROM x) FROM y
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT b > ALL(SELECT a FROM x) FROM y
 ----
 Explained Query:
   With
     cte l0 =
-      Distinct project=[#0] // { arity: 1 }
+      Distinct project=[#0{b}] // { arity: 1 }
         ReadStorage materialize.public.y // { arity: 1 }
     cte l1 =
-      Distinct project=[#0] // { arity: 1 }
-        Project (#0) // { arity: 1 }
-          Filter (#0 <= #1) // { arity: 2 }
+      Distinct project=[#0{b}] // { arity: 1 }
+        Project (#0{b}) // { arity: 1 }
+          Filter (#0{b} <= #1{a}) // { arity: 2 }
             CrossJoin type=differential // { arity: 2 }
               implementation
                 %0:l0[×] » %1:x[×]
@@ -578,12 +578,12 @@ Explained Query:
   Return // { arity: 1 }
     Project (#3) // { arity: 1 }
       Map (NOT(#2)) // { arity: 4 }
-        Join on=(#0 = #1) type=differential // { arity: 3 }
+        Join on=(#0{b} = #1{b}) type=differential // { arity: 3 }
           implementation
             %0:y[#0]K » %1[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 1 }
+          ArrangeBy keys=[[#0{b}]] // { arity: 1 }
             ReadStorage materialize.public.y // { arity: 1 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
+          ArrangeBy keys=[[#0{b}]] // { arity: 2 }
             Union // { arity: 2 }
               Map (true) // { arity: 2 }
                 Get l1 // { arity: 1 }
@@ -687,7 +687,7 @@ WHERE a IN (9, 0)
 1
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT 1 FROM x RIGHT JOIN (SELECT 2 FROM y) ON  NULL
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT 1 FROM x RIGHT JOIN (SELECT 2 FROM y) ON  NULL
 WHERE a IN (9, 0)
   OR 0  <  ALL (
       SELECT agg1  NULL
