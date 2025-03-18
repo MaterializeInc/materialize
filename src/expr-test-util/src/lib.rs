@@ -323,7 +323,10 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
             for (variant, data) in map.iter() {
                 match &variant[..] {
                     "Column" => {
-                        return Some(format!("#{}", data.as_array().unwrap()[0].as_u64().unwrap()));
+                        return Some(format!(
+                            "#{}",
+                            data.as_array().unwrap()[0].as_u64().unwrap()
+                        ));
                     }
                     "Literal" => {
                         let column_type: ColumnType =
