@@ -22,8 +22,8 @@ message ProtoCaptureGroupDesc {
 }
 
 message ProtoAnalyzedRegexOpts {
-    bool case_insensitive = 1;
-    bool global = 2;
+  bool case_insensitive = 1;
+  bool global = 2;
 }
 
 message ProtoAnalyzedRegex {
