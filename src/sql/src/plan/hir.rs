@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
-use std::rc::Rc;
+use std::sync::Arc;
 use std::{fmt, mem};
 
 use itertools::Itertools;
@@ -190,34 +190,34 @@ pub enum HirScalarExpr {
     /// Unlike mz_expr::MirScalarExpr, we can nest HirRelationExprs via eg Exists. This means that a
     /// variable could refer to a column of the current input, or to a column of an outer relation.
     /// We use ColumnRef to denote the difference.
-    Column(ColumnRef, Option<Rc<str>>),
-    Parameter(usize, Option<Rc<str>>),
-    Literal(Row, ColumnType, Option<Rc<str>>),
-    CallUnmaterializable(UnmaterializableFunc, Option<Rc<str>>),
+    Column(ColumnRef, Option<Arc<str>>),
+    Parameter(usize, Option<Arc<str>>),
+    Literal(Row, ColumnType, Option<Arc<str>>),
+    CallUnmaterializable(UnmaterializableFunc, Option<Arc<str>>),
     CallUnary {
         func: UnaryFunc,
         expr: Box<HirScalarExpr>,
-        name: Option<Rc<str>>,
+        name: Option<Arc<str>>,
     },
     CallBinary {
         func: BinaryFunc,
         expr1: Box<HirScalarExpr>,
         expr2: Box<HirScalarExpr>,
-        name: Option<Rc<str>>,
+        name: Option<Arc<str>>,
     },
     CallVariadic {
         func: VariadicFunc,
         exprs: Vec<HirScalarExpr>,
-        name: Option<Rc<str>>,
+        name: Option<Arc<str>>,
     },
     If {
         cond: Box<HirScalarExpr>,
         then: Box<HirScalarExpr>,
         els: Box<HirScalarExpr>,
-        name: Option<Rc<str>>,
+        name: Option<Arc<str>>,
     },
     /// Returns true if `expr` returns any rows
-    Exists(Box<HirRelationExpr>, Option<Rc<str>>),
+    Exists(Box<HirRelationExpr>, Option<Arc<str>>),
     /// Given `expr` with arity 1. If expr returns:
     /// * 0 rows, return NULL
     /// * 1 row, return the value of that row
@@ -227,8 +227,8 @@ pub enum HirScalarExpr {
     ///   If there are multiple `Select` expressions in a single SQL query, the result is that we take the product of all of them.
     ///   This is counter to the spec, but is consistent with eg postgres' treatment of multiple set-returning-functions
     ///   (see <https://tapoueh.org/blog/2017/10/set-returning-functions-and-postgresql-10/>).
-    Select(Box<HirRelationExpr>, Option<Rc<str>>),
-    Windowing(WindowExpr, Option<Rc<str>>),
+    Select(Box<HirRelationExpr>, Option<Arc<str>>),
+    Windowing(WindowExpr, Option<Arc<str>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -2879,7 +2879,7 @@ impl VisitChildren<HirScalarExpr> for HirRelationExpr {
 }
 
 impl HirScalarExpr {
-    pub fn name(&self) -> Option<Rc<str>> {
+    pub fn name(&self) -> Option<Arc<str>> {
         use HirScalarExpr::*;
         match self {
             Column(_, name)
@@ -2912,7 +2912,7 @@ impl HirScalarExpr {
                 *e = HirScalarExpr::Literal(
                     row,
                     column_type,
-                    name.clone().or_else(|| Some(Rc::from(format!("${n}")))),
+                    name.clone().or_else(|| Some(Arc::from(format!("${n}")))),
                 );
             }
             Ok(())
