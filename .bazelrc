@@ -198,7 +198,8 @@ build:rust-nightly --@rules_rust//rust/toolchain/channel=nightly
 
 # AddressSanitizer
 #
-# See: <https://clang.llvm.org/docs/ThreadSanitizer.html>
+# See: <https://clang.llvm.org/docs/AddressSanitizer.html>
+#      <https://doc.rust-lang.org/beta/unstable-book/compiler-flags/sanitizer.html#addresssanitizer>
 build:asan --config=rust-nightly
 build:asan --@rules_rust//:extra_rustc_flag=-Zsanitizer=address --@rules_rust//:extra_rustc_flag=-Zexternal-clangrt
 build:asan --@rules_rust//:extra_rustc_flag=-Cdebug-assertions=on
@@ -215,6 +216,27 @@ build:asan --strip=never
 build:asan --@rules_rust//:extra_rustc_flag=-Clinker=external/llvm_toolchain_llvm/bin/clang++
 # Turn jemalloc off because ASAN and jemalloc do not play well together.
 build:asan --@//misc/bazel/platforms:enable_jemalloc=false
+
+# Hardware Assisted AddressSanitizer
+#
+# Only works on `aarch64-linux-unknown-gnu`.
+#
+# See: <https://clang.llvm.org/docs/HardwareAssistedAddressSanitizerDesign.html>
+#      <https://doc.rust-lang.org/beta/unstable-book/compiler-flags/sanitizer.html#hwaddresssanitizer>
+build:hwasan --config=rust-nightly
+build:hwasan --@rules_rust//:extra_rustc_flag=-Zsanitizer=hwaddress --@rules_rust//:extra_rustc_flag=-Zexternal-clangrt
+build:hwasan --@rules_rust//:extra_rustc_flag=-Cdebug-assertions=on
+build:hwasan --@rules_rust//:extra_rustc_flag=-Ctarget-feature=+tagged-globals
+build:hwasan --copt=-fsanitize=hwaddress
+build:hwasan --copt=-g
+build:hwasan --copt=-O1
+build:hwasan --linkopt=-fsanitize=hwaddress
+build:hwasan --strip=never
+# HACK(parkmycar): We want to tell Rust to use the Bazel provided `clang++` but there isn't
+# a great way to do that. We know this is where `clang++` lives though, so it works.
+build:hwasan --@rules_rust//:extra_rustc_flag=-Clinker=external/llvm_toolchain_llvm/bin/clang++
+# Turn jemalloc off because ASAN and jemalloc do not play well together.
+build:hwasan --@//misc/bazel/platforms:enable_jemalloc=false
 
 # Cross Language LTO
 #
