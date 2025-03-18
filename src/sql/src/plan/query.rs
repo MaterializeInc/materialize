@@ -5153,7 +5153,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
         [(column, item)] if item.from_single_column_function => {
             // TODO(mgree) !!! intern column_name
             let col_name_ref = None;
-            return Ok(HirScalarExpr::Column(*column, col_name_ref));
+            Ok(HirScalarExpr::Column(*column, col_name_ref))
         }
         // The name refers to a normal table. Return a record containing all the
         // columns of the table.

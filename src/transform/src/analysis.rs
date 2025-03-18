@@ -995,7 +995,7 @@ mod column_names {
         fn extend_with_scalars(column_names: &mut Vec<ColumnName>, scalars: &Vec<MirScalarExpr>) {
             for scalar in scalars {
                 column_names.push(match scalar {
-                    MirScalarExpr::Column(c) => column_names[*c].clone(),
+                    MirScalarExpr::Column(c, _) => column_names[*c].clone(),
                     _ => ColumnName::Unknown,
                 });
             }
@@ -1569,7 +1569,7 @@ mod cardinality {
         ) -> OrderedFloat<f64> {
             let index_selectivity = |expr: &MirScalarExpr| -> Option<OrderedFloat<f64>> {
                 match expr {
-                    MirScalarExpr::Column(col) => {
+                    MirScalarExpr::Column(col, _) => {
                         if unique_columns.contains(col) {
                             // TODO(mgree): when we have index cardinality statistics, they should go here when `expr` is a `MirScalarExpr::Column` that's in `unique_columns`
                             None
@@ -1582,7 +1582,7 @@ mod cardinality {
             };
 
             match predicate_expr {
-                MirScalarExpr::Column(_)
+                MirScalarExpr::Column(_, _)
                 | MirScalarExpr::Literal(_, _)
                 | MirScalarExpr::CallUnmaterializable(_) => OrderedFloat(1.0),
                 MirScalarExpr::CallUnary { func, expr } => match func {
@@ -1701,7 +1701,7 @@ mod cardinality {
                 let mut all_unique = true;
 
                 for expr in equiv {
-                    if let MirScalarExpr::Column(col) = expr {
+                    if let MirScalarExpr::Column(col, _) = expr {
                         if let Some(idx) = unique_columns.get(col) {
                             unique_sources.insert(*idx);
                         } else {

@@ -222,6 +222,7 @@ impl MirScalarExprDeserializeContext {
                     .to_string()
                     .parse::<usize>()
                     .map_err_to_string_with_causes()?,
+                None,
             ));
         }
         Err(format!(

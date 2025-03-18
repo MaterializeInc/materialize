@@ -971,7 +971,7 @@ mod scalar {
     }
 
     pub fn parse_column(input: ParseStream) -> Result {
-        Ok(MirScalarExpr::Column(parse_column_index(input)?))
+        Ok(MirScalarExpr::Column(parse_column_index(input)?, None))
     }
 
     pub fn parse_column_index(input: ParseStream) -> syn::Result<usize> {
