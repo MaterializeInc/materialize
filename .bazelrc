@@ -198,6 +198,13 @@ build:rust-nightly --@rules_rust//rust/toolchain/channel=nightly
 
 # AddressSanitizer
 #
+# Only works on Linux and does not support cross compiling.
+#
+# TODO: To support cross compiling sanitized builds we most likely need to move
+# our compiler runtime libraries (e.g. libc++, libunwind, asan) from our
+# toolchain into our system root, and then also specify `-resource-dir` to tell
+# `clang` to search for these libraries in the system root.
+#
 # See: <https://clang.llvm.org/docs/AddressSanitizer.html>
 #      <https://doc.rust-lang.org/beta/unstable-book/compiler-flags/sanitizer.html#addresssanitizer>
 build:asan --config=rust-nightly
@@ -219,7 +226,7 @@ build:asan --@//misc/bazel/platforms:enable_jemalloc=false
 
 # Hardware Assisted AddressSanitizer
 #
-# Only works on `aarch64-linux-unknown-gnu`.
+# Only works on `aarch64-linux-unknown-gnu` and does not support cross compiling.
 #
 # See: <https://clang.llvm.org/docs/HardwareAssistedAddressSanitizerDesign.html>
 #      <https://doc.rust-lang.org/beta/unstable-book/compiler-flags/sanitizer.html#hwaddresssanitizer>
