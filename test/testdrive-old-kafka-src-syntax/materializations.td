@@ -488,14 +488,14 @@ c    d
   JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
   JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
   WHERE export_id LIKE 'u%'
-"Dataflow: materialize.public.data_view_idx" ArrangeBy[[Column(0)]]
-"Dataflow: materialize.public.data_view_idx" ArrangeBy[[Column(0)]]-errors
-"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
-"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
-"Dataflow: materialize.public.mat_data_idx3" ArrangeBy[[Column(1)]]
-"Dataflow: materialize.public.mat_data_idx3" ArrangeBy[[Column(1)]]-errors
-"Dataflow: materialize.public.mat_data_primary_idx" "ArrangeBy[[Column(0), Column(1)]]"
-"Dataflow: materialize.public.mat_data_primary_idx" "ArrangeBy[[Column(0), Column(1)]]-errors"
+"Dataflow: materialize.public.data_view_idx" ArrangeBy[[Column(0, None)]]
+"Dataflow: materialize.public.data_view_idx" ArrangeBy[[Column(0, None)]]-errors
+"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0, None), Column(1, None)]]"
+"Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0, None), Column(1, None)]]-errors"
+"Dataflow: materialize.public.mat_data_idx3" ArrangeBy[[Column(1, None)]]
+"Dataflow: materialize.public.mat_data_idx3" ArrangeBy[[Column(1, None)]]-errors
+"Dataflow: materialize.public.mat_data_primary_idx" "ArrangeBy[[Column(0, None), Column(1, None)]]"
+"Dataflow: materialize.public.mat_data_primary_idx" "ArrangeBy[[Column(0, None), Column(1, None)]]-errors"
 "Dataflow: materialize.public.test1" AccumulableErrorCheck
 "Dataflow: materialize.public.test1" "ArrangeAccumulable [val: empty]"
 "Dataflow: materialize.public.test1" ReduceAccumulable
