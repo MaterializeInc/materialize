@@ -1514,7 +1514,215 @@ steps:
             args: [--replicas=2]
       skip: "Reenable when database-issues#8990 is fixed"
 
-    - id: data-ingest-8-replicas
+    - id: data-ingest-8-replicas-1
+      label: "Data Ingest (8 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-16cpu-32gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=8]
+
+    - id: data-ingest-2-replicas-1
+      label: "Data Ingest (2 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-8cpu-16gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=2]
+
+    - id: data-ingest-8-replicas-2
+      label: "Data Ingest (8 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-16cpu-32gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=8]
+
+    - id: data-ingest-2-replicas-2
+      label: "Data Ingest (2 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-8cpu-16gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=2]
+
+    - id: data-ingest-8-replicas-3
+      label: "Data Ingest (8 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-16cpu-32gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=8]
+
+    - id: data-ingest-2-replicas-3
+      label: "Data Ingest (2 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-8cpu-16gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=2]
+
+    - id: data-ingest-8-replicas-4
+      label: "Data Ingest (8 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-16cpu-32gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=8]
+
+    - id: data-ingest-2-replicas-4
+      label: "Data Ingest (2 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-8cpu-16gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=2]
+
+    - id: data-ingest-8-replicas-5
+      label: "Data Ingest (8 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-16cpu-32gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=8]
+
+    - id: data-ingest-2-replicas-5
+      label: "Data Ingest (2 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-8cpu-16gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=2]
+
+    - id: data-ingest-8-replicas-6
+      label: "Data Ingest (8 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-16cpu-32gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=8]
+
+    - id: data-ingest-2-replicas-6
+      label: "Data Ingest (2 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-8cpu-16gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=2]
+
+    - id: data-ingest-8-replicas-7
+      label: "Data Ingest (8 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-16cpu-32gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=8]
+
+    - id: data-ingest-2-replicas-7
+      label: "Data Ingest (2 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-8cpu-16gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=2]
+
+    - id: data-ingest-8-replicas-8
+      label: "Data Ingest (8 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-16cpu-32gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=8]
+
+    - id: data-ingest-2-replicas-9
+      label: "Data Ingest (2 replicas)"
+      depends_on: build-aarch64
+      timeout_in_minutes: 90
+      parallelism: 2
+      agents:
+        queue: hetzner-aarch64-8cpu-16gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: data-ingest
+            # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
+            args: [--replicas=2]
+
+    - id: data-ingest-8-replicas-9
       label: "Data Ingest (8 replicas)"
       depends_on: build-aarch64
       timeout_in_minutes: 90
