@@ -220,18 +220,18 @@ Target cluster: quickstart
   JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
   JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
   WHERE export_id LIKE 'u%'
-"Dataflow: materialize.public.i1_primary_idx" ArrangeBy[[Column(0, None)]]
-"Dataflow: materialize.public.i1_primary_idx" ArrangeBy[[Column(0, None)]]-errors
-"Dataflow: materialize.public.i4_primary_idx" ArrangeBy[[Column(0, None)]]
-"Dataflow: materialize.public.i4_primary_idx" ArrangeBy[[Column(0, None)]]-errors
-"Dataflow: materialize.public.i6_primary_idx" ArrangeBy[[Column(0, None)]]
-"Dataflow: materialize.public.i6_primary_idx" ArrangeBy[[Column(0, None)]]-errors
+"Dataflow: materialize.public.i1_primary_idx" "ArrangeBy[[Column(0, None)]]"
+"Dataflow: materialize.public.i1_primary_idx" "ArrangeBy[[Column(0, None)]]-errors"
+"Dataflow: materialize.public.i4_primary_idx" "ArrangeBy[[Column(0, None)]]"
+"Dataflow: materialize.public.i4_primary_idx" "ArrangeBy[[Column(0, None)]]-errors"
+"Dataflow: materialize.public.i6_primary_idx" "ArrangeBy[[Column(0, None)]]"
+"Dataflow: materialize.public.i6_primary_idx" "ArrangeBy[[Column(0, None)]]-errors"
 "Dataflow: materialize.public.i6_primary_idx" "Arranged TopK input"
 "Dataflow: materialize.public.i6_primary_idx" "Reduced TopK input"
-"Dataflow: materialize.public.i8_primary_idx" ArrangeBy[[Column(0, None)]]
-"Dataflow: materialize.public.i8_primary_idx" ArrangeBy[[Column(0, None)]]-errors
-"Dataflow: materialize.public.i9_primary_idx" ArrangeBy[[Column(0, None)]]
-"Dataflow: materialize.public.i9_primary_idx" ArrangeBy[[Column(0, None)]]-errors
+"Dataflow: materialize.public.i8_primary_idx" "ArrangeBy[[Column(0, None)]]"
+"Dataflow: materialize.public.i8_primary_idx" "ArrangeBy[[Column(0, None)]]-errors"
+"Dataflow: materialize.public.i9_primary_idx" "ArrangeBy[[Column(0, None)]]"
+"Dataflow: materialize.public.i9_primary_idx" "ArrangeBy[[Column(0, None)]]-errors"
 "Dataflow: materialize.public.monotonic_fused" "ArrangeMonotonic [val: empty]"
 "Dataflow: materialize.public.monotonic_fused" ReduceMonotonic
 "Dataflow: materialize.public.monotonic_max" "ArrangeMonotonic [val: empty]"

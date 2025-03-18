@@ -505,12 +505,12 @@ c    d
 "Dataflow: materialize.public.test6" "Reduced Fallibly MinsMaxesHierarchical"
 "Dataflow: materialize.public.test6" "Reduced Fallibly MinsMaxesHierarchical"
 "Dataflow: materialize.public.test6" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.data_view_idx" ArrangeBy[[Column(0, None)]]
-"Dataflow: materialize.public.data_view_idx" ArrangeBy[[Column(0, None)]]-errors
+"Dataflow: materialize.public.data_view_idx" "ArrangeBy[[Column(0, None)]]"
+"Dataflow: materialize.public.data_view_idx" "ArrangeBy[[Column(0, None)]]-errors"
 "Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0, None), Column(1, None)]]"
 "Dataflow: materialize.public.data_view_primary_idx" "ArrangeBy[[Column(0, None), Column(1, None)]]-errors"
-"Dataflow: materialize.public.mat_data_idx3" ArrangeBy[[Column(1, None)]]
-"Dataflow: materialize.public.mat_data_idx3" ArrangeBy[[Column(1, None)]]-errors
+"Dataflow: materialize.public.mat_data_idx3" "ArrangeBy[[Column(1, None)]]"
+"Dataflow: materialize.public.mat_data_idx3" "ArrangeBy[[Column(1, None)]]-errors"
 "Dataflow: materialize.public.test1" AccumulableErrorCheck
 "Dataflow: materialize.public.test1" "ArrangeAccumulable [val: empty]"
 "Dataflow: materialize.public.test1" ReduceAccumulable

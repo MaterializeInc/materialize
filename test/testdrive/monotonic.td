@@ -280,17 +280,17 @@ Target cluster: quickstart
 "Dataflow: materialize.public.monotonic_min" "Reduced Fallibly MinsMaxesHierarchical"
 "Dataflow: materialize.public.monotonic_min" "Reduced Fallibly MinsMaxesHierarchical"
 "Dataflow: materialize.public.monotonic_min" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" ArrangeBy[[Column(0, None)]]
-"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" ArrangeBy[[Column(0, None)]]-errors
-"Dataflow: materialize.public.i1_primary_idx" ArrangeBy[[Column(0, None)]]
-"Dataflow: materialize.public.i1_primary_idx" ArrangeBy[[Column(0, None)]]-errors
-"Dataflow: materialize.public.i4_primary_idx" ArrangeBy[[Column(0, None)]]
-"Dataflow: materialize.public.i4_primary_idx" ArrangeBy[[Column(0, None)]]-errors
-"Dataflow: materialize.public.i6_primary_idx" ArrangeBy[[Column(0, None)]]
-"Dataflow: materialize.public.i6_primary_idx" ArrangeBy[[Column(0, None)]]-errors
+"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0, None)]]"
+"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0, None)]]-errors"
+"Dataflow: materialize.public.i1_primary_idx" "ArrangeBy[[Column(0, None)]]"
+"Dataflow: materialize.public.i1_primary_idx" "ArrangeBy[[Column(0, None)]]-errors"
+"Dataflow: materialize.public.i4_primary_idx" "ArrangeBy[[Column(0, None)]]"
+"Dataflow: materialize.public.i4_primary_idx" "ArrangeBy[[Column(0, None)]]-errors"
+"Dataflow: materialize.public.i6_primary_idx" "ArrangeBy[[Column(0, None)]]"
+"Dataflow: materialize.public.i6_primary_idx" "ArrangeBy[[Column(0, None)]]-errors"
 "Dataflow: materialize.public.i6_primary_idx" "Arranged TopK input"
 "Dataflow: materialize.public.i6_primary_idx" "Reduced TopK input"
-"Dataflow: materialize.public.i8_primary_idx" ArrangeBy[[Column(0, None)]]
-"Dataflow: materialize.public.i8_primary_idx" ArrangeBy[[Column(0, None)]]-errors
-"Dataflow: materialize.public.i9_primary_idx" ArrangeBy[[Column(0, None)]]
-"Dataflow: materialize.public.i9_primary_idx" ArrangeBy[[Column(0, None)]]-errors
+"Dataflow: materialize.public.i8_primary_idx" "ArrangeBy[[Column(0, None)]]"
+"Dataflow: materialize.public.i8_primary_idx" "ArrangeBy[[Column(0, None)]]-errors"
+"Dataflow: materialize.public.i9_primary_idx" "ArrangeBy[[Column(0, None)]]"
+"Dataflow: materialize.public.i9_primary_idx" "ArrangeBy[[Column(0, None)]]-errors"
