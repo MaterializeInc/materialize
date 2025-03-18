@@ -155,7 +155,7 @@ so it is executed.""",
         def visit(step: dict[str, Any]) -> None:
             # ASan runs are slower ...
             if "timeout_in_minutes" in step:
-                step["timeout_in_minutes"] *= 3
+                step["timeout_in_minutes"] *= 10
 
             # ... and need more memory:
             if "agents" in step:
