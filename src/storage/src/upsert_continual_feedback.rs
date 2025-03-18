@@ -254,12 +254,6 @@ where
                         }
                     }
 
-                    // When we finish ingesting our initial persist snapshot,
-                    // during "re-hydration", we downgrade this to the empty
-                    // frontier, so we need to be lenient to this failing from
-                    // then on.
-                    let _ = snapshot_cap.try_downgrade(persist_upper.iter());
-
                     let last_rehydration_chunk =
                         hydrating && PartialOrder::less_equal(&resume_upper, &persist_upper);
 
@@ -297,6 +291,26 @@ where
                             .await;
                         }
                     }
+
+                    tracing::debug!(
+                        worker_id = %source_config.worker_id,
+                        source_id = %source_config.id,
+                        ?resume_upper,
+                        ?persist_upper,
+                        "downgrading snapshot cap",
+                    );
+
+                    // Only downgrade this _after_ ingesting the data, because
+                    // that can actually take quite some time, and we don't want
+                    // to announce that we're done ingesting the initial
+                    // snapshot too early.
+                    //
+                    // When we finish ingesting our initial persist snapshot,
+                    // during "re-hydration", we downgrade this to the empty
+                    // frontier, so we need to be lenient to this failing from
+                    // then on.
+                    let _ = snapshot_cap.try_downgrade(persist_upper.iter());
+
 
 
                     if last_rehydration_chunk {
