@@ -74,11 +74,11 @@ EXCEPT
 ----
 Explained Query:
   Union // { non_negative: true }
-    Project (#0) // { non_negative: true }
+    Project (#0{id}) // { non_negative: true }
       ReadStorage materialize.public.people // { non_negative: true }
     Negate // { non_negative: false }
-      Project (#0) // { non_negative: true }
-        Filter (#0 = 5) // { non_negative: true }
+      Project (#0{id}) // { non_negative: true }
+        Filter (#0{id} = 5) // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
 
 Source materialize.public.people
@@ -100,11 +100,11 @@ EXCEPT ALL
 ----
 Explained Query:
   Union // { non_negative: true }
-    Project (#0) // { non_negative: true }
+    Project (#0{id}) // { non_negative: true }
       ReadStorage materialize.public.people // { non_negative: true }
     Negate // { non_negative: false }
-      Project (#0) // { non_negative: true }
-        Filter (#3) IS NOT NULL // { non_negative: true }
+      Project (#0{id}) // { non_negative: true }
+        Filter (#3{died}) IS NOT NULL // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
 
 Source materialize.public.people
@@ -122,13 +122,13 @@ SELECT name FROM people WHERE id > 1
 ----
 Explained Query:
   Union // { non_negative: true }
-    Distinct project=[#0] // { non_negative: true }
-      Project (#1) // { non_negative: true }
+    Distinct project=[#0{name}] // { non_negative: true }
+      Project (#1{name}) // { non_negative: true }
         ReadStorage materialize.public.people // { non_negative: true }
     Negate // { non_negative: false }
-      Distinct project=[#0] // { non_negative: true }
-        Project (#1) // { non_negative: true }
-          Filter (#0 > 1) // { non_negative: true }
+      Distinct project=[#0{name}] // { non_negative: true }
+        Project (#1{name}) // { non_negative: true }
+          Filter (#0{id} > 1) // { non_negative: true }
             ReadStorage materialize.public.people // { non_negative: true }
 
 Source materialize.public.people
@@ -148,15 +148,15 @@ SELECT MAX(id) FROM (SELECT * FROM people WHERE id > 1) GROUP BY name
 Explained Query:
   Threshold // { non_negative: true }
     Union // { non_negative: false }
-      Project (#1) // { non_negative: true }
-        Reduce group_by=[#1] aggregates=[max(#0)] // { non_negative: true }
-          Project (#0, #1) // { non_negative: true }
+      Project (#1{max_id}) // { non_negative: true }
+        Reduce group_by=[#1{name}] aggregates=[max(#0{id})] // { non_negative: true }
+          Project (#0{id}, #1{name}) // { non_negative: true }
             ReadStorage materialize.public.people // { non_negative: true }
       Negate // { non_negative: false }
-        Project (#1) // { non_negative: true }
-          Reduce group_by=[#1] aggregates=[max(#0)] // { non_negative: true }
-            Project (#0, #1) // { non_negative: true }
-              Filter (#0 > 1) // { non_negative: true }
+        Project (#1{max_id}) // { non_negative: true }
+          Reduce group_by=[#1{name}] aggregates=[max(#0{id})] // { non_negative: true }
+            Project (#0{id}, #1{name}) // { non_negative: true }
+              Filter (#0{id} > 1) // { non_negative: true }
                 ReadStorage materialize.public.people // { non_negative: true }
 
 Source materialize.public.people
@@ -191,13 +191,13 @@ EXCEPT ALL
 Explained Query:
   With
     cte l0 =
-      Project (#0, #1) // { non_negative: true }
+      Project (#0{id}, #1{name}) // { non_negative: true }
         ReadStorage materialize.public.people // { non_negative: true }
   Return // { non_negative: true }
     Union // { non_negative: true }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        TopK group_by=[#0] limit=1 // { non_negative: true }
+        TopK group_by=[#0{id}] limit=1 // { non_negative: true }
           Get l0 // { non_negative: true }
 
 Source materialize.public.people
@@ -232,13 +232,13 @@ EXCEPT
 Explained Query:
   With
     cte l0 =
-      Project (#0, #1) // { non_negative: true }
+      Project (#0{id}, #1{name}) // { non_negative: true }
         ReadStorage materialize.public.people // { non_negative: true }
   Return // { non_negative: true }
     Union // { non_negative: true }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        TopK group_by=[#0] limit=1 // { non_negative: true }
+        TopK group_by=[#0{id}] limit=1 // { non_negative: true }
           Get l0 // { non_negative: true }
 
 Source materialize.public.people
@@ -258,7 +258,7 @@ Explained Query:
     cte l0 =
       CrossJoin type=differential // { non_negative: true }
         ArrangeBy keys=[[]] // { non_negative: true }
-          Project (#0) // { non_negative: true }
+          Project (#0{id}) // { non_negative: true }
             ReadStorage materialize.public.people // { non_negative: true }
         ArrangeBy keys=[[]] // { non_negative: true }
           Project () // { non_negative: true }
@@ -267,7 +267,7 @@ Explained Query:
     Union // { non_negative: true }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        Filter (#0 > 5) // { non_negative: true }
+        Filter (#0{id} > 5) // { non_negative: true }
           Get l0 // { non_negative: true }
 
 Source materialize.public.bands
@@ -286,14 +286,14 @@ SELECT * FROM cte EXCEPT ALL SELECT * FROM cte WHERE name LIKE 'J%'
 Explained Query:
   With
     cte l0 =
-      Distinct project=[#0] // { non_negative: true }
-        Project (#1) // { non_negative: true }
+      Distinct project=[#0{name}] // { non_negative: true }
+        Project (#1{name}) // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
   Return // { non_negative: true }
     Union // { non_negative: true }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        Filter like["J%"](#0) // { non_negative: true }
+        Filter like["J%"](#0{name}) // { non_negative: true }
           Get l0 // { non_negative: true }
 
 Source materialize.public.people
@@ -315,8 +315,8 @@ SELECT * FROM a EXCEPT (SELECT * FROM a WHERE birth_year > 1940);
 Explained Query:
   With
     cte l0 =
-      Reduce group_by=[extract_year_d(#0)] aggregates=[count(*)] // { non_negative: true }
-        Project (#2) // { non_negative: true }
+      Reduce group_by=[extract_year_d(#0{born})] aggregates=[count(*)] // { non_negative: true }
+        Project (#2{born}) // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
   Return // { non_negative: true }
     Union // { non_negative: true }
@@ -354,17 +354,17 @@ SELECT * FROM cte2 WHERE name LIKE 'P%';
 Explained Query:
   With
     cte l0 =
-      Distinct project=[#0..=#3] // { non_negative: true }
+      Distinct project=[#0{id}..=#3{died}] // { non_negative: true }
         Union // { non_negative: true }
           ReadStorage materialize.public.people // { non_negative: true }
           Negate // { non_negative: false }
-            Filter like["J%"](#1) // { non_negative: true }
+            Filter like["J%"](#1{name}) // { non_negative: true }
               ReadStorage materialize.public.people // { non_negative: true }
   Return // { non_negative: true }
     Union // { non_negative: true }
       Get l0 // { non_negative: true }
       Negate // { non_negative: false }
-        Filter like["P%"](#1) // { non_negative: true }
+        Filter like["P%"](#1{name}) // { non_negative: true }
           Get l0 // { non_negative: true }
 
 Source materialize.public.people
@@ -387,15 +387,15 @@ EXCEPT ALL
 Explained Query:
   Threshold // { non_negative: true }
     Union // { non_negative: false }
-      Project (#1) // { non_negative: true }
+      Project (#1{name}) // { non_negative: true }
         ReadStorage materialize.public.people // { non_negative: true }
       Negate // { non_negative: false }
-        Project (#1) // { non_negative: true }
-          Filter (#0 = 1) // { non_negative: true }
+        Project (#1{name}) // { non_negative: true }
+          Filter (#0{id} = 1) // { non_negative: true }
             ReadStorage materialize.public.people // { non_negative: true }
       Negate // { non_negative: false }
-        Project (#1) // { non_negative: true }
-          Filter (#0 = 2) // { non_negative: true }
+        Project (#1{name}) // { non_negative: true }
+          Filter (#0{id} = 2) // { non_negative: true }
             ReadStorage materialize.public.people // { non_negative: true }
 
 Source materialize.public.people
@@ -429,16 +429,16 @@ SELECT * FROM c1
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Distinct project=[#0, #1] // { non_negative: true }
+      Distinct project=[#0{id}, #1] // { non_negative: true }
         Union // { non_negative: true }
-          Project (#0, #2) // { non_negative: true }
-            Map ((#1 || "_init")) // { non_negative: true }
+          Project (#0{id}, #2) // { non_negative: true }
+            Map ((#1{name} || "_init")) // { non_negative: true }
               Union // { non_negative: true }
-                Project (#0, #1) // { non_negative: true }
+                Project (#0{id}, #1{name}) // { non_negative: true }
                   ReadStorage materialize.public.people // { non_negative: true }
                 Negate // { non_negative: false }
-                  Project (#0, #1) // { non_negative: true }
-                    Filter (#0 > 1) // { non_negative: true }
+                  Project (#0{id}, #1{name}) // { non_negative: true }
+                    Filter (#0{id} > 1) // { non_negative: true }
                       ReadStorage materialize.public.people // { non_negative: true }
           Project (#0, #2) // { non_negative: true }
             Map ((#1 || "_iter")) // { non_negative: true }
@@ -477,10 +477,10 @@ SELECT * FROM c1
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Distinct project=[#0, #1] // { non_negative: true }
+      Distinct project=[#0{id}, #1] // { non_negative: true }
         Union // { non_negative: false }
-          Project (#0, #4) // { non_negative: true }
-            Map ((#1 || "_init")) // { non_negative: true }
+          Project (#0{id}, #4) // { non_negative: true }
+            Map ((#1{name} || "_init")) // { non_negative: true }
               ReadStorage materialize.public.people // { non_negative: true }
           Distinct project=[#0, (#1 || "_iter")] // { non_negative: true }
             Get l1 // { non_negative: true }
@@ -492,7 +492,7 @@ Explained Query:
       Union // { non_negative: true }
         Get l0 // { non_negative: true }
         Negate // { non_negative: false }
-          Filter (#0 > 2) // { non_negative: true }
+          Filter (#0{id} > 2) // { non_negative: true }
             Get l0 // { non_negative: true }
   Return // { non_negative: true }
     Get l0 // { non_negative: true }
@@ -521,16 +521,16 @@ SELECT * FROM c0
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Distinct project=[#0, #1] // { non_negative: true }
+      Distinct project=[#0{id}, #1] // { non_negative: true }
         Union // { non_negative: false }
-          Project (#0, #4) // { non_negative: true }
-            Map ((#1 || "_init")) // { non_negative: true }
+          Project (#0{id}, #4) // { non_negative: true }
+            Map ((#1{name} || "_init")) // { non_negative: true }
               ReadStorage materialize.public.people // { non_negative: true }
-          Distinct project=[#0, (#1 || "_iter")] // { non_negative: true }
+          Distinct project=[#0{id}, (#1 || "_iter")] // { non_negative: true }
             Get l0 // { non_negative: true }
           Negate // { non_negative: false }
             Distinct project=[#0, (#1 || "_iter")] // { non_negative: true }
-              Filter (#0 > 1) // { non_negative: true }
+              Filter (#0{id} > 1) // { non_negative: true }
                 Get l0 // { non_negative: true }
   Return // { non_negative: true }
     Get l0 // { non_negative: true }
@@ -552,14 +552,14 @@ SELECT f1 FROM t1 EXCEPT SELECT f1 FROM t1 WHERE f1 = 5;
 ----
 Explained Query:
   Union // { non_negative: false }
-    Distinct project=[#0] // { non_negative: true }
-      Project (#0) // { non_negative: true }
+    Distinct project=[#0{f1}] // { non_negative: true }
+      Project (#0{f1}) // { non_negative: true }
         ReadStorage materialize.public.t1 // { non_negative: true }
     Negate // { non_negative: false }
       Map (5) // { non_negative: true }
         Distinct project=[] // { non_negative: true }
           Project () // { non_negative: true }
-            Filter (#0 = 5) // { non_negative: true }
+            Filter (#0{f1} = 5) // { non_negative: true }
               ReadStorage materialize.public.t1 // { non_negative: true }
 
 Source materialize.public.t1

@@ -24,11 +24,11 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
-  Filter (#1 = 100)
+  Filter (#1{balance} = 100)
     ReadStorage materialize.public.accounts
 
 Source materialize.public.accounts
-  filter=((#1 = 100))
+  filter=((#1{balance} = 100))
 
 Target cluster: quickstart
 
@@ -44,11 +44,11 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
-  Filter (#1 = 100)
+  Filter (#1{balance} = 100)
     ReadStorage materialize.public.accounts
 
 Source materialize.public.accounts
-  filter=((#1 = 100))
+  filter=((#1{balance} = 100))
 
 Target cluster: quickstart
 
@@ -79,7 +79,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
-  Project (#0, #1)
+  Project (#0{id}, #1{balance})
     ReadIndex on=materialize.public.accounts accounts_balance_idx=[lookup value=(100)]
 
 Used Indexes:
@@ -128,7 +128,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
-  Project (#0, #1)
+  Project (#0{id}, #1{balance})
     ReadIndex on=materialize.public.accounts accounts_balance_index=[lookup value=(100)]
 
 Used Indexes:
@@ -178,7 +178,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv;
 ----
 materialize.public.mv:
-  Project (#0, #1)
+  Project (#0{id}, #1{balance})
     ReadIndex on=materialize.public.accounts [DELETED INDEX]=[lookup value=(100)]
 
 Used Indexes:

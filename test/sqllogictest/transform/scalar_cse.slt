@@ -17,7 +17,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 ----
 Explained Query:
   Project (#3, #2) // { arity: 2 }
-    Map ((#1 * #1), (#2 * #1)) // { arity: 4 }
+    Map ((#1{b} * #1{b}), (#2 * #1{b})) // { arity: 4 }
       ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
@@ -31,7 +31,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 ----
 Explained Query:
   Project (#3, #4) // { arity: 2 }
-    Map ((#1 * #1), (#2 * #1), (#2 + 1)) // { arity: 5 }
+    Map ((#1{b} * #1{b}), (#2 * #1{b}), (#2 + 1)) // { arity: 5 }
       ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
@@ -49,7 +49,7 @@ FROM x
 ----
 Explained Query:
   Project (#3..=#5) // { arity: 3 }
-    Map (text_to_jsonb(#0), (#2 -> "Field1"), (#2 -> "Field2"), (#2 -> "Field3")) // { arity: 6 }
+    Map (text_to_jsonb(#0{a}), (#2 -> "Field1"), (#2 -> "Field2"), (#2 -> "Field3")) // { arity: 6 }
       ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
@@ -68,7 +68,7 @@ FROM x
 ----
 Explained Query:
   Project (#4, #5, #7, #8) // { arity: 4 }
-    Map (text_to_jsonb(#0), (#2 -> "Field1"), (#3 -> "Foo"), (#3 -> "Bar"), (#2 -> "Field2"), (#6 -> "Baz"), ((#6 -> "Quux") -> "Zorb")) // { arity: 9 }
+    Map (text_to_jsonb(#0{a}), (#2 -> "Field1"), (#3 -> "Foo"), (#3 -> "Bar"), (#2 -> "Field2"), (#6 -> "Baz"), ((#6 -> "Quux") -> "Zorb")) // { arity: 9 }
       ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
@@ -87,7 +87,7 @@ FROM x
 ----
 Explained Query:
   Project (#2, #3) // { arity: 2 }
-    Map (case when (#1 = 0) then 0 else (1 / #1) end, case when (#1 != 0) then (1 / #1) else 0 end) // { arity: 4 }
+    Map (case when (#1{b} = 0) then 0 else (1 / #1{b}) end, case when (#1{b} != 0) then (1 / #1{b}) else 0 end) // { arity: 4 }
       ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
@@ -109,7 +109,7 @@ FROM
 ----
 Explained Query:
   Project (#3, #4) // { arity: 2 }
-    Map ((#1 / 2), case when (#2 = 0) then 0 else (1 / #2) end, case when (#2 != 0) then (1 / #2) else 0 end) // { arity: 5 }
+    Map ((#1{b} / 2), case when (#2 = 0) then 0 else (1 / #2) end, case when (#2 != 0) then (1 / #2) else 0 end) // { arity: 5 }
       ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
@@ -127,14 +127,14 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR select * from t where 2*x + 2*x > 0
 ----
 Explained Query:
-  Project (#0)
+  Project (#0{x})
     Filter ((#1 + #1) > 0)
-      Map ((2 * #0))
+      Map ((2 * #0{x}))
         ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=(((#1 + #1) > 0))
-  map=((2 * #0))
+  map=((2 * #0{x}))
 
 Target cluster: quickstart
 
@@ -144,14 +144,14 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR select * from t where 2*x + 2*x + 2*x > 0
 ----
 Explained Query:
-  Project (#0)
+  Project (#0{x})
     Filter (((#1 + #1) + #1) > 0)
-      Map ((2 * #0))
+      Map ((2 * #0{x}))
         ReadStorage materialize.public.t
 
 Source materialize.public.t
   filter=((((#1 + #1) + #1) > 0))
-  map=((2 * #0))
+  map=((2 * #0{x}))
 
 Target cluster: quickstart
 
@@ -161,14 +161,14 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR select * from t where 2*x + 5*x + 2*x > 0
 ----
 Explained Query:
-  Project (#0)
-    Filter (((#1 + (5 * #0)) + #1) > 0)
-      Map ((2 * #0))
+  Project (#0{x})
+    Filter (((#1 + (5 * #0{x})) + #1) > 0)
+      Map ((2 * #0{x}))
         ReadStorage materialize.public.t
 
 Source materialize.public.t
-  filter=((((#1 + (5 * #0)) + #1) > 0))
-  map=((2 * #0))
+  filter=((((#1 + (5 * #0{x})) + #1) > 0))
+  map=((2 * #0{x}))
 
 Target cluster: quickstart
 

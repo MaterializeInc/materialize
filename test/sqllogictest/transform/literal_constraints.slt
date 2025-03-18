@@ -41,7 +41,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE a IN (1, 1+1)
 ----
 Explained Query (fast path):
-  Filter ((#0 = 1) OR (#0 = 2))
+  Filter ((#0{a} = 1) OR (#0{a} = 2))
     ReadIndex on=materialize.public.t1 idx_t1_a_b=[*** full scan ***]
 
 Used Indexes:
@@ -75,7 +75,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE a IN (1, 1+1)
 ----
 Explained Query (fast path):
-  Project (#0, #1)
+  Project (#0{a}, #1{b})
     ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2)]]
 
 Used Indexes:
@@ -100,7 +100,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE a = 2 AND b = 'l2'
 ----
 Explained Query (fast path):
-  Project (#0, #1)
+  Project (#0{a}, #1{b})
     ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup value=(2, "l2")]
 
 Used Indexes:
@@ -220,7 +220,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE a = NULL OR a = 2
 ----
 Explained Query (fast path):
-  Filter (null OR (#0 = 2))
+  Filter (null OR (#0{a} = 2))
     ReadIndex on=materialize.public.t1 idx_t1_a_b=[*** full scan ***]
 
 Used Indexes:
@@ -267,7 +267,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE (a,b) IN ((1,'l1'), (2,'l2'))
 ----
 Explained Query (fast path):
-  Project (#0, #1)
+  Project (#0{a}, #1{b})
     ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(1, "l1"); (2, "l2")]]
 
 Used Indexes:
@@ -291,7 +291,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE (a,b) IN ((1, 'l1'), (1, 'a'))
 ----
 Explained Query (fast path):
-  Project (#0, #1)
+  Project (#0{a}, #1{b})
     ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(1, "a"); (1, "l1")]]
 
 Used Indexes:
@@ -324,7 +324,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE (a,b,c) IN ((1,2,3), (1,4,5), (1,4,7))
 ----
 Explained Query (fast path):
-  Project (#0..=#2)
+  Project (#0{a}..=#2{c})
     ReadIndex on=materialize.public.t2 idx_t2_a_b_c=[lookup values=[(1, 2, 3); (1, 4, 5); (1, 4, 7)]]
 
 Used Indexes:
@@ -357,8 +357,8 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE (a = 1) OR (a = 3 AND b = 'l3')
 ----
 Explained Query (fast path):
-  Project (#0, #1)
-    Filter ((#0 = 1) OR ((#0 = 3) AND (#1 = "l3")))
+  Project (#0{a}, #1{b})
+    Filter ((#0{a} = 1) OR ((#0{a} = 3) AND (#1{b} = "l3")))
       ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (3)]]
 
 Used Indexes:
@@ -383,7 +383,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE a IN (1, a+a)
 ----
 Explained Query (fast path):
-  Filter ((#0 = 1) OR (#0 = (#0 + #0)))
+  Filter ((#0{a} = 1) OR (#0{a} = (#0{a} + #0{a})))
     ReadIndex on=materialize.public.t1 idx_t1_a_b=[*** full scan ***]
 
 Used Indexes:
@@ -411,7 +411,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE a+a = 2
 ----
 Explained Query (fast path):
-  Project (#1)
+  Project (#1{a})
     ReadIndex on=materialize.public.t1 idx_t1_aa=[lookup value=(2)]
 
 Used Indexes:
@@ -435,7 +435,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE a+a IN (-1, 1, 2, 3, 6, 7, 9)
 ----
 Explained Query (fast path):
-  Project (#1)
+  Project (#1{a})
     ReadIndex on=materialize.public.t1 idx_t1_aa=[lookup values=[(-1); (1); (2); (3); (6); (7); (9)]]
 
 Used Indexes:
@@ -463,7 +463,7 @@ WHERE a+a IN (2, 6);
 ----
 Explained Query (fast path):
   Project (#4)
-    Map ((#1 + #1))
+    Map ((#1{a} + #1{a}))
       ReadIndex on=materialize.public.t1 idx_t1_aa=[lookup values=[(2); (6)]]
 
 Used Indexes:
@@ -492,8 +492,8 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE (a,b) IN ((1, 4*a), (2, 5*a), (3, a+20))
 ----
 Explained Query (fast path):
-  Project (#0..=#2)
-    Filter (((#0 = 1) AND (#1 = (4 * #0))) OR ((#0 = 2) AND (#1 = (5 * #0))) OR ((#0 = 3) AND (#1 = (#0 + 20))))
+  Project (#0{a}..=#2{c})
+    Filter (((#0{a} = 1) AND (#1{b} = (4 * #0{a}))) OR ((#0{a} = 2) AND (#1{b} = (5 * #0{a}))) OR ((#0{a} = 3) AND (#1{b} = (#0{a} + 20))))
       ReadIndex on=materialize.public.t2 idx_t2_a=[lookup values=[(1); (2); (3)]]
 
 Used Indexes:
@@ -547,8 +547,8 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE (a < 3 OR a > 0) AND b IN ('l1', 'l2', 'l3', 'l9')
 ----
 Explained Query (fast path):
-  Project (#1)
-    Filter ((#1 < 3) OR (#1 > 0))
+  Project (#1{a})
+    Filter ((#1{a} < 3) OR (#1{a} > 0))
       ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l1"); ("l2"); ("l3"); ("l9")]]
 
 Used Indexes:
@@ -573,8 +573,8 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE (a < 3 OR a > 0 OR a < 7) AND b IN ('l1', 'l2', 'l3', 'l9') AND (b like 'l%' OR a > 5)
 ----
 Explained Query (fast path):
-  Project (#1)
-    Filter ((#1 < 3) OR (#1 < 7) OR (#1 > 0)) AND (like["l%"](#0) OR (#1 > 5))
+  Project (#1{a})
+    Filter ((#1{a} < 3) OR (#1{a} < 7) OR (#1{a} > 0)) AND (like["l%"](#0{b}) OR (#1{a} > 5))
       ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l1"); ("l2"); ("l3"); ("l9")]]
 
 Used Indexes:
@@ -596,8 +596,8 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE ((b = 'l1' AND a = 1) OR (a = 2 AND b = 'l2')) AND (b like 'nonono' OR (b like 'l%' AND a < 10))
 ----
 Explained Query (fast path):
-  Project (#0, #1)
-    Filter (like["nonono"](#1) OR (like["l%"](#1) AND (#0 < 10)))
+  Project (#0{a}, #1{b})
+    Filter (like["nonono"](#1{b}) OR (like["l%"](#1{b}) AND (#0{a} < 10)))
       ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(1, "l1"); (2, "l2")]]
 
 Used Indexes:
@@ -621,9 +621,9 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE (a % 3 = 0 OR a % 3 = 1) AND (a,b) IN ((1,'l1'), (2,'l2'), (3,'l3'), (9,'l9'))
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{a})
     Filter ((#4 = 0) OR (#4 = 1))
-      Map ((#0 % 3))
+      Map ((#0{a} % 3))
         ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup values=[(1, "l1"); (2, "l2"); (3, "l3"); (9, "l9")]]
 
 Used Indexes:
@@ -657,8 +657,8 @@ WHERE (
 (b like 'l%' OR b like 'aaa')
 ----
 Explained Query (fast path):
-  Project (#0)
-    Filter (like["aaa"](#1) OR like["l%"](#1)) AND ((#0 = 2) OR (like["nope"](#1) AND (#0 = 1)))
+  Project (#0{a})
+    Filter (like["aaa"](#1{b}) OR like["l%"](#1{b})) AND ((#0{a} = 2) OR (like["nope"](#1{b}) AND (#0{a} = 1)))
       ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2)]]
 
 Used Indexes:
@@ -699,7 +699,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE (a = 4 AND a = 7) OR (a = 9)
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{a})
     ReadIndex on=materialize.public.t1 idx_t1_a=[lookup value=(9)]
 
 Used Indexes:
@@ -714,7 +714,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE a IN (1,2) AND a IN (2,3,4)
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{a})
     ReadIndex on=materialize.public.t1 idx_t1_a=[lookup value=(2)]
 
 Used Indexes:
@@ -759,17 +759,17 @@ WHERE
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 3 }
+      ArrangeBy keys=[[#0{a}]] // { arity: 3 }
         ReadIndex on=t2 idx_t2_a=[delta join lookup] // { arity: 3 }
   Return // { arity: 3 }
-    Project (#0, #1, #5) // { arity: 3 }
-      Filter (#0) IS NOT NULL // { arity: 9 }
-        Join on=(#0 = #3 = #6) type=delta // { arity: 9 }
+    Project (#0{a}, #1{b}, #5{c}) // { arity: 3 }
+      Filter (#0{a}) IS NOT NULL // { arity: 9 }
+        Join on=(#0{a} = #3{a} = #6{a}) type=delta // { arity: 9 }
           implementation
             %0:t1 » %1:l0[#0]KA » %2:l0[#0]KA
             %1:l0 » %0:t1[#0]KAe » %2:l0[#0]KA
             %2:l0 » %0:t1[#0]KAe » %1:l0[#0]KA
-          ArrangeBy keys=[[#0]] // { arity: 3 }
+          ArrangeBy keys=[[#0{a}]] // { arity: 3 }
             ReadIndex on=materialize.public.t1 idx_t1_b=[lookup values=[("l2"); ("l3")]] // { arity: 3 }
           Get l0 // { arity: 3 }
           Get l0 // { arity: 3 }
@@ -801,14 +801,14 @@ WHERE
     t1.b = 'l2'
 ----
 Explained Query:
-  Project (#0, #1, #5) // { arity: 3 }
-    Filter (#0) IS NOT NULL // { arity: 6 }
-      Join on=(#0 = #3) type=differential // { arity: 6 }
+  Project (#0{a}, #1{b}, #5{c}) // { arity: 3 }
+    Filter (#0{a}) IS NOT NULL // { arity: 6 }
+      Join on=(#0{a} = #3{a}) type=differential // { arity: 6 }
         implementation
           %0:t1[#0]KAe » %1:t2[#0]KAe
-        ArrangeBy keys=[[#0]] // { arity: 3 }
+        ArrangeBy keys=[[#0{a}]] // { arity: 3 }
           ReadIndex on=materialize.public.t1 idx_t1_b=[lookup value=("l2")] // { arity: 3 }
-        ArrangeBy keys=[[#0]] // { arity: 3 }
+        ArrangeBy keys=[[#0{a}]] // { arity: 3 }
           ReadIndex on=t2 idx_t2_a=[differential join] // { arity: 3 }
 
 Used Indexes:
@@ -844,10 +844,10 @@ Explained Query:
     implementation
       %0:t1[×]e » %1:t2[×]e
     ArrangeBy keys=[[]] // { arity: 2 }
-      Project (#0, #1) // { arity: 2 }
+      Project (#0{a}, #1{b}) // { arity: 2 }
         ReadIndex on=materialize.public.t1 idx_t1_a_b=[lookup value=(2, "l2")] // { arity: 4 }
     ArrangeBy keys=[[]] // { arity: 1 }
-      Project (#2) // { arity: 1 }
+      Project (#2{c}) // { arity: 1 }
         ReadIndex on=materialize.public.t2 idx_t2_a=[lookup value=(2)] // { arity: 4 }
 
 Used Indexes:
@@ -882,7 +882,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE a = 0 AND b = 1 AND c = 2 AND v = 'xxx';
 ----
 Explained Query (fast path):
-  Project (#0..=#3)
+  Project (#0{a}..=#3{v})
     ReadIndex on=materialize.public.foo foo_primary_idx=[lookup value=(0, 1, 2, "xxx")]
 
 Used Indexes:
@@ -897,7 +897,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE 0 = a AND 1 = b AND 2 = c AND 'xxx' = v;
 ----
 Explained Query (fast path):
-  Project (#0..=#3)
+  Project (#0{a}..=#3{v})
     ReadIndex on=materialize.public.foo foo_primary_idx=[lookup value=(0, 1, 2, "xxx")]
 
 Used Indexes:
@@ -923,7 +923,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE a = 0 AND a = 0::SMALLINT;
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{a})
     ReadIndex on=materialize.public.foo idx_foo_a=[lookup value=(0)]
 
 Used Indexes:
@@ -947,7 +947,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE (a = 0 AND a = 2::SMALLINT) OR a = 3;
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{a})
     ReadIndex on=materialize.public.foo idx_foo_a=[lookup value=(3)]
 
 Used Indexes:
@@ -971,7 +971,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE a = 3::SMALLINT;
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{a})
     ReadIndex on=materialize.public.foo idx_foo_a=[lookup value=(3)]
 
 Used Indexes:
@@ -1000,7 +1000,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE a = 0;
 ----
 Explained Query (fast path):
-  Project (#1..=#4)
+  Project (#1{a}..=#4{v})
     ReadIndex on=materialize.public.foo idx_foo_a_cast=[lookup value=(0)]
 
 Used Indexes:
@@ -1026,7 +1026,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE v = 'xxx';
 ----
 Explained Query (fast path):
-  Project (#1..=#4)
+  Project (#1{a}..=#4{v})
     ReadIndex on=materialize.public.foo idx_foo_v_cast=[lookup value=("xxx")]
 
 Used Indexes:
@@ -1053,7 +1053,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE a = 0;
 ----
 Explained Query (fast path):
-  Project (#0..=#3)
+  Project (#0{a}..=#3{v})
     ReadIndex on=materialize.public.foo idx_foo_a=[lookup value=(0)]
 
 Used Indexes:
@@ -1080,7 +1080,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE v = 'xxx';
 ----
 Explained Query (fast path):
-  Project (#1..=#3, #0)
+  Project (#1{a}..=#3{c}, #0{v})
     ReadIndex on=materialize.public.foo idx_foo_v=[lookup value=("xxx")]
 
 Used Indexes:
@@ -1122,9 +1122,9 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a, b, c FROM t2 WHERE a IN (a + b, a + c, 1 + 5) AND a + b = 5 AND a + c = 4;
 ----
 Explained Query (fast path):
-  Project (#0..=#2)
-    Filter (#3 = 5) AND (#4 = 4) AND ((#0 = #3) OR (#0 = #4) OR (#0 = 6))
-      Map ((#0 + #1), (#0 + #2))
+  Project (#0{a}..=#2{c})
+    Filter (#3 = 5) AND (#4 = 4) AND ((#0{a} = #3) OR (#0{a} = #4) OR (#0{a} = 6))
+      Map ((#0{a} + #1{b}), (#0{a} + #2{c}))
         ReadIndex on=materialize.public.t2 idx_t2_a_b_c=[*** full scan ***]
 
 Used Indexes:
@@ -1147,7 +1147,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM bar WHERE (b AND a) = TRUE;
 ----
 Explained Query (fast path):
-  Project (#1, #2)
+  Project (#1{a}, #2{b})
     ReadIndex on=materialize.public.bar bar_expr_idx=[lookup value=(true)]
 
 Used Indexes:
@@ -1175,7 +1175,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 SELECT * FROM t3 WHERE NOT (((t3.c0)::INT != 0));
 ----
 Explained Query (fast path):
-  Filter (0 = double_to_integer(#0))
+  Filter (0 = double_to_integer(#0{c0}))
     ReadIndex on=materialize.public.t3 t3i0=[*** full scan ***]
 
 Used Indexes:
@@ -1200,7 +1200,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 SELECT * FROM t3 WHERE NOT ((t3.c0 != 0.6) AND (t3.c0 != -0.1) AND (t3.c0 != 0.1) AND (-0.1 != t3.c0));
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{c0})
     ReadIndex on=materialize.public.t3 t3i0=[lookup values=[(0.6); (0.1); (-0.1)]]
 
 Used Indexes:
@@ -1224,7 +1224,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 SELECT * FROM t3 WHERE t3.c0 = 0.8::INT OR t3.c0 = -0.1;
 ----
 Explained Query (fast path):
-  Project (#0)
+  Project (#0{c0})
     ReadIndex on=materialize.public.t3 t3i0=[lookup values=[(1); (-0.1)]]
 
 Used Indexes:
@@ -1262,8 +1262,8 @@ WHERE (a,b,c) IN ((15, 16, 17), (25, 26, 111), (35, 36, 111));
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[sum((((#0 * #1) * #2) * #3))] // { arity: 1, types: "(bigint?)", keys: "([])" }
-        Project (#0..=#3) // { arity: 4, types: "(integer, integer, integer, integer?)", keys: "([1], [2])" }
+      Reduce aggregates=[sum((((#0{a} * #1{b}) * #2{c}) * #3{d}))] // { arity: 1, types: "(bigint?)", keys: "([])" }
+        Project (#0{a}..=#3{d}) // { arity: 4, types: "(integer, integer, integer, integer?)", keys: "([1], [2])" }
           ReadIndex on=materialize.public.t4 idx_t4_a_b_c=[lookup values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)]] // { arity: 7, types: "(integer, integer, integer, integer?, integer, integer, integer)", keys: "([1], [2])" }
   Return // { arity: 1, types: "(bigint?)", keys: "([])" }
     Union // { arity: 1, types: "(bigint?)", keys: "([])" }
@@ -1328,14 +1328,14 @@ SELECT * FROM c0;
 Explained Query:
   With Mutually Recursive [recursion_limit=3, return_at_limit]
     cte l0 =
-      Distinct project=[#0]
+      Distinct project=[#0{f1}]
         Union
           ReadIndex on=t5 idx_t5_f1=[*** full scan ***]
           Project (#2)
-            Map ((#0 + #1))
+            Map ((#0{f1} + #1))
               CrossJoin type=differential
                 ArrangeBy keys=[[]]
-                  Project (#0)
+                  Project (#0{f1})
                     ReadIndex on=materialize.public.t5 idx_t5_f1=[lookup values=[(0); (2); (8)]]
                 ArrangeBy keys=[[]]
                   Get l0
@@ -1360,7 +1360,7 @@ LIMIT 1;
 ----
 Explained Query (fast path):
   Finish limit=1 output=[#0, #1]
-    Project (#0, #1)
+    Project (#0{a}, #1{b})
       ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2); (3); (4)]]
 
 Used Indexes:
@@ -1389,8 +1389,8 @@ LIMIT 3;
 ----
 Explained Query (fast path):
   Finish order_by=[#2 asc nulls_last, #1 asc nulls_last] limit=3 output=[#0, #1]
-    Project (#0, #1, #3)
-      Map (-(#0))
+    Project (#0{a}, #1{b}, #3)
+      Map (-(#0{a}))
         ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2); (3); (4)]]
 
 Used Indexes:
@@ -1421,8 +1421,8 @@ LIMIT 3 OFFSET 1;
 ----
 Explained Query (fast path):
   Finish order_by=[#2 asc nulls_last, #1 asc nulls_last] limit=3 offset=1 output=[#0, #1]
-    Project (#0, #1, #3)
-      Map (-(#0))
+    Project (#0{a}, #1{b}, #3)
+      Map (-(#0{a}))
         ReadIndex on=materialize.public.t1 idx_t1_a=[lookup values=[(1); (2); (3); (4)]]
 
 Used Indexes:

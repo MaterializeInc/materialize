@@ -198,33 +198,33 @@ GROUP BY round;
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Reduce group_by=[#0] aggregates=[min(#1)]
+      Reduce group_by=[#0{dst}] aggregates=[min(#1{dst})]
         Union
-          Project (#1, #1)
+          Project (#1{dst}, #1{dst})
             ReadStorage materialize.public.edges
-          Project (#1, #3)
-            Join on=(#0 = #2) type=differential
-              ArrangeBy keys=[[#0]]
-                Filter (#0) IS NOT NULL
+          Project (#1{dst}, #3)
+            Join on=(#0{src} = #2) type=differential
+              ArrangeBy keys=[[#0{src}]]
+                Filter (#0{src}) IS NOT NULL
                   ReadStorage materialize.public.edges
               ArrangeBy keys=[[#0]]
-                Filter (#0) IS NOT NULL
+                Filter (#0{dst}) IS NOT NULL
                   Get l0
   Return
     With Mutually Recursive
       cte l1 =
-        TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=1
+        TopK group_by=[#0{dst}] order_by=[#1{min_dst} asc nulls_last] limit=1
           Union
             Map (0)
               Get l0
-            Project (#1, #3, #5)
+            Project (#1{dst}, #3, #5)
               Map ((#4 + 1))
-                Join on=(#0 = #2) type=differential
-                  ArrangeBy keys=[[#0]]
-                    Filter (#0) IS NOT NULL
+                Join on=(#0{src} = #2) type=differential
+                  ArrangeBy keys=[[#0{src}]]
+                    Filter (#0{src}) IS NOT NULL
                       ReadStorage materialize.public.edges
                   ArrangeBy keys=[[#0]]
-                    Filter (#0) IS NOT NULL
+                    Filter (#0{dst}) IS NOT NULL
                       Get l1
     Return
       Reduce group_by=[#0] aggregates=[count(*)]
@@ -443,33 +443,33 @@ GROUP BY round;
 Explained Query:
   With Mutually Recursive [recursion_limit=21]
     cte l0 =
-      Reduce group_by=[#0] aggregates=[min(#1)]
+      Reduce group_by=[#0{dst}] aggregates=[min(#1{dst})]
         Union
-          Project (#1, #1)
+          Project (#1{dst}, #1{dst})
             ReadStorage materialize.public.edges
-          Project (#1, #3)
-            Join on=(#0 = #2) type=differential
-              ArrangeBy keys=[[#0]]
-                Filter (#0) IS NOT NULL
+          Project (#1{dst}, #3)
+            Join on=(#0{src} = #2) type=differential
+              ArrangeBy keys=[[#0{src}]]
+                Filter (#0{src}) IS NOT NULL
                   ReadStorage materialize.public.edges
               ArrangeBy keys=[[#0]]
-                Filter (#0) IS NOT NULL
+                Filter (#0{dst}) IS NOT NULL
                   Get l0
   Return
     With Mutually Recursive [recursion_limit=23]
       cte l1 =
-        TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=1
+        TopK group_by=[#0{dst}] order_by=[#1{min_dst} asc nulls_last] limit=1
           Union
             Map (0)
               Get l0
-            Project (#1, #3, #5)
+            Project (#1{dst}, #3, #5)
               Map ((#4 + 1))
-                Join on=(#0 = #2) type=differential
-                  ArrangeBy keys=[[#0]]
-                    Filter (#0) IS NOT NULL
+                Join on=(#0{src} = #2) type=differential
+                  ArrangeBy keys=[[#0{src}]]
+                    Filter (#0{src}) IS NOT NULL
                       ReadStorage materialize.public.edges
                   ArrangeBy keys=[[#0]]
-                    Filter (#0) IS NOT NULL
+                    Filter (#0{dst}) IS NOT NULL
                       Get l1
     Return
       Reduce group_by=[#0] aggregates=[count(*)]

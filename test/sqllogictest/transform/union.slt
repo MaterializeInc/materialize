@@ -137,7 +137,7 @@ Explained Query:
         Union // { arity: 2 }
           ReadStorage materialize.public.t1 // { arity: 2 }
           Negate // { arity: 2 }
-            Project (#0, #2) // { arity: 2 }
+            Project (#0{f1}, #2) // { arity: 2 }
               Map (null) // { arity: 3 }
                 ReadStorage materialize.public.t3 // { arity: 2 }
 
@@ -161,36 +161,36 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+        Filter (#0{f1}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.t3 // { arity: 2 }
     cte l1 =
-      Project (#0, #1) // { arity: 2 }
-        Join on=(#0 = #2) type=differential // { arity: 3 }
+      Project (#0{f1}, #1{f2}) // { arity: 2 }
+        Join on=(#0{f1} = #2{nokey}) type=differential // { arity: 3 }
           implementation
             %0:l0[#0]K » %1:t2[#0]K
           Get l0 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 1 }
-            Project (#1) // { arity: 1 }
-              Filter (#1) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{nokey}]] // { arity: 1 }
+            Project (#1{nokey}) // { arity: 1 }
+              Filter (#1{nokey}) IS NOT NULL // { arity: 2 }
                 ReadStorage materialize.public.t2 // { arity: 2 }
   Return // { arity: 2 }
     Union // { arity: 2 }
       Negate // { arity: 2 }
-        Project (#0, #1) // { arity: 2 }
-          Join on=(#0 = #2) type=differential // { arity: 3 }
+        Project (#0{f1}, #1{f2}) // { arity: 2 }
+          Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
             implementation
               %1[#0]UKA » %0:l0[#0]K
             Get l0 // { arity: 2 }
-            ArrangeBy keys=[[#0]] // { arity: 1 }
-              Distinct project=[#0] // { arity: 1 }
-                Project (#0) // { arity: 1 }
+            ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
+              Distinct project=[#0{f1}] // { arity: 1 }
+                Project (#0{f1}) // { arity: 1 }
                   Get l1 // { arity: 2 }
       ReadStorage materialize.public.t3 // { arity: 2 }
       Get l1 // { arity: 2 }
 
 Source materialize.public.t2
-  filter=((#1) IS NOT NULL)
+  filter=((#1{nokey}) IS NOT NULL)
 Source materialize.public.t3
 
 Target cluster: quickstart

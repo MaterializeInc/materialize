@@ -132,9 +132,9 @@ SELECT * FROM c0
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Distinct project=[#0] // { arity: 1 }
+      Distinct project=[#0{dst}] // { arity: 1 }
         Union // { arity: 1 }
-          Project (#1) // { arity: 1 }
+          Project (#1{dst}) // { arity: 1 }
             ReadStorage materialize.public.edges // { arity: 2 }
           Get l0 // { arity: 1 }
   Return // { arity: 1 }

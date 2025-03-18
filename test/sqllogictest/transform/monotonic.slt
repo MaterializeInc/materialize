@@ -34,7 +34,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT counter % 3, MAX(counter) as sum FROM counter GROUP BY counter % 3;
 ----
 Explained Query:
-  Reduce group_by=[(#0 % 3)] aggregates=[max(#0)] monotonic
+  Reduce group_by=[(#0{counter} % 3)] aggregates=[max(#0{counter})] monotonic
     ReadStorage materialize.public.counter
 
 Source materialize.public.counter
@@ -55,8 +55,8 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM v1 CROSS JOIN LATERAL (SELECT * FROM v2 WHERE counter < f1 ORDER BY counter DESC LIMIT 3);
 ----
 Explained Query:
-  TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=3
-    Filter (#1 < #0)
+  TopK group_by=[#0{f1}] order_by=[#1{counter} desc nulls_first] limit=3
+    Filter (#1{counter} < #0{f1})
       CrossJoin type=differential
         ArrangeBy keys=[[]]
           ReadStorage materialize.public.v1

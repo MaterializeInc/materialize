@@ -74,12 +74,12 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key) WHERE a1.nokey = 1
 ----
 Explained Query:
-  Project (#0, #1, #0, #1) // { arity: 4 }
-    Filter (#1 = 1) // { arity: 2 }
+  Project (#0{key}, #1{nokey}, #0{key}, #1{nokey}) // { arity: 4 }
+    Filter (#1{nokey} = 1) // { arity: 2 }
       ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
-  filter=((#1 = 1))
+  filter=((#1{nokey} = 1))
 
 Target cluster: quickstart
 
@@ -212,7 +212,7 @@ WITH t3_with_key AS (select f1 as key, sum(f2) as nokey from t3 group by f1)
 SELECT a1.* FROM t3_with_key AS a1 LEFT JOIN t3_with_key AS a2 ON (a1.key = a2.key)
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[sum(#1)] // { arity: 2 }
+  Reduce group_by=[#0{f1}] aggregates=[sum(#1{f2})] // { arity: 2 }
     ReadStorage materialize.public.t3 // { arity: 2 }
 
 Source materialize.public.t3
@@ -305,12 +305,12 @@ Explained Query:
   With Mutually Recursive
     cte l0 =
       Union
-        Project (#0)
+        Project (#0{n})
           ReadStorage materialize.public.init
         Get l2
     cte l1 =
       Project (#1)
-        Map ((#0 + #0))
+        Map ((#0{n} + #0{n}))
           Get l0
     cte l2 =
       Union

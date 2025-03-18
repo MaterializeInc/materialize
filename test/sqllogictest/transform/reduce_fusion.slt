@@ -14,7 +14,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT * FROM t GROUP BY f1, f2, f0
 ----
 Explained Query:
-  Distinct project=[#0..=#2] // { arity: 3 }
+  Distinct project=[#0{f0}..=#2{f2}] // { arity: 3 }
     ReadStorage materialize.public.t // { arity: 3 }
 
 Source materialize.public.t
@@ -27,8 +27,8 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT r0 FROM (SELECT DISTINCT f1 + 1 as r0, f0 FROM t)
 ----
 Explained Query:
-  Distinct project=[(#0 + 1)] // { arity: 1 }
-    Project (#1) // { arity: 1 }
+  Distinct project=[(#0{f1} + 1)] // { arity: 1 }
+    Project (#1{f1}) // { arity: 1 }
       ReadStorage materialize.public.t // { arity: 3 }
 
 Source materialize.public.t
@@ -41,8 +41,8 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT f1 FROM (SELECT DISTINCT f0, f1 FROM t)
 ----
 Explained Query:
-  Distinct project=[#0] // { arity: 1 }
-    Project (#1) // { arity: 1 }
+  Distinct project=[#0{f1}] // { arity: 1 }
+    Project (#1{f1}) // { arity: 1 }
       ReadStorage materialize.public.t // { arity: 3 }
 
 Source materialize.public.t
@@ -83,8 +83,8 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT f0 FROM (SELECT f0 FROM t GROUP BY f1 / 10, f0) GROUP BY f0;
 ----
 Explained Query:
-  Distinct project=[#0] // { arity: 1 }
-    Project (#0) // { arity: 1 }
+  Distinct project=[#0{f0}] // { arity: 1 }
+    Project (#0{f0}) // { arity: 1 }
       ReadStorage materialize.public.t // { arity: 3 }
 
 Source materialize.public.t
@@ -97,8 +97,8 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT f0 / 20 FROM (SELECT f0 / 10 AS f0 FROM t GROUP BY f0 / 10) GROUP BY f0 / 20;
 ----
 Explained Query:
-  Distinct project=[((#0 / 10) / 20)] // { arity: 1 }
-    Project (#0) // { arity: 1 }
+  Distinct project=[((#0{f0} / 10) / 20)] // { arity: 1 }
+    Project (#0{f0}) // { arity: 1 }
       ReadStorage materialize.public.t // { arity: 3 }
 
 Source materialize.public.t
