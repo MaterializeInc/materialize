@@ -2126,8 +2126,8 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_graceful_cluster_reconfiguration,
-        desc: "Enable graceful reconfiguration for alter cluster",
+        name: enable_zero_downtime_cluster_reconfiguration,
+        desc: "Enable zero-downtime reconfiguration for alter cluster",
         default: false,
         enable_for_item_parsing: false,
     },

@@ -109,8 +109,9 @@ You can change the size of a cluster to respond to changes in your workload
 using [`ALTER CLUSTER`](/sql/alter-cluster). Depending on the type of objects
 the cluster is hosting, this operation **might incur downtime**.
 
-See the reference documentation for [`ALTER CLUSTER`](/sql/alter-cluster#graceful-cluster-resizing)
-for more details on cluster resizing.
+See the reference documentation for [`ALTER
+CLUSTER`](/sql/alter-cluster#zero-downtime-cluster-resizing) for more details
+on cluster resizing.
 
 #### Legacy sizes
 

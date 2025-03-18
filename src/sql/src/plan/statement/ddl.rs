@@ -5895,7 +5895,7 @@ pub fn plan_alter_cluster(
                         AlterClusterPlanStrategy::None => {}
                         _ => {
                             scx.require_feature_flag(
-                                &crate::session::vars::ENABLE_GRACEFUL_CLUSTER_RECONFIGURATION,
+                                &crate::session::vars::ENABLE_ZERO_DOWNTIME_CLUSTER_RECONFIGURATION,
                             )?;
                         }
                     }

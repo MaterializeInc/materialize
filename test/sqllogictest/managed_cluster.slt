@@ -446,7 +446,7 @@ DROP CLUSTER foo
 
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_graceful_cluster_reconfiguration = true;
+ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
 ----
 COMPLETE 0
 

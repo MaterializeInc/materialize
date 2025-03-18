@@ -35,12 +35,14 @@ contact your Materialize support.
 {{</ note >}}
 
 
-### Graceful cluster resizing
+### Zero-downtime cluster resizing
 
-For clusters that do not contain sources or sinks, Materialize supports altering
-the cluster size with no downtime (i.e., graceful cluster resizing).
+For clusters that do not contain sources or sinks, Materialize supports
+altering the cluster size with no downtime (i.e., zero-downtime cluster
+resizing).
 
-For more information, see [Graceful cluster resizing](/sql/alter-cluster/#graceful-cluster-resizing).
+For more information, see [Zero-downtime cluster
+resizing](/sql/alter-cluster/#zero-downtime-cluster-resizing).
 
 ### Real-time recency
 
