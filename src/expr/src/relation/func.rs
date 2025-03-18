@@ -3881,7 +3881,7 @@ impl TableFunc {
                 let r = Row::pack_slice(datums);
                 Ok(Box::new(std::iter::once((r, 1))))
             }
-            TableFunc::RegexpMatches(a) => Ok(Box::new(regexp_matches(datums[0], a).into_iter())),
+            TableFunc::RegexpMatches(a) => Ok(Box::new(regexp_matches(datums[0], a))),
         }
     }
 
