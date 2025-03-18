@@ -90,9 +90,6 @@ pub(crate) struct Instance<T> {
 
 #[derive(Debug)]
 struct ActiveIngestion {
-    /// Whether the ingestion prefers running on a single replica.
-    prefers_single_replica: bool,
-
     /// The set of replicas that this ingestion is currently running on.
     active_replicas: BTreeSet<ReplicaId>,
 }
@@ -358,12 +355,6 @@ where
     /// in state and potentially update scheduling decisions.
     fn absorb_ingestions(&mut self, ingestions: Vec<RunIngestionCommand>) {
         for ingestion in ingestions {
-            let prefers_single_replica = ingestion
-                .description
-                .desc
-                .connection
-                .prefers_single_replica();
-
             let existing_ingestion_state = self.active_ingestions.get_mut(&ingestion.id);
 
             // Always update our mapping from export to their ingestion.
@@ -376,10 +367,6 @@ where
                 // change anything about our scheduling decisions, no need to
                 // update active_ingestions.
 
-                assert!(
-                    ingestion_state.prefers_single_replica == prefers_single_replica,
-                    "single-replica preference changed"
-                );
                 tracing::debug!(
                     ingestion_id = %ingestion.id,
                     active_replicas = %ingestion_state.active_replicas.iter().map(|id| id.to_string()).join(", "),
@@ -388,7 +375,6 @@ where
             } else {
                 // We create a new ingestion state for this ingestion.
                 let ingestion_state = ActiveIngestion {
-                    prefers_single_replica,
                     active_replicas: BTreeSet::new(),
                 };
                 self.active_ingestions.insert(ingestion.id, ingestion_state);
@@ -418,16 +404,39 @@ where
     /// If `send_commands` is true, will send commands for newly-scheduled
     /// single-replica ingestions.
     fn update_ingestion_scheduling(&mut self, send_commands: bool) {
-        // We have to collect first and then send later, because we're borrowing
-        // self mutably just below.
+        // We first collect scheduling preferences and then schedule below.
+        // Applying the decision needs a mutable borrow but we also need to
+        // borrow for determining `prefers_single_replica`, so we split this
+        // into two loops.
+        let mut scheduling_preferences: Vec<(GlobalId, bool)> = Vec::new();
+
+        for ingestion_id in self.active_ingestions.keys() {
+            let ingestion_description = self
+                .get_ingestion_description(ingestion_id)
+                .expect("missing ingestion description");
+
+            let prefers_single_replica = ingestion_description
+                .desc
+                .connection
+                .prefers_single_replica();
+
+            scheduling_preferences.push((*ingestion_id, prefers_single_replica));
+        }
+
+        // Collect all commands per replica and send them in one go.
         let mut commands_by_replica: BTreeMap<ReplicaId, Vec<GlobalId>> = BTreeMap::new();
 
-        for (ingestion_id, ingestion_state) in self.active_ingestions.iter_mut() {
-            if ingestion_state.prefers_single_replica {
+        for (ingestion_id, prefers_single_replica) in scheduling_preferences {
+            let ingestion_state = self
+                .active_ingestions
+                .get_mut(&ingestion_id)
+                .expect("missing ingestion state");
+
+            if prefers_single_replica {
                 // For single-replica ingestion, schedule only if it's not already running.
                 if ingestion_state.active_replicas.is_empty() {
-                    let first_replica = self.replicas.keys().min().copied();
-                    if let Some(first_replica_id) = first_replica {
+                    let target_replica = self.replicas.keys().min().copied();
+                    if let Some(first_replica_id) = target_replica {
                         tracing::info!(
                             ingestion_id = %ingestion_id,
                             replica_id = %first_replica_id,
@@ -437,7 +446,7 @@ where
                         commands_by_replica
                             .entry(first_replica_id)
                             .or_default()
-                            .push(ingestion_id.clone());
+                            .push(ingestion_id);
                     }
                 } else {
                     tracing::info!(
@@ -463,7 +472,6 @@ where
             }
         }
 
-        // Now send all collected commands
         if send_commands {
             for (replica_id, ingestion_ids) in commands_by_replica {
                 let commands: Vec<RunIngestionCommand> = ingestion_ids
