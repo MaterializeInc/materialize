@@ -121,6 +121,7 @@ def run(
             f"ALTER SYSTEM SET max_replicas_per_cluster = {MAX_CLUSTER_REPLICAS * 40 + num_threads}"
         )
         system_exe.execute("ALTER SYSTEM SET max_secrets = 1000000")
+        system_exe.execute("ALTER SYSTEM SET idle_in_transaction_session_timeout = 0")
         # Most queries should not fail because of privileges
         for object_type in [
             "TABLES",
