@@ -26,9 +26,9 @@ modules](https://github.com/MaterializeInc/terraform-google-materialize) to:
 
 {{< warning >}}
 
-The Terraform modules used in this tutorial are provided for
-demonstration/evaluation purposes only and not intended for production use.
-Materialize does not support nor recommend these modules for production use.
+{{< self-managed/terraform-disclaimer >}}
+
+{{< self-managed/tutorial-disclaimer >}}
 
 {{< /warning >}}
 
