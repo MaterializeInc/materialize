@@ -4932,7 +4932,8 @@ derive_unary!(
     KafkaMurmur2Bytes,
     KafkaMurmur2String,
     SeahashBytes,
-    SeahashString
+    SeahashString,
+    Reverse
 );
 
 impl UnaryFunc {
@@ -5758,6 +5759,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::KafkaMurmur2String(_) => KafkaMurmur2String(()),
             UnaryFunc::SeahashBytes(_) => SeahashBytes(()),
             UnaryFunc::SeahashString(_) => SeahashString(()),
+            UnaryFunc::Reverse(_) => Reverse(()),
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
@@ -6256,6 +6258,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 KafkaMurmur2String(()) => Ok(impls::KafkaMurmur2String.into()),
                 SeahashBytes(()) => Ok(impls::SeahashBytes.into()),
                 SeahashString(()) => Ok(impls::SeahashString.into()),
+                Reverse(()) => Ok(impls::Reverse.into()),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoUnaryFunc::kind"))
