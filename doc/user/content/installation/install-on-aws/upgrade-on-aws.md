@@ -73,8 +73,7 @@ documentation](https://helm.sh/docs/intro/install/).
    cd terraform-aws-materialize/examples/simple
    ```
 
-1. Optional. You may need to update your [Materialize on AWS Terraform
-   modules](https://github.com/MaterializeInc/terraform-aws-materialize) to
+1. Optional. You may need to update your fork of the Terraform modules to
    upgrade.
 
 1. Configure `kubectl` to connect to your EKS cluster, replacing:
