@@ -236,25 +236,25 @@ SCENARIOS = [
                     INSERT INTO t1 (f3) SELECT '{i}' || REPEAT('a', {PAD_LEN}) FROM generate_series(1, {REPEAT});
                     """
                 )
-                for i in range(0, ITERATIONS)
+                for i in range(0, ITERATIONS * 10)
             ]
         )
         + PgCdcScenario.MZ_SETUP
         + dedent(
             f"""
-            > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
-            {ITERATIONS * REPEAT}
+            > SELECT * FROM v1; /* expect {ITERATIONS * 10 * REPEAT} */
+            {ITERATIONS * 10 * REPEAT}
             """
         ),
         post_restart=dedent(
             f"""
             # We do not do DELETE post-restart, as it will cause OOM for clusterd
-            > SELECT * FROM v1; /* expect {ITERATIONS * REPEAT} */
-            {ITERATIONS * REPEAT}
+            > SELECT * FROM v1; /* expect {ITERATIONS * 10 * REPEAT} */
+            {ITERATIONS * 10 * REPEAT}
             """
         ),
         materialized_memory="4.5Gb",
-        clusterd_memory="3.5Gb",
+        clusterd_memory="1Gb",
     ),
     PgCdcScenario(
         name="pg-cdc-update",
