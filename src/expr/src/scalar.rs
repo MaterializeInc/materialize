@@ -731,7 +731,7 @@ impl MirScalarExpr {
     /// use mz_expr::MirScalarExpr;
     /// use mz_repr::{ColumnType, Datum, ScalarType};
     ///
-    /// let expr_0 = MirScalarExpr::Column(0);
+    /// let expr_0 = MirScalarExpr::column(0);
     /// let expr_t = MirScalarExpr::literal_true();
     /// let expr_f = MirScalarExpr::literal_false();
     ///
