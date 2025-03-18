@@ -16,28 +16,41 @@ support building Materialize for.
 """
 
 load("@bazel_skylib//lib:selects.bzl", "selects")
-load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
 
-# This defines a flag we can specify on the command line.
-bool_flag(
-    name = "enable_jemalloc",
-    build_setting_default = True,
-    visibility = ["//visibility:public"],
+# A flag that we can specify on the command line to configure whether or not we
+# build with a sanitizer.
+string_flag(
+    name = "sanitizer",
+    build_setting_default = "none",
+    values = [
+        "none",
+        "address",
+        "hwaddress",
+    ],
 )
 
-# This defines a setting we can match on in `select({ ... })` statements for
-# the above build flag.
 config_setting(
-    name = "jemalloc_enabled",
-    flag_values = {":enable_jemalloc": "true"},
+    name = "sanitizer_none",
+    flag_values = {":sanitizer": "none"},
 )
 
-# We only want to use jemalloc if we're building for Linux and the feature is enabled.
+config_setting(
+    name = "sanitizer_address",
+    flag_values = {":sanitizer": "address"},
+)
+
+config_setting(
+    name = "sanitizer_hwaddress",
+    flag_values = {":sanitizer": "hwaddress"},
+)
+
+# We only want to use jemalloc if we're building for Linux and we're not using sanitizers.
 selects.config_setting_group(
     name = "use_jemalloc",
     match_all = [
         "@platforms//os:linux",
-        ":jemalloc_enabled",
+        ":sanitizer_none",
     ],
     visibility = ["//visibility:public"],
 )
