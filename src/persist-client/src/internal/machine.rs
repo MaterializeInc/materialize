@@ -17,7 +17,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use futures::future::BoxFuture;
+use futures::future::{self, BoxFuture};
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
 use mz_dyncfg::{Config, ConfigSet};
@@ -1016,25 +1016,20 @@ where
             Watch(&'a mut StateWatch<K, V, T, D>),
             Sleep(MetricsRetryStream),
         }
-        let mut wakes = FuturesUnordered::<
-            std::pin::Pin<Box<dyn Future<Output = Wake<K, V, T, D>> + Send + Sync>>,
-        >::new();
-        wakes.push(Box::pin(
-            watch
-                .wait_for_seqno_ge(seqno.next())
-                .map(Wake::Watch)
-                .instrument(trace_span!("snapshot::watch")),
-        ));
-        wakes.push(Box::pin(
-            sleeps
-                .sleep()
-                .map(Wake::Sleep)
-                .instrument(trace_span!("snapshot::sleep")),
-        ));
+        let mut watch_fut = std::pin::pin!(watch
+            .wait_for_seqno_ge(seqno.next())
+            .map(Wake::Watch)
+            .instrument(trace_span!("snapshot::watch")));
+        let mut sleep_fut = std::pin::pin!(sleeps
+            .sleep()
+            .map(Wake::Sleep)
+            .instrument(trace_span!("snapshot::sleep")));
 
         loop {
-            assert_eq!(wakes.len(), 2);
-            let wake = wakes.next().await.expect("wakes should be non-empty");
+            let wake = match future::select(watch_fut.as_mut(), sleep_fut.as_mut()).await {
+                future::Either::Left((wake, _)) => wake,
+                future::Either::Right((wake, _)) => wake,
+            };
             // Note that we don't need to fetch in the Watch case, because the
             // Watch wakeup is a signal that the shared state has already been
             // updated.
@@ -1064,13 +1059,14 @@ where
             // Wait a bit and try again. Intentionally don't ever log
             // this at info level.
             match wake {
-                Wake::Watch(watch) => wakes.push(Box::pin(
-                    async move {
-                        watch.wait_for_seqno_ge(seqno.next()).await;
-                        Wake::Watch(watch)
-                    }
-                    .instrument(trace_span!("snapshot::watch")),
-                )),
+                Wake::Watch(watch) => {
+                    watch_fut.set(
+                        watch
+                            .wait_for_seqno_ge(seqno.next())
+                            .map(Wake::Watch)
+                            .instrument(trace_span!("snapshot::watch")),
+                    );
+                }
                 Wake::Sleep(sleeps) => {
                     debug!(
                         "{:?}: {} {} next_listen_batch didn't find new data, retrying in {:?}",
@@ -1079,12 +1075,12 @@ where
                         self.shard_id(),
                         sleeps.next_sleep()
                     );
-                    wakes.push(Box::pin(
+                    sleep_fut.set(
                         sleeps
                             .sleep()
                             .map(Wake::Sleep)
                             .instrument(trace_span!("snapshot::sleep")),
-                    ));
+                    );
                 }
             }
         }
