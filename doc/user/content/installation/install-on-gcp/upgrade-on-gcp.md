@@ -172,8 +172,7 @@ If you want to use `jq` and do not have `jq` installed, install.
    cd terraform-google-materialize/examples/simple
    ```
 
-1. Optional. You may need to update your [Materialize on Google Cloud Terraform
-   modules](https://github.com/MaterializeInc/terraform-google-materialize) to
+1. Optional. You may need to update your fork of the Terraform modules to
    upgrade.
 
 1. Configure `kubectl` to connect to your EKS cluster, specifying:
