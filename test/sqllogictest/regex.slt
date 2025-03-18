@@ -761,24 +761,26 @@ SELECT regexp_replace(s, regex, replacement, 'igx') FROM e;
 query T
 SELECT regexp_matches('foobarbaz', '(b..)')
 ----
-bar
+{bar}
 
 query T
 SELECT regexp_matches('foobarbaz', '(b..)', 'g')
 ----
-bar
-baz
+{bar}
+{baz}
 
 query T
-select regexp_matches('foobarbequebazilbarfbonk', '(b[^b]+)(b[^b]+)', 'g');
+SELECT regexp_matches('foobarbequebazilbarfbonkbilbobagginsbarbellbeachball', '(b[^b]+)(b[^b]+)(b[^b]+)');
 ----
-(bar,beque)
-(bazil,barf)
+{bar,beque,bazil}
 
 query T
-select regexp_matches('foobarbequebazilbarfbonk', '(b[^b]+)(b[^b]+)');
+SELECT regexp_matches('foobarbequebazilbarfbonkbilbobagginsbarbellbeachball', '(b[^b]+)(b[^b]+)(b[^b]+)', 'g');
 ----
-(bar,beque)
+{barf,bonk,bil}
+{bo,baggins,bar}
+{bar,beque,bazil}
+{bell,beach,ball} 
 
 statement ok
 DROP CLUSTER multiprocess;

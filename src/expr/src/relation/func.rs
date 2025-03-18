@@ -3147,9 +3147,20 @@ fn regexp_matches<'a, 'r: 'a>(
             .iter()
             // The first match is the *entire* match, we want the capture groups by themselves.
             .skip(1)
-            .map(|m| Datum::from(m.map(|m| m.as_str())));
+            .map(|m| Datum::from(m.map(|m| m.as_str())))
+            .collect::<Vec<_>>();
 
-        (Row::pack(matches), 1)
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        let dimension = ArrayDimension {
+            lower_bound: 1,
+            length: matches.len(),
+        };
+        packer
+            .try_push_array(&[dimension], matches.into_iter())
+            .expect("generated dimensions above");
+
+        (row, 1)
     });
 
     if r.opts().global {
@@ -4010,11 +4021,9 @@ impl TableFunc {
             TableFunc::TabletizedScalar { relation, .. } => {
                 return relation.clone();
             }
-            TableFunc::RegexpMatches(a) => {
-                let column_types = a
-                    .capture_groups_iter()
-                    .map(|cg| ScalarType::String.nullable(cg.nullable))
-                    .collect();
+            TableFunc::RegexpMatches(_) => {
+                let column_types =
+                    vec![ScalarType::Array(Box::new(ScalarType::String)).nullable(false)];
                 let keys = vec![];
 
                 (column_types, keys)
@@ -4048,7 +4057,7 @@ impl TableFunc {
             TableFunc::UnnestMap { .. } => 2,
             TableFunc::Wrap { width, .. } => *width,
             TableFunc::TabletizedScalar { relation, .. } => relation.column_types.len(),
-            TableFunc::RegexpMatches(a) => a.capture_groups_len(),
+            TableFunc::RegexpMatches(_) => 1,
         }
     }
 
