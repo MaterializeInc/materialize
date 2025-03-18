@@ -287,6 +287,9 @@ resulting [`rust_library`](http://bazelbuild.github.io/rules_rust/defs.html#rust
 # Configuration for the crate as a whole.
 [package.metadata.cargo-gazelle]
 # Will skip generating a BUILD.bazel entirely.
+#
+# If you specify this setting please include a reason at the top of the
+# BUILD.bazel file explaining why we skip generating.
 skip_generating = (true | false)
 # Concatenate the specified string at the end of the generated BUILD.bazel file.
 #
