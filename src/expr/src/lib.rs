@@ -38,8 +38,8 @@ pub use linear::{
 };
 pub use relation::func::order_aggregate_datums as order_aggregate_datums_exported_for_benchmarking;
 pub use relation::func::{
-    AggregateFunc, AnalyzedRegex, CaptureGroupDesc, LagLeadType, NaiveOneByOneAggr, OneByOneAggr,
-    TableFunc,
+    AggregateFunc, AnalyzedRegex, AnalyzedRegexOpts, CaptureGroupDesc, LagLeadType,
+    NaiveOneByOneAggr, OneByOneAggr, TableFunc,
 };
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{

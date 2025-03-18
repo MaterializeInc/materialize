@@ -13,6 +13,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::str::FromStr;
 use std::sync::LazyLock;
 
 use itertools::Itertools;
@@ -3444,6 +3445,57 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String, String, String) => VariadicFunc::RegexpReplace => String, 2285;
             // TODO: PostgreSQL supports additional five and six argument forms of this function which
             // allow controlling where to start the replacement and how many replacements to make.
+        },
+        "regexp_matches" => Table {
+            params!(String, String) => Operation::variadic(move |_ecx, exprs| {
+                let regex = match exprs[1].clone().into_literal_string() {
+                    None => sql_bail!("regexp_matches requires a string literal as its second argument"),
+                    Some(regex) => mz_expr::AnalyzedRegex::new(&regex, mz_expr::AnalyzedRegexOpts::default()).map_err(|e| sql_err!("analyzing regex: {}", e))?,
+                };
+                let column_names = regex
+                    .capture_groups_iter()
+                    .map(|cg| {
+                        cg.name.clone().unwrap_or_else(|| format!("column{}", cg.index)).into()
+                    })
+                    .collect::<Vec<_>>();
+                if column_names.is_empty(){
+                    sql_bail!("regexp_matches must specify at least one capture group");
+                }
+                Ok(TableFuncPlan {
+                    expr: HirRelationExpr::CallTable {
+                        func: TableFunc::RegexpMatches(regex),
+                        exprs: vec![exprs[0].clone()],
+                    },
+                    column_names,
+                })
+            }) => ReturnType::set_of(String.into()), 2763;
+            params!(String, String, String) => Operation::variadic(move |_ecx, exprs| {
+                let flags = match exprs[2].clone().into_literal_string() {
+                    None => sql_bail!("regexp_matches requires a string literal as its third argument"),
+                    Some(flags) => flags,
+                };
+                let opts = mz_expr::AnalyzedRegexOpts::from_str(&flags).map_err(|e| sql_err!("parsing regex flags: {}", e))?;
+                let regex = match exprs[1].clone().into_literal_string() {
+                    None => sql_bail!("regexp_matches requires a string literal as its second argument"),
+                    Some(regex) => mz_expr::AnalyzedRegex::new(&regex, opts).map_err(|e| sql_err!("analyzing regex: {}", e))?,
+                };
+                let column_names = regex
+                    .capture_groups_iter()
+                    .map(|cg| {
+                        cg.name.clone().unwrap_or_else(|| format!("column{}", cg.index)).into()
+                    })
+                    .collect::<Vec<_>>();
+                if column_names.is_empty(){
+                    sql_bail!("regexp_matches must specify at least one capture group");
+                }
+                Ok(TableFuncPlan {
+                    expr: HirRelationExpr::CallTable {
+                        func: TableFunc::RegexpMatches(regex),
+                        exprs: vec![exprs[0].clone()],
+                    },
+                    column_names,
+                })
+            }) => ReturnType::set_of(String.into()), 2764;
         }
     };
 
@@ -3821,7 +3873,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
                 let regex = match regex.into_literal_string() {
                     None => sql_bail!("regexp_extract requires a string literal as its first argument"),
-                    Some(regex) => mz_expr::AnalyzedRegex::new(&regex).map_err(|e| sql_err!("analyzing regex: {}", e))?,
+                    Some(regex) => mz_expr::AnalyzedRegex::new(&regex, mz_expr::AnalyzedRegexOpts::default()).map_err(|e| sql_err!("analyzing regex: {}", e))?,
                 };
                 let column_names = regex
                     .capture_groups_iter()

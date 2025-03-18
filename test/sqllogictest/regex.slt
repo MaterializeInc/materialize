@@ -756,5 +756,29 @@ SELECT s, regexp_replace(s, regex, replacement, 'ig') FROM e;
 query error invalid regular expression flag: x
 SELECT regexp_replace(s, regex, replacement, 'igx') FROM e;
 
+# regexp_matches
+
+query T
+SELECT regexp_matches('foobarbaz', '(b..)')
+----
+bar
+
+query T
+SELECT regexp_matches('foobarbaz', '(b..)', 'g')
+----
+bar
+baz
+
+query T
+select regexp_matches('foobarbequebazilbarfbonk', '(b[^b]+)(b[^b]+)', 'g');
+----
+(bar,beque)
+(bazil,barf)
+
+query T
+select regexp_matches('foobarbequebazilbarfbonk', '(b[^b]+)(b[^b]+)');
+----
+(bar,beque)
+
 statement ok
 DROP CLUSTER multiprocess;

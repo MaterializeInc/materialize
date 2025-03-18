@@ -21,7 +21,13 @@ message ProtoCaptureGroupDesc {
   bool nullable = 3;
 }
 
+message ProtoAnalyzedRegexOpts {
+    bool case_insensitive = 1;
+    bool global = 2;
+}
+
 message ProtoAnalyzedRegex {
   mz_repr.adt.regex.ProtoRegex regex = 1;
   repeated ProtoCaptureGroupDesc groups = 2;
+  ProtoAnalyzedRegexOpts opts = 3;
 }
