@@ -780,7 +780,7 @@ SELECT regexp_matches('foobarbequebazilbarfbonkbilbobagginsbarbellbeachball', '(
 {barf,bonk,bil}
 {bo,baggins,bar}
 {bar,beque,bazil}
-{bell,beach,ball} 
+{bell,beach,ball}
 
 statement ok
 DROP CLUSTER multiprocess;
