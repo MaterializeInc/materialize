@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -169,7 +170,11 @@ fn generage_build_bazel<'a>(
     let crate_config = CrateConfig::new(package);
     tracing::debug!(?crate_config, "found config");
     if crate_config.skip_generating() {
-        tracing::info!(path = ?package.manifest_path(), "skipping, because crate config");
+        let msg = format!(
+            "skipping generation of '{}' because `skip_generating = True` was set",
+            package.manifest_path()
+        );
+        log_info(msg);
         return Ok(None);
     }
 
@@ -239,4 +244,11 @@ fn hash_file(file: &Path) -> Result<Option<Vec<u8>>, anyhow::Error> {
     let file_hash = file_hasher.finalize();
 
     Ok(Some(file_hash.to_vec()))
+}
+
+/// Prints to stderr an info line that will _always_ get shown to the user.
+fn log_info(s: impl fmt::Display) {
+    static YELLOW_START: &str = "\x1b[94m";
+    static RESET: &str = "\x1b[0m";
+    eprintln!("{YELLOW_START}info:{RESET} {s}");
 }
