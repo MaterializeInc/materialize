@@ -3157,7 +3157,7 @@ fn regexp_matches<'a, 'r: 'a>(
             length: matches.len(),
         };
         packer
-            .try_push_array(&[dimension], matches.into_iter())
+            .try_push_array(&[dimension], matches)
             .expect("generated dimensions above");
 
         (row, 1)
