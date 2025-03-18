@@ -326,7 +326,7 @@ steps:
           composition: sqllogictest
           run: fast-tests
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-aarch64-16cpu-32gb
 
   - id: restarts
     label: "Restart test"
@@ -336,7 +336,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: restart
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner-aarch64-8cpu-16gb
 
   - id: legacy-upgrade-docs-ignore-missing
     label: "Legacy upgrade tests (last version from docs, ignore missing)"
@@ -363,7 +363,7 @@ steps:
               composition: debezium
               run: postgres
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: debezium-sql-server
         label: "Debezium SQL Server tests"
@@ -415,7 +415,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: mysql-rtr
         label: "MySQL RTR tests"
@@ -455,7 +455,7 @@ steps:
               composition: pg-cdc-resumption
         agents:
           # Larger agent for faster runtime
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
 
       - id: pg-rtr
         label: "Postgres RTR tests"
@@ -603,7 +603,7 @@ steps:
         timeout_in_minutes: 45
         parallelism: 6
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -620,7 +620,7 @@ steps:
         timeout_in_minutes: 45
         parallelism: 6
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
