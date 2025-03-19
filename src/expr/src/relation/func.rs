@@ -51,11 +51,11 @@ use crate::relation::{
     WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
+use crate::EvalError;
 use crate::WindowFrameBound::{
     CurrentRow, OffsetFollowing, OffsetPreceding, UnboundedFollowing, UnboundedPreceding,
 };
 use crate::WindowFrameUnits::{Groups, Range, Rows};
-use crate::{row, EvalError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.relation.func.rs"));
 
