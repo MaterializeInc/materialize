@@ -598,6 +598,24 @@ where
             .connected_replica_count
             .set(u64::cast_from(connected_replica_count));
     }
+
+    /// Returns the set of replica IDs that are actively running the given
+    /// object (ingestion, ingestion export (aka. subsource), or export).
+    pub fn get_active_replicas_for_object(&self, id: &GlobalId) -> BTreeSet<ReplicaId> {
+        if let Some(ingestion_id) = self.ingestion_exports.get(id) {
+            // Right now, only ingestions can have per-replica scheduling decisions.
+            match self.active_ingestions.get(ingestion_id) {
+                Some(ingestion) => ingestion.active_replicas.clone(),
+                None => {
+                    // The ingestion has already been compacted away (aka. stopped).
+                    BTreeSet::new()
+                }
+            }
+        } else {
+            // For non-ingestion objects, all replicas are active
+            self.replicas.keys().copied().collect()
+        }
+    }
 }
 
 /// Replica-specific configuration.

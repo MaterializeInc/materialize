@@ -489,27 +489,6 @@ where
             location,
             grpc_client: self.config.parameters.grpc_client.clone(),
         };
-        for id in instance.active_ingestions() {
-            let ingestion_state = self
-                .collections
-                .get(id)
-                .expect("instance contains unknown ingestion");
-
-            let ingestion_description = match &ingestion_state.data_source {
-                DataSource::Ingestion(ingestion_description) => ingestion_description.clone(),
-                _ => panic!(
-                    "unexpected data source for ingestion: {:?}",
-                    ingestion_state.data_source
-                ),
-            };
-
-            for id in ingestion_description.collection_ids() {
-                let collection = self.collections.get_mut(&id).expect("missing collection");
-
-                // Track which replicas this ingestion is running on.
-                collection.active_replicas.insert(replica_id);
-            }
-        }
         instance.add_replica(replica_id, config);
     }
 
@@ -536,19 +515,17 @@ where
         };
 
         for id in instance.active_ingestions() {
-            let ingestion = self
-                .collections
-                .get_mut(id)
-                .expect("instance contains unknown ingestion");
-
-            ingestion.active_replicas.remove(&replica_id);
-
             if let Some(active_replicas) = self.dropped_objects.get_mut(id) {
                 active_replicas.remove(&replica_id);
                 if active_replicas.is_empty() {
                     self.dropped_objects.remove(id);
                 }
             }
+
+            let ingestion = self
+                .collections
+                .get_mut(id)
+                .expect("instance contains unknown ingestion");
 
             let ingestion_description = match &ingestion.data_source {
                 DataSource::Ingestion(ingestion_description) => ingestion_description.clone(),
@@ -576,12 +553,6 @@ where
         }
 
         for id in instance.active_exports() {
-            self.collections
-                .get_mut(id)
-                .expect("instance contains unknown export")
-                .active_replicas
-                .remove(&replica_id);
-
             if let Some(active_replicas) = self.dropped_objects.get_mut(id) {
                 active_replicas.remove(&replica_id);
                 if active_replicas.is_empty() {
@@ -1099,10 +1070,6 @@ where
                 data_source,
                 collection_metadata: metadata,
                 extra_state,
-                // Default to empty as tables and webhooks don't run on
-                // replicas.  For ingestions, this will be updated in
-                // run_ingestion.
-                active_replicas: BTreeSet::new(),
                 wallclock_lag_max: Default::default(),
                 wallclock_lag_metrics,
             };
@@ -1378,7 +1345,7 @@ where
         expected_version: RelationVersion,
         register_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        let (data_shard, active_replicas) = {
+        let data_shard = {
             let Controller {
                 collections,
                 storage_collections,
@@ -1402,10 +1369,7 @@ where
                 )
                 .await?;
 
-            let data_shard = existing.collection_metadata.data_shard.clone();
-            let active_replicas = existing.active_replicas.clone();
-
-            (data_shard, active_replicas)
+            existing.collection_metadata.data_shard.clone()
         };
 
         let persist_client = self
@@ -1438,7 +1402,6 @@ where
             data_source: collection_desc.data_source.clone(),
             collection_metadata: collection_meta,
             extra_state: CollectionStateExtra::None,
-            active_replicas,
             wallclock_lag_max: Default::default(),
             wallclock_lag_metrics,
         };
@@ -1959,11 +1922,37 @@ where
                 .remove(id)
                 .expect("list populated after checking that self.collections contains it");
 
+            let instance = match &collection.extra_state {
+                CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
+                CollectionStateExtra::Export(export) => Some(export.cluster_id()),
+                CollectionStateExtra::None => None,
+            }
+            .and_then(|i| self.instances.get(&i));
+
             // Record which replicas were running a collection, so that we can
             // match DroppedId messages against them and eventually remove state
             // from self.dropped_objects
-            if !collection.active_replicas.is_empty() {
-                self.dropped_objects.insert(*id, collection.active_replicas);
+            if let Some(instance) = instance {
+                let active_replicas = instance.get_active_replicas_for_object(id);
+                if !active_replicas.is_empty() {
+                    // The remap collection of an ingestion doesn't have extra
+                    // state and doesn't have an instance_id, but we still get
+                    // upper updates for them, so want to make sure to populate
+                    // dropped_ids.
+                    // TODO(aljoscha): All this is a bit icky. But here we are
+                    // for now...
+                    match &collection.data_source {
+                        DataSource::Ingestion(ingestion_desc) => {
+                            self.dropped_objects.insert(
+                                ingestion_desc.remap_collection_id,
+                                active_replicas.clone(),
+                            );
+                        }
+                        _ => {}
+                    }
+
+                    self.dropped_objects.insert(*id, active_replicas);
+                }
             }
         }
 
@@ -2042,10 +2031,23 @@ where
                 .collections
                 .remove(id)
                 .expect("list populated after checking that self.collections contains it");
+
+            let instance = match &collection.extra_state {
+                CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
+                CollectionStateExtra::Export(export) => Some(export.cluster_id()),
+                CollectionStateExtra::None => None,
+            }
+            .and_then(|i| self.instances.get(&i));
+
             // Record how many replicas were running an export, so that we can
             // match `DroppedId` messages against it and eventually remove state
             // from `self.dropped_objects`.
-            self.dropped_objects.insert(*id, collection.active_replicas);
+            if let Some(instance) = instance {
+                let active_replicas = instance.get_active_replicas_for_object(id);
+                if !active_replicas.is_empty() {
+                    self.dropped_objects.insert(*id, active_replicas);
+                }
+            }
         }
 
         // Also let StorageCollections know!
@@ -3185,16 +3187,6 @@ where
                 ingestion_id: id,
             })?;
 
-        for id in ingestion_description.collection_ids() {
-            let collection = self
-                .collections
-                .get_mut(&id)
-                .ok_or(StorageError::IdentifierMissing(id))?;
-
-            // Track which replicas this ingestion is running on.
-            collection.active_replicas = instance.replica_ids().collect();
-        }
-
         let augmented_ingestion = RunIngestionCommand { id, description };
         instance.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
 
@@ -3262,14 +3254,6 @@ where
                 storage_instance_id,
                 export_id: id,
             })?;
-
-        let collection = self
-            .collections
-            .get_mut(&id)
-            .ok_or(StorageError::IdentifierMissing(id))?;
-
-        // Track which replicas this export is running on.
-        collection.active_replicas = instance.replica_ids().collect();
 
         instance.send(StorageCommand::RunSinks(vec![cmd]));
 
@@ -3548,11 +3532,6 @@ struct CollectionState<T: TimelyTimestamp> {
     pub collection_metadata: CollectionMetadata,
 
     pub extra_state: CollectionStateExtra<T>,
-
-    /// Tracks the replicas this collection is running on. This is used to track
-    /// the DroppedIds responses we expect to receive before dropping the tracked
-    /// state.
-    active_replicas: BTreeSet<ReplicaId>,
 
     /// Maximum frontier wallclock lag since the last introspection update.
     wallclock_lag_max: Duration,
