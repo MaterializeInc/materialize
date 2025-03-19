@@ -108,7 +108,7 @@ We will need three pieces of work, which should all land together:
 | `Threshold` | `Threshold`                              | `Threshold Diffs`                                    |
 | `Union`     | `Union`                                  | `Union`                                              |
 | `Union`     | `Union (consolidates output)`            | `Consolidating Union`                                |
-| `ArrangeBy` | `Arrange`                                | `Arrange`                                            |
+| `ArrangeBy` | `Arrange`                                | `Arrange` or `Stream/Arrange`                        |
 | `Let`       | `e0 With l1 = e1 ...`                    | `e1 With l1 = e1 ...`                                |
 | `LetRec`    | `e0 With Mutually Recursive l1 = e1 ...` | `e0 With Mutually Recursve l1 = e1 ...`              |
 
@@ -330,18 +330,12 @@ Finish
                              %0:customer » %1:orders[#1]KAif » %2:lineitem[#0]KAif
                              %1:orders » %0:customer[#0]KAef » %2:lineitem[#0]KAif
                              %2:lineitem » %1:orders[#0]KAif » %0:customer[#0]KAef
-                           -> Arranged (columns=8)
-                                Keys: [c_custkey]
-                                -> Index Scan using pk_customer_custkey on customer (columns=8)
-                                   Delta join first input (full scan): pk_customer_custkey
-                           -> Arrange (columns=9)
-                                Keys: [o_orderkey], [o_custkey]
-                                -> Index Scan using pk_orders_orderkey, fk_orders_custkey on orders (columns=9)
-                                   Delta join lookup: pk_orders_orderkey, fk_orders_custkey
-                           -> Arrange (columns=16)
-                                Keys: [l_orderkey]
-                                -> Index Scan using fk_lineitem_orderkey on lineitem (columns=16)
-                                   Delta join lookup: fk_lineitem_orderkey
+                           -> Index Scan using pk_customer_custkey on customer (columns=8)
+                                Delta join first input (full scan): pk_customer_custkey
+                           -> Index Scan using pk_orders_orderkey, fk_orders_custkey on orders (columns=9)
+                                Delta join lookup: pk_orders_orderkey (%1), fk_orders_custkey (%0, %2)
+                           -> Index Scan using fk_lineitem_orderkey on lineitem (columns=16)
+                                Delta join lookup: fk_lineitem_orderkey (%0, %1, %2)
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (delta join 1st input (full scan))
