@@ -1512,7 +1512,6 @@ steps:
             composition: data-ingest
             # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
             args: [--replicas=2]
-      skip: "Reenable when database-issues#8990 is fixed"
 
     - id: data-ingest-8-replicas
       label: "Data Ingest (8 replicas)"
@@ -1526,7 +1525,6 @@ steps:
             composition: data-ingest
             # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
             args: [--replicas=8]
-      skip: "Reenable when database-issues#8990 is fixed"
 
   - group: "Parallel Workload"
     key: parallel-workload
