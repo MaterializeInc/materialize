@@ -82,9 +82,6 @@ def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
         if name == "default":
             return
-        # TODO: Reenable when database-issues#9084 is fixed
-        if name == "kafka-source-rehydration":
-            return
         with c.test_case(name):
             c.workflow(name)
 
@@ -965,6 +962,14 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         )
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
+
+        start_time = time.time()
+        result = c.sql_query("SELECT 1", service="mz_new")
+        elapsed = time.time() - start_time
+        print(f"bootstrapping (checked via SELECT 1) took {elapsed} seconds")
+        duration = time.time() - start_time
+        assert result[0][0] == 1, f"Wrong result: {result}"
+
         start_time = time.time()
         result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
@@ -972,7 +977,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         duration = time.time() - start_time
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            duration < 8
+            duration < 2
         ), f"Took {duration}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
 
