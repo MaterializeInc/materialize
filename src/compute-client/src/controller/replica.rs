@@ -9,8 +9,9 @@
 
 //! A client for replicas of a compute instance.
 
+use std::sync::atomic::{self, AtomicBool};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use mz_build_info::BuildInfo;
@@ -18,7 +19,7 @@ use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, Tim
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_REPLICA_EXPIRATION;
 use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
-use mz_ore::retry::Retry;
+use mz_ore::retry::{Retry, RetryState};
 use mz_ore::task::AbortOnDropHandle;
 use mz_service::client::GenericClient;
 use mz_service::params::GrpcClientParameters;
@@ -61,6 +62,8 @@ pub(super) struct ReplicaClient<T> {
     task: AbortOnDropHandle<()>,
     /// Replica metrics.
     metrics: ReplicaMetrics,
+    /// Flag reporting whether the replica connection has been established.
+    connected: Arc<AtomicBool>,
 }
 
 impl<T> ReplicaClient<T>
@@ -81,6 +84,7 @@ where
         // asynchronously. This isolates the main controller thread from
         // the replica.
         let (command_tx, command_rx) = unbounded_channel();
+        let connected = Arc::new(AtomicBool::new(false));
 
         let task = mz_ore::task::spawn(
             || format!("active-replication-replica-{id}"),
@@ -92,6 +96,7 @@ where
                 response_tx,
                 epoch,
                 metrics: metrics.clone(),
+                connected: Arc::clone(&connected),
                 dyncfg,
             }
             .run(),
@@ -101,6 +106,7 @@ where
             command_tx,
             task: task.abort_on_drop(),
             metrics,
+            connected,
         }
     }
 }
@@ -121,6 +127,11 @@ impl<T> ReplicaClient<T> {
     pub(super) fn is_failed(&self) -> bool {
         self.task.is_finished()
     }
+
+    /// Determine if the replica connection has been established.
+    pub(super) fn is_connected(&self) -> bool {
+        self.connected.load(atomic::Ordering::Relaxed)
+    }
 }
 
 /// Configuration for `replica_task`.
@@ -140,6 +151,8 @@ struct ReplicaTask<T> {
     epoch: ClusterStartupEpoch,
     /// Replica metrics.
     metrics: ReplicaMetrics,
+    /// Flag to report successful replica connection.
+    connected: Arc<AtomicBool>,
     /// Dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
 }
@@ -166,47 +179,50 @@ where
     /// The connection is retried forever (with backoff) and this method returns only after
     /// a connection was successfully established.
     async fn connect(&self) -> Client<T> {
-        Retry::default()
-            .clamp_backoff(Duration::from_secs(1))
-            .retry_async(|state| {
-                let addrs = &self.config.location.ctl_addrs;
-                let dests = addrs
-                    .iter()
-                    .map(|addr| (addr.clone(), self.metrics.clone()))
-                    .collect();
-                let version = self.build_info.semver_version();
-                let client_params = &self.config.grpc_client;
+        let try_connect = |retry: RetryState| {
+            let addrs = &self.config.location.ctl_addrs;
+            let dests = addrs
+                .iter()
+                .map(|addr| (addr.clone(), self.metrics.clone()))
+                .collect();
+            let version = self.build_info.semver_version();
+            let client_params = &self.config.grpc_client;
 
-                async move {
-                    match ComputeGrpcClient::connect_partitioned(dests, version, client_params)
-                        .await
-                    {
-                        Ok(client) => {
-                            let dyncfg = Arc::clone(&self.dyncfg);
-                            let metrics = self.metrics.clone();
-                            Ok(SequentialHydration::new(client, dyncfg, metrics))
-                        }
-                        Err(e) => {
-                            if state.i >= mz_service::retry::INFO_MIN_RETRIES {
-                                info!(
-                                    replica = ?self.replica_id,
-                                    "error connecting to replica, retrying in {:?}: {e:#}",
-                                    state.next_backoff.unwrap(),
-                                );
-                            } else {
-                                debug!(
-                                    replica = ?self.replica_id,
-                                    "error connecting to replica, retrying in {:?}: {e:#}",
-                                    state.next_backoff.unwrap()
-                                );
-                            }
-                            Err(e)
-                        }
+            async move {
+                let connect_start = Instant::now();
+                let connect_result =
+                    ComputeGrpcClient::connect_partitioned(dests, version, client_params).await;
+                self.metrics.observe_connect_time(connect_start.elapsed());
+
+                connect_result.inspect_err(|error| {
+                    let next_backoff = retry.next_backoff.unwrap();
+                    if retry.i >= mz_service::retry::INFO_MIN_RETRIES {
+                        info!(
+                            replica_id = %self.replica_id, ?next_backoff,
+                            "error connecting to replica: {error:#}",
+                        );
+                    } else {
+                        debug!(
+                            replica_id = %self.replica_id, ?next_backoff,
+                            "error connecting to replica: {error:#}",
+                        );
                     }
-                }
-            })
+                })
+            }
+        };
+
+        let client = Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .retry_async(try_connect)
             .await
-            .expect("retry retries forever")
+            .expect("retry retries forever");
+
+        self.metrics.observe_connect();
+        self.connected.store(true, atomic::Ordering::Relaxed);
+
+        let dyncfg = Arc::clone(&self.dyncfg);
+        let metrics = self.metrics.clone();
+        SequentialHydration::new(client, dyncfg, metrics)
     }
 
     /// Runs the message loop.
