@@ -375,14 +375,15 @@ node instance type, etc.), see the
    {{< tab  "Via Network Load Balancer" >}}
 
    Starting in v0.3.0, for each Materialize instance, Materialize on AWS
-   Terraform module also deploys AWS Network Load
-   Balancers  (by default, internal) with the following listeners:
+   Terraform module also deploys AWS Network Load Balancers (by default,
+   internal) with the following listeners, including a listener on port 8080 for
+   the Materialize Console:
 
    | Port | Description |
    | ---- | ------------|
    | 6875 | For SQL connections to the database |
    | 6876 | For HTTP(S) connections to the database |
-   | 6876 | For HTTP(S) connections to Materialize Console |
+   | **8080** | **For HTTP(S) connections to Materialize Console** |
 
    The Network Load Balancer (NLB) details are found in the `nlb_details`  in
    the [Terraform output](#aws-terrafrom-output).
