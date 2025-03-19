@@ -94,7 +94,16 @@ configure_make(
     ) + select({
         "@platforms//os:macos": ["ARFLAGS=r"],
         "//conditions:default": [],
-    }),
+    }) + select(
+        {
+            "@//misc/bazel/platforms:sanitizer_none": [],
+            "@//misc/bazel/platforms:sanitizer_address": [],
+            # When we build with the hardware assisted address sanitizer
+            # linking fails with some ASM instructions being out of range.
+            "@//misc/bazel/platforms:sanitizer_hwaddress": ["no-asm"],
+        },
+        no_match_error = "Please configure OpenSSL to build with this sanitizer.",
+    ),
     env = select({
         "@platforms//os:macos": {"AR": "$(execpath @llvm_toolchain_llvm//:ar)"},
         "//conditions:default": {},

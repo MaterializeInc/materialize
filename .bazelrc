@@ -27,6 +27,8 @@ common --macos_sdk_version=14.0
 # trying to constrain the above arguments to just macos doesn't seem to work.
 common --copt=-Wno-unused-command-line-argument
 common --linkopt=-Wno-unused-command-line-argument
+# Always build position independent C code.
+common --copt=-fPIC
 
 # Config for building protobuf.
 build --copt=-Wno-error=deprecated-declarations
@@ -195,6 +197,56 @@ build:optimized --@rules_rust//rust/settings:lto=off
 
 # Build with the Rust Nightly Toolchain
 build:rust-nightly --@rules_rust//rust/toolchain/channel=nightly
+
+# AddressSanitizer
+#
+# Only works on Linux and does not support cross compiling.
+#
+# TODO: To support cross compiling sanitized builds we most likely need to move
+# our compiler runtime libraries (e.g. libc++, libunwind, asan) from our
+# toolchain into our system root, and then also specify `-resource-dir` to tell
+# `clang` to search for these libraries in the system root.
+#
+# See: <https://clang.llvm.org/docs/AddressSanitizer.html>
+#      <https://doc.rust-lang.org/beta/unstable-book/compiler-flags/sanitizer.html#addresssanitizer>
+build:asan --config=rust-nightly
+build:asan --@rules_rust//:extra_rustc_flag=-Zsanitizer=address --@rules_rust//:extra_rustc_flag=-Zexternal-clangrt
+build:asan --@rules_rust//:extra_rustc_flag=-Cdebug-assertions=on
+build:asan --@rules_rust//:extra_rustc_flag=-Cllvm-args=-asan-use-after-scope
+build:asan --@rules_rust//:extra_rustc_flag=-Cllvm-args=-asan-use-after-return=always
+build:asan --copt=-fsanitize=address
+build:asan --copt=-fno-omit-frame-pointer
+build:asan --copt=-g
+build:asan --copt=-O1
+build:asan --linkopt=-fsanitize=address
+build:asan --strip=never
+build:asan --@//misc/bazel/platforms:sanitizer="address"
+build:asan --action_env=ASAN_OPTIONS=verbosity=1
+# HACK(parkmycar): We want to tell Rust to use the Bazel provided `clang++` but there isn't
+# a great way to do that. We know this is where `clang++` lives though, so it works.
+build:asan --@rules_rust//:extra_rustc_flag=-Clinker=external/llvm_toolchain_llvm/bin/clang++
+
+# Hardware Assisted AddressSanitizer
+#
+# Only works on `aarch64-linux-unknown-gnu` and does not support cross compiling.
+#
+# See: <https://clang.llvm.org/docs/HardwareAssistedAddressSanitizerDesign.html>
+#      <https://doc.rust-lang.org/beta/unstable-book/compiler-flags/sanitizer.html#hwaddresssanitizer>
+build:hwasan --config=rust-nightly
+build:hwasan --@rules_rust//:extra_rustc_flag=-Zsanitizer=hwaddress --@rules_rust//:extra_rustc_flag=-Zexternal-clangrt
+build:hwasan --@rules_rust//:extra_rustc_flag=-Cdebug-assertions=on
+build:hwasan --@rules_rust//:extra_rustc_flag=-Ctarget-feature=+tagged-globals
+build:hwasan --copt=-fsanitize=hwaddress
+build:hwasan --copt=-fno-omit-frame-pointer
+build:hwasan --copt=-g
+build:hwasan --copt=-O1
+build:hwasan --linkopt=-fsanitize=hwaddress
+build:hwasan --strip=never
+build:hwasan --@//misc/bazel/platforms:sanitizer="hwaddress"
+build:hwasan --action_env=ASAN_OPTIONS=verbosity=1
+# HACK(parkmycar): We want to tell Rust to use the Bazel provided `clang++` but there isn't
+# a great way to do that. We know this is where `clang++` lives though, so it works.
+build:hwasan --@rules_rust//:extra_rustc_flag=-Clinker=external/llvm_toolchain_llvm/bin/clang++
 
 # Cross Language LTO
 #
