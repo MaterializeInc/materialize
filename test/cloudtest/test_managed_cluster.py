@@ -217,6 +217,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     # Setup for validating cancelation and
     # replica checks during alter
     mz.testdrive.run(
+        no_reset=True,
         input=dedent(
             """
         $ kafka-create-topic topic=zdt-reconfig
