@@ -1738,6 +1738,11 @@ async fn monotonic_append<T: Timestamp + Lattice + Codec64 + TimestampManipulati
                 ((SourceData(Ok(row.clone())), ()), lower.clone(), diff)
             })
             .collect::<Vec<_>>();
+        if write_handle.shard_id().to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32"
+            && updates.len() > 0
+        {
+            tracing::info!(shard = %write_handle.shard_id(), "appending {} updates", updates.len());
+        }
         let res = write_handle
             .compare_and_append(
                 updates,

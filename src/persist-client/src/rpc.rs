@@ -293,8 +293,24 @@ impl GrpcPubSubClient {
                 async_stream::stream! {
                     while let Some(message) = broadcast.next().await {
                         debug!("sending pubsub message: {:?}", message);
+
                         match message {
-                            Ok(message) => yield message,
+                            Ok(message) => {
+                                use crate::internal::service::proto_pub_sub_message::Message::*;
+                                if let Some(m) = &message.message {
+                                    let shard_id = match m {
+                                        PushDiff(pd) => &pd.shard_id,
+                                        Subscribe(s)=> &s.shard_id,
+                                        Unsubscribe(us) => &us.shard_id,
+                                    };
+                                    if shard_id.to_string()
+                                        == "s372c59b4-091f-40b6-b462-9a7791b3cb32"
+                                    {
+                                        tracing::info!(shard = %shard_id, msg = ?m, "sending pubsub message");
+                                    }
+                                }
+                                yield message;
+                            }
                             Err(BroadcastStreamRecvError::Lagged(i)) => {
                                 broadcast_errors.inc_by(i);
                             }
@@ -440,7 +456,12 @@ impl Debug for GrpcPubSubSender {
 }
 
 impl GrpcPubSubSender {
-    fn send(&self, message: proto_pub_sub_message::Message, metrics: &PubSubClientCallMetrics) {
+    fn send(
+        &self,
+        message: proto_pub_sub_message::Message,
+        metrics: &PubSubClientCallMetrics,
+        log: bool,
+    ) {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .expect("failed to get millis since epoch");
@@ -453,10 +474,16 @@ impl GrpcPubSubSender {
 
         match self.requests.send(message) {
             Ok(_) => {
+                if log {
+                    tracing::info!("send succeeded (GrpcPubSubSender)");
+                }
                 metrics.succeeded.inc();
                 metrics.bytes_sent.inc_by(u64::cast_from(size));
             }
             Err(err) => {
+                if log {
+                    tracing::info!("send failed (GrpcPubSubSender): {err}");
+                }
                 metrics.failed.inc();
                 debug!("error sending client message: {}", err);
             }
@@ -466,6 +493,9 @@ impl GrpcPubSubSender {
 
 impl PubSubSenderInternal for GrpcPubSubSender {
     fn push_diff(&self, shard_id: &ShardId, diff: &VersionedData) {
+        if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+            tracing::info!(shard = %shard_id, "pushing diff (GrpcPubSubSender)");
+        }
         self.send(
             proto_pub_sub_message::Message::PushDiff(ProtoPushDiff {
                 shard_id: shard_id.into_proto(),
@@ -473,15 +503,21 @@ impl PubSubSenderInternal for GrpcPubSubSender {
                 diff: diff.data.clone(),
             }),
             &self.metrics.pubsub_client.sender.push,
+            false,
         )
     }
 
     fn subscribe(&self, shard_id: &ShardId) {
+        if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+            tracing::info!(shard = %shard_id, "sending subscribe (GrpcPubSubSender)");
+        }
+
         self.send(
             proto_pub_sub_message::Message::Subscribe(ProtoSubscribe {
                 shard_id: shard_id.into_proto(),
             }),
             &self.metrics.pubsub_client.sender.subscribe,
+            shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32",
         )
     }
 
@@ -491,6 +527,7 @@ impl PubSubSenderInternal for GrpcPubSubSender {
                 shard_id: shard_id.into_proto(),
             }),
             &self.metrics.pubsub_client.sender.unsubscribe,
+            false,
         )
     }
 }
@@ -518,6 +555,10 @@ impl SubscriptionTrackingSender {
                 false
             } else {
                 debug!("reconnecting to: {}", shard_id);
+
+                if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+                    tracing::info!(shard = %shard_id, "reconnecting");
+                }
                 self.delegate.subscribe(shard_id);
                 true
             }
@@ -527,15 +568,25 @@ impl SubscriptionTrackingSender {
 
 impl PubSubSender for SubscriptionTrackingSender {
     fn push_diff(&self, shard_id: &ShardId, diff: &VersionedData) {
+        if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+            tracing::info!(shard = %shard_id, "pushing diff (SubscriptionTrackingSender)");
+        }
         self.delegate.push_diff(shard_id, diff)
     }
 
     fn subscribe(self: Arc<Self>, shard_id: &ShardId) -> Arc<ShardSubscriptionToken> {
+        if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+            tracing::info!(shard = %shard_id, "subscribe (SubscriptionTrackingSender)");
+        }
+
         let mut subscribes = self.subscribes.lock().expect("lock");
         if let Some(token) = subscribes.get(shard_id) {
             match token.upgrade() {
                 None => assert!(subscribes.remove(shard_id).is_some()),
                 Some(token) => {
+                    if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+                        tracing::info!(shard = %shard_id, "already subscribed (SubscriptionTrackingSender)");
+                    }
                     return Arc::clone(&token);
                 }
             }
@@ -585,15 +636,26 @@ impl MetricsSameProcessPubSubSender {
 
 impl PubSubSender for MetricsSameProcessPubSubSender {
     fn push_diff(&self, shard_id: &ShardId, diff: &VersionedData) {
+        if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+            tracing::info!(shard = %shard_id, "pushing diff (MetricsSameProcessPubSubSender)");
+        }
         self.delegate.push_diff(shard_id, diff);
         self.metrics.pubsub_client.sender.push.succeeded.inc();
     }
 
     fn subscribe(self: Arc<Self>, shard_id: &ShardId) -> Arc<ShardSubscriptionToken> {
+        if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+            tracing::info!(shard = %shard_id, "subscribe (MetricsSameProcessPubSubSender)");
+        }
+
         if self.delegate_subscribe {
             let delegate = Arc::clone(&self.delegate);
             delegate.subscribe(shard_id)
         } else {
+            if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+                tracing::info!(shard = %shard_id, "not delegating subscribe (MetricsSameProcessPubSubSender)");
+            }
+
             // Create a no-op token that does not subscribe nor unsubscribe.
             // This is ideal for single-process persist setups, since the sender and
             // receiver should already share a state cache... but if the diffs are
@@ -617,9 +679,17 @@ impl PubSubSenderInternal for NoopPubSubSender {
 }
 
 impl PubSubSender for NoopPubSubSender {
-    fn push_diff(&self, _shard_id: &ShardId, _diff: &VersionedData) {}
+    fn push_diff(&self, shard_id: &ShardId, _diff: &VersionedData) {
+        if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+            tracing::info!(shard = %shard_id, "pushing diff (NoopPubSubSender)");
+        }
+    }
 
     fn subscribe(self: Arc<Self>, shard_id: &ShardId) -> Arc<ShardSubscriptionToken> {
+        if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+            tracing::info!(shard = %shard_id, "subscribe (NoopPubSubSender)");
+        }
+
         Arc::new(ShardSubscriptionToken {
             shard_id: *shard_id,
             sender: self,
@@ -776,6 +846,11 @@ impl PubSubState {
     }
 
     fn push_diff(&self, connection_id: usize, shard_id: &ShardId, data: &VersionedData) {
+        let log = shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32";
+
+        if log {
+            tracing::info!(shard = %shard_id, "pushing diff (PubSubState)");
+        }
         let now = Instant::now();
         self.metrics.push_call_count.inc();
 
@@ -789,6 +864,12 @@ impl PubSubState {
         );
 
         let subscribers = self.shard_subscribers.read().expect("lock poisoned");
+        if log {
+            let ids = subscribers
+                .get(shard_id)
+                .map(|s| s.keys().collect::<Vec<_>>());
+            tracing::info!(shard = %shard_id, "shard_subscribers: {ids:?}");
+        }
         if let Some(subscribed_connections) = subscribers.get(shard_id) {
             let mut num_sent = 0;
             let mut data_size = 0;
@@ -796,6 +877,9 @@ impl PubSubState {
             for (subscribed_conn_id, tx) in subscribed_connections {
                 // skip sending the diff back to the original sender
                 if *subscribed_conn_id == connection_id {
+                    if log {
+                        tracing::info!(shard = %shard_id, "skipping original sender: {subscribed_conn_id}");
+                    }
                     continue;
                 }
                 debug!(
@@ -805,6 +889,9 @@ impl PubSubState {
                     data.seqno,
                     data.data.len()
                 );
+                if log {
+                    tracing::info!(shard = %shard_id, seqno = %data.seqno, "forwarding req to {subscribed_conn_id}");
+                }
                 let req = ProtoPubSubMessage {
                     timestamp: Some(
                         SystemTime::now()
@@ -825,8 +912,15 @@ impl PubSubState {
                     }
                     Err(TrySendError::Full(_)) => {
                         self.metrics.broadcasted_diff_dropped_channel_full.inc();
+                        if log {
+                            tracing::info!(shard = %shard_id, "TrySendError::Full");
+                        }
                     }
-                    Err(TrySendError::Closed(_)) => {}
+                    Err(TrySendError::Closed(_)) => {
+                        if log {
+                            tracing::info!(shard = %shard_id, "TrySendError::Closed");
+                        }
+                    }
                 };
             }
 
@@ -847,6 +941,10 @@ impl PubSubState {
         notifier: Sender<Result<ProtoPubSubMessage, Status>>,
         shard_id: &ShardId,
     ) {
+        if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+            tracing::info!(shard = %shard_id, %connection_id, "subscribe (PubSubState)");
+        }
+
         let now = Instant::now();
         self.metrics.subscribe_call_count.inc();
 
@@ -1055,7 +1153,10 @@ impl proto_persist_pub_sub_server::ProtoPersistPubSub for PersistGrpcPubSubServe
                             warn!("received empty message from: {}", caller_id);
                         }
                         Some(proto_pub_sub_message::Message::PushDiff(req)) => {
-                            let shard_id = req.shard_id.parse().expect("valid shard id");
+                            let shard_id: ShardId = req.shard_id.parse().expect("valid shard id");
+                            if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+                                tracing::info!(shard = %shard_id, ?req, "received PushDiff");
+                            }
                             let diff = VersionedData {
                                 seqno: req.seqno.into_rust().expect("valid seqno"),
                                 data: req.diff.clone(),
@@ -1065,11 +1166,17 @@ impl proto_persist_pub_sub_server::ProtoPersistPubSub for PersistGrpcPubSubServe
                             }
                         }
                         Some(proto_pub_sub_message::Message::Subscribe(diff)) => {
-                            let shard_id = diff.shard_id.parse().expect("valid shard id");
+                            let shard_id: ShardId = diff.shard_id.parse().expect("valid shard id");
+                            if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+                                tracing::info!(shard = %shard_id, ?diff, "received Subscribe");
+                            }
                             connection.subscribe(&shard_id);
                         }
                         Some(proto_pub_sub_message::Message::Unsubscribe(diff)) => {
-                            let shard_id = diff.shard_id.parse().expect("valid shard id");
+                            let shard_id: ShardId = diff.shard_id.parse().expect("valid shard id");
+                            if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+                                tracing::info!(shard = %shard_id, ?diff, "received Unsubscribe");
+                            }
                             connection.unsubscribe(&shard_id);
                         }
                     }
@@ -1097,10 +1204,16 @@ pub(crate) struct PubSubConnection {
 
 impl PubSubSenderInternal for PubSubConnection {
     fn push_diff(&self, shard_id: &ShardId, diff: &VersionedData) {
+        if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+            tracing::info!(shard = %shard_id, "pushing diff (PubSubConnection)");
+        }
         self.state.push_diff(self.connection_id, shard_id, diff)
     }
 
     fn subscribe(&self, shard_id: &ShardId) {
+        if shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+            tracing::info!(shard = %shard_id, "subscribe (PubSubConnection)");
+        }
         self.state
             .subscribe(self.connection_id, self.notifier.clone(), shard_id)
     }

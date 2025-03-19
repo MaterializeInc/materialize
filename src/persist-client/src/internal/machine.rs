@@ -1048,6 +1048,7 @@ where
                             self.applier.metrics.watch.listen_resolved_via_watch.inc()
                         }
                         Wake::Sleep(_) => {
+                            //tracing::info!(shard = %self.shard_id(), "resolved via sleep");
                             self.applier.metrics.watch.listen_resolved_via_sleep.inc()
                         }
                     }

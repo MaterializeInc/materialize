@@ -355,6 +355,9 @@ where
                     self.shard_metrics.cmd_succeeded.inc();
                     self.update_state(new_state);
                     if PUBSUB_PUSH_DIFF_ENABLED.get(&self.cfg) {
+                        if self.shard_id.to_string() == "s372c59b4-091f-40b6-b462-9a7791b3cb32" {
+                            tracing::info!(shard = %self.shard_id, "pushing diff");
+                        }
                         self.pubsub_sender.push_diff(&self.shard_id, &diff);
                     }
                     return Ok((diff.seqno, Ok(res), maintenance));
