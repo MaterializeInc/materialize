@@ -782,7 +782,7 @@ where
         let mut input = builder.new_input_connection(
             &self.inner,
             Pipeline,
-            vec![Antichain::from_elem(step_forward_summary)],
+            [(0, Antichain::from_elem(step_forward_summary))].into(),
         );
         builder.set_notify(false);
         builder.build(move |_caps| {

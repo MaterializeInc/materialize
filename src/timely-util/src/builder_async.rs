@@ -16,7 +16,7 @@
 //! Types to build async operators with general shapes.
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -340,7 +340,7 @@ pub trait InputConnection<T: Timestamp> {
     type Capability;
 
     /// Generates a summary description of the connection behavior given the number of outputs.
-    fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>>;
+    fn describe(&self, outputs: usize) -> BTreeMap<usize, Antichain<T::Summary>>;
 
     /// Accepts an input capability.
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability;
@@ -352,8 +352,8 @@ pub struct Disconnected;
 impl<T: Timestamp> InputConnection<T> for Disconnected {
     type Capability = T;
 
-    fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
-        vec![Antichain::new(); outputs]
+    fn describe(&self, _outputs: usize) -> BTreeMap<usize, Antichain<T::Summary>> {
+        BTreeMap::default()
     }
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
@@ -367,10 +367,8 @@ pub struct ConnectedToOne(usize);
 impl<T: Timestamp> InputConnection<T> for ConnectedToOne {
     type Capability = Capability<T>;
 
-    fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
-        let mut summary = vec![Antichain::new(); outputs];
-        summary[self.0] = Antichain::from_elem(T::Summary::default());
-        summary
+    fn describe(&self, _outputs: usize) -> BTreeMap<usize, Antichain<T::Summary>> {
+        [(self.0, Antichain::from_elem(T::Summary::default()))].into()
     }
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
@@ -384,12 +382,11 @@ pub struct ConnectedToMany<const N: usize>([usize; N]);
 impl<const N: usize, T: Timestamp> InputConnection<T> for ConnectedToMany<N> {
     type Capability = [Capability<T>; N];
 
-    fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
-        let mut summary = vec![Antichain::new(); outputs];
-        for output in self.0 {
-            summary[output] = Antichain::from_elem(T::Summary::default());
-        }
-        summary
+    fn describe(&self, _outputs: usize) -> BTreeMap<usize, Antichain<T::Summary>> {
+        self.0
+            .iter()
+            .map(|output| (*output, Antichain::from_elem(T::Summary::default())))
+            .collect()
     }
 
     fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
@@ -533,8 +530,7 @@ impl<G: Scope> OperatorBuilder<G> {
     ) {
         let index = self.builder.shape().outputs();
 
-        let connection = vec![Antichain::new(); self.builder.shape().inputs()];
-        let (wrapper, stream) = self.builder.new_output_connection(connection);
+        let (wrapper, stream) = self.builder.new_output_connection(Default::default());
 
         let handle = AsyncOutputHandle::new(wrapper, index);
 
