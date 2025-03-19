@@ -2476,29 +2476,33 @@ where
     fn set_read_policies(&self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>) {
         let mut collections = self.collections.lock().expect("lock poisoned");
 
-        let user_capabilities = collections
-            .iter_mut()
-            .filter(|(id, _c)| id.is_user())
-            .map(|(id, c)| {
-                let updates = c.read_capabilities.updates().cloned().collect_vec();
-                (*id, c.implied_capability.clone(), updates)
-            })
-            .collect_vec();
+        if tracing::enabled!(tracing::Level::TRACE) {
+            let user_capabilities = collections
+                .iter_mut()
+                .filter(|(id, _c)| id.is_user())
+                .map(|(id, c)| {
+                    let updates = c.read_capabilities.updates().cloned().collect_vec();
+                    (*id, c.implied_capability.clone(), updates)
+                })
+                .collect_vec();
 
-        trace!(?policies, ?user_capabilities, "set_read_policies");
+            trace!(?policies, ?user_capabilities, "set_read_policies");
+        }
 
         self.set_read_policies_inner(&mut collections, policies);
 
-        let user_capabilities = collections
-            .iter_mut()
-            .filter(|(id, _c)| id.is_user())
-            .map(|(id, c)| {
-                let updates = c.read_capabilities.updates().cloned().collect_vec();
-                (*id, c.implied_capability.clone(), updates)
-            })
-            .collect_vec();
+        if tracing::enabled!(tracing::Level::TRACE) {
+            let user_capabilities = collections
+                .iter_mut()
+                .filter(|(id, _c)| id.is_user())
+                .map(|(id, c)| {
+                    let updates = c.read_capabilities.updates().cloned().collect_vec();
+                    (*id, c.implied_capability.clone(), updates)
+                })
+                .collect_vec();
 
-        trace!(?user_capabilities, "after! set_read_policies");
+            trace!(?user_capabilities, "after! set_read_policies");
+        }
     }
 
     fn acquire_read_holds(
