@@ -379,7 +379,6 @@ Arrange ReduceMinsMaxes
 Arrange ReduceMinsMaxes
 Arrange ReduceMinsMaxes
 Arrange recursive err
-Arrange recursive err
 ArrangeAccumulable [val: empty]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0)]]
@@ -407,7 +406,6 @@ Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
-Distinct recursive err
 Distinct recursive err
 DistinctBy
 DistinctByErrorCheck
@@ -984,7 +982,7 @@ AccumulableErrorCheck  9
 Arrange␠ReduceMinsMaxes  3
 Arrange␠export␠iterative  2
 Arrange␠export␠iterative␠err  2
-Arrange␠recursive␠err  4
+Arrange␠recursive␠err  3
 ArrangeAccumulable␠[val:␠empty]  9
 ArrangeBy[[CallBinary␠{␠func:␠JsonbGetString␠{␠stringify:␠true␠},␠expr1:␠Column(1),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  2
 ArrangeBy[[CallBinary␠{␠func:␠JsonbGetString␠{␠stringify:␠true␠},␠expr1:␠Column(2),␠expr2:␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠})␠}]]  1
@@ -1031,7 +1029,7 @@ Arranged␠DistinctBy  47
 Arranged␠MinsMaxesHierarchical␠input  14
 Arranged␠ReduceInaccumulable  3
 Arranged␠TopK␠input  68
-Distinct␠recursive␠err  4
+Distinct␠recursive␠err  3
 DistinctBy  47
 DistinctByErrorCheck  47
 ReduceAccumulable  9
