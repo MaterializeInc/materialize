@@ -335,15 +335,12 @@ where
     // `export_handles.len() + 1` outputs.
     for (id, export) in exports {
         // This output is not connected to any of the existing inputs.
-        let connection = vec![Antichain::new(); export_handles.len()];
         let (export_output, new_export) =
-            builder.new_output_connection::<CapacityContainerBuilder<_>>(connection);
+            builder.new_output_connection::<CapacityContainerBuilder<_>>(Default::default());
 
         // The input is not connected to any of the existing outputs.
         let outputs_count = export_handles.len() + 1;
-        let mut connection = vec![Antichain::new(); outputs_count];
-        // Standard frontier implication for the corresponding output of this input.
-        connection.push(Antichain::from_elem(Default::default()));
+        let connection = [(outputs_count, Antichain::from_elem(Default::default()))].into();
         let export_input = builder.new_input_connection(&export.inner, Pipeline, connection);
         export_handles.push((id, export_input, export_output));
         let new_export: StackedCollection<G, Result<SourceMessage, DataflowError>> =
