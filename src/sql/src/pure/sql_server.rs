@@ -14,8 +14,7 @@ use mz_sql_parser::ast::{ExternalReferences, UnresolvedItemName};
 use crate::plan::PlanError;
 use crate::pure::{PurifiedSourceExport, RetrievedSourceReferences, SourceReferencePolicy};
 
-// BTreeMap<UnresolvedItemName, PurifiedSourceExport>
-
+/// Purify the requested [`ExternalReferences`] from the provided [``]
 pub(super) async fn purify_source_exports(
     client: &mut mz_sql_server_util::Client,
     retrieved_references: &RetrievedSourceReferences,

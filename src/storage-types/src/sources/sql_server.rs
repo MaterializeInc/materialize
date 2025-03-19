@@ -13,10 +13,12 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use columnation::{Columnation, CopyRegion};
+use mz_ore::future::InTask;
 use mz_proto::{IntoRustIfSome, RustType};
 use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use timely::progress::Antichain;
 
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
@@ -51,9 +53,24 @@ pub struct SqlServerSource<C: ConnectionAccess = InlinedConnection> {
 impl SqlServerSource<InlinedConnection> {
     pub async fn fetch_write_frontier(
         self,
-        _storage_configuration: &crate::configuration::StorageConfiguration,
-    ) -> Result<timely::progress::Antichain<Lsn>, anyhow::Error> {
-        todo!()
+        storage_configuration: &crate::configuration::StorageConfiguration,
+    ) -> Result<Antichain<Lsn>, anyhow::Error> {
+        let config = self
+            .connection
+            .resolve_config(
+                &storage_configuration.connection_context.secrets_reader,
+                storage_configuration,
+                InTask::No,
+            )
+            .await?;
+        let (mut client, conn) = mz_sql_server_util::Client::connect(config).await?;
+        // TODO(sql_server1): Make spawning this task automatic.
+        mz_ore::task::spawn(|| "sql server connection", async move { conn.await });
+
+        let maximum_raw_lsn = mz_sql_server_util::inspect::get_max_lsn(&mut client).await?;
+        let maximum_lsn = Lsn::try_from(&maximum_raw_lsn[..])?;
+
+        Ok(Antichain::from_elem(maximum_lsn))
     }
 }
 
@@ -223,6 +240,19 @@ impl RustType<ProtoSqlServerSourceExtras> for SqlServerSourceExtras {
     Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary,
 )]
 pub struct Lsn([u8; 10]);
+
+impl TryFrom<&[u8]> for Lsn {
+    // TODO(sql_server2): Add an InvalidLsnError type that can identify when
+    // the LSN is reported as 0xNULL, which I think happens when CDC is not enabled.
+    type Error = anyhow::Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let raw = value
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid SQL Server LSN"))?;
+        Ok(Lsn(raw))
+    }
+}
 
 impl fmt::Display for Lsn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

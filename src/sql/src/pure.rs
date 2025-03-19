@@ -991,7 +991,7 @@ async fn purify_create_source(
                 database: connection.database.into(),
             };
             retrieved_source_references = reference_client.get_source_references().await?;
-            tracing::debug!(?retrieved_source_references, "got source references");
+            tracing::info!(?retrieved_source_references, "got source references");
 
             let subsources = sql_server::purify_source_exports(
                 &mut client,

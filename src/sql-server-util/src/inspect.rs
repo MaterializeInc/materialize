@@ -65,6 +65,28 @@ pub async fn ensure_snapshot_isolation_enabled(client: &mut Client) -> Result<()
     Ok(())
 }
 
+/// Returns the maximum log sequence number.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/sys-fn-cdc-get-max-lsn-transact-sql?view=sql-server-ver16>
+pub async fn get_max_lsn(client: &mut Client) -> Result<Vec<u8>, SqlServerError> {
+    static MAX_LSN_QUERY: &str = "SELECT sys.fn_cdc_get_max_lsn();";
+    let result = client.simple_query(MAX_LSN_QUERY).await?;
+
+    match &result[..] {
+        [row] => row
+            .try_get::<&[u8], _>(0)?
+            .map(|lsn| lsn.to_vec())
+            .ok_or_else(|| SqlServerError::InvalidSystemSetting {
+                name: "max_lsn".to_string(),
+                expected: "10 byte binary".to_string(),
+                actual: format!("{result:?}"),
+            }),
+        other => Err(SqlServerError::InvariantViolated(format!(
+            "expected 1 row, got {other:?}"
+        ))),
+    }
+}
+
 /// Returns metadata about the columns from the specified table.
 ///
 /// Note: The implementation of TryFrom for [`SqlServerColumnRaw`] relies on

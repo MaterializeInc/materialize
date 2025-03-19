@@ -46,6 +46,7 @@ impl SourceRender for SqlServerSource {
         Option<TimelyStream<G, Probe<Self::Time>>>,
         Vec<PressOnDropButton>,
     ) {
+        tracing::error!(source_exports = ?config.source_exports, ?self, "SQL SERVER SOURCE");
         todo!()
     }
 }
