@@ -46,12 +46,19 @@
 //!    them to write back out, ensuring that the final contents of the persist shard match
 //!    `desired`.
 //!  * `append` appends the batches minted by `mint` and written by `write` to the persist shard.
-//!    This is again a single-worker operator. It waits for all workers to stage their batches for
-//!    a given batch description, then appends all the batches together as a single logical batch.
+//!    This is a multi-worker operator, where workers are responsible for different subsets of
+//!    batch descriptions. If a worker is responsible for a given batch description, it waits for
+//!    all workers to stage their batches for that batch description, then appends all the batches
+//!    together as a single logical batch.
 //!
 //! Note that while the above graph suggests that `mint` and `write` both receive copies of the
 //! `desired` stream, the actual implementation passes that stream through `mint` and lets `write`
 //! read the passed-through stream, to avoid cloning data.
+//!
+//! Also note that the `append` operator's implementation would perhaps be more natural as a
+//! single-worker implementation. The purpose of sharing the work between all workers is to avoid a
+//! work imbalance where one worker is overloaded (doing both appends and the consequent persist
+//! maintenance work) while others are comparatively idle.
 //!
 //! The persist sink is written to be robust to the presence of other conflicting instances (e.g.
 //! from other replicas) writing to the same persist shard. Each of the three operators needs to be
@@ -115,6 +122,7 @@ use std::sync::Arc;
 
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::StreamExt;
+use mz_compute_types::dyncfgs::ENABLE_MV_APPEND_SMEARING;
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
@@ -213,7 +221,7 @@ type PersistStreams<S> =
 type DescsStream<S> = Stream<S, BatchDescription>;
 
 /// Type of the `batches` stream.
-type BatchesStream<S> = Stream<S, ProtoBatch>;
+type BatchesStream<S> = Stream<S, (BatchDescription, ProtoBatch)>;
 
 /// Type of the shared sink write frontier.
 type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
@@ -243,9 +251,6 @@ where
         start_signal,
     );
 
-    // Determine the active worker for single-worker operators.
-    let active_worker_id = usize::cast_from(sink_id.hashed()) % scope.peers();
-
     let persist_api = PersistApi {
         persist_clients: Arc::clone(&compute_state.persist_clients),
         collection: target.clone(),
@@ -257,9 +262,9 @@ where
         sink_id,
         persist_api.clone(),
         as_of.clone(),
-        active_worker_id,
         compute_state.read_only_rx.clone(),
         &desired,
+        Rc::clone(&compute_state.worker_config),
     );
 
     let (batches, write_token) = write::render(
@@ -272,7 +277,7 @@ where
         Rc::clone(&compute_state.worker_config),
     );
 
-    let append_token = append::render(sink_id, persist_api, active_worker_id, &descs, &batches);
+    let append_token = append::render(sink_id, persist_api, &descs, &batches);
 
     // Report sink frontier updates to the `ComputeState`.
     let collection = compute_state.expect_collection_mut(sink_id);
@@ -414,16 +419,24 @@ where
 ///
 /// Batch descriptions are produced by the `mint` operator and consumed by the `write` and `append`
 /// operators, where they inform which batches should be written or appended, respectively.
+///
+/// Each batch description also contains the index of its "append worker", i.e. the worker that is
+/// responsible for appending the written batches to the output shard.
 #[derive(Clone, Serialize, Deserialize)]
 struct BatchDescription {
     lower: Antichain<Timestamp>,
     upper: Antichain<Timestamp>,
+    append_worker: usize,
 }
 
 impl BatchDescription {
-    fn new(lower: Antichain<Timestamp>, upper: Antichain<Timestamp>) -> Self {
+    fn new(lower: Antichain<Timestamp>, upper: Antichain<Timestamp>, append_worker: usize) -> Self {
         assert!(PartialOrder::less_than(&lower, &upper));
-        Self { lower, upper }
+        Self {
+            lower,
+            upper,
+            append_worker,
+        }
     }
 }
 
@@ -431,9 +444,10 @@ impl std::fmt::Debug for BatchDescription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "({:?}, {:?})",
+            "({:?}, {:?})@{}",
             self.lower.elements(),
-            self.upper.elements()
+            self.upper.elements(),
+            self.append_worker,
         )
     }
 }
@@ -453,16 +467,15 @@ mod mint {
     ///  * `sink_id`: The `GlobalId` of the sink export.
     ///  * `persist_api`: An object providing access to the output persist shard.
     ///  * `as_of`: The first time for which the sink may produce output.
-    ///  * `active_worker_id`: The ID of the worker that runs this (single-threaded) operator.
     ///  * `read_only_tx`: A receiver that reports the sink is in read-only mode.
     ///  * `desired`: The ok/err streams that should be sinked to persist.
     pub fn render<S>(
         sink_id: GlobalId,
         persist_api: PersistApi,
         as_of: Antichain<Timestamp>,
-        active_worker_id: usize,
         mut read_only_rx: watch::Receiver<bool>,
         desired: &DesiredStreams<S>,
+        worker_config: Rc<ConfigSet>,
     ) -> (
         DesiredStreams<S>,
         DescsStream<S>,
@@ -474,6 +487,10 @@ mod mint {
     {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
+        let worker_count = scope.peers();
+
+        // Determine the active worker for the mint operator.
+        let active_worker_id = usize::cast_from(sink_id.hashed()) % scope.peers();
 
         let sink_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::MIN)));
         let shared_frontier = Rc::clone(&sink_frontier);
@@ -525,7 +542,7 @@ mod mint {
             let mut cap_set = CapabilitySet::from_elem(desc_cap);
 
             let read_only = *read_only_rx.borrow_and_update();
-            let mut state = State::new(sink_id, as_of, read_only);
+            let mut state = State::new(sink_id, worker_count, as_of, read_only, worker_config);
 
             // Create a stream that reports advancements of the target shard's frontier and updates
             // the shared sink frontier.
@@ -613,10 +630,14 @@ mod mint {
     /// State maintained by the `mint` operator.
     struct State {
         sink_id: GlobalId,
+        /// The number of workers in the Timely cluster.
+        worker_count: usize,
         /// The frontiers of the `desired` inputs.
         desired_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
         /// The frontier of the target persist shard.
         persist_frontier: Antichain<Timestamp>,
+        /// The append worker for the next batch description, chosen in round-robin fashion.
+        next_append_worker: usize,
         /// The last `lower` we have emitted in a batch description, if any. Whenever the
         /// `persist_frontier` moves beyond this frontier, we need to mint a new description.
         last_lower: Option<Antichain<Timestamp>>,
@@ -624,10 +645,18 @@ mod mint {
         ///
         /// In read-only mode, minting of batch descriptions is disabled.
         read_only: bool,
+        /// Dynamic configuration.
+        worker_config: Rc<ConfigSet>,
     }
 
     impl State {
-        fn new(sink_id: GlobalId, as_of: Antichain<Timestamp>, read_only: bool) -> Self {
+        fn new(
+            sink_id: GlobalId,
+            worker_count: usize,
+            as_of: Antichain<Timestamp>,
+            read_only: bool,
+            worker_config: Rc<ConfigSet>,
+        ) -> Self {
             // Initializing `persist_frontier` to the `as_of` ensures that the first minted batch
             // description will have a `lower` of `as_of` or beyond, and thus that we don't spend
             // work needlessly writing batches at previous times.
@@ -635,10 +664,13 @@ mod mint {
 
             Self {
                 sink_id,
+                worker_count,
                 desired_frontiers: OkErr::new_frontiers(),
                 persist_frontier,
+                next_append_worker: 0,
                 last_lower: None,
                 read_only,
+                worker_config,
             }
         }
 
@@ -697,7 +729,12 @@ mod mint {
 
             let lower = persist_frontier.clone();
             let upper = desired_frontier.clone();
-            let desc = BatchDescription::new(lower, upper);
+            let append_worker = self.next_append_worker;
+            let desc = BatchDescription::new(lower, upper, append_worker);
+
+            if ENABLE_MV_APPEND_SMEARING.get(&self.worker_config) {
+                self.next_append_worker = (self.next_append_worker + 1) % self.worker_count;
+            }
 
             self.last_lower = Some(desc.lower.clone());
 
@@ -840,8 +877,8 @@ mod write {
                     else => return,
                 };
 
-                if let Some((batch, cap)) = maybe_batch {
-                    batches_output.give(&cap, batch);
+                if let Some((index, batch, cap)) = maybe_batch {
+                    batches_output.give(&cap, (index, batch));
                 }
             }
         });
@@ -1007,7 +1044,9 @@ mod write {
             self.trace("set batch description");
         }
 
-        async fn maybe_write_batch(&mut self) -> Option<(ProtoBatch, Capability<Timestamp>)> {
+        async fn maybe_write_batch(
+            &mut self,
+        ) -> Option<(BatchDescription, ProtoBatch, Capability<Timestamp>)> {
             let (desc, _cap) = self.batch_description.as_ref()?;
 
             // We can write a new batch if we have seen all `persist` updates before `lower` and
@@ -1038,13 +1077,13 @@ mod write {
 
             let batch = self
                 .persist_writer
-                .batch(updates, desc.lower, desc.upper)
+                .batch(updates, desc.lower.clone(), desc.upper.clone())
                 .await
                 .expect("valid usage")
                 .into_transmittable_batch();
 
             self.trace("wrote a batch");
-            Some((batch, cap))
+            Some((desc, batch, cap))
         }
     }
 }
@@ -1063,7 +1102,6 @@ mod append {
     pub fn render<S>(
         sink_id: GlobalId,
         persist_api: PersistApi,
-        active_worker_id: usize,
         descs: &DescsStream<S>,
         batches: &BatchesStream<S>,
     ) -> PressOnDropButton
@@ -1076,19 +1114,20 @@ mod append {
         let name = operator_name(sink_id, "append");
         let mut op = OperatorBuilder::new(name, scope);
 
-        let mut descs_input = op.new_disconnected_input(descs, Pipeline);
+        // Broadcast batch descriptions to all workers, regardless of whether or not they are
+        // responsible for the append, to give them a chance to clean up any outdated state they
+        // might still hold.
+        let mut descs_input = op.new_disconnected_input(&descs.broadcast(), Pipeline);
         let mut batches_input = op.new_disconnected_input(
             batches,
-            Exchange::new(move |_| u64::cast_from(active_worker_id)),
+            Exchange::new(move |(desc, _): &(BatchDescription, _)| {
+                u64::cast_from(desc.append_worker)
+            }),
         );
 
         let button = op.build(move |_capabilities| async move {
-            if worker_id != active_worker_id {
-                return;
-            }
-
             let writer = persist_api.open_writer().await;
-            let mut state = State::new(sink_id, writer);
+            let mut state = State::new(sink_id, worker_id, writer);
 
             loop {
                 // Read from the inputs, absorb batch descriptions and batches. If the `batches`
@@ -1106,7 +1145,9 @@ mod append {
                     Some(event) = batches_input.next() => {
                         match event {
                             Event::Data(_cap, data) => {
-                                for batch in data {
+                                // The batch description is only used for routing and we ignore it
+                                // here since we already get one from `descs_input`.
+                                for (_desc, batch) in data {
                                     state.absorb_batch(batch).await;
                                 }
                             }
@@ -1128,6 +1169,7 @@ mod append {
     /// State maintained by the `append` operator.
     struct State {
         sink_id: GlobalId,
+        worker_id: usize,
         persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
         /// The current input frontier of `batches`.
         batches_frontier: Antichain<Timestamp>,
@@ -1142,10 +1184,12 @@ mod append {
     impl State {
         fn new(
             sink_id: GlobalId,
+            worker_id: usize,
             persist_writer: WriteHandle<SourceData, (), Timestamp, Diff>,
         ) -> Self {
             Self {
                 sink_id,
+                worker_id,
                 persist_writer,
                 batches_frontier: Antichain::from_elem(Timestamp::MIN),
                 lower: Antichain::from_elem(Timestamp::MIN),
@@ -1158,6 +1202,7 @@ mod append {
             let message = message.as_ref();
             trace!(
                 sink_id = %self.sink_id,
+                worker = %self.worker_id,
                 batches_frontier = ?self.batches_frontier.elements(),
                 lower = ?self.lower.elements(),
                 batch_description = ?self.batch_description,
@@ -1198,8 +1243,10 @@ mod append {
                 return;
             }
 
-            self.batch_description = Some(desc);
-            self.trace("set batch description");
+            if desc.append_worker == self.worker_id {
+                self.batch_description = Some(desc);
+                self.trace("set batch description");
+            }
         }
 
         /// Absorb the given batch into the state, provided it is not outdated.
