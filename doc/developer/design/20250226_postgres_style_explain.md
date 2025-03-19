@@ -76,32 +76,33 @@ We will need three pieces of work, which should all land together:
 
 ### Concrete Mapping
 
-| LIR node    | `mz_lir_mapping` node                    | New, Postgres-style syntax              |
-| :---------- | :--------------------------------------- | :-------------------------------------- |
-| `Constant`  | `Constant`                               | `Constant`                              |
-| `Get`       | `Get::PassArrangements l0`               | `Index Scan on l0 using ...`            |
-| `Get`       | `Get::Arrangement l0 (val=...)`          | `Index Lookup on l0 using ...`          |
-| `Get`       | `Get::Collection l0`                     | `Read l0`                               |
-| `Mfp`       | `MapFilterProject`                       | `Map/Filter/Project`                    |
-| `FlatMap`   | `FlatMap`                                | `Flat Map`                              |
-| `Join`      | `Join::Differential`                     | `Differential Join`                     |
-| `Join`      | `Join::Delta`                            | `Delta Join`                            |
-| `Reduce`    | `Reduce::Distinct`                       | `Distinct GroupAggregate`               |
-| `Reduce`    | `Reduce::Accumulable`                    | `Accumulable GroupAggregate`            |
-| `Reduce`    | `Reduce::Hierarchical (monotonic)`       | `Monotonic Hierarchical GroupAggregate` |
-| `Reduce`    | `Reduce::Hierarchical (buckets: ...)`    | `Bucketed Hierarchical GroupAggregate`  |
-| `Reduce`    | `Reduce::Basic`                          | `Non-incremental GroupAggregate`        |
-| `Reduce`    | `Reduce::Collation`                      | `Collated GroupAggregate` (details?)    |
-| `TopK`      | `TopK::MonotonicTop1`                    | `Monotonic Top1`                        |
-| `TopK`      | `TopK::MonotonicTopK`                    | `Monotonic TopK`                        |
-| `TopK`      | `TopK::Basic`                            | `Non-monotonic TopK`                    |
-| `Negate`    | `Negate`                                 | `Negate Diffs`                          |
-| `Threshold` | `Threshold`                              | `Threshold Diffs`                       |
-| `Union`     | `Union`                                  | `Union`                                 |
-| `Union`     | `Union (consolidates output)`            | `Consolidating Union`                   |
-| `ArrangeBy` | `Arrange`                                | `Arrange`                               |
-| `Let`       | `e0 With l1 = e1 ...`                    | `e1 With l1 = e1 ...`                   |
-| `LetRec`    | `e0 With Mutually Recursive l1 = e1 ...` | `e0 With Mutually Recursve l1 = e1 ...` |
+| LIR node    | `mz_lir_mapping` node                    | New, Postgres-style syntax                           |
+| :---------- | :--------------------------------------- | :--------------------------------------------------- |
+| `Constant`  | `Constant`                               | `Constant`                                           |
+| `Get`       | `Get::PassArrangements l0`               | `Index Scan on l0 using ...` or `Stream Scan on l0`  |
+| `Get`       | `Get::Arrangement l0 (val=...)`          | `Index Lookup on l0 using ...`                       |
+| `Get`       | `Get::Arrangement l0`                    | `Index Scan on l0 using ...` (showing mfp)           |
+| `Get`       | `Get::Collection l0`                     | `Read l0`                                            |
+| `Mfp`       | `MapFilterProject`                       | `Map/Filter/Project`                                 |
+| `FlatMap`   | `FlatMap`                                | `Table Function`                                     |
+| `Join`      | `Join::Differential`                     | `Differential Join`                                  |
+| `Join`      | `Join::Delta`                            | `Delta Join`                                         |
+| `Reduce`    | `Reduce::Distinct`                       | `Distinct GroupAggregate`                            |
+| `Reduce`    | `Reduce::Accumulable`                    | `Accumulable GroupAggregate`                         |
+| `Reduce`    | `Reduce::Hierarchical (monotonic)`       | `Monotonic Hierarchical GroupAggregate`              |
+| `Reduce`    | `Reduce::Hierarchical (buckets: ...)`    | `Bucketed Hierarchical GroupAggregate`               |
+| `Reduce`    | `Reduce::Basic`                          | `Non-incremental GroupAggregate`                     |
+| `Reduce`    | `Reduce::Collation`                      | `Collated GroupAggregate` (details?)                 |
+| `TopK`      | `TopK::MonotonicTop1`                    | `Monotonic Top1`                                     |
+| `TopK`      | `TopK::MonotonicTopK`                    | `Monotonic TopK`                                     |
+| `TopK`      | `TopK::Basic`                            | `Non-monotonic TopK`                                 |
+| `Negate`    | `Negate`                                 | `Negate Diffs`                                       |
+| `Threshold` | `Threshold`                              | `Threshold Diffs`                                    |
+| `Union`     | `Union`                                  | `Union`                                              |
+| `Union`     | `Union (consolidates output)`            | `Consolidating Union`                                |
+| `ArrangeBy` | `Arrange`                                | `Arrange`                                            |
+| `Let`       | `e0 With l1 = e1 ...`                    | `e1 With l1 = e1 ...`                                |
+| `LetRec`    | `e0 With Mutually Recursive l1 = e1 ...` | `e0 With Mutually Recursve l1 = e1 ...`              |
 
 In the new Postgres-style syntax, extra information will appear on the
 next line: for joins, it will be the join pipelines; for
@@ -111,6 +112,23 @@ filters.
 For `Delta Join` in particular, we will want to push information
 further down in the listing; see [TPC-H query 3](#tpc-h-query-3) below
 for an example.
+
+### Formerly Open Questions
+
+**Should we show `Project`? Should we show _all_ expressions for `Map`
+and `Filter`?** Yes: we will show all Mfp expressions by default.
+
+**How much of this data should `mz_lir_mapping` show?** I propose
+showing the first line plus anything involving scalar expressions
+(e.g., `Map/Filter/Project`s, `Join` equivalences, etc.).
+
+**What about names?** Separate efforts
+([#31802](https://github.com/MaterializeInc/materialize/pull/31802)
+will help us [get more column
+names](https://github.com/MaterializeInc/database-issues/issues/8960)). Showing
+_only_ column names (without numbers) can induce some confusion when
+we have self-joins, as in outer-join lowering. We will want to add
+context (e.g., the table alias, `f1.f_col = f2.f_col`).
 
 ## Minimal Viable Prototype
 
@@ -185,17 +203,17 @@ New Materialize `EXPLAIN`:
   Finish
     Order by: l_returnflag, l_linestatus
     ->  Project (columns=10)
-        Columns: l_returnflag..=sum, #9..=#11, count
-        -> Map (columns=12)
-           (bigint_to_numeric(case when (count = 0) then null else count end), (sum_l_quantity / #8), (sum_l_extendedprice / #8), (sum_l_discount / #8))
-           -> Accumulable GroupAggregate (columns=8)
-              Group Key: l_returnflag, l_linestatus
-              Aggregates: sum(l_quantity), sum(l_extendedprice), sum((l_extendedprice * (1 - l_discount))), sum(((l_extendedprice * (1 - l_discount)) * (1 + l_tax))), count(*), sum(l_discount)
-              -> Project (columns=6)
-                 Columns: l_quantity..=l_linestatus
-                 -> Filter (columns=16)
-                    Predicates: date_to_timestamp(l_shipdate) <= 1998-10-02 00:00:00
-                      -> Index Scan using pk_lineitem_orderkey_linenumber on lineitem (columns=16)
+          Columns: l_returnflag..=sum, #9..=#11, count
+          -> Map (columns=12)
+             (bigint_to_numeric(case when (count = 0) then null else count end), (sum_l_quantity / #8), (sum_l_extendedprice / #8), (sum_l_discount / #8))
+             -> Accumulable GroupAggregate (columns=8)
+                  Group Key: l_returnflag, l_linestatus
+                  Aggregates: sum(l_quantity), sum(l_extendedprice), sum((l_extendedprice * (1 - l_discount))), sum(((l_extendedprice * (1 - l_discount)) * (1 + l_tax))), count(*), sum(l_discount)
+                  -> Project (columns=6)
+                       Columns: l_quantity..=l_linestatus
+                       -> Filter (columns=16)
+                            Predicates: date_to_timestamp(l_shipdate) <= 1998-10-02 00:00:00
+                            -> Index Scan using pk_lineitem_orderkey_linenumber on lineitem (columns=16)
 
 Used Indexes:
   - materialize.public.pk_lineitem_orderkey_linenumber (*** full scan ***)
@@ -285,34 +303,34 @@ New Materialize `EXPLAIN`:
 
 ```
 Finish
-  Order by: sum desc nulls_first, o_orderdate
+  Order by: sum desc, o_orderdate
   -> Project (columns=4)
-     Columns: o_orderkey, sum, o_orderdate, o_shippriority
-     -> Reduce (columns=4)
-        Group key: o_orderkey..=#2o_shippriority
-        Aggregates: sum((l_extendedprice * (1 - l_discount)))
-        -> Project (columns=5)
-           Columns: o_orderkey, o_orderdate, o_shippriority, l_extendedprice, l_discount
-           -> Filter (columns=33)
-              Predicates: (c_mktsegment = "BUILDING") AND (o_orderdate < 1995-03-15) AND (l_shipdate > 1995-03-15)
-              -> Delta Join (columns=33)
-                 Conditions: c_custkey = o_custkey AND o_orderkey = l_orderkey
-                 Pipelines:
-                   %0:customer » %1:orders[#1]KAif » %2:lineitem[#0]KAif
-                   %1:orders » %0:customer[#0]KAef » %2:lineitem[#0]KAif
-                   %2:lineitem » %1:orders[#0]KAif » %0:customer[#0]KAef
-                 -> Arranged (columns=8)
-                    Keys: [c_custkey]
-                    -> Index Scan using pk_customer_custkey on customer (columns=8)
-                       Delta join first input (full scan): pk_customer_custkey
-                 -> Arrange (columns=9)
-                    Keys: [o_orderkey], [o_custkey]
-                    -> Index Scan using pk_orders_orderkey, fk_orders_custkey on orders (columns=9)
-                       Delta join lookup: pk_orders_orderkey, fk_orders_custkey
-                 -> Arrange (columns=16)
-                    Keys: [l_orderkey]
-                    -> Index Scan using fk_lineitem_orderkey on lineitem (columns=16)
-                       Delta join lookup: fk_lineitem_orderkey
+       Columns: o_orderkey, sum, o_orderdate, o_shippriority
+       -> Reduce (columns=4)
+            Group key: o_orderkey..=#2o_shippriority
+            Aggregates: sum((l_extendedprice * (1 - l_discount)))
+            -> Project (columns=5)
+                 Columns: o_orderkey, o_orderdate, o_shippriority, l_extendedprice, l_discount
+                 -> Filter (columns=33)
+                      Predicates: (c_mktsegment = "BUILDING") AND (o_orderdate < 1995-03-15) AND (l_shipdate > 1995-03-15)
+                      -> Delta Join (columns=33)
+                           Conditions: c_custkey = o_custkey AND o_orderkey = l_orderkey
+                           Pipelines:
+                             %0:customer » %1:orders[#1]KAif » %2:lineitem[#0]KAif
+                             %1:orders » %0:customer[#0]KAef » %2:lineitem[#0]KAif
+                             %2:lineitem » %1:orders[#0]KAif » %0:customer[#0]KAef
+                           -> Arranged (columns=8)
+                                Keys: [c_custkey]
+                                -> Index Scan using pk_customer_custkey on customer (columns=8)
+                                   Delta join first input (full scan): pk_customer_custkey
+                           -> Arrange (columns=9)
+                                Keys: [o_orderkey], [o_custkey]
+                                -> Index Scan using pk_orders_orderkey, fk_orders_custkey on orders (columns=9)
+                                   Delta join lookup: pk_orders_orderkey, fk_orders_custkey
+                           -> Arrange (columns=16)
+                                Keys: [l_orderkey]
+                                -> Index Scan using fk_lineitem_orderkey on lineitem (columns=16)
+                                   Delta join lookup: fk_lineitem_orderkey
 
 Used Indexes:
   - materialize.public.pk_customer_custkey (delta join 1st input (full scan))
@@ -327,12 +345,8 @@ Target cluster: quickstart
 
 Should we more radically reduce the AST?
 
-Should we abandon static `EXPLAIN` and encourage `mz_lir_mapping` use?
+~~Should we abandon static `EXPLAIN` and encourage `mz_lir_mapping`
+use?~~ No: being able to `EXPLAIN` ahead of time is valuable, and also
+`mz_lir_mapping` forces us to munge strings in SQL.
 
 ## Open questions
-
-Should we show `Project`?
-
-Should we show _all_ expressions for `Map` and `Filter`?
-
-How much of this data should `mz_lir_mapping` show?
