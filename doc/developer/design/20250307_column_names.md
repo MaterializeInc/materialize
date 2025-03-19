@@ -132,7 +132,9 @@ pub enum MirRelationExpr {
 
 The `Project` is the most critical, as projections appear at the top
 of nearly every `SELECT` query---the missing `succ_x` in the example
-above appears in a `Project`, for example.
+above appears in a `Project`, for example. We will need to similarly
+track names in `Mfp`s, which will involve updating
+`MapFilterProject::extract_*` methods.
 
 ### The new `EXPLAIN AS TEXT` format requires names for LIR
 
@@ -145,7 +147,8 @@ We currently compute arity, names, and other metadata using the
 `Analysis` bottom-up framework. But `Analysis` is only defined for
 MIR. We should build simple, direct versions of these analyses for
 LIR---and we can generalize it to a lower-level `Analysis` framework
-if we later need it.
+if we later need it. We may be able to use the existing LIR abstract
+interpretation framework.
 
 ## Alternatives
 
