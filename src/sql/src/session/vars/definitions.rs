@@ -1788,6 +1788,12 @@ macro_rules! feature_flags {
 }
 
 feature_flags!(
+    {
+        name: enable_let_prefix_extraction,
+        desc: "Enables hoisting of loop-invariant CTE bindindgs",
+        default: true,
+        enable_for_item_parsing: false,
+    },
     // Gates for other feature flags
     {
         name: allow_real_time_recency,
@@ -2197,6 +2203,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_reduce_reduction: vars.enable_reduce_reduction(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
+            enable_let_prefix_extraction: vars.enable_let_prefix_extraction(),
         }
     }
 }
