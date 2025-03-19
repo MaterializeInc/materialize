@@ -3463,7 +3463,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     },
                     column_names,
                 })
-            }) => ReturnType::set_of(ArrayAny), 2763;
+            }) => ReturnType::set_of(ScalarType::Array(Box::new(ScalarType::String)).into()), 2763;
             params!(String, String, String) => Operation::variadic(move |_ecx, exprs| {
                 let flags = match exprs[2].clone().into_literal_string() {
                     None => sql_bail!("regexp_matches requires a string literal as its third argument"),
@@ -3485,7 +3485,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     },
                     column_names,
                 })
-            }) => ReturnType::set_of(ArrayAny), 2764;
+            }) => ReturnType::set_of(ScalarType::Array(Box::new(ScalarType::String)).into()), 2764;
         }
     };
 
