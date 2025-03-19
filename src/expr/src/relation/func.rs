@@ -30,7 +30,9 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::Regex as ReprRegex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
-use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
+use mz_repr::{
+    ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType, SharedRow,
+};
 use num::{CheckedAdd, Integer, Signed, ToPrimitive};
 use ordered_float::OrderedFloat;
 use proptest::prelude::{Arbitrary, Just};
@@ -49,11 +51,11 @@ use crate::relation::{
     WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
-use crate::EvalError;
 use crate::WindowFrameBound::{
     CurrentRow, OffsetFollowing, OffsetPreceding, UnboundedFollowing, UnboundedPreceding,
 };
 use crate::WindowFrameUnits::{Groups, Range, Rows};
+use crate::{row, EvalError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.relation.func.rs"));
 
@@ -3150,8 +3152,10 @@ fn regexp_matches<'a, 'r: 'a>(
             .map(|m| Datum::from(m.map(|m| m.as_str())))
             .collect::<Vec<_>>();
 
-        let mut row = Row::default();
-        let mut packer = row.packer();
+        let row = SharedRow::get();
+        let mut binding = row.borrow_mut();
+        let mut packer = binding.packer();
+
         let dimension = ArrayDimension {
             lower_bound: 1,
             length: matches.len(),
@@ -3160,7 +3164,7 @@ fn regexp_matches<'a, 'r: 'a>(
             .try_push_array(&[dimension], matches)
             .expect("generated dimensions above");
 
-        (row, 1)
+        (binding.clone(), 1)
     });
 
     if r.opts().global {
