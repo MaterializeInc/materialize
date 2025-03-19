@@ -1545,10 +1545,11 @@ class PostgresSources(Generator):
 
 
 class PostgresTables(Generator):
-    COUNT = 2000
+    COUNT = 5000
 
     @classmethod
     def body(cls) -> None:
+        clusters = [f"single_worker_cluster_{i}" for i in range(1, 5)]
         print("$ set-sql-timeout duration=600s")
         print("> SET statement_timeout='600s'")
         print("> SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';")
@@ -1585,7 +1586,7 @@ class PostgresTables(Generator):
             )
             print(
                 f"""> CREATE SOURCE p_{i}
-                IN CLUSTER single_worker_cluster
+                IN CLUSTER {clusters[i % len(clusters)]}
                 FROM POSTGRES CONNECTION pg_{i} (PUBLICATION 'mz_source_{i}')
                 FOR ALL TABLES
                 """
@@ -1707,7 +1708,7 @@ class WebhookSources(Generator):
         print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         for i in cls.all():
             print(
-                f"> CREATE SOURCE w{i} IN CLUSTER single_replica_cluster FROM WEBHOOK BODY FORMAT TEXT;"
+                f"> CREATE SOURCE w{i} IN CLUSTER single_replica_cluster_1 FROM WEBHOOK BODY FORMAT TEXT;"
             )
 
         for i in cls.all():
@@ -1805,7 +1806,7 @@ SERVICES = [
     ),
     Cockroach(in_memory=True),
     Materialized(
-        memory="8G",
+        memory="16G",
         cpu=2,
         default_size=1,
         options=[
@@ -1825,6 +1826,7 @@ SERVICES = [
         sanity_restart=False,
         external_metadata_store=True,
         metadata_store="cockroach",
+        soft_assertions=False,
     ),
     Mz(app_password=""),
 ] + [
@@ -1846,23 +1848,26 @@ for cluster_id in range(1, MAX_CLUSTERS + 1):
             )
 
 
-service_names = [
-    "zookeeper",
-    "kafka",
-    "schema-registry",
-    "postgres",
-    "mysql",
-    "materialized",
-    "balancerd",
-    "frontegg-mock",
-    "clusterd_1_1_1",
-    "clusterd_1_2_1",
-    "clusterd_2_1_1",
-    "clusterd_2_2_1",
-    "clusterd_3_1_1",
-    "clusterd_3_2_1",
-    "clusterd_4_1_1",
-] + [f"postgres_{i}" for i in range(1, ADDITIONAL_POSTGRES + 1)]
+service_names = (
+    [
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+        "postgres",
+        "mysql",
+        "materialized",
+        "balancerd",
+        "frontegg-mock",
+        "clusterd_1_1_1",
+        "clusterd_1_2_1",
+        "clusterd_2_1_1",
+        "clusterd_2_2_1",
+        "clusterd_3_1_1",
+        "clusterd_3_2_1",
+    ]
+    + [f"postgres_{i}" for i in range(1, ADDITIONAL_POSTGRES + 1)]
+    + [f"clusterd_{i+3}_1_1" for i in range(1, 5)]
+)
 
 
 def setup(c: Composition, workers: int) -> None:
@@ -1904,18 +1909,23 @@ def setup(c: Composition, workers: int) -> None:
             )
         );
         GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
-        DROP CLUSTER IF EXISTS single_worker_cluster CASCADE;
-        CREATE CLUSTER single_worker_cluster REPLICAS (
+    """
+        + "\n".join(
+            f"""
+        DROP CLUSTER IF EXISTS single_worker_cluster_{i} CASCADE;
+        CREATE CLUSTER single_worker_cluster_{i} REPLICAS (
             replica1 (
-                STORAGECTL ADDRESSES ['clusterd_4_1_1:2100'],
-                STORAGE ADDRESSES ['clusterd_4_1_1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_4_1_1:2101'],
-                COMPUTE ADDRESSES ['clusterd_4_1_1:2102'],
+                STORAGECTL ADDRESSES ['clusterd_{i+3}_1_1:2100'],
+                STORAGE ADDRESSES ['clusterd_{i+3}_1_1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_{i+3}_1_1:2101'],
+                COMPUTE ADDRESSES ['clusterd_{i+3}_1_1:2102'],
                 WORKERS 1
             )
         );
-        GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
-    """,
+        GRANT ALL PRIVILEGES ON CLUSTER single_worker_cluster_{i} TO materialize;
+        """
+            for i in range(1, 5)
+        ),
         port=6877,
         user="mz_system",
     )
