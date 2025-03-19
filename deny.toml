@@ -142,6 +142,10 @@ skip = [
     { name = "rustix", version = "0.38.44" },
 ]
 
+[[bans.deny]]
+crate = "crossbeam-channel@0.5.14"
+reason = "memory corruption, https://github.com/MaterializeInc/database-issues/issues/9091"
+
 # Use `tracing` instead.
 [[bans.deny]]
 name = "env_logger"
