@@ -502,8 +502,8 @@ crates_repository(
             gen_build_script = False,
             deps = ["@bzip2"],
         )],
-        "liblzma-sys": [crate.annotation(
-            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.liblzma-sys.bazel",
+        "lzma-sys": [crate.annotation(
+            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.lzma-sys.bazel",
             gen_build_script = False,
             # Note: This is a target we add from the additive build file above.
             deps = [":xz"],

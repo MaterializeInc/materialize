@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.97"
-async-compression = { version = "0.4.21", features = ["bzip2", "gzip", "tokio", "xz", "zstd"] }
+async-compression = { version = "0.4.11", features = ["bzip2", "gzip", "tokio", "xz", "zstd"] }
 async-trait = "0.1.88"
 aws-credential-types = { version = "1.2.2", features = ["hardcoded-credentials"] }
 aws-sdk-sts = { version = "1.7.0", default-features = false, features = ["rt-tokio"] }
@@ -64,7 +64,7 @@ regex = "1.10.6"
 reqwest = { version = "0.11.13", features = ["native-tls-vendored"] }
 semver = "1.0.26"
 serde = "1.0.219"
-serde_json = { version = "1.0.140", features = ["raw_value"] }
+serde_json = { version = "1.0.127", features = ["raw_value"] }
 similar = "2.7.0"
 tempfile = "3.19.1"
 termcolor = "1.4.1"

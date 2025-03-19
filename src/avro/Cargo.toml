@@ -27,7 +27,7 @@ mz-ore = { path = "../ore", features = ["test"] }
 rand = "0.8.5"
 regex = "1.10.6"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
+serde_json = "1.0.127"
 sha2 = "0.10.8"
 snap = { version = "1.1.1", optional = true }
 tracing = "0.1.37"

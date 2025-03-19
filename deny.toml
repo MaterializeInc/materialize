@@ -143,6 +143,9 @@ skip = [
     { name = "rustix", version = "0.38.44" },
     # Used by ahash
     { name = "zerocopy", version = "0.7.23" },
+    # Used by guppy
+    { name = "fixedbitset", version = "0.4.2" },
+    { name = "petgraph", version = "0.6.5" },
 ]
 
 [[bans.deny]]

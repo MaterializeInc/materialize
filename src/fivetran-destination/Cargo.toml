@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-async-compression = { version = "0.4.21", features = ["gzip", "tokio", "zstd"] }
+async-compression = { version = "0.4.11", features = ["gzip", "tokio", "zstd"] }
 bytes = "1.10.1"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 csv-async = { version = "1.2.6", default-features = false, features = ["tokio"] }
@@ -25,7 +25,7 @@ postgres-protocol = { version = "0.6.5" }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 prost-types = { version = "0.13.5" }
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
+serde_json = "1.0.127"
 sha2 = "0.10.8"
 socket2 = "0.5.8"
 thiserror = "2.0.12"
