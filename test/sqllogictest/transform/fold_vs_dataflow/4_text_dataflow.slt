@@ -43,8 +43,8 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT *
 WHERE f1 ILIKE (SELECT op_val FROM t_operator);
 ----
 Explained Query:
-  Project (#0)
-    Filter (#0 ilike #1)
+  Project (#0{f1})
+    Filter (#0{f1} ilike #1{op_val})
       CrossJoin type=differential
         ArrangeBy keys=[[]]
           ReadStorage materialize.public.t_data
@@ -53,7 +53,7 @@ Explained Query:
             ReadStorage materialize.public.t_operator
             Map (error("more than one record produced in subquery"))
               Project ()
-                Filter (#0 > 1)
+                Filter (#0{count} > 1)
                   Reduce aggregates=[count(*)]
                     Project ()
                       ReadStorage materialize.public.t_operator
@@ -132,7 +132,7 @@ FROM t_using_dataflow_rendering;
 ----
 Explained Query:
   Project (#6..=#22)
-    Map ((#0 || #3), upper(#0), lower(#0), substr(#0, 1), replace(#0, #1, #2), position(#1, #0), split_string(#0, #1, 1), translate(#0, "C", "Z"), btrim(#4), ltrim(#4), btrim(#5), rtrim(#5), lpad(#0, 1), lpad(#0, 10), lpad(#0, 10, #1), regexp_match(#0, #1), regexp_match(#0, #2, "i"))
+    Map ((#0{f1} || #3{f4}), upper(#0{f1}), lower(#0{f1}), substr(#0{f1}, 1), replace(#0{f1}, #1{f2}, #2{f3}), position(#1{f2}, #0{f1}), split_string(#0{f1}, #1{f2}, 1), translate(#0{f1}, "C", "Z"), btrim(#4{f1ls}), ltrim(#4{f1ls}), btrim(#5{f1rs}), rtrim(#5{f1rs}), lpad(#0{f1}, 1), lpad(#0{f1}, 10), lpad(#0{f1}, 10, #1{f2}), regexp_match(#0{f1}, #1{f2}), regexp_match(#0{f1}, #2{f3}, "i"))
       ReadStorage materialize.public.t_using_dataflow_rendering
 
 Source materialize.public.t_using_dataflow_rendering

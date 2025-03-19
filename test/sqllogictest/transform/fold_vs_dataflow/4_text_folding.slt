@@ -35,11 +35,11 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT *
 WHERE f1 ILIKE '%bCd%';
 ----
 Explained Query:
-  Filter ilike["%bCd%"](#0)
+  Filter ilike["%bCd%"](#0{f1})
     ReadStorage materialize.public.t_data
 
 Source materialize.public.t_data
-  filter=(ilike["%bCd%"](#0))
+  filter=(ilike["%bCd%"](#0{f1}))
 
 Target cluster: quickstart
 

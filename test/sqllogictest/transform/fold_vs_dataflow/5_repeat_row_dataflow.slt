@@ -47,7 +47,7 @@ FROM mv_using_dataflow_rendering;
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[sum(#0)]
+      Reduce aggregates=[sum(#0{data})]
         ReadStorage materialize.public.mv_using_dataflow_rendering
   Return
     Union
