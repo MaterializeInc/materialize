@@ -3448,40 +3448,21 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "regexp_matches" => Table {
             params!(String, String) => Operation::variadic(move |_ecx, exprs| {
-                let regex = match exprs[1].clone().into_literal_string() {
-                    None => sql_bail!("regexp_matches requires a string literal as its second argument"),
-                    Some(regex) => mz_expr::AnalyzedRegex::new(&regex, mz_expr::AnalyzedRegexOpts::default()).map_err(|e| sql_err!("analyzing regex: {}", e))?,
-                };
                 let column_names = vec!["regexp_matches".into()];
-                if regex.capture_groups_len() == 0 {
-                    sql_bail!("regexp_matches must specify at least one capture group");
-                }
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
-                        func: TableFunc::RegexpMatches(regex),
-                        exprs: vec![exprs[0].clone()],
+                        func: TableFunc::RegexpMatches,
+                        exprs: vec![exprs[0].clone(), exprs[1].clone()],
                     },
                     column_names,
                 })
             }) => ReturnType::set_of(ScalarType::Array(Box::new(ScalarType::String)).into()), 2763;
             params!(String, String, String) => Operation::variadic(move |_ecx, exprs| {
-                let flags = match exprs[2].clone().into_literal_string() {
-                    None => sql_bail!("regexp_matches requires a string literal as its third argument"),
-                    Some(flags) => flags,
-                };
-                let opts = mz_expr::AnalyzedRegexOpts::from_str(&flags).map_err(|e| sql_err!("parsing regex flags: {}", e))?;
-                let regex = match exprs[1].clone().into_literal_string() {
-                    None => sql_bail!("regexp_matches requires a string literal as its second argument"),
-                    Some(regex) => mz_expr::AnalyzedRegex::new(&regex, opts).map_err(|e| sql_err!("analyzing regex: {}", e))?,
-                };
                 let column_names = vec!["regexp_matches".into()];
-                if regex.capture_groups_len() == 0 {
-                    sql_bail!("regexp_matches must specify at least one capture group");
-                }
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
-                        func: TableFunc::RegexpMatches(regex),
-                        exprs: vec![exprs[0].clone()],
+                        func: TableFunc::RegexpMatches,
+                        exprs: vec![exprs[0].clone(), exprs[1].clone(), exprs[2].clone()],
                     },
                     column_names,
                 })

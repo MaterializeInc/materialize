@@ -40,6 +40,7 @@ use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::proto_aggregate_func::{
@@ -3138,11 +3139,25 @@ fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<(Row, Diff)> {
 }
 
 fn regexp_matches<'a, 'r: 'a>(
-    a: Datum<'a>,
-    r: &'r AnalyzedRegex,
-) -> impl Iterator<Item = (Row, Diff)> + 'a {
-    let regex = r.inner();
-    let a = a.unwrap_str();
+    exprs: &[Datum<'a>],
+) -> Result<impl Iterator<Item = (Row, Diff)> + 'a, EvalError> {
+    // There are only two acceptable ways to call this function:
+    // 1. regexp_matches(string, regex)
+    // 2. regexp_matches(string, regex, flag)
+    assert!(exprs.len() == 2 || exprs.len() == 3);
+    let a = exprs[0].unwrap_str();
+    let r = exprs[1].unwrap_str();
+
+    let (regex, opts) = if exprs.len() == 3 {
+        let flag = exprs[2].unwrap_str();
+        let opts = AnalyzedRegexOpts::from_str(flag)?;
+        (AnalyzedRegex::new(r, opts)?, opts)
+    } else {
+        let opts = AnalyzedRegexOpts::default();
+        (AnalyzedRegex::new(r, opts)?, opts)
+    };
+
+    let regex = regex.inner().clone();
 
     let iter = regex.captures_iter(a).map(move |captures| {
         let matches = captures
@@ -3167,10 +3182,16 @@ fn regexp_matches<'a, 'r: 'a>(
         (binding.clone(), 1)
     });
 
-    if r.opts().global {
-        Either::Left(iter)
+    // This is slightly unfortunate, but we need to collect the captures into a
+    // Vec before we can yield them, because we can't return a iter with a
+    // reference to the local `regex` variable.
+    // We attempt to minimize the cost of this by using a SmallVec.
+    let out = iter.collect::<SmallVec<[_; 3]>>();
+
+    if opts.global {
+        Ok(Either::Left(out.into_iter()))
     } else {
-        Either::Right(iter.take(1))
+        Ok(Either::Right(out.into_iter().take(1)))
     }
 }
 
@@ -3502,6 +3523,7 @@ impl RustType<ProtoCaptureGroupDesc> for CaptureGroupDesc {
 #[derive(
     Arbitrary,
     Clone,
+    Copy,
     Debug,
     Eq,
     PartialEq,
@@ -3736,7 +3758,7 @@ pub enum TableFunc {
         name: String,
         relation: RelationType,
     },
-    RegexpMatches(AnalyzedRegex),
+    RegexpMatches,
 }
 
 impl RustType<ProtoTableFunc> for TableFunc {
@@ -3771,7 +3793,7 @@ impl RustType<ProtoTableFunc> for TableFunc {
                         relation: Some(relation.into_proto()),
                     })
                 }
-                TableFunc::RegexpMatches(x) => Kind::RegexpMatches(x.into_proto()),
+                TableFunc::RegexpMatches => Kind::RegexpMatches(()),
             }),
         }
     }
@@ -3816,7 +3838,7 @@ impl RustType<ProtoTableFunc> for TableFunc {
                     .relation
                     .into_rust_if_some("ProtoTabletizedScalar::relation")?,
             },
-            Kind::RegexpMatches(x) => TableFunc::RegexpMatches(x.into_rust()?),
+            Kind::RegexpMatches(x) => TableFunc::RegexpMatches,
         })
     }
 }
@@ -3896,7 +3918,7 @@ impl TableFunc {
                 let r = Row::pack_slice(datums);
                 Ok(Box::new(std::iter::once((r, 1))))
             }
-            TableFunc::RegexpMatches(a) => Ok(Box::new(regexp_matches(datums[0], a))),
+            TableFunc::RegexpMatches => Ok(Box::new(regexp_matches(datums)?)),
         }
     }
 
@@ -4025,7 +4047,7 @@ impl TableFunc {
             TableFunc::TabletizedScalar { relation, .. } => {
                 return relation.clone();
             }
-            TableFunc::RegexpMatches(_) => {
+            TableFunc::RegexpMatches => {
                 let column_types =
                     vec![ScalarType::Array(Box::new(ScalarType::String)).nullable(false)];
                 let keys = vec![];
@@ -4061,7 +4083,7 @@ impl TableFunc {
             TableFunc::UnnestMap { .. } => 2,
             TableFunc::Wrap { width, .. } => *width,
             TableFunc::TabletizedScalar { relation, .. } => relation.column_types.len(),
-            TableFunc::RegexpMatches(_) => 1,
+            TableFunc::RegexpMatches => 1,
         }
     }
 
@@ -4083,7 +4105,7 @@ impl TableFunc {
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. }
             | TableFunc::UnnestMap { .. }
-            | TableFunc::RegexpMatches(_) => true,
+            | TableFunc::RegexpMatches => true,
             TableFunc::Wrap { .. } => false,
             TableFunc::TabletizedScalar { .. } => false,
         }
@@ -4112,7 +4134,7 @@ impl TableFunc {
             TableFunc::UnnestMap { .. } => true,
             TableFunc::Wrap { .. } => true,
             TableFunc::TabletizedScalar { .. } => true,
-            TableFunc::RegexpMatches(_) => true,
+            TableFunc::RegexpMatches => true,
         }
     }
 }
@@ -4138,7 +4160,7 @@ impl fmt::Display for TableFunc {
             TableFunc::UnnestMap { .. } => f.write_str("unnest_map"),
             TableFunc::Wrap { width, .. } => write!(f, "wrap{}", width),
             TableFunc::TabletizedScalar { name, .. } => f.write_str(name),
-            TableFunc::RegexpMatches(a) => write!(f, "regexp_matches({:?}, _)", a.0),
+            TableFunc::RegexpMatches => write!(f, "regexp_matches(_, _, _)"),
         }
     }
 }
