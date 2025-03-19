@@ -53,6 +53,14 @@ with spaces, and properties are clearly elucidated in human-readable
 formats. When it is sensible, we have simply borrowed Postgres's
 terminology, i.e., `Reduce` is renamed to `GroupAggregate`.
 
+The guiding principle here is that every operator is of the form
+`(Adjective) Operator`, with lines below offering more detail.  We
+should choose `Operator` to use familiar and evocative terminology
+(knowing that we can't always follow Postgres, because our execution
+models are so different). We should choose `Adjective` such that
+expensive moments---allocation, arrangement---are called
+out/searchable.
+
 Postgres displays some parts of the query differently from us, namely:
 
   - Column names:
@@ -103,6 +111,9 @@ We will need three pieces of work, which should all land together:
 | `ArrangeBy` | `Arrange`                                | `Arrange`                                            |
 | `Let`       | `e0 With l1 = e1 ...`                    | `e1 With l1 = e1 ...`                                |
 | `LetRec`    | `e0 With Mutually Recursive l1 = e1 ...` | `e0 With Mutually Recursve l1 = e1 ...`              |
+
+Notice that we have used the following "expensive" adjectives:
+`Non-incremental`, `Bucketed`, `Non-monotonic`, `Consolidating`.
 
 In the new Postgres-style syntax, extra information will appear on the
 next line: for joins, it will be the join pipelines; for
