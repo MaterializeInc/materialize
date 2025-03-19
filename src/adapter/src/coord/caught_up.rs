@@ -245,7 +245,6 @@ impl Coordinator {
             .controller
             .storage
             .active_ingestions(cluster.id)
-            .iter()
             .copied()
             .filter(|id| !id.is_transient() && !exclude_collections.contains(id))
             .map(|id| {
