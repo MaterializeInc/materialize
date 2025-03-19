@@ -92,25 +92,27 @@ WITH MUTUALLY RECURSIVE
 SELECT * FROM triangle_cycles;
 ----
 Explained Query:
-  With Mutually Recursive
+  With
     cte l0 =
       Filter (#0{src}) IS NOT NULL AND (#1{dst}) IS NOT NULL
         ReadStorage materialize.public.edges
-    cte l1 =
-      Distinct project=[#0{dst}..=#2{src}]
-        Union
-          Project (#1{dst}, #3{dst}, #0{src})
-            Join on=(#0{src} = #5{dst} AND #1{dst} = #2{src} AND #3{dst} = #4{src}) type=differential
-              ArrangeBy keys=[[#1{dst}]]
-                Get l0
-              ArrangeBy keys=[[#0{src}]]
-                Get l0
-              ArrangeBy keys=[[#0{src}, #1{dst}]]
-                Get l0
-          Project (#2{src}, #0{dst}, #1{dst})
-            Get l1
   Return
-    Get l1
+    With Mutually Recursive
+      cte l1 =
+        Distinct project=[#0{dst}..=#2{src}]
+          Union
+            Project (#1{dst}, #3{dst}, #0{src})
+              Join on=(#0{src} = #5{dst} AND #1{dst} = #2{src} AND #3{dst} = #4{src}) type=differential
+                ArrangeBy keys=[[#1{dst}]]
+                  Get l0
+                ArrangeBy keys=[[#0{src}]]
+                  Get l0
+                ArrangeBy keys=[[#0{src}, #1{dst}]]
+                  Get l0
+            Project (#2{src}, #0{dst}, #1{dst})
+              Get l1
+    Return
+      Get l1
 
 Source materialize.public.edges
   filter=((#0{src}) IS NOT NULL AND (#1{dst}) IS NOT NULL)
