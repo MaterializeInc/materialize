@@ -2001,6 +2001,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
         types: &Vec<Type>,
         column_names: Option<&Vec<ColumnName>>,
         actual_output: &Vec<String>,
+        multiline: bool,
     ) {
         buf.append_header(input, expected_output, column_names);
 
@@ -2013,20 +2014,46 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                         buf.append("\n");
                     }
 
-                    if row.len() <= 1 {
-                        buf.append(&row.iter().join("  "));
+                    if row.len() == 0 {
+                        // nothing to do
+                    } else if row.len() == 1 {
+                        // If there is only one column, then there is no need for space
+                        // substitution, so we only do newline substitution.
+                        if multiline {
+                            buf.append(&row[0]);
+                        } else {
+                            buf.append(&row[0].replace('\n', "⏎"))
+                        }
                     } else {
-                        buf.append(&row.iter().map(|col| col.replace(' ', "␠")).join("  "));
+                        // Substitute spaces with ␠ to avoid mistaking the spaces in the result
+                        // values with spaces that separate columns.
+                        buf.append(
+                            &row.iter()
+                                .map(|col| {
+                                    let mut col = col.replace(' ', "␠");
+                                    if !multiline {
+                                        col = col.replace('\n', "⏎");
+                                    }
+                                    col
+                                })
+                                .join("  "),
+                        );
                     }
                 }
                 // In standard mode, output each value on its own line,
                 // and ignore row boundaries.
+                // No need to substitute spaces, because every value (not row) is on a separate
+                // line. But we do need to substitute newlines.
                 Mode::Standard => {
                     for (j, col) in row.iter().enumerate() {
                         if i != 0 || j != 0 {
                             buf.append("\n");
                         }
-                        buf.append(col);
+                        buf.append(&if multiline {
+                            col.clone()
+                        } else {
+                            col.replace('\n', "⏎")
+                        });
                     }
                 }
             }
@@ -2048,6 +2075,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                             output_str: expected_output,
                             types,
                             column_names,
+                            multiline,
                             ..
                         }),
                     ..
@@ -2065,6 +2093,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                     types,
                     column_names.as_ref(),
                     actual_output,
+                    *multiline,
                 );
             }
             (
@@ -2075,6 +2104,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                             output: Output::Values(_),
                             output_str: expected_output,
                             types,
+                            multiline,
                             ..
                         }),
                     ..
@@ -2093,6 +2123,7 @@ pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<()
                     types,
                     Some(actual_column_names),
                     actual_output,
+                    *multiline,
                 );
             }
             (
@@ -2231,7 +2262,7 @@ impl<'a> RewriteBuffer<'a> {
         self.append(
             &names
                 .iter()
-                .map(|name| name.as_str().replace('␠', " "))
+                .map(|name| name.as_str().replace(' ', "␠"))
                 .collect::<Vec<_>>()
                 .join(" "),
         );

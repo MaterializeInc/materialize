@@ -24,7 +24,7 @@ chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["wrap_help", "env", "derive"] }
 derivative = "2.2.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.30"
+futures = "0.3.31"
 headers = "0.4.0"
 http = "1.2.0"
 humantime = "2.2.0"

@@ -20,17 +20,18 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
-    DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, HistogramVec, IntCounterVec,
-    MetricVecExt, MetricsRegistry,
+    CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, HistogramVec,
+    IntCounterVec, MetricVecExt, MetricsRegistry,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
 use mz_service::codec::StatsCollector;
-use prometheus::core::AtomicU64;
+use prometheus::core::{AtomicF64, AtomicU64};
 
 use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
 use crate::protocol::response::{PeekResponse, ProtoComputeResponse};
 
+pub(crate) type Counter = DeleteOnDropCounter<AtomicF64, Vec<String>>;
 pub(crate) type IntCounter = DeleteOnDropCounter<AtomicU64, Vec<String>>;
 pub(crate) type UIntGauge = DeleteOnDropGauge<AtomicU64, Vec<String>>;
 type Histogram = DeleteOnDropHistogram<Vec<String>>;
@@ -63,6 +64,11 @@ pub struct ComputeControllerMetrics {
     // peeks
     peeks_total: IntCounterVec,
     peek_duration_seconds: HistogramVec,
+
+    // replica connections
+    connected_replica_count: UIntGaugeVec,
+    replica_connects_total: IntCounterVec,
+    replica_connect_wait_time_seconds_total: CounterVec,
 
     /// Metrics shared with the storage controller.
     shared: ControllerMetrics,
@@ -163,6 +169,21 @@ impl ComputeControllerMetrics {
                 var_labels: ["instance_id", "result"],
                 buckets: histogram_seconds_buckets(0.000_500, 32.),
             )),
+            connected_replica_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_connected_replica_count",
+                help: "The number of replicas successfully connected to the compute controller.",
+                var_labels: ["instance_id"],
+            )),
+            replica_connects_total: metrics_registry.register(metric!(
+                name: "mz_compute_controller_replica_connects_total",
+                help: "The total number of replica (re-)connections made by the compute controller.",
+                var_labels: ["instance_id", "replica_id"],
+            )),
+            replica_connect_wait_time_seconds_total: metrics_registry.register(metric!(
+                name: "mz_compute_controller_replica_connect_wait_time_seconds_total",
+                help: "The total time the compute controller spent waiting for replica (re-)connection.",
+                var_labels: ["instance_id", "replica_id"],
+            )),
 
             shared,
         }
@@ -204,6 +225,9 @@ impl ComputeControllerMetrics {
         let response_recv_count = self
             .response_recv_count
             .get_delete_on_drop_metric(labels.clone());
+        let connected_replica_count = self
+            .connected_replica_count
+            .get_delete_on_drop_metric(labels);
 
         InstanceMetrics {
             instance_id,
@@ -220,6 +244,7 @@ impl ComputeControllerMetrics {
             peek_duration_seconds,
             response_send_count,
             response_recv_count,
+            connected_replica_count,
         }
     }
 }
@@ -250,10 +275,12 @@ pub struct InstanceMetrics {
     pub peeks_total: PeekMetrics<IntCounter>,
     /// Histogram tracking peek durations.
     pub peek_duration_seconds: PeekMetrics<Histogram>,
-    /// Gauge tracking the number of sends on the compute response queue.
+    /// Counter tracking the number of sends on the compute response queue.
     pub response_send_count: IntCounter,
-    /// Gauge tracking the number of receives on the compute response queue.
+    /// Counter tracking the number of receives on the compute response queue.
     pub response_recv_count: IntCounter,
+    /// Gauge tracking the number of connected replicas.
+    pub connected_replica_count: UIntGauge,
 }
 
 impl InstanceMetrics {
@@ -302,6 +329,15 @@ impl InstanceMetrics {
             .hydration_queue_size
             .get_delete_on_drop_metric(labels.clone());
 
+        let replica_connects_total = self
+            .metrics
+            .replica_connects_total
+            .get_delete_on_drop_metric(labels.clone());
+        let replica_connect_wait_time_seconds_total = self
+            .metrics
+            .replica_connect_wait_time_seconds_total
+            .get_delete_on_drop_metric(labels);
+
         ReplicaMetrics {
             instance_id: self.instance_id,
             replica_id,
@@ -313,6 +349,8 @@ impl InstanceMetrics {
                 response_message_bytes_total,
                 command_queue_size,
                 hydration_queue_size,
+                replica_connects_total,
+                replica_connect_wait_time_seconds_total,
             }),
         }
     }
@@ -369,6 +407,11 @@ pub struct ReplicaMetricsInner {
     pub command_queue_size: UIntGauge,
     /// Gauge tracking the size of the hydration queue.
     pub hydration_queue_size: UIntGauge,
+
+    /// Counter tracking the total number of (re-)connects.
+    replica_connects_total: IntCounter,
+    /// Counter tracking the total time spent waiting for (re-)connects.
+    replica_connect_wait_time_seconds_total: Counter,
 }
 
 impl ReplicaMetrics {
@@ -391,6 +434,18 @@ impl ReplicaMetrics {
         );
 
         Some(ReplicaCollectionMetrics { wallclock_lag })
+    }
+
+    /// Observe a successful replica connection.
+    pub(crate) fn observe_connect(&self) {
+        self.inner.replica_connects_total.inc();
+    }
+
+    /// Observe time spent waiting for a replica connection.
+    pub(crate) fn observe_connect_time(&self, wait_time: Duration) {
+        self.inner
+            .replica_connect_wait_time_seconds_total
+            .inc_by(wait_time.as_secs_f64());
     }
 }
 

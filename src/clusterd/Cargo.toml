@@ -14,7 +14,7 @@ anyhow = "1.0.95"
 axum = "0.7.5"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.30"
+futures = "0.3.31"
 hyper = "1.4.1"
 hyper-util = "0.1.6"
 mz-alloc = { path = "../alloc" }

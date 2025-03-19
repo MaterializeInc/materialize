@@ -489,6 +489,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 3059  concat_ws
 3060  left
 3061  right
+3062  reverse
 3100  row_number
 3101  rank
 3102  dense_rank

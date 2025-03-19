@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.95"
 clap = { version = "4.5.23", features = ["derive", "env"] }
-futures = "0.3.30"
+futures = "0.3.31"
 mz-adapter = { path = "../adapter" }
 mz-adapter-types = { path = "../adapter-types" }
 mz-build-info = { path = "../build-info" }

@@ -3486,6 +3486,9 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     column_names,
                 })
             }) => ReturnType::set_of(ScalarType::Array(Box::new(ScalarType::String)).into()), 2764;
+        },
+        "reverse" => Scalar {
+            params!(String) => UnaryFunc::Reverse(func::Reverse) => String, 3062;
         }
     };
 

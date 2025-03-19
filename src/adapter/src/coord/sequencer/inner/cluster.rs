@@ -282,8 +282,8 @@ impl Coordinator {
                     )
                     .await?;
                 if alter_followup == NeedsFinalization::Yes {
-                    // For non backgrounded graceful alters, store the cluster_id in the ConnMeta
-                    // to allow for cancellation.
+                    // For non backgrounded zero-downtime alters, store the
+                    // cluster_id in the ConnMeta to allow for cancellation.
                     self.active_conns
                         .get_mut(session.conn_id())
                         .expect("There must be an active connection")
@@ -1185,10 +1185,9 @@ impl Coordinator {
             || new_disk != disk
         {
             self.ensure_valid_azs(new_availability_zones.iter())?;
-            // If we're not doing a graceful reconfig
-            // tear down all replicas, create new ones
-            // else create the pending replicas and return
-            // early asking for finalization
+            // If we're not doing a zero-downtime reconfig tear down all
+            // replicas, create new ones else create the pending replicas and
+            // return early asking for finalization
             match strategy {
                 AlterClusterPlanStrategy::None => {
                     let replica_ids_and_reasons = (0..*replication_factor)

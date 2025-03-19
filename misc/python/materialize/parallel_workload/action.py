@@ -1913,7 +1913,7 @@ class CreateMySqlSourceAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        # TODO: Reenable when database-issues#6881 is fixed
+        # See database-issues#6881, not expected to work
         if exe.db.scenario == Scenario.BackupRestore:
             return False
 
@@ -1982,7 +1982,7 @@ class CreatePostgresSourceAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        # TODO: Reenable when database-issues#6881 is fixed
+        # See database-issues#6881, not expected to work
         if exe.db.scenario == Scenario.BackupRestore:
             return False
 

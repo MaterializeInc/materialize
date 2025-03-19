@@ -11,9 +11,11 @@ syntax = "proto3";
 
 package mz_storage_types.oneshot_sources;
 
+import "expr/src/linear.proto";
 import "google/protobuf/empty.proto";
 import "pgcopy/src/copy.proto";
 import "repr/src/catalog_item_id.proto";
+import "repr/src/relation_and_scalar.proto";
 import "storage-types/src/connections/aws.proto";
 
 message ProtoOneshotIngestionRequest {
@@ -32,6 +34,8 @@ message ProtoOneshotIngestionRequest {
     ProtoFilterFiles files = 6;
     ProtoFilterPattern pattern = 7;
   }
+
+  ProtoContentShape shape = 8;
 }
 
 message ProtoHttpContentSource {
@@ -56,4 +60,9 @@ message ProtoFilterFiles {
 
 message ProtoFilterPattern {
   string pattern = 1;
+}
+
+message ProtoContentShape {
+  mz_repr.relation_and_scalar.ProtoRelationDesc source_desc = 1;
+  mz_expr.linear.ProtoSafeMfpPlan source_mfp = 2;
 }

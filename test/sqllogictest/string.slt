@@ -1742,3 +1742,18 @@ query T
 SELECT starts_with(NULL, 'ab')
 ----
 NULL
+
+# reverse for string
+
+statement ok
+create table words (word text);
+
+statement ok
+insert into words values ('hello'), ('world'), ('!');
+
+query T
+select reverse(word) from words;
+----
+!
+dlrow
+olleh

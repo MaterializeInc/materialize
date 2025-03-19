@@ -15,7 +15,7 @@ async-trait = "0.1.83"
 chrono = { version = "0.4.39", default-features = false }
 clap = { version = "4.5.23", features = ["derive"] }
 fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.30"
+futures = "0.3.31"
 maplit = "1.0.2"
 mz-cloud-resources = { path = "../cloud-resources", default-features = false, features = ["vpc-endpoints"] }
 mz-orchestrator = { path = "../orchestrator", default-features = false }

@@ -45,7 +45,9 @@ use std::{iter, mem};
 
 use itertools::Itertools;
 use mz_expr::virtual_syntax::AlgExcept;
-use mz_expr::{func as expr_func, Id, LetRecLimit, LocalId, MirScalarExpr, RowSetFinishing};
+use mz_expr::{
+    func as expr_func, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, RowSetFinishing,
+};
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
 use mz_ore::option::FallibleMapExt;
@@ -56,7 +58,7 @@ use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
-    strconv, CatalogItemId, ColumnName, ColumnType, Datum, RelationDesc, RelationType,
+    strconv, CatalogItemId, ColumnIndex, ColumnName, ColumnType, Datum, RelationDesc, RelationType,
     RelationVersionSelector, Row, RowArena, ScalarType,
 };
 use mz_sql_parser::ast::display::AstDisplay;
@@ -476,27 +478,97 @@ pub fn plan_insert_query(
     ))
 }
 
+/// Determines the mapping between some external data and a Materialize relation.
+///
+/// Returns the following:
+/// * [`CatalogItemId`] for the destination table.
+/// * [`RelationDesc`] representing the shape of the __input__ data we are copying from.
+/// * The [`ColumnIndex`]es that the source data maps to. TODO(cf2): We don't need this mapping
+///   since we now return a [`MapFilterProject`].
+/// * [`MapFilterProject`] which will map and project the input data to match the shape of the
+///   destination table.
+///
 pub fn plan_copy_item(
     scx: &StatementContext,
     item_name: ResolvedItemName,
     columns: Vec<Ident>,
-) -> Result<(CatalogItemId, RelationDesc, Vec<usize>), PlanError> {
+) -> Result<
+    (
+        CatalogItemId,
+        RelationDesc,
+        Vec<ColumnIndex>,
+        Option<MapFilterProject>,
+    ),
+    PlanError,
+> {
     let item = scx.get_item_by_resolved_name(&item_name)?;
-
-    let mut desc = item
-        .desc(&scx.catalog.resolve_full_name(item.name()))?
-        .into_owned();
-
+    let fullname = scx.catalog.resolve_full_name(item.name());
+    let table_desc = item.desc(&fullname)?.into_owned();
     let mut ordering = Vec::with_capacity(columns.len());
 
-    if columns.is_empty() {
-        ordering.extend(0..desc.arity());
+    // TODO(cf2): The logic here to create the `source_desc` and the MFP are a bit duplicated and
+    // should be simplified. The reason they are currently separate code paths is so we can roll
+    // out `COPY ... FROM <url>` without touching the current `COPY ... FROM ... STDIN` behavior.
+
+    // If we're copying data into a table that users can write into (e.g. not a `CREATE TABLE ...
+    // FROM SOURCE ...`), then we generate an MFP.
+    //
+    // Note: This method is called for both `COPY INTO <table> FROM` and `COPY <expr> TO <external>`
+    // so it's not always guaranteed that our `item` is a table.
+    let mfp = if let Some(table_defaults) = item.writable_table_details() {
+        let mut table_defaults = table_defaults.to_vec();
+
+        for default in &mut table_defaults {
+            transform_ast::transform(scx, default)?;
+        }
+
+        // Fill in any omitted columns and rearrange into correct order
+        let source_column_names: Vec<_> = columns
+            .iter()
+            .cloned()
+            .map(normalize::column_name)
+            .collect();
+
+        let mut default_exprs = Vec::new();
+        let mut project_keys = Vec::with_capacity(table_desc.arity());
+
+        // For each column in the destination table, either project it from the source data, or provide
+        // an expression to fill in a default value.
+        let column_details = table_desc.iter().zip_eq(table_defaults);
+        for ((col_name, col_type), col_default) in column_details {
+            let maybe_src_idx = source_column_names.iter().position(|name| name == col_name);
+            if let Some(src_idx) = maybe_src_idx {
+                project_keys.push(src_idx);
+            } else {
+                // If one a column from the table does not exist in the source data, then a default
+                // value will get appended to the end of the input Row from the source data.
+                let hir = plan_default_expr(scx, &col_default, &col_type.scalar_type)?;
+                let mir = hir.lower_uncorrelated()?;
+                project_keys.push(source_column_names.len() + default_exprs.len());
+                default_exprs.push(mir);
+            }
+        }
+
+        let mfp = MapFilterProject::new(source_column_names.len())
+            .map(default_exprs)
+            .project(project_keys);
+        Some(mfp)
+    } else {
+        None
+    };
+
+    // Create a mapping from input data to the table we're copying into.
+    let source_desc = if columns.is_empty() {
+        let indexes = (0..table_desc.arity()).map(ColumnIndex::from_raw);
+        ordering.extend(indexes);
+
+        // The source data should be in the same order as the table.
+        table_desc
     } else {
         let columns: Vec<_> = columns.into_iter().map(normalize::column_name).collect();
-        let column_by_name: BTreeMap<&ColumnName, (usize, &ColumnType)> = desc
-            .iter()
-            .enumerate()
-            .map(|(idx, (name, typ))| (name, (idx, typ)))
+        let column_by_name: BTreeMap<&ColumnName, (ColumnIndex, &ColumnType)> = table_desc
+            .iter_all()
+            .map(|(idx, name, typ)| (name, (*idx, typ)))
             .collect();
 
         let mut names = Vec::with_capacity(columns.len());
@@ -519,17 +591,29 @@ pub fn plan_copy_item(
             sql_bail!("column {} specified more than once", dup.as_str().quoted());
         }
 
-        desc = RelationDesc::new(RelationType::new(source_types), names);
+        // The source data is a different shape than the destination table.
+        RelationDesc::new(RelationType::new(source_types), names)
     };
 
-    Ok((item.id(), desc, ordering))
+    Ok((item.id(), source_desc, ordering, mfp))
 }
 
+/// See the doc comment on [`plan_copy_item`] for the details of what this function returns.
+///
+/// TODO(cf3): Merge this method with [`plan_copy_item`].
 pub fn plan_copy_from(
     scx: &StatementContext,
     table_name: ResolvedItemName,
     columns: Vec<Ident>,
-) -> Result<(CatalogItemId, RelationDesc, Vec<usize>), PlanError> {
+) -> Result<
+    (
+        CatalogItemId,
+        RelationDesc,
+        Vec<ColumnIndex>,
+        Option<MapFilterProject>,
+    ),
+    PlanError,
+> {
     let table = scx.get_item_by_resolved_name(&table_name)?;
 
     // Validate the target of the insert.
@@ -554,9 +638,9 @@ pub fn plan_copy_from(
             table_name.full_name_str()
         );
     }
-    let (id, desc, ordering) = plan_copy_item(scx, table_name, columns)?;
+    let (id, desc, ordering, mfp) = plan_copy_item(scx, table_name, columns)?;
 
-    Ok((id, desc, ordering))
+    Ok((id, desc, ordering, mfp))
 }
 
 /// Builds a plan that adds the default values for the missing columns and re-orders
@@ -565,7 +649,7 @@ pub fn plan_copy_from_rows(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
     id: CatalogItemId,
-    columns: Vec<usize>,
+    columns: Vec<ColumnIndex>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<HirRelationExpr, PlanError> {
     let scx = StatementContext::new(Some(pcx), catalog);
@@ -587,7 +671,7 @@ pub fn plan_copy_from_rows(
 
     let column_types = columns
         .iter()
-        .map(|x| desc.typ().column_types[*x].clone())
+        .map(|x| desc.get_type(x).clone())
         .map(|mut x| {
             // Null constraint is enforced later, when inserting the row in the table.
             // Without this, an assert is hit during lowering.
@@ -606,7 +690,7 @@ pub fn plan_copy_from_rows(
     // more easily, as at every stage we know this expression is nothing more than
     // a constant (as opposed to e.g. a constant with with an identity map and identity
     // projection).
-    let default: Vec<_> = (0..desc.arity()).collect();
+    let default: Vec<_> = (0..desc.arity()).map(ColumnIndex::from_raw).collect();
     if columns == default {
         return Ok(expr);
     }
@@ -618,8 +702,8 @@ pub fn plan_copy_from_rows(
     // Maps from table column index to position in the source query
     let col_to_source: BTreeMap<_, _> = columns.iter().enumerate().map(|(a, b)| (b, a)).collect();
 
-    let column_details = desc.iter_types().zip_eq(defaults).enumerate();
-    for (col_idx, (col_typ, default)) in column_details {
+    let column_details = desc.iter_all().zip_eq(defaults);
+    for ((col_idx, _col_name, col_typ), default) in column_details {
         if let Some(src_idx) = col_to_source.get(&col_idx) {
             project_key.push(*src_idx);
         } else {

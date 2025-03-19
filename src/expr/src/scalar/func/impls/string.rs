@@ -153,6 +153,13 @@ sqlfunc!(
     }
 );
 
+sqlfunc!(
+    #[sqlname = "reverse"]
+    fn reverse<'a>(a: &'a str) -> String {
+        a.chars().rev().collect()
+    }
+);
+
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]

@@ -5319,12 +5319,14 @@ fn contains_single_replica_objects(scx: &StatementContext, cluster: &dyn Catalog
         let item = scx.catalog.get_item(id);
         let single_replica_source = match item.source_desc() {
             Ok(Some(desc)) => match desc.connection {
-                GenericSourceConnection::Kafka(_) | GenericSourceConnection::LoadGenerator(_) => {
+                GenericSourceConnection::Kafka(_)
+                | GenericSourceConnection::LoadGenerator(_)
+                | GenericSourceConnection::MySql(_)
+                | GenericSourceConnection::Postgres(_) => {
                     let enable_multi_replica_sources =
                         ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs());
                     !enable_multi_replica_sources
                 }
-                GenericSourceConnection::MySql(_) | GenericSourceConnection::Postgres(_) => true,
             },
             _ => false,
         };
@@ -5895,7 +5897,7 @@ pub fn plan_alter_cluster(
                         AlterClusterPlanStrategy::None => {}
                         _ => {
                             scx.require_feature_flag(
-                                &crate::session::vars::ENABLE_GRACEFUL_CLUSTER_RECONFIGURATION,
+                                &crate::session::vars::ENABLE_ZERO_DOWNTIME_CLUSTER_RECONFIGURATION,
                             )?;
                         }
                     }

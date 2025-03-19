@@ -435,8 +435,11 @@ where
         self.storage_collections.active_collection_metadatas()
     }
 
-    fn active_ingestions(&self, instance_id: StorageInstanceId) -> &BTreeSet<GlobalId> {
-        self.instances[&instance_id].active_ingestions()
+    fn active_ingestions(
+        &self,
+        instance_id: StorageInstanceId,
+    ) -> Box<dyn Iterator<Item = &GlobalId> + '_> {
+        Box::new(self.instances[&instance_id].active_ingestions())
     }
 
     fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
@@ -3434,6 +3437,11 @@ where
     fn maintain(&mut self) {
         self.update_frontier_introspection();
         self.refresh_wallclock_lag();
+
+        // Perform instance maintenance work.
+        for instance in self.instances.values_mut() {
+            instance.refresh_state_metrics();
+        }
     }
 }
 

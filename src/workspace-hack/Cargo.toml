@@ -33,7 +33,6 @@ aws-smithy-runtime-api = { version = "1.7.3", features = ["client", "http-02x", 
 aws-smithy-types = { version = "1.2.13", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.7.5", features = ["ws"] }
 axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
-base64 = { version = "0.21.5" }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
@@ -59,7 +58,7 @@ flate2 = { version = "1.1.0", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
-futures-executor = { version = "0.3.30" }
+futures-executor = { version = "0.3.31" }
 futures-io = { version = "0.3.31" }
 futures-sink = { version = "0.3.31" }
 futures-task = { version = "0.3.31" }
@@ -69,7 +68,6 @@ half = { version = "2.4.1", features = ["num-traits"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.4.1", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1.6", features = ["client-legacy", "server-auto", "service"] }
-indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.42.2", features = ["json"] }
 itertools = { version = "0.12.1" }
 k8s-openapi = { version = "0.22.0", default-features = false, features = ["schemars", "v1_30"] }
@@ -108,7 +106,7 @@ proc-macro2 = { version = "1.0.93", features = ["span-locations"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.14.7", default-features = false, features = ["serde"] }
 prost-types = { version = "0.13.5" }
-quote = { version = "1.0.38" }
+quote = { version = "1.0.40" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
 rand_core = { version = "0.6.2", default-features = false, features = ["std"] }
@@ -170,7 +168,6 @@ aws-smithy-runtime-api = { version = "1.7.3", features = ["client", "http-02x", 
 aws-smithy-types = { version = "1.2.13", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.7.5", features = ["ws"] }
 axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
-base64 = { version = "0.21.5" }
 bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
@@ -197,7 +194,7 @@ flate2 = { version = "1.1.0", features = ["zlib"] }
 form_urlencoded = { version = "1.2.1" }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
-futures-executor = { version = "0.3.30" }
+futures-executor = { version = "0.3.31" }
 futures-io = { version = "0.3.31" }
 futures-sink = { version = "0.3.31" }
 futures-task = { version = "0.3.31" }
@@ -207,7 +204,6 @@ half = { version = "2.4.1", features = ["num-traits"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.4.1", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1.6", features = ["client-legacy", "server-auto", "service"] }
-indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 insta = { version = "1.42.2", features = ["json"] }
 itertools = { version = "0.12.1" }
 k8s-openapi = { version = "0.22.0", default-features = false, features = ["schemars", "v1_30"] }
@@ -247,7 +243,7 @@ proptest-derive = { version = "0.5.1", default-features = false, features = ["bo
 prost = { version = "0.13.5", features = ["no-recursion-limit", "prost-derive"] }
 prost-reflect = { version = "0.14.7", default-features = false, features = ["serde"] }
 prost-types = { version = "0.13.5" }
-quote = { version = "1.0.38" }
+quote = { version = "1.0.40" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
 rand_core = { version = "0.6.2", default-features = false, features = ["std"] }

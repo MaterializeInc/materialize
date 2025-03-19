@@ -13,7 +13,7 @@ workspace = true
 async-trait = "0.1.83"
 bytes = { version = "1.10.1" }
 differential-dataflow = "0.13.7"
-futures = "0.3.30"
+futures = "0.3.31"
 itertools = { version = "0.12.1" }
 mz-ore = { path = "../ore", features = ["process"] }
 mz-dyncfg = { path = "../dyncfg" }
@@ -30,7 +30,7 @@ uuid = { version = "1.16.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-crossbeam-channel = "0.5.14"
+crossbeam-channel = "0.5.8"
 rand = { version = "0.8.5", default-features = false, features = ["small_rng"] }
 
 [build-dependencies]

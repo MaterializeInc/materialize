@@ -28,6 +28,13 @@ pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "Whether compute should use the new MV sink correction buffer implementation.",
 );
 
+/// Whether the MV sink should distribute appends among workers.
+pub const ENABLE_MV_APPEND_SMEARING: Config<bool> = Config::new(
+    "enable_compute_mv_append_smearing",
+    true,
+    "Whether the MV sink should distribute appends among workers.",
+);
+
 /// The yielding behavior with which linear joins should be rendered.
 pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
     "linear_join_yielding",
@@ -227,6 +234,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_CORRECTION_V2)
+        .add(&ENABLE_MV_APPEND_SMEARING)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)

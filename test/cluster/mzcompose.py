@@ -2827,6 +2827,15 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_peeks_total("canceled")
     assert count == 0, f"got {count}"
 
+    count = metrics.get_value("mz_compute_controller_connected_replica_count")
+    assert count == 1, f"got {count}"
+    count = metrics.get_value("mz_compute_controller_replica_connects_total")
+    assert count == 1, f"got {count}"
+    duration = metrics.get_value(
+        "mz_compute_controller_replica_connect_wait_time_seconds_total"
+    )
+    assert duration > 0, f"got {duration}"
+
     # mz_dataflow_wallclock_lag_seconds_count
     count = metrics.get_wallclock_lag_count(index_id)
     assert count, f"got {count}"
@@ -2953,6 +2962,15 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     assert count == 1, f"got {count}"
     count = metrics_u2.get_storage_controller_history_command_count("allow_writes")
     assert count == 1, f"got {count}"
+
+    count = metrics_u2.get_value("mz_compute_controller_connected_replica_count")
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_value("mz_compute_controller_replica_connects_total")
+    assert count == 1, f"got {count}"
+    duration = metrics_u2.get_value(
+        "mz_compute_controller_replica_connect_wait_time_seconds_total"
+    )
+    assert duration > 0, f"got {duration}"
 
     # mz_dataflow_wallclock_lag_seconds_count
     count = metrics_ux.get_wallclock_lag_count(table1_id)
@@ -4934,11 +4952,11 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
         )
 
 
-def workflow_test_graceful_reconfigure(
+def workflow_test_zero_downtime_reconfigure(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """
-    Tests gracefully reconfiguring a managed cluster
+    Tests reconfiguring a managed cluster with zero downtime
     """
     c.down(destroy_volumes=True)
     with c.override(
@@ -4949,7 +4967,7 @@ def workflow_test_graceful_reconfigure(
         c.up("clusterd1")
         c.sql(
             """
-            ALTER SYSTEM SET enable_graceful_cluster_reconfiguration = true;
+            ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
 
             DROP CLUSTER IF EXISTS cluster1 CASCADE;
             DROP TABLE IF EXISTS t CASCADE;
@@ -4991,7 +5009,7 @@ def workflow_test_graceful_reconfigure(
             len(replicas) == 0
         ), f"Cluster should only have no pending replica prior to alter, found {replicas}"
 
-        def gracefully_alter():
+        def zero_downtime_alter():
             try:
                 c.sql(
                     """
@@ -5005,7 +5023,7 @@ def workflow_test_graceful_reconfigure(
                 pass
 
         # Run a reconfigure
-        thread = Thread(target=gracefully_alter)
+        thread = Thread(target=zero_downtime_alter)
         thread.start()
         time.sleep(3)
 
@@ -5059,7 +5077,7 @@ def workflow_test_graceful_reconfigure(
         )
         c.sql(
             """
-            ALTER SYSTEM RESET enable_graceful_cluster_reconfiguration;
+            ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration;
             """,
             port=6877,
             user="mz_system",

@@ -13,7 +13,7 @@ workspace = true
 anyhow = "1.0.66"
 chrono = { version = "0.4.35", default-features = false }
 clap = { version = "4.5.23", features = ["derive", "env"] }
-futures = "0.3.30"
+futures = "0.3.31"
 k8s-openapi = { version = "0.22.0", features = ["v1_30"] }
 kube = { version = "0.92.1", default-features = false, features = ["client", "runtime"] }
 mz-build-info = { path = "../build-info" }
