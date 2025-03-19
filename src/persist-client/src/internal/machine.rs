@@ -10,7 +10,6 @@
 //! Implementation of the persist state machine.
 
 use std::fmt::Debug;
-use std::future::Future;
 use std::ops::ControlFlow::{self, Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -18,7 +17,6 @@ use std::time::{Duration, Instant, SystemTime};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, BoxFuture};
-use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::assert_none;
@@ -869,21 +867,14 @@ where
             Watch(&'a mut StateWatch<K, V, T, D>),
             Sleep(MetricsRetryStream),
         }
-        let mut wakes = FuturesUnordered::<
-            std::pin::Pin<Box<dyn Future<Output = Wake<K, V, T, D>> + Send + Sync>>,
-        >::new();
-        wakes.push(Box::pin(
-            watch
-                .wait_for_seqno_ge(seqno.next())
-                .map(Wake::Watch)
-                .instrument(trace_span!("snapshot::watch")),
-        ));
-        wakes.push(Box::pin(
-            sleeps
-                .sleep()
-                .map(Wake::Sleep)
-                .instrument(trace_span!("snapshot::sleep")),
-        ));
+        let mut watch_fut = std::pin::pin!(watch
+            .wait_for_seqno_ge(seqno.next())
+            .map(Wake::Watch)
+            .instrument(trace_span!("snapshot::watch")),);
+        let mut sleep_fut = std::pin::pin!(sleeps
+            .sleep()
+            .map(Wake::Sleep)
+            .instrument(trace_span!("snapshot::sleep")),);
 
         // To reduce log spam, we log "not yet available" only once at info if
         // it passes a certain threshold. Then, if it did one info log, we log
@@ -914,8 +905,10 @@ where
                 );
             }
 
-            assert_eq!(wakes.len(), 2);
-            let wake = wakes.next().await.expect("wakes should be non-empty");
+            let wake = match future::select(watch_fut.as_mut(), sleep_fut.as_mut()).await {
+                future::Either::Left((wake, _)) => wake,
+                future::Either::Right((wake, _)) => wake,
+            };
             // Note that we don't need to fetch in the Watch case, because the
             // Watch wakeup is a signal that the shared state has already been
             // updated.
@@ -949,12 +942,14 @@ where
             };
 
             match wake {
-                Wake::Watch(watch) => wakes.push(Box::pin(
-                    watch
-                        .wait_for_seqno_ge(seqno.next())
-                        .map(Wake::Watch)
-                        .instrument(trace_span!("snapshot::watch")),
-                )),
+                Wake::Watch(watch) => {
+                    watch_fut.set(
+                        watch
+                            .wait_for_seqno_ge(seqno.next())
+                            .map(Wake::Watch)
+                            .instrument(trace_span!("snapshot::watch")),
+                    );
+                }
                 Wake::Sleep(sleeps) => {
                     debug!(
                         "snapshot {} {} sleeping for {:?}",
@@ -962,12 +957,12 @@ where
                         self.shard_id(),
                         sleeps.next_sleep()
                     );
-                    wakes.push(Box::pin(
+                    sleep_fut.set(
                         sleeps
                             .sleep()
                             .map(Wake::Sleep)
                             .instrument(trace_span!("snapshot::sleep")),
-                    ));
+                    );
                 }
             }
         }
@@ -1401,6 +1396,7 @@ pub mod datadriven {
     use anyhow::anyhow;
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
+    use futures::StreamExt;
     use mz_dyncfg::{ConfigUpdates, ConfigVal};
     use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
