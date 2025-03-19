@@ -430,6 +430,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 persist_fast_path_limit: Default::default(),
                 reoptimize_imported_views: v.reoptimize_imported_views,
                 enable_reduce_reduction: Default::default(),
+                enable_let_prefix_extraction: Default::default(),
             },
         })
     }
