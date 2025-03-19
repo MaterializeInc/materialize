@@ -370,18 +370,75 @@ where
         }
 
         match &collection.extra_state {
-            CollectionStateExtra::Ingestion(ingestion_state) => Ok(ingestion_state.hydrated),
+            CollectionStateExtra::Ingestion(ingestion_state) => {
+                // An ingestion is hydrated if it is hydrated on at least one replica.
+                Ok(ingestion_state.hydrated_on.len() >= 1)
+            }
             CollectionStateExtra::Export(_) => {
-                // For now, sinks are always considered hydrated.
-                // TODO(sinks): base this off of the sink shard's frontier?
+                // For now, sinks are always considered hydrated. We rely on
+                // them starting up "instantly" and don't wait for them when
+                // checking hydration status of a replica.  TODO(sinks): base
+                // this off of the sink shard's frontier?
                 Ok(true)
             }
             CollectionStateExtra::None => {
                 // For now, objects that are not ingestions are always
-                // considered hydrated.
+                // considered hydrated. This is tables and webhooks, as of
+                // today.
                 Ok(true)
             }
         }
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    fn collections_hydrated_on_replicas(
+        &self,
+        target_replica_ids: Option<Vec<ReplicaId>>,
+        exclude_collections: &BTreeSet<GlobalId>,
+    ) -> Result<bool, StorageError<Self::Timestamp>> {
+        // If target_replica_ids is provided, use it as the set of target
+        // replicas. Otherwise check for hydration on any replica.
+        let target_replicas: Option<BTreeSet<ReplicaId>> =
+            target_replica_ids.map(|ids| ids.into_iter().collect());
+
+        let mut all_hydrated = true;
+        for (collection_id, collection_state) in self.collections.iter() {
+            if collection_id.is_transient() || exclude_collections.contains(collection_id) {
+                continue;
+            }
+            let hydrated = match &collection_state.extra_state {
+                CollectionStateExtra::Ingestion(state) => {
+                    match &target_replicas {
+                        Some(target_replicas) => !state.hydrated_on.is_disjoint(target_replicas),
+                        None => {
+                            // Not target replicas, so check that it's hydrated
+                            // on at least one replica.
+                            state.hydrated_on.len() >= 1
+                        }
+                    }
+                }
+                CollectionStateExtra::Export(_) => {
+                    // For now, sinks are always considered hydrated. We rely on
+                    // them starting up "instantly" and don't wait for them when
+                    // checking hydration status of a replica.  TODO(sinks):
+                    // base this off of the sink shard's frontier?
+                    true
+                }
+                CollectionStateExtra::None => {
+                    // For now, objects that are not ingestions are always
+                    // considered hydrated. This is tables and webhooks, as of
+                    // today.
+                    true
+                }
+            };
+            if !hydrated {
+                tracing::info!(%collection_id, "collection is not hydrated on any replica");
+                all_hydrated = false;
+                // We continue with our loop instead of breaking out early, so
+                // that we log all non-hydrated replicas.
+            }
+        }
+        Ok(all_hydrated)
     }
 
     fn collection_frontiers(
@@ -1016,7 +1073,7 @@ where
                         write_frontier: Antichain::from_elem(Self::Timestamp::minimum()),
                         hold_policy: ReadPolicy::step_back(),
                         instance_id,
-                        hydrated: false,
+                        hydrated_on: BTreeSet::new(),
                     };
 
                     extra_state = CollectionStateExtra::Ingestion(ingestion_state);
@@ -1055,7 +1112,7 @@ where
                         write_frontier: Antichain::from_elem(Self::Timestamp::minimum()),
                         hold_policy: ReadPolicy::step_back(),
                         instance_id: ingestion_desc.instance_id,
-                        hydrated: false,
+                        hydrated_on: BTreeSet::new(),
                     };
 
                     extra_state = CollectionStateExtra::Ingestion(ingestion_state);
@@ -1347,7 +1404,7 @@ where
                 }
                 o => {
                     tracing::warn!("alter_ingestion_export_data_configs called on {:?}", o);
-                    Err(StorageError::IdentifierInvalid(ingestion_id))?;
+                    Err(StorageError::IdentifierInvalid(ingestion_id))?
                 }
             }
         }
@@ -2246,10 +2303,41 @@ where
                                         CollectionStateExtra::Ingestion(
                                             ref mut ingestion_state,
                                         ) => {
-                                            if !ingestion_state.hydrated {
+                                            if ingestion_state.hydrated_on.is_empty() {
                                                 tracing::debug!(ingestion_id = %status_update.id, "ingestion is hydrated");
-                                                ingestion_state.hydrated = true;
                                             }
+                                            ingestion_state.hydrated_on.insert(replica_id.expect(
+                                                "replica id should be present for status running",
+                                            ));
+                                        }
+                                        CollectionStateExtra::Export(_) => {
+                                            // TODO(sinks): track sink hydration?
+                                        }
+                                        CollectionStateExtra::None => {
+                                            // Nothing to do
+                                        }
+                                    }
+                                }
+                                None => (), // no collection, let's say that's fine
+                                            // here
+                            }
+                        }
+                        Status::Paused => {
+                            let collection = self.collections.get_mut(&status_update.id);
+                            match collection {
+                                Some(collection) => {
+                                    match collection.extra_state {
+                                        CollectionStateExtra::Ingestion(
+                                            ref mut ingestion_state,
+                                        ) => {
+                                            // TODO: Paused gets send when there
+                                            // are no active replicas. We should
+                                            // change this to send a targeted
+                                            // Pause for each replica, and do
+                                            // more fine-grained hydration
+                                            // tracking here.
+                                            tracing::debug!(ingestion_id = %status_update.id, "ingestion is now paused");
+                                            ingestion_state.hydrated_on.clear();
                                         }
                                         CollectionStateExtra::Export(_) => {
                                             // TODO(sinks): track sink hydration?
@@ -3595,8 +3683,8 @@ struct IngestionState<T: TimelyTimestamp> {
     /// The ID of the instance in which the ingestion is running.
     pub instance_id: StorageInstanceId,
 
-    /// Whether or not the ingestion is hydrated.
-    pub hydrated: bool,
+    /// Set of replica IDs on which this ingestion is hydrated.
+    pub hydrated_on: BTreeSet<ReplicaId>,
 }
 
 /// A description of a status history collection.
