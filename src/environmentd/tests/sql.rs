@@ -3381,6 +3381,16 @@ async fn test_retain_history() {
             .into_iter()
             .count();
 
+        // Out of bounds AS OF should fail.
+        assert_contains!(
+            client
+                .query(&format!("SELECT * FROM {name} AS OF {ts}-10000"), &[])
+                .await
+                .unwrap_err()
+                .to_string(),
+            "not valid for all inputs"
+        );
+
         // We sanity check that we have _some_
         assert!(now_vals > 0);
         assert!(earlier_values > 0);
