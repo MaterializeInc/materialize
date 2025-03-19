@@ -782,5 +782,35 @@ SELECT regexp_matches('foobarbequebazilbarfbonkbilbobagginsbarbellbeachball', '(
 {bar,beque,bazil}
 {bell,beach,ball}
 
+query error invalid regular expression flag: x
+SELECT regexp_matches('foobarbaz', '(b..)', 'igx');
+
+query T
+SELECT regexp_matches('orangeoculus', '(b[^b]+)(b[^b]+)(b[^b]+)', 'g');
+----
+
+query T
+SELECT regexp_matches('fooBarBequebazilbarfBonkbilbobagginsbarbellbeachball', '(b[^b]+)(b[^b]+)(b[^b]+)', 'ig');
+----
+{barf,Bonk,bil}
+{bo,baggins,bar}
+{Bar,Beque,bazil}
+{bell,beach,ball}
+
+statement OK
+CREATE TABLE foo(bar text);
+
+statement OK
+insert into foo values ('fooBarBequebazilbarfBonkbilbobagginsbarbellbeachball'), ('bellbeachball');
+
+query T
+SELECT regexp_matches(bar, '(b[^b]+)(b[^b]+)(b[^b]+)', 'ig') FROM foo;
+----
+{barf,Bonk,bil}
+{bo,baggins,bar}
+{Bar,Beque,bazil}
+{bell,beach,ball}
+{bell,beach,ball}
+
 statement ok
 DROP CLUSTER multiprocess;
