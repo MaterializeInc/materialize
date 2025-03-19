@@ -17,7 +17,6 @@ use std::net::{IpAddr, SocketAddr, TcpListener as StdTcpListener};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,8 +26,8 @@ use anyhow::{anyhow, bail, Context};
 use async_stream::stream;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::future;
-use futures::stream::{BoxStream, FuturesUnordered, TryStreamExt};
+use futures::stream::{BoxStream, FuturesUnordered};
+use futures::StreamExt;
 use itertools::Itertools;
 use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
@@ -1096,8 +1095,7 @@ async fn tcp_proxy(
         uds_path,
     }: TcpProxyConfig,
 ) {
-    let mut conns = FuturesUnordered::<Pin<Box<dyn Future<Output = _> + Send>>>::new();
-    conns.push(Box::pin(future::pending()));
+    let mut conns = FuturesUnordered::new();
     loop {
         select! {
             res = tcp_listener.listener.accept() => {
@@ -1113,10 +1111,8 @@ async fn tcp_proxy(
                         .context("proxying")
                 }));
             }
-            res = conns.try_next() => {
-                if let Err(e) = res {
-                    warn!("{name}: tcp proxy connection failed: {}", e.display_with_causes());
-                }
+            Some(Err(e)) = conns.next() => {
+                warn!("{name}: tcp proxy connection failed: {}", e.display_with_causes());
             }
         }
     }
