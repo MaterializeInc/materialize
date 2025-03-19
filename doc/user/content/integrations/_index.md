@@ -164,20 +164,13 @@ Materialize integrates with dbt through the [`dbt-materialize`](https://github.c
 | dbt Core  | {{< supportLevel beta >}}        | See the [`dbt-materialize` reference documentation](/manage/dbt/) for more details, and the [development workflows guide](/integrations/dbt/) for common dbt patterns. | [](#notify) |
 | dbt Cloud | {{< supportLevel in-progress >}} | Not supported yet. Making the adapter available in dbt Cloud depends on prioritization by dbt Labs. If you require dbt Cloud support, please reach out to the [dbt Labs team](https://www.getdbt.com/community/join-the-community/).                                                                                                                | [](#notify) |
 
-### Terraform
+### Infrastructure as Code
 
-Materialize maintains a
-[Terraform provider](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs) to help you safely and predictably provision and manage connections, sources, and other database objects.
+ Service      | Support level                    | Notes                                                                                                                                                                                                                                                                             |             |
+| ------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| Terraform | {{< supportLevel beta >}}  | See the [Go cheatsheet](/manage/terraform/). |
+| Pulumi    | {{< supportLevel alpha >}} | See the [Go cheatsheet](/manage/pulumi/). |
 
-Materialize also maintains several [Terraform modules](https://registry.terraform.io/namespaces/MaterializeInc) to help manage your other
-cloud resources. Modules allow you to bypass manually configuring cloud
-resources and are an efficient way of deploying essential infrastructure for
-your organization.
-
-{{< note >}}
-While Materialize offers support for its provider, Materialize does not offer
-support for these modules.
-{{</ note >}}
 
 ### SQL clients
 
