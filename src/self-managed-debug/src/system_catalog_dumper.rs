@@ -855,12 +855,6 @@ impl<'n> SystemCatalogDumper<'n> {
 
         let relation_name = relation.name.to_string();
 
-        let mut pg_client_lock = pg_client.lock().await;
-        // TODO (debug_tool3): Use a transaction for the entire dump instead of per query.
-        let transaction = pg_client_lock.transaction().await?;
-
-        let cancel_token = transaction.cancel_token();
-
         if let Err(err) = retry::Retry::default()
             .max_duration(PG_QUERY_TIMEOUT)
             .initial_backoff(Duration::from_secs(2))
@@ -868,10 +862,14 @@ impl<'n> SystemCatalogDumper<'n> {
                 let start_time = start_time.clone();
                 let relation_name = relation.name;
                 let cluster_replica = cluster_replica.clone();
-                let transaction = &transaction;
 
                 async move {
-                    match query_relation(transaction, start_time, relation, cluster_replica).await {
+                    // TODO (debug_tool3): Use a transaction for the entire dump instead of per query.
+                    let mut pg_client_lock = pg_client.lock().await;
+                    let transaction = pg_client_lock.transaction().await?;
+
+                    match query_relation(&transaction, start_time, relation, cluster_replica).await
+                    {
                         Ok(()) => Ok(()),
                         Err(err) => {
                             error!(
@@ -886,6 +884,10 @@ impl<'n> SystemCatalogDumper<'n> {
             })
             .await
         {
+            let pg_client_lock = pg_client.lock().await;
+
+            let cancel_token = pg_client_lock.cancel_token();
+
             if let Err(_) = async {
                 let tls = self.pg_tls.clone();
 
