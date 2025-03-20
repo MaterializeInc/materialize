@@ -241,7 +241,7 @@ pub struct Relation {
     pub category: RelationCategory,
 }
 
-const RELATIONS: &[Relation] = &[
+static RELATIONS: &[Relation] = &[
     // Basic object information
     Relation {
         name: "mz_audit_events",
@@ -613,14 +613,17 @@ const RELATIONS: &[Relation] = &[
     },
 ];
 
-const PG_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
+static PG_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
 /// Timeout for a query. We use 6 minutes since it's a good
 /// sign that the operation won't work.
-const PG_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
+static PG_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The maximum number of errors we tolerate for a cluster replica.
 /// If a cluster replica has more than this many errors, we skip it.
-const MAX_CLUSTER_REPLICA_ERROR_COUNT: usize = 3;
+static MAX_CLUSTER_REPLICA_ERROR_COUNT: usize = 3;
+
+static SET_SEARCH_PATH_QUERY: &str = "SET search_path = mz_internal, mz_catalog, mz_introspection";
+static SELECT_CLUSTER_REPLICAS_QUERY: &str = "SELECT c.name as cluster_name, cr.name as replica_name FROM mz_clusters AS c JOIN mz_cluster_replicas AS cr ON c.id = cr.cluster_id;";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ClusterReplica {
@@ -808,24 +811,19 @@ impl<'n> SystemCatalogDumper<'n> {
 
         // Set search path to system catalog tables
         pg_client
-            .execute(
-                "SET search_path = mz_internal, mz_catalog, mz_introspection",
-                &[],
-            )
+            .execute(SET_SEARCH_PATH_QUERY, &[])
             .await
             .context("Failed to set search path")?;
 
         // We need to get all cluster replicas to dump introspection relations.
-        let cluster_replicas = match pg_client
-            .query("SELECT c.name as cluster_name, cr.name as replica_name FROM mz_clusters AS c JOIN mz_cluster_replicas AS cr ON c.id = cr.cluster_id;", &[])
-            .await
-            {
-                Ok(rows) => rows.into_iter()
-                            .map(|row| ClusterReplica {
-                                cluster_name: row.get::<_, String>("cluster_name"),
-                                replica_name: row.get::<_, String>("replica_name"),
-                            })
-                            .collect::<Vec<_>>(),
+        let cluster_replicas = match pg_client.query(SELECT_CLUSTER_REPLICAS_QUERY, &[]).await {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|row| ClusterReplica {
+                    cluster_name: row.get::<_, String>("cluster_name"),
+                    replica_name: row.get::<_, String>("replica_name"),
+                })
+                .collect::<Vec<_>>(),
             Err(e) => {
                 error!("Failed to get replica names: {}", e);
                 vec![]
