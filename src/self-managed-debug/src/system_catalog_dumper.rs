@@ -21,6 +21,7 @@
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
+use mz_ore::future::{timeout, TimeoutError};
 use mz_tls_util::make_tls;
 use std::fmt;
 use std::path::PathBuf;
@@ -230,7 +231,7 @@ pub enum RelationCategory {
     /// For relations that belong in the `mz_introspection` schema.
     /// These relations require a replica name to be specified.
     Introspection,
-    /// For relations that are retained metric objects that we'd also like to get the SUBSCRIBE output for.
+    /// For relations that are retained metric objects that we'd like to get the SUBSCRIBE output for.
     Retained,
     /// Other relations that we want to do a SELECT * FROM on.
     Basic,
@@ -375,7 +376,15 @@ static RELATIONS: &[Relation] = &[
     // Sources/sinks
     Relation {
         name: "mz_source_statistics_with_history",
+        category: RelationCategory::Basic,
+    },
+    Relation {
+        name: "mz_source_statistics_with_history",
         category: RelationCategory::Retained,
+    },
+    Relation {
+        name: "mz_sink_statistics",
+        category: RelationCategory::Basic,
     },
     Relation {
         name: "mz_sink_statistics",
@@ -621,6 +630,11 @@ static PG_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
 // TODO (debug_tool3): Make this configurable.
 static PG_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// The amount of time we wait to collect data from the subscribe
+/// query before cancelling the query. This is to prevent the query
+/// from running indefinitely.
+static SUBSCRIBE_SCRAPE_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// The maximum number of errors we tolerate for a cluster replica.
 /// If a cluster replica has more than this many errors, we skip it.
 static MAX_CLUSTER_REPLICA_ERROR_COUNT: usize = 3;
@@ -682,43 +696,111 @@ pub async fn create_postgres_connection(
     Ok((pg_client, pg_conn, tls))
 }
 
+pub async fn write_copy_stream(
+    transaction: &Transaction<'_>,
+    copy_query: &str,
+    file: &mut tokio::fs::File,
+    relation_name: &str,
+) -> Result<(), anyhow::Error> {
+    let copy_stream = transaction
+        .copy_out(copy_query)
+        .await
+        .context(format!("Failed to COPY TO for {}", relation_name))?
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+    let copy_stream = std::pin::pin!(copy_stream);
+    let mut reader = StreamReader::new(copy_stream);
+    tokio::io::copy(&mut reader, file).await?;
+    // Ensure the file is flushed to disk.
+    file.sync_all().await?;
+
+    Ok::<(), anyhow::Error>(())
+}
+
 pub async fn copy_relation_to_csv(
     transaction: &Transaction<'_>,
     file_path_name: PathBuf,
     column_names: &Vec<String>,
-    relation_name: &str,
+    relation: &Relation,
+    tls: MakeTlsConnector,
 ) -> Result<(), anyhow::Error> {
     let mut file = tokio::fs::File::create(&file_path_name).await?;
     // TODO (SangJunBak): Use `WITH (HEADER TRUE)` once database-issues#2846 is implemented.
     file.write_all((column_names.join(",") + "\n").as_bytes())
         .await?;
 
-    // Stream data rows to CSV
-    let copy_query = format!(
-        "COPY (SELECT * FROM {}) TO STDOUT WITH (FORMAT CSV)",
-        relation_name
-    );
+    match relation.category {
+        RelationCategory::Retained => {
+            let copy_query = format!(
+                "COPY (SUBSCRIBE TO (SELECT * FROM {})) TO STDOUT WITH (FORMAT CSV);",
+                relation.name
+            );
 
-    let copy_stream = transaction
-        .copy_out(&copy_query)
-        .await
-        .context(format!("Failed to COPY TO for {}", relation_name))?
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
-    let copy_stream = std::pin::pin!(copy_stream);
-    let mut reader = StreamReader::new(copy_stream);
-    tokio::io::copy(&mut reader, &mut file).await?;
-    // Ensure the file is flushed to disk.
-    file.sync_all().await?;
+            let copy_fut = write_copy_stream(transaction, &copy_query, &mut file, relation.name);
+            // We use a timeout to cut the SUBSCRIBE query short since it's expected to run indefinitely.
+            // Alternatively, we could use a `DECLARE...FETCH ALL` for the same effect, but then we'd have
+            // to format the result as CSV ourselves, leading to more code. Another alternative is to
+            // specify an UPTO, but it gets finicky to get the UPTO frontier right since we can't rely on
+            // wallclock time.
+            let res = timeout(SUBSCRIBE_SCRAPE_TIMEOUT, copy_fut).await;
 
-    info!("Copied {} to {}", relation_name, file_path_name.display());
+            match res {
+                Ok(()) => Ok(()),
+                Err(TimeoutError::DeadlineElapsed) => {
+                    transaction.cancel_token().cancel_query(tls).await?;
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            }
+            .map_err(|e| anyhow::anyhow!(e))?;
+        }
+        _ => {
+            let copy_query = format!(
+                "COPY (SELECT * FROM {}) TO STDOUT WITH (FORMAT CSV)",
+                relation.name
+            );
+            write_copy_stream(transaction, &copy_query, &mut file, relation.name).await?;
+        }
+    };
+
+    info!("Copied {} to {}", relation.name, file_path_name.display());
     Ok::<(), anyhow::Error>(())
+}
+
+pub async fn query_column_names(
+    pg_client: &PgClient,
+    relation: &Relation,
+) -> Result<Vec<String>, anyhow::Error> {
+    let relation_name = relation.name;
+    // We query the column names to write the header row of the CSV file.
+    let mut column_names = pg_client
+        .query(&format!("SHOW COLUMNS FROM {}", &relation_name), &[])
+        .await
+        .context(format!("Failed to get column names for {}", relation_name))?
+        .into_iter()
+        .map(|row| match row.try_get::<_, String>("name") {
+            Ok(name) => Some(name),
+            Err(_) => None,
+        })
+        .filter_map(|row| row)
+        .collect::<Vec<_>>();
+
+    match relation.category {
+        RelationCategory::Retained => {
+            column_names.splice(0..0, ["mz_timestamp".to_string(), "mz_diff".to_string()]);
+        }
+        _ => (),
+    }
+
+    Ok(column_names)
 }
 
 pub async fn query_relation(
     transaction: &Transaction<'_>,
     start_time: DateTime<Utc>,
     relation: &Relation,
+    column_names: &Vec<String>,
     cluster_replica: Option<&ClusterReplica>,
+    tls: MakeTlsConnector,
 ) -> Result<(), anyhow::Error> {
     let relation_name = relation.name;
     let relation_category = &relation.category;
@@ -750,26 +832,13 @@ pub async fn query_relation(
             ))?;
     }
 
-    // We query the column names to write the header row of the CSV file.
-    let column_names = transaction
-        .query(&format!("SHOW COLUMNS FROM {}", &relation_name), &[])
-        .await
-        .context(format!("Failed to get column names for {}", relation_name))?
-        .into_iter()
-        .map(|row| match row.try_get::<_, String>("name") {
-            Ok(name) => Some(name),
-            Err(_) => None,
-        })
-        .filter_map(|row| row)
-        .collect::<Vec<_>>();
-
     match relation_category {
         RelationCategory::Basic => {
             let file_path = format_file_path(start_time, None);
             let file_path_name = file_path.join(relation_name).with_extension("csv");
             tokio::fs::create_dir_all(&file_path).await?;
 
-            copy_relation_to_csv(transaction, file_path_name, &column_names, relation_name).await?;
+            copy_relation_to_csv(transaction, file_path_name, column_names, relation, tls).await?;
         }
         RelationCategory::Introspection => {
             let file_path = format_file_path(start_time, cluster_replica);
@@ -777,15 +846,17 @@ pub async fn query_relation(
 
             let file_path_name = file_path.join(relation_name).with_extension("csv");
 
-            copy_relation_to_csv(transaction, file_path_name, &column_names, relation_name).await?;
+            copy_relation_to_csv(transaction, file_path_name, column_names, relation, tls).await?;
         }
-        _ => {
+        RelationCategory::Retained => {
+            // Copy the current state and retained subscribe state
             let file_path = format_file_path(start_time, None);
-            let file_path_name = file_path.join(relation_name).with_extension("csv");
+            let file_path_name = file_path
+                .join(format!("{}_subscribe", relation_name))
+                .with_extension("csv");
             tokio::fs::create_dir_all(&file_path).await?;
 
-            copy_relation_to_csv(transaction, file_path_name, &column_names, relation_name).await?;
-            // TODO (debug_tool1): Dump the `FETCH ALL SUBSCRIBE` output too
+            copy_relation_to_csv(transaction, file_path_name, column_names, relation, tls).await?;
         }
     }
     Ok::<(), anyhow::Error>(())
@@ -845,8 +916,12 @@ impl<'n> SystemCatalogDumper<'n> {
         cluster_replica: Option<&ClusterReplica>,
     ) -> Result<(), anyhow::Error> {
         info!(
-            "Copying relation {}{}",
+            "Copying relation {}{}{}",
             relation.name,
+            match relation.category {
+                RelationCategory::Retained => " (subscribe history)",
+                _ => "",
+            },
             cluster_replica.map_or_else(|| "".to_string(), |replica| format!(" in {}", replica))
         );
 
@@ -865,10 +940,23 @@ impl<'n> SystemCatalogDumper<'n> {
 
                 async move {
                     // TODO (debug_tool3): Use a transaction for the entire dump instead of per query.
-                    let mut pg_client_lock = pg_client.lock().await;
-                    let transaction = pg_client_lock.transaction().await?;
+                    let mut pg_client = pg_client.lock().await;
 
-                    match query_relation(&transaction, start_time, relation, cluster_replica).await
+                    // We cannot query the column names in the transaction because SUBSCRIBE queries
+                    // cannot be executed with SELECT and SHOW queries in the same transaction.
+                    let column_names = query_column_names(&pg_client, relation).await?;
+
+                    let transaction = pg_client.transaction().await?;
+
+                    match query_relation(
+                        &transaction,
+                        start_time,
+                        relation,
+                        &column_names,
+                        cluster_replica,
+                        self.pg_tls.clone(),
+                    )
+                    .await
                     {
                         Ok(()) => Ok(()),
                         Err(err) => {
