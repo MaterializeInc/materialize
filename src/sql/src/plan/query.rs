@@ -41,6 +41,8 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{TryFrom, TryInto};
 use std::num::NonZeroU64;
+use std::rc::Rc;
+use std::sync::Arc;
 use std::{iter, mem};
 
 use itertools::Itertools;
@@ -3751,14 +3753,20 @@ fn plan_using_constraint(
     let mut hidden_cols = vec![];
 
     for column_name in column_names {
-        let lhs = left_scope.resolve_using_column(column_name, JoinSide::Left)?;
-        let mut rhs = right_scope.resolve_using_column(column_name, JoinSide::Right)?;
+        // the two sides will have different names (e.g., `t1.a` and `t2.a`)
+        let (lhs, lhs_name) = left_scope.resolve_using_column(
+            column_name,
+            JoinSide::Left,
+            &mut left_qcx.name_manager.borrow_mut(),
+        )?;
+        let (mut rhs, rhs_name) = right_scope.resolve_using_column(
+            column_name,
+            JoinSide::Right,
+            &mut right_qcx.name_manager.borrow_mut(),
+        )?;
 
         // Adjust the RHS reference to its post-join location.
         rhs.column += left_scope.len();
-
-        // TODO(mgree) !!! intern column_name
-        let column_ref_name = None;
 
         // Join keys must be resolved to same type.
         let mut exprs = coerce_homogeneous_exprs(
@@ -3767,8 +3775,14 @@ fn plan_using_constraint(
                 column_name.as_str().quoted()
             )),
             vec![
-                CoercibleScalarExpr::Coerced(HirScalarExpr::Column(lhs, column_ref_name.clone())),
-                CoercibleScalarExpr::Coerced(HirScalarExpr::Column(rhs, column_ref_name.clone())),
+                CoercibleScalarExpr::Coerced(HirScalarExpr::Column(
+                    lhs,
+                    Some(Arc::clone(&lhs_name)),
+                )),
+                CoercibleScalarExpr::Coerced(HirScalarExpr::Column(
+                    rhs,
+                    Some(Arc::clone(&rhs_name)),
+                )),
             ],
             None,
         )?;
@@ -3792,7 +3806,7 @@ fn plan_using_constraint(
                 map_exprs.push(HirScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
                     exprs: vec![expr1.clone(), expr2.clone()],
-                    name: column_ref_name.clone(),
+                    name: Some(Arc::clone(&lhs_name)), // arbitrarily choose the left name
                 });
                 new_items.push(ScopeItem::from_column_name(column_name));
             }
@@ -3814,7 +3828,8 @@ fn plan_using_constraint(
 
             // Should be safe to use either `lhs` or `rhs` here since the column
             // is available in both scopes and must have the same type of the new item.
-            map_exprs.push(HirScalarExpr::Column(lhs, column_ref_name.clone()));
+            // We (arbitrarily) choose the left name.
+            map_exprs.push(HirScalarExpr::Column(lhs, Some(Arc::clone(&lhs_name))));
         }
 
         join_exprs.push(HirScalarExpr::CallBinary {
@@ -3862,9 +3877,13 @@ fn plan_expr_inner<'a>(
     ecx: &'a ExprContext,
     e: &Expr<Aug>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
-    if let Some(i) = ecx.scope.resolve_expr(e) {
+    if let Some((i, item)) = ecx.scope.resolve_expr(e) {
         // We've already calculated this expression.
-        return Ok(HirScalarExpr::Column(i, None).into());
+        return Ok(HirScalarExpr::Column(
+            i,
+            Some(ecx.qcx.name_manager.borrow_mut().intern_scope_item(item)),
+        )
+        .into());
     }
 
     match e {
@@ -5109,21 +5128,24 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
     // If the name is qualified, it must refer to a column in a table.
     if !names.is_empty() {
         let table_name = normalize::unresolved_item_name(UnresolvedItemName(names))?;
-        let i = ecx
-            .scope
-            .resolve_table_column(&ecx.qcx.outer_scopes, &table_name, &col_name)?;
-        // TODO(mgree) !!! intern column_name
-        let col_name_ref = None;
-        return Ok(HirScalarExpr::Column(i, col_name_ref));
+        let (i, i_name) = ecx.scope.resolve_table_column(
+            &ecx.qcx.outer_scopes,
+            &table_name,
+            &col_name,
+            &mut ecx.qcx.name_manager.borrow_mut(),
+        )?;
+        return Ok(HirScalarExpr::Column(i, Some(i_name)));
     }
 
     // If the name is unqualified, first check if it refers to a column. Track any similar names
     // that might exist for a better error message.
-    let similar_names = match ecx.scope.resolve_column(&ecx.qcx.outer_scopes, &col_name) {
-        Ok(i) => {
-            // TODO(mgree) !!! intern column_name
-            let col_name_ref = None;
-            return Ok(HirScalarExpr::Column(i, col_name_ref));
+    let similar_names = match ecx.scope.resolve_column(
+        &ecx.qcx.outer_scopes,
+        &col_name,
+        &mut ecx.qcx.name_manager.borrow_mut(),
+    ) {
+        Ok((i, i_name)) => {
+            return Ok(HirScalarExpr::Column(i, Some(i_name)));
         }
         Err(PlanError::UnknownColumn { similar, .. }) => similar,
         Err(e) => return Err(e),
@@ -5150,11 +5172,10 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
         // returned a single column. Per PostgreSQL, this is a special case
         // that returns the value directly.
         // See: https://github.com/postgres/postgres/blob/22592e10b/src/backend/parser/parse_expr.c#L2519-L2524
-        [(column, item)] if item.from_single_column_function => {
-            // TODO(mgree) !!! intern column_name
-            let col_name_ref = None;
-            Ok(HirScalarExpr::Column(*column, col_name_ref))
-        }
+        [(column, item)] if item.from_single_column_function => Ok(HirScalarExpr::Column(
+            *column,
+            Some(ecx.qcx.name_manager.borrow_mut().intern_scope_item(item)),
+        )),
         // The name refers to a normal table. Return a record containing all the
         // columns of the table.
         _ => {
@@ -5166,10 +5187,10 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
                         has_exists_column = Some(column);
                         None
                     } else {
-                        // TODO(mgree) !!! intern column_name
-                        let col_name_ref = None;
-
-                        let expr = HirScalarExpr::Column(column, col_name_ref);
+                        let expr = HirScalarExpr::Column(
+                            column,
+                            Some(ecx.qcx.name_manager.borrow_mut().intern_scope_item(item)),
+                        );
                         let name = item.column_name.clone();
                         Some((expr, name))
                     }
@@ -6363,6 +6384,8 @@ pub struct QueryContext<'a> {
     pub outer_relation_types: Vec<RelationType>,
     /// CTEs for this query, mapping their assigned LocalIds to their definition.
     pub ctes: BTreeMap<LocalId, CteDesc>,
+    /// A name manager, for interning column names that will be stored in HIR and MIR.
+    pub name_manager: Rc<RefCell<NameManager>>,
     pub recursion_guard: RecursionGuard,
 }
 
@@ -6380,6 +6403,7 @@ impl<'a> QueryContext<'a> {
             outer_scopes: vec![],
             outer_relation_types: vec![],
             ctes: BTreeMap::new(),
+            name_manager: Rc::new(RefCell::new(NameManager::new())),
             recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
     }
@@ -6396,6 +6420,8 @@ impl<'a> QueryContext<'a> {
         let outer_relation_types = iter::once(relation_type)
             .chain(self.outer_relation_types.clone())
             .collect();
+        // These shenanigans are simpler than adding `&mut NameManager` arguments everywhere.
+        let name_manager = Rc::clone(&self.name_manager);
 
         QueryContext {
             scx: self.scx,
@@ -6403,6 +6429,7 @@ impl<'a> QueryContext<'a> {
             outer_scopes,
             outer_relation_types,
             ctes,
+            name_manager,
             recursion_guard: self.recursion_guard.clone(),
         }
     }
@@ -6550,5 +6577,84 @@ impl<'a> ExprContext<'a> {
     /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
     pub fn humanize_scalar_type(&self, typ: &ScalarType, postgres_compat: bool) -> String {
         self.qcx.scx.humanize_scalar_type(typ, postgres_compat)
+    }
+
+    pub fn intern(&self, item: &ScopeItem) -> Arc<str> {
+        self.qcx.name_manager.borrow_mut().intern_scope_item(item)
+    }
+}
+
+/// Manages column names, doing lightweight string internment.
+///
+/// Names are stored in `HirScalarExpr` and `MirScalarExpr` using
+/// `Option<Arc<str>>`; we use the `NameManager` when lowering from SQL to HIR
+/// to ensure maximal sharing.
+#[derive(Debug, Clone)]
+pub struct NameManager(BTreeSet<Arc<str>>);
+
+impl NameManager {
+    /// Creates a new `NameManager`, with no interned names
+    pub fn new() -> Self {
+        Self(BTreeSet::new())
+    }
+
+    /// Interns a string, returning a reference-counted pointer to the interned
+    /// string.
+    fn intern<S: AsRef<str>>(&mut self, s: S) -> Arc<str> {
+        let s = s.as_ref();
+        if let Some(interned) = self.0.get(s) {
+            Arc::clone(interned)
+        } else {
+            let interned: Arc<str> = Arc::from(s);
+            self.0.insert(Arc::clone(&interned));
+            interned
+        }
+    }
+
+    /// Interns a string representing a reference to a `ScopeItem`, returning a
+    /// reference-counted pointer to the interned string.
+    pub fn intern_scope_item(&mut self, item: &ScopeItem) -> Arc<str> {
+        if let Some(table_name) = &item.table_name {
+            // In order to avoid clutter, we're just going to use the table name (not database or schema)
+            self.intern(format!("{}.{}", table_name.item, item.column_name))
+        } else {
+            self.intern(item.column_name.as_str())
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// Ensure that `NameManager`'s string interning works as expected.
+    ///
+    /// In particular, structurally but not referentially identical strings should
+    /// be interned to the same `Arc`ed pointer.
+    #[mz_ore::test]
+    pub fn test_name_manager_string_interning() {
+        let mut nm = NameManager::new();
+
+        let orig_hi = "hi";
+        let hi = nm.intern(orig_hi);
+        let hello = nm.intern("hello");
+
+        assert_ne!(hi.as_ptr(), hello.as_ptr());
+
+        // this static string is _likely_ the same as `orig_hi``
+        let hi2 = nm.intern("hi");
+        assert_eq!(hi.as_ptr(), hi2.as_ptr());
+
+        // generate a "hi" string that doesn't get optimized to the same static string
+        let s = format!(
+            "{}{}",
+            hi.chars().nth(0).unwrap(),
+            hi2.chars().nth(1).unwrap()
+        );
+        // make sure that we're testing with a fresh string!
+        assert_ne!(orig_hi.as_ptr(), s.as_ptr());
+
+        let hi3 = nm.intern(s);
+        assert_eq!(hi.as_ptr(), hi3.as_ptr());
     }
 }
