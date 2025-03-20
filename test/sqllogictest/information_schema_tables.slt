@@ -721,6 +721,10 @@ mz_type_pg_metadata
 BASE TABLE
 materialize
 mz_internal
+mz_wallclock_global_lag
+VIEW
+materialize
+mz_internal
 mz_wallclock_global_lag_history
 VIEW
 materialize
