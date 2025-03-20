@@ -88,6 +88,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new("mz_self_managed_debug=info"))
         .without_time()
+        .with_target(false)
         .init();
 
     let args: Args = cli::parse_args(CliConfig {
