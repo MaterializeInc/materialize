@@ -130,22 +130,6 @@ pub struct PersistConfig {
     pub writer_lease_duration: Duration,
     /// Length of time between critical handles' calls to downgrade since
     pub critical_downgrade_interval: Duration,
-    /// Timeout per connection attempt to Persist PubSub service.
-    pub pubsub_connect_attempt_timeout: Duration,
-    /// Timeout per request attempt to Persist PubSub service.
-    pub pubsub_request_timeout: Duration,
-    /// Maximum backoff when retrying connection establishment to Persist PubSub service.
-    pub pubsub_connect_max_backoff: Duration,
-    /// Size of channel used to buffer send messages to PubSub service.
-    pub pubsub_client_sender_channel_size: usize,
-    /// Size of channel used to buffer received messages from PubSub service.
-    pub pubsub_client_receiver_channel_size: usize,
-    /// Size of channel used per connection to buffer broadcasted messages from PubSub server.
-    pub pubsub_server_connection_channel_size: usize,
-    /// Size of channel used by the state cache to broadcast shard state references.
-    pub pubsub_state_cache_shard_ref_channel_size: usize,
-    /// Backoff after an established connection to Persist PubSub service fails.
-    pub pubsub_reconnect_backoff: Duration,
     /// Number of worker threads to create for the [`crate::IsolatedRuntime`], defaults to the
     /// number of threads.
     pub isolated_runtime_worker_threads: usize,
@@ -189,14 +173,6 @@ impl PersistConfig {
             compaction_yield_after_n_updates: 100_000,
             writer_lease_duration: 60 * Duration::from_secs(60),
             critical_downgrade_interval: Duration::from_secs(30),
-            pubsub_connect_attempt_timeout: Duration::from_secs(5),
-            pubsub_request_timeout: Duration::from_secs(5),
-            pubsub_connect_max_backoff: Duration::from_secs(60),
-            pubsub_client_sender_channel_size: 25,
-            pubsub_client_receiver_channel_size: 25,
-            pubsub_server_connection_channel_size: 25,
-            pubsub_state_cache_shard_ref_channel_size: 25,
-            pubsub_reconnect_backoff: Duration::from_secs(5),
             isolated_runtime_worker_threads: num_cpus::get(),
             // TODO: This doesn't work with the process orchestrator. Instead,
             // separate --log-prefix into --service-name and --enable-log-prefix
@@ -370,6 +346,14 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::rpc::PUBSUB_CLIENT_ENABLED)
         .add(&crate::rpc::PUBSUB_PUSH_DIFF_ENABLED)
         .add(&crate::rpc::PUBSUB_SAME_PROCESS_DELEGATE_ENABLED)
+        .add(&crate::rpc::PUBSUB_CONNECT_ATTEMPT_TIMEOUT)
+        .add(&crate::rpc::PUBSUB_REQUEST_TIMEOUT)
+        .add(&crate::rpc::PUBSUB_CONNECT_MAX_BACKOFF)
+        .add(&crate::rpc::PUBSUB_CLIENT_SENDER_CHANNEL_SIZE)
+        .add(&crate::rpc::PUBSUB_CLIENT_RECEIVER_CHANNEL_SIZE)
+        .add(&crate::rpc::PUBSUB_SERVER_CONNECTION_CHANNEL_SIZE)
+        .add(&crate::rpc::PUBSUB_STATE_CACHE_SHARD_REF_CHANNEL_SIZE)
+        .add(&crate::rpc::PUBSUB_RECONNECT_BACKOFF)
         .add(&crate::stats::STATS_AUDIT_PERCENT)
         .add(&crate::stats::STATS_BUDGET_BYTES)
         .add(&crate::stats::STATS_COLLECTION_ENABLED)
