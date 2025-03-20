@@ -22,6 +22,22 @@ provider "azurerm" {
   }
 }
 
+provider "kubernetes" {
+  host                   = module.materialize.kube_config[0].host
+  client_certificate     = base64decode(module.materialize.kube_config[0].client_certificate)
+  client_key             = base64decode(module.materialize.kube_config[0].client_key)
+  cluster_ca_certificate = base64decode(module.materialize.kube_config[0].cluster_ca_certificate)
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = module.materialize.kube_config[0].host
+    client_certificate     = base64decode(module.materialize.kube_config[0].client_certificate)
+    client_key             = base64decode(module.materialize.kube_config[0].client_key)
+    cluster_ca_certificate = base64decode(module.materialize.kube_config[0].cluster_ca_certificate)
+  }
+}
+
 resource "random_password" "pass" {
   length  = 20
   special = false
@@ -34,7 +50,7 @@ resource "azurerm_resource_group" "materialize" {
 }
 
 module "materialize" {
-  source = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=v0.1.5"
+  source = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=v0.2.0"
   resource_group_name = azurerm_resource_group.materialize.name
   location            = "eastus2"
   prefix              = "tf-test"
@@ -48,13 +64,23 @@ module "materialize" {
     password = random_password.pass.result
   }
 
+  network_config = {
+    vnet_address_space   = "10.0.0.0/16"
+    subnet_cidr          = "10.0.0.0/20"
+    postgres_subnet_cidr = "10.0.16.0/24"
+    service_cidr         = "10.1.0.0/16"
+    docker_bridge_cidr   = "172.17.0.1/16"
+  }
+
   tags = {
     environment = "dev"
     managed_by  = "terraform"
   }
 
   providers = {
-    azurerm = azurerm
+    azurerm    = azurerm
+    kubernetes = kubernetes
+    helm       = helm
   }
 }
 
