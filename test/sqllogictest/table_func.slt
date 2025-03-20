@@ -105,7 +105,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT generate_series FROM generate_series(-2, 2)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT generate_series FROM generate_series(-2, 2)
 ----
 Explained Query (fast path):
   Constant
@@ -219,7 +219,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x, generate_series(1, 10)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x, generate_series(1, 10)
 ----
 Explained Query:
   CrossJoin type=differential // { arity: 3 }
@@ -247,10 +247,10 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x, generate_series(1, a)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x, generate_series(1, a)
 ----
 Explained Query:
-  FlatMap generate_series(1, #0, 1) // { arity: 3 }
+  FlatMap generate_series(1, #0{a}, 1) // { arity: 3 }
     ReadStorage materialize.public.x // { arity: 2 }
 
 Source materialize.public.x
@@ -260,52 +260,52 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#1]] // { arity: 2 }
-        Filter (#1) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#1{b}]] // { arity: 2 }
+        Filter (#1{b}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.x // { arity: 2 }
   Return // { arity: 5 }
-    Project (#0..=#2, #1, #3) // { arity: 5 }
-      FlatMap generate_series(#0, #2, 1) // { arity: 4 }
-        Project (#0..=#2) // { arity: 3 }
-          Join on=(#1 = #3) type=differential // { arity: 4 }
+    Project (#0{a}..=#2{a}, #1{b}, #3) // { arity: 5 }
+      FlatMap generate_series(#0{a}, #2{a}, 1) // { arity: 4 }
+        Project (#0{a}..=#2{a}) // { arity: 3 }
+          Join on=(#1{b} = #3{b}) type=differential // { arity: 4 }
             implementation
               %0:l0[#1]K » %1:l0[#1]K
             Get l0 // { arity: 2 }
             Get l0 // { arity: 2 }
 
 Source materialize.public.x
-  filter=((#1) IS NOT NULL)
+  filter=((#1{b}) IS NOT NULL)
 
 Target cluster: quickstart
 
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.a) WHERE x1.b = x2.b
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#1]] // { arity: 2 }
-        Filter (#1) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#1{b}]] // { arity: 2 }
+        Filter (#1{b}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.x // { arity: 2 }
   Return // { arity: 5 }
-    Project (#0..=#2, #1, #3) // { arity: 5 }
-      FlatMap generate_series(#0, #2, 1) // { arity: 4 }
-        Project (#0..=#2) // { arity: 3 }
-          Join on=(#1 = #3) type=differential // { arity: 4 }
+    Project (#0{a}..=#2{a}, #1{b}, #3) // { arity: 5 }
+      FlatMap generate_series(#0{a}, #2{a}, 1) // { arity: 4 }
+        Project (#0{a}..=#2{a}) // { arity: 3 }
+          Join on=(#1{b} = #3{b}) type=differential // { arity: 4 }
             implementation
               %0:l0[#1]K » %1:l0[#1]K
             Get l0 // { arity: 2 }
             Get l0 // { arity: 2 }
 
 Source materialize.public.x
-  filter=((#1) IS NOT NULL)
+  filter=((#1{b}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -314,27 +314,27 @@ EOF
 # Regression test for database-issues#1700: crash when a filter references an output column of
 # a table function around a join
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) WHERE x1.b = x2.b AND x1.a = x3.b
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#1]] // { arity: 2 }
-        Filter (#1) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#1{b}]] // { arity: 2 }
+        Filter (#1{b}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.x // { arity: 2 }
   Return // { arity: 5 }
-    Project (#0..=#2, #1, #3) // { arity: 5 }
-      Filter (#0 = #3) // { arity: 4 }
-        FlatMap generate_series(#0, #1, 1) // { arity: 4 }
-          Project (#0..=#2) // { arity: 3 }
-            Join on=(#1 = #3) type=differential // { arity: 4 }
+    Project (#0{a}..=#2{a}, #1{b}, #3) // { arity: 5 }
+      Filter (#0{a} = #3) // { arity: 4 }
+        FlatMap generate_series(#0{a}, #1{b}, 1) // { arity: 4 }
+          Project (#0{a}..=#2{a}) // { arity: 3 }
+            Join on=(#1{b} = #3{b}) type=differential // { arity: 4 }
               implementation
                 %0:l0[#1]K » %1:l0[#1]K
               Get l0 // { arity: 2 }
               Get l0 // { arity: 2 }
 
 Source materialize.public.x
-  filter=((#1) IS NOT NULL)
+  filter=((#1{b}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -483,7 +483,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT generate_series FROM generate_series(-2, 2, 2)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT generate_series FROM generate_series(-2, 2, 2)
 ----
 Explained Query (fast path):
   Constant
@@ -496,7 +496,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 2::bigint)
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT generate_series FROM generate_series(-2::bigint, 2::bigint, 2::bigint)
 ----
 Explained Query (fast path):
   Constant
@@ -1418,11 +1418,11 @@ WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), * FROM a ORDER BY genera
 # Plan should be just a simple FlatMap + Project
 # Regression test for database-issues#3173
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT jsonb_object_keys(a) FROM y;
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT jsonb_object_keys(a) FROM y;
 ----
 Explained Query:
   Project (#1) // { arity: 1 }
-    FlatMap jsonb_object_keys(#0) // { arity: 2 }
+    FlatMap jsonb_object_keys(#0{a}) // { arity: 2 }
       ReadStorage materialize.public.y // { arity: 1 }
 
 Source materialize.public.y

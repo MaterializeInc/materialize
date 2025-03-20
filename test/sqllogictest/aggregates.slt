@@ -225,11 +225,11 @@ SELECT a, sum(b) from agg_pk group by a order by a
 3 4
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT a, sum(b) from agg_pk group by a
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a, sum(b) from agg_pk group by a
 ----
 Explained Query:
-  Project (#0, #3) // { arity: 2 }
-    Map (integer_to_bigint(#1)) // { arity: 4 }
+  Project (#0{a}, #3) // { arity: 2 }
+    Map (integer_to_bigint(#1{b})) // { arity: 4 }
       ReadStorage materialize.public.agg_pk // { arity: 3 }
 
 Source materialize.public.agg_pk
@@ -246,11 +246,11 @@ SELECT a, sum(c) from agg_pk group by a order by a
 3 5
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT a, sum(c) from agg_pk group by a
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT a, sum(c) from agg_pk group by a
 ----
 Explained Query:
-  Project (#0, #3) // { arity: 2 }
-    Map (bigint_to_numeric(#2)) // { arity: 4 }
+  Project (#0{a}, #3) // { arity: 2 }
+    Map (bigint_to_numeric(#2{c})) // { arity: 4 }
       ReadStorage materialize.public.agg_pk // { arity: 3 }
 
 Source materialize.public.agg_pk
@@ -719,18 +719,18 @@ EOF
 
 # Should include only one sum(*) aggregate.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT stddev(x), sum(x) FROM t_variance;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT stddev(x), sum(x) FROM t_variance;
 ----
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
+      Reduce aggregates=[sum((#0{x} * #0{x})), sum(#0{x}), count(#0{x})]
         ReadStorage materialize.public.t_variance
   Return
-    Project (#4, #3)
-      Map (sqrtf64(case when ((#0) IS NULL OR (#1) IS NULL OR (case when (#2 = 0) then null else #2 end) IS NULL OR (case when (0 = (#2 - 1)) then null else (#2 - 1) end) IS NULL) then null else greatest(((#0 - ((#1 * #1) / bigint_to_double(case when (#2 = 0) then null else #2 end))) / bigint_to_double(case when (0 = (#2 - 1)) then null else (#2 - 1) end)), 0) end))
+    Project (#4, #3{sum_x})
+      Map (sqrtf64(case when ((#0{sum}) IS NULL OR (#1{sum_x}) IS NULL OR (case when (#2{count_x} = 0) then null else #2{count_x} end) IS NULL OR (case when (0 = (#2{count_x} - 1)) then null else (#2{count_x} - 1) end) IS NULL) then null else greatest(((#0{sum} - ((#1{sum_x} * #1{sum_x}) / bigint_to_double(case when (#2{count_x} = 0) then null else #2{count_x} end))) / bigint_to_double(case when (0 = (#2{count_x} - 1)) then null else (#2{count_x} - 1) end)), 0) end))
         Union
-          Project (#0..=#2, #1)
+          Project (#0{sum}..=#2{count_x}, #1{sum_x})
             Get l0
           Map (null, null, 0, null)
             Union

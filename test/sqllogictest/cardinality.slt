@@ -60,16 +60,16 @@ statement ok
 INSERT INTO t (x, y) VALUES (1, 1), (1, 2), (2, 3), (3, 1)
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR SELECT * FROM t as l, t as r WHERE l.x = r.x;
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM t as l, t as r WHERE l.x = r.x;
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{x}]]
         ReadIndex on=t t_x=[differential join]
   Return
-    Project (#0, #1, #0, #3)
-      Join on=(#0 = #2) type=differential
+    Project (#0{x}, #1{y}, #0{x}, #3{y})
+      Join on=(#0{x} = #2{x}) type=differential
         implementation
           %0:l0[#0]KA|4| » %1:l0[#0]KA|4|
         Get l0
@@ -86,16 +86,16 @@ statement ok
 INSERT INTO t2 (x, y) SELECT l.*, r.* FROM (SELECT generate_series(1, 200)) AS l, (SELECT generate_series(1, 50)) AS r
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR SELECT * FROM t, t2 WHERE t.x = t2.x;
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM t, t2 WHERE t.x = t2.x;
 ----
 Explained Query:
-  Project (#0, #1, #0, #3)
-    Join on=(#0 = #2) type=differential
+  Project (#0{x}, #1{y}, #0{x}, #3{y})
+    Join on=(#0{x} = #2{x}) type=differential
       implementation
         %0:t[#0]KA|4| » %1:t2[#0]KA|10000|
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{x}]]
         ReadIndex on=t t_x=[differential join]
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{x}]]
         ReadIndex on=t2 tt_x=[differential join]
 
 Used Indexes:
@@ -120,7 +120,7 @@ statement ok
 CREATE INDEX Person_knows_Person_Person1id_Person2id ON Person_knows_Person (Person1id, Person2id)
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
   mm (src bigint, dst bigint, w bigint) AS (SELECT 3::bigint, 4::bigint, 5::bigint),
   path (src bigint, dst bigint, w double precision) AS (
       SELECT pp.person1id, pp.person2id, 10::double precision / (coalesce(w, 0) + 10)
@@ -161,34 +161,34 @@ SELECT * FROM pexists;
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Project (#1, #3)
-        Join on=(#0 = #2) type=differential
-          ArrangeBy keys=[[#0]]
+      Project (#1, #3{person2id})
+        Join on=(#0 = #2{person1id}) type=differential
+          ArrangeBy keys=[[#0{person2id}]]
             Get l3
-          ArrangeBy keys=[[#0]]
-            Project (#1, #2)
+          ArrangeBy keys=[[#0{person1id}]]
+            Project (#1{person1id}, #2{person2id})
               ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
     cte l1 =
       Union
-        Project (#1, #0)
+        Project (#1{person2id}, #0)
           Get l0
         Get l3
     cte l2 =
       Distinct project=[]
         Project ()
-          Join on=(#0 = #1) type=differential
-            ArrangeBy keys=[[#0]]
-              Project (#0)
+          Join on=(#0{person2id} = #1{person2id}) type=differential
+            ArrangeBy keys=[[#0{person2id}]]
+              Project (#0{person2id})
                 Filter #1
                   Get l1
-            ArrangeBy keys=[[#0]]
-              Project (#0)
+            ArrangeBy keys=[[#0{person2id}]]
+              Project (#0{person2id})
                 Filter NOT(#1)
                   Get l1
     cte l3 =
-      Distinct project=[#0, #1]
+      Distinct project=[#0{person2id}, #1]
         Union
-          Project (#1, #0)
+          Project (#1{person2id}, #0)
             CrossJoin type=differential
               ArrangeBy keys=[[]]
                 Get l0
@@ -218,7 +218,7 @@ EOF
 # TODO(mgree): we could probably trim this down to be tighter, but the optimizer has been too clever for me
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
   mm (src bigint, dst bigint, w bigint) AS (SELECT 3::bigint, 4::bigint, 5::bigint),
   path (src bigint, dst bigint, w double precision) AS (
       SELECT pp.person1id, pp.person2id, 10::double precision / (coalesce(w, 0) + 10)
@@ -259,34 +259,34 @@ SELECT * FROM pexists;
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Project (#1, #3)
-        Join on=(#0 = #2) type=differential
-          ArrangeBy keys=[[#0]]
+      Project (#1, #3{person2id})
+        Join on=(#0 = #2{person1id}) type=differential
+          ArrangeBy keys=[[#0{person2id}]]
             Get l3
-          ArrangeBy keys=[[#0]]
-            Project (#1, #2)
+          ArrangeBy keys=[[#0{person1id}]]
+            Project (#1{person1id}, #2{person2id})
               ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[*** full scan ***]
     cte l1 =
       Union
-        Project (#1, #0)
+        Project (#1{person2id}, #0)
           Get l0
         Get l3
     cte l2 =
       Distinct project=[]
         Project ()
-          Join on=(#0 = #1) type=differential
-            ArrangeBy keys=[[#0]]
-              Project (#0)
+          Join on=(#0{person2id} = #1{person2id}) type=differential
+            ArrangeBy keys=[[#0{person2id}]]
+              Project (#0{person2id})
                 Filter #1
                   Get l1
-            ArrangeBy keys=[[#0]]
-              Project (#0)
+            ArrangeBy keys=[[#0{person2id}]]
+              Project (#0{person2id})
                 Filter NOT(#1)
                   Get l1
     cte l3 =
-      Distinct project=[#0, #1]
+      Distinct project=[#0{person2id}, #1]
         Union
-          Project (#1, #0)
+          Project (#1{person2id}, #0)
             CrossJoin type=differential
               ArrangeBy keys=[[]]
                 Get l0
@@ -430,11 +430,11 @@ SHOW optimizer_oneshot_stats_timeout;
 COMPLETE 1
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(join implementations) AS VERBOSE TEXT FOR SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN t3 ON t.x = t3.x JOIN t4 ON t.x = t4.x JOIN t5 ON t.x = t5.x JOIN t6 ON t.x = t6.x JOIN t7 ON t.x = t7.x JOIN t8 ON t.x = t8.x JOIN t9 ON t.x = t9.x JOIN t10 ON t.x = t10.x;
+EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN t3 ON t.x = t3.x JOIN t4 ON t.x = t4.x JOIN t5 ON t.x = t5.x JOIN t6 ON t.x = t6.x JOIN t7 ON t.x = t7.x JOIN t8 ON t.x = t8.x JOIN t9 ON t.x = t9.x JOIN t10 ON t.x = t10.x;
 ----
 Explained Query:
-  Project (#0, #1, #0, #3, #0, #5, #0, #7, #0, #9, #0, #11, #0, #13, #0, #15, #0, #17, #0, #19)
-    Join on=(#0 = #2 = #4 = #6 = #8 = #10 = #12 = #14 = #16 = #18) type=delta
+  Project (#0{x}, #1{y}, #0{x}, #3{y}, #0{x}, #5{y}, #0{x}, #7{y}, #0{x}, #9{y}, #0{x}, #11{y}, #0{x}, #13{y}, #0{x}, #15{y}, #0{x}, #17{y}, #0{x}, #19{y})
+    Join on=(#0{x} = #2{x} = #4{x} = #6{x} = #8{x} = #10{x} = #12{x} = #14{x} = #16{x} = #18{x}) type=delta
       implementation
         %0:t » %1:t2[#0]KA|10000| » %2:t3[#0]K|169| » %9:t10[#0]K|260| » %8:t9[#0]K|273| » %5:t6[#0]K|299| » %6:t7[#0]K|299| » %7:t8[#0]K|299| » %4:t5[#0]K|494| » %3:t4[#0]K|611|
         %1:t2 » %0:t[#0]KA|4| » %2:t3[#0]K|169| » %9:t10[#0]K|260| » %8:t9[#0]K|273| » %5:t6[#0]K|299| » %6:t7[#0]K|299| » %7:t8[#0]K|299| » %4:t5[#0]K|494| » %3:t4[#0]K|611|
@@ -446,25 +446,25 @@ Explained Query:
         %7:t8 » %0:t[#0]KA|4| » %1:t2[#0]KA|10000| » %2:t3[#0]K|169| » %9:t10[#0]K|260| » %8:t9[#0]K|273| » %5:t6[#0]K|299| » %6:t7[#0]K|299| » %4:t5[#0]K|494| » %3:t4[#0]K|611|
         %8:t9 » %0:t[#0]KA|4| » %1:t2[#0]KA|10000| » %2:t3[#0]K|169| » %9:t10[#0]K|260| » %5:t6[#0]K|299| » %6:t7[#0]K|299| » %7:t8[#0]K|299| » %4:t5[#0]K|494| » %3:t4[#0]K|611|
         %9:t10 » %0:t[#0]KA|4| » %1:t2[#0]KA|10000| » %2:t3[#0]K|169| » %8:t9[#0]K|273| » %5:t6[#0]K|299| » %6:t7[#0]K|299| » %7:t8[#0]K|299| » %4:t5[#0]K|494| » %3:t4[#0]K|611|
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{x}]]
         ReadIndex on=t t_x=[delta join 1st input (full scan)]
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{x}]]
         ReadIndex on=t2 tt_x=[delta join lookup]
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{x}]]
         ReadStorage materialize.public.t3
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{x}]]
         ReadStorage materialize.public.t4
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{x}]]
         ReadStorage materialize.public.t5
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{x}]]
         ReadStorage materialize.public.t6
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{x}]]
         ReadStorage materialize.public.t7
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{x}]]
         ReadStorage materialize.public.t8
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{x}]]
         ReadStorage materialize.public.t9
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{x}]]
         ReadStorage materialize.public.t10
 
 Source materialize.public.t3
@@ -486,7 +486,7 @@ EOF
 
 # Regression test for gh issue 27348 (cardinality + WMR panic)
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(cardinality) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(cardinality, humanized expressions) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   t(x int) AS (SELECT 1 UNION ALL SELECT * FROM u),
   u(x int) AS (SELECT t.x+1 FROM t WHERE x < 7)

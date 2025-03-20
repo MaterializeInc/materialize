@@ -293,18 +293,18 @@ SELECT v2.a, v3.a, v4.a, v2.b, v3.b, v4.c FROM v2 JOIN v3 ON v2.a = v3.a JOIN v4
 7  7  7  bar  bar  1000-01-01␠00:00:00
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT v2.a, v3.a, v4.a, v2.b, v3.b, v4.c FROM v2 JOIN v3 ON v2.a = v3.a JOIN v4 ON v2.a = v4.a;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT v2.a, v3.a, v4.a, v2.b, v3.b, v4.c FROM v2 JOIN v3 ON v2.a = v3.a JOIN v4 ON v2.a = v4.a;
 ----
 Explained Query:
-  Project (#0, #0, #0, #1, #3, #5)
-    Join on=(#0 = #2 = #4) type=delta
-      ArrangeBy keys=[[#0]]
+  Project (#0{a}, #0{a}, #0{a}, #1{b}, #3{b}, #5{c})
+    Join on=(#0{a} = #2{a} = #4{a}) type=delta
+      ArrangeBy keys=[[#0{a}]]
         ReadIndex on=v2 v2_idx=[delta join 1st input (full scan)]
-      ArrangeBy keys=[[#0]]
-        Project (#0, #1)
+      ArrangeBy keys=[[#0{a}]]
+        Project (#0{a}, #1{b})
           ReadIndex on=v3 v3_idx_full_scan=[*** full scan ***]
-      ArrangeBy keys=[[#0]]
-        Project (#0, #2)
+      ArrangeBy keys=[[#0{a}]]
+        Project (#0{a}, #2{c})
           ReadStorage materialize.public.t1
 
 Source materialize.public.t1
@@ -334,17 +334,17 @@ statement ok
 CREATE INDEX t1_idx_a ON t1 (a);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT v2.a, v3.a, v4.a, v2.b, v3.b, v4.c FROM v2 JOIN v3 ON v2.a = v3.a JOIN v4 ON v2.a = v4.a;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT v2.a, v3.a, v4.a, v2.b, v3.b, v4.c FROM v2 JOIN v3 ON v2.a = v3.a JOIN v4 ON v2.a = v4.a;
 ----
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{a}]]
         ReadIndex on=t1 t1_idx_a=[delta join lookup]
   Return
-    Project (#0, #0, #0, #1, #3, #7)
-      Join on=(#0 = #2 = #5) type=delta
-        ArrangeBy keys=[[#0]]
+    Project (#0{a}, #0{a}, #0{a}, #1{b}, #3{b}, #7{c})
+      Join on=(#0{a} = #2{a} = #5{a}) type=delta
+        ArrangeBy keys=[[#0{a}]]
           ReadIndex on=v2 v2_idx=[delta join 1st input (full scan)]
         Get l0
         Get l0

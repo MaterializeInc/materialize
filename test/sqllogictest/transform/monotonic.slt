@@ -17,7 +17,7 @@ CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;
 
 # Properly TopK
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM (SELECT counter FROM counter limit 1);
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM (SELECT counter FROM counter limit 1);
 ----
 Explained Query:
   TopK limit=1 monotonic
@@ -31,10 +31,10 @@ EOF
 
 # Infer monotonic Reduce operator
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT counter % 3, MAX(counter) as sum FROM counter GROUP BY counter % 3;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT counter % 3, MAX(counter) as sum FROM counter GROUP BY counter % 3;
 ----
 Explained Query:
-  Reduce group_by=[(#0 % 3)] aggregates=[max(#0)] monotonic
+  Reduce group_by=[(#0{counter} % 3)] aggregates=[max(#0{counter})] monotonic
     ReadStorage materialize.public.counter
 
 Source materialize.public.counter
@@ -52,11 +52,11 @@ statement ok
 CREATE MATERIALIZED VIEW v2 AS SELECT f1 as counter FROM v1 WHERE f1 % 7 = 0;
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM v1 CROSS JOIN LATERAL (SELECT * FROM v2 WHERE counter < f1 ORDER BY counter DESC LIMIT 3);
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM v1 CROSS JOIN LATERAL (SELECT * FROM v2 WHERE counter < f1 ORDER BY counter DESC LIMIT 3);
 ----
 Explained Query:
-  TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=3
-    Filter (#1 < #0)
+  TopK group_by=[#0{f1}] order_by=[#1{counter} desc nulls_first] limit=3
+    Filter (#1{counter} < #0{f1})
       CrossJoin type=differential
         ArrangeBy keys=[[]]
           ReadStorage materialize.public.v1
@@ -75,7 +75,7 @@ EOF
 # Positive example: both c1 and c2 and consequently the body of the
 # WMR are monotonic.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c0(x INT, y INT) AS (
     SELECT * FROM (VALUES (1, 2), (3, 4), (5, 6))
@@ -128,7 +128,7 @@ EOF
 # Negative example: c2 (and consequently c2 and the WMR block body) are not
 # monotonic because c2 has a LIMIT clause.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   c0(x INT, y INT) AS (
     SELECT * FROM (VALUES (1, 2), (3, 4), (5, 6))

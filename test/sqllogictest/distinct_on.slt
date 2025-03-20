@@ -28,12 +28,12 @@ CREATE TABLE abc (
 )
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT ON (c) a FROM abc
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT ON (c) a FROM abc
 ----
 Explained Query:
-  Project (#0) // { arity: 1 }
-    TopK group_by=[#1] limit=1 // { arity: 2 }
-      Project (#0, #2) // { arity: 2 }
+  Project (#0{a}) // { arity: 1 }
+    TopK group_by=[#1{c}] limit=1 // { arity: 2 }
+      Project (#0{a}, #2{c}) // { arity: 2 }
         ReadStorage materialize.public.abc // { arity: 3 }
 
 Source materialize.public.abc
@@ -43,11 +43,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT ON (c) a FROM abc ORDER BY c, b
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT DISTINCT ON (c) a FROM abc ORDER BY c, b
 ----
 Explained Query:
-  Finish order_by=[#2 asc nulls_last, #1 asc nulls_last] output=[#0]
-    TopK group_by=[#2] order_by=[#1 asc nulls_last] limit=1 // { arity: 3 }
+  Finish order_by=[#2{c} asc nulls_last, #1{b} asc nulls_last] output=[#0]
+    TopK group_by=[#2{c}] order_by=[#1{b} asc nulls_last] limit=1 // { arity: 3 }
       ReadStorage materialize.public.abc // { arity: 3 }
 
 Source materialize.public.abc

@@ -101,7 +101,7 @@ statement ok
 CREATE INDEX idx_inventory_product_id ON inventory(product_id);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 WITH recent_prices AS (
 	SELECT grp.product_id, AVG(price) AS avg_price
 	FROM (SELECT DISTINCT product_id FROM sales) grp,
@@ -191,40 +191,40 @@ JOIN products p ON dp.product_id = p.product_id;
 Explained Query:
   With
     cte l0 =
-      Project (#0, #3)
-        Map ((#1 / bigint_to_numeric(case when (#2 = 0) then null else #2 end)))
-          Reduce group_by=[#0] aggregates=[sum(#1), count(*)]
-            Project (#0, #2)
-              TopK group_by=[#0] order_by=[#1 desc nulls_first] limit=10
-                Project (#1, #3, #4)
+      Project (#0{product_id}, #3)
+        Map ((#1{sum_price} / bigint_to_numeric(case when (#2{count} = 0) then null else #2{count} end)))
+          Reduce group_by=[#0{product_id}] aggregates=[sum(#1{price}), count(*)]
+            Project (#0{product_id}, #2{price})
+              TopK group_by=[#0{product_id}] order_by=[#1{sale_date} desc nulls_first] limit=10
+                Project (#1{product_id}, #3{sale_date}, #4{price})
                   ReadIndex on=sales idx_sales_product_id=[*** full scan ***]
     cte l1 =
-      Project (#0)
+      Project (#0{product_id})
         ReadIndex on=products idx_products_product_name=[*** full scan ***]
     cte l2 =
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{product_id}]]
         Get l1
     cte l3 =
-      Reduce group_by=[#0] aggregates=[min(#1)]
-        Project (#1, #2)
-          Join on=(#1 = #8) type=differential
-            ArrangeBy keys=[[#1]]
+      Reduce group_by=[#0{product_id}] aggregates=[min(#1{promotion_discount})]
+        Project (#1{product_id}, #2{promotion_discount})
+          Join on=(#1{product_id} = #8{product_id}) type=differential
+            ArrangeBy keys=[[#1{product_id}]]
               ReadIndex on=materialize.public.promotions idx_promotions_active=[lookup value=(true)]
             Get l2
     cte l4 =
-      Distinct project=[#0]
+      Distinct project=[#0{product_id}]
         Get l1
     cte l5 =
-      ArrangeBy keys=[[#1]]
+      ArrangeBy keys=[[#1{product_id}]]
         ReadIndex on=sales idx_sales_product_id=[differential join]
     cte l6 =
-      Project (#0..=#2, #10..=#12)
-        Map (case when (#5) IS NULL then null else #4 end, case when (#8) IS NULL then null else #7 end)
-          Join on=(#0 = #3 = #6 = #9) type=delta
-            ArrangeBy keys=[[#0]]
-              Project (#0..=#2)
+      Project (#0{product_id}..=#2{base_price}, #10..=#12)
+        Map (case when (#5) IS NULL then null else #4 end, case when (#8) IS NULL then null else #7{min_promotion_discount} end)
+          Join on=(#0{product_id} = #3{product_id} = #6{product_id} = #9) type=delta
+            ArrangeBy keys=[[#0{product_id}]]
+              Project (#0{product_id}..=#2{base_price})
                 ReadIndex on=products idx_products_product_name=[*** full scan ***]
-            ArrangeBy keys=[[#0]]
+            ArrangeBy keys=[[#0{product_id}]]
               Union
                 Map (true)
                   Get l0
@@ -232,10 +232,10 @@ Explained Query:
                   Threshold
                     Union
                       Negate
-                        Project (#0)
+                        Project (#0{product_id})
                           Get l0
                       Get l4
-            ArrangeBy keys=[[#0]]
+            ArrangeBy keys=[[#0{product_id}]]
               Union
                 Map (true)
                   Get l3
@@ -243,59 +243,59 @@ Explained Query:
                   Threshold
                     Union
                       Negate
-                        Project (#0)
+                        Project (#0{product_id})
                           Get l3
                       Get l4
             ArrangeBy keys=[[#0]]
               Project (#2, #3)
                 Filter (#2) IS NOT NULL
                   Map (record_get[0](record_get[1](#1)), record_get[0](#1))
-                    FlatMap unnest_list(#0)
-                      Project (#1)
-                        Reduce group_by=[#1] aggregates=[rank[order_by=[#0 desc nulls_first]](row(list[row(#0, #1, #2)], #2))]
-                          Reduce group_by=[#0, #1] aggregates=[count(*)]
-                            Project (#1, #6)
-                              Join on=(#1 = #5) type=differential
+                    FlatMap unnest_list(#0{rank})
+                      Project (#1{rank})
+                        Reduce group_by=[#1{category_id}] aggregates=[rank[order_by=[#0{product_id} desc nulls_first]](row(list[row(#0{product_id}, #1{category_id}, #2{count})], #2{count}))]
+                          Reduce group_by=[#0{product_id}, #1{category_id}] aggregates=[count(*)]
+                            Project (#1{product_id}, #6{category_id})
+                              Join on=(#1{product_id} = #5{product_id}) type=differential
                                 Get l5
-                                ArrangeBy keys=[[#0]]
-                                  Project (#0, #3)
+                                ArrangeBy keys=[[#0{product_id}]]
+                                  Project (#0{product_id}, #3{category_id})
                                     ReadIndex on=products idx_products_product_name=[*** full scan ***]
     cte l7 =
       Project (#2, #3)
         Filter (#2) IS NOT NULL
           Map (record_get[0](record_get[1](#1)), record_get[0](#1))
-            FlatMap unnest_list(#0)
-              Reduce aggregates=[rank[order_by=[#0 desc nulls_first]](row(list[row(#0, #1)], #1))]
-                Reduce group_by=[#0] aggregates=[sum(#1)]
-                  Project (#1, #2)
+            FlatMap unnest_list(#0{rank})
+              Reduce aggregates=[rank[order_by=[#0{product_id} desc nulls_first]](row(list[row(#0{product_id}, #1{sum_stock})], #1{sum_stock}))]
+                Reduce group_by=[#0{product_id}] aggregates=[sum(#1{stock})]
+                  Project (#1{product_id}, #2{stock})
                     ReadIndex on=inventory idx_inventory_product_id=[*** full scan ***]
     cte l8 =
-      Project (#0)
-        Filter (bigint_to_numeric(#1) > (#2 / bigint_to_numeric(case when (#3 = 0) then null else #3 end)))
+      Project (#0{product_id})
+        Filter (bigint_to_numeric(#1{count}) > (#2{sum_count} / bigint_to_numeric(case when (#3{count} = 0) then null else #3{count} end)))
           CrossJoin type=differential
             ArrangeBy keys=[[]]
-              Reduce group_by=[#0] aggregates=[count(*)]
-                Project (#0)
-                  Join on=(#0 = #2) type=differential
+              Reduce group_by=[#0{product_id}] aggregates=[count(*)]
+                Project (#0{product_id})
+                  Join on=(#0{product_id} = #2{product_id}) type=differential
                     Get l2
                     Get l5
             ArrangeBy keys=[[]]
-              Reduce aggregates=[sum(#0), count(*)]
-                Project (#1)
-                  Reduce group_by=[#0] aggregates=[count(*)]
-                    Project (#1)
+              Reduce aggregates=[sum(#0{count}), count(*)]
+                Project (#1{count})
+                  Reduce group_by=[#0{product_id}] aggregates=[count(*)]
+                    Project (#1{product_id})
                       ReadIndex on=sales idx_sales_product_id=[*** full scan ***]
     cte l9 =
-      Distinct project=[#0]
-        Project (#0)
+      Distinct project=[#0{product_id}]
+        Project (#0{product_id})
           Get l6
   Return
-    Project (#0, #13, #11)
-      Map (case when (#8) IS NULL then null else #7 end, (((((#2 * case when (#3 <= 3) then 1.2 else case when ((#3 <= 10) AND (#3 >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#5 / 100)), 1)) * case when (#12 <= 3) then 1.1 else case when ((#12 <= 10) AND (#12 >= 4)) then 1.05 else 1 end end) * case when (#2 > #4) then (1 + ((#2 - #4) / #4)) else (1 - ((#4 - #2) / #4)) end) * case when ilike["%cheap%"](varchar_to_text(#1)) then 0.8 else 1 end))
-        Join on=(#0 = #6 = #9 = #10) type=delta
-          ArrangeBy keys=[[#0]]
+    Project (#0{product_id}, #13, #11{last_update_time})
+      Map (case when (#8) IS NULL then null else #7 end, (((((#2{base_price} * case when (#3 <= 3) then 1.2 else case when ((#3 <= 10) AND (#3 >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#5 / 100)), 1)) * case when (#12 <= 3) then 1.1 else case when ((#12 <= 10) AND (#12 >= 4)) then 1.05 else 1 end end) * case when (#2{base_price} > #4) then (1 + ((#2{base_price} - #4) / #4)) else (1 - ((#4 - #2{base_price}) / #4)) end) * case when ilike["%cheap%"](varchar_to_text(#1{product_name})) then 0.8 else 1 end))
+        Join on=(#0{product_id} = #6{product_id} = #9{product_id} = #10{product_id}) type=delta
+          ArrangeBy keys=[[#0{product_id}]]
             Get l6
-          ArrangeBy keys=[[#0]]
+          ArrangeBy keys=[[#0{product_id}]]
             Union
               Map (true)
                 Get l7
@@ -306,7 +306,7 @@ Explained Query:
                       Project (#0)
                         Get l7
                     Get l9
-          ArrangeBy keys=[[#0]]
+          ArrangeBy keys=[[#0{product_id}]]
             Union
               Get l8
               Threshold
@@ -314,8 +314,8 @@ Explained Query:
                   Negate
                     Get l8
                   Get l9
-          ArrangeBy keys=[[#0]]
-            Project (#0, #6)
+          ArrangeBy keys=[[#0{product_id}]]
+            Project (#0{product_id}, #6{last_update_time})
               ReadIndex on=products idx_products_product_name=[*** full scan ***]
 
 Used Indexes:
@@ -511,7 +511,7 @@ statement ok
 CREATE INDEX idx_product_id ON mv_dynamic_pricing(product_id);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   sc.product_id,
   sc.product_name,
@@ -539,42 +539,42 @@ GROUP BY
 Explained Query:
   With
     cte l0 =
-      Project (#0, #1, #3, #5, #7)
-        Join on=(#0 = #2 = #6 AND #3 = #4) type=delta
-          ArrangeBy keys=[[#0]]
-            Project (#0, #1)
+      Project (#0{product_id}, #1{product_name}, #3{category_id}, #5{category_name}, #7{adjusted_price})
+        Join on=(#0{product_id} = #2{product_id} = #6{product_id} AND #3{category_id} = #4{category_id}) type=delta
+          ArrangeBy keys=[[#0{product_id}]]
+            Project (#0{product_id}, #1{product_name})
               ReadStorage materialize.public.shopping_cart
-          ArrangeBy keys=[[#0], [#1]]
-            Project (#0, #3)
+          ArrangeBy keys=[[#0{product_id}], [#1{category_id}]]
+            Project (#0{product_id}, #3{category_id})
               ReadIndex on=products idx_products_product_name=[*** full scan ***]
-          ArrangeBy keys=[[#0]]
-            Project (#0, #1)
+          ArrangeBy keys=[[#0{category_id}]]
+            Project (#0{category_id}, #1{category_name})
               ReadStorage materialize.public.categories
-          ArrangeBy keys=[[#0]]
+          ArrangeBy keys=[[#0{product_id}]]
             ReadIndex on=dynamic_pricing dynamic_pricing_product_id_idx=[delta join lookup]
     cte l1 =
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{product_id}]]
         Get l0
     cte l2 =
-      Project (#0..=#4, #7)
-        Join on=(#0 = #6) type=differential
+      Project (#0{product_id}..=#4{adjusted_price}, #7{stock})
+        Join on=(#0{product_id} = #6{product_id}) type=differential
           Get l1
-          ArrangeBy keys=[[#1]]
+          ArrangeBy keys=[[#1{product_id}]]
             ReadIndex on=inventory idx_inventory_product_id=[differential join]
   Return
-    Project (#0..=#4, #6)
-      Map (coalesce(#5, 0))
-        Reduce group_by=[#0..=#4] aggregates=[sum(#5)]
+    Project (#0{product_id}..=#4{adjusted_price}, #6)
+      Map (coalesce(#5{sum_stock}, 0))
+        Reduce group_by=[#0{product_id}..=#4{adjusted_price}] aggregates=[sum(#5{stock})]
           Union
             Map (null)
               Union
                 Negate
-                  Project (#0..=#4)
-                    Join on=(#0 = #5) type=differential
+                  Project (#0{product_id}..=#4{adjusted_price})
+                    Join on=(#0{product_id} = #5{product_id}) type=differential
                       Get l1
-                      ArrangeBy keys=[[#0]]
-                        Distinct project=[#0]
-                          Project (#0)
+                      ArrangeBy keys=[[#0{product_id}]]
+                        Distinct project=[#0{product_id}]
+                          Project (#0{product_id})
                             Get l2
                 Get l0
             Get l2
@@ -620,7 +620,7 @@ statement ok
 CREATE DEFAULT INDEX IF NOT EXISTS dynamic_price_shopping_cart_idx ON dynamic_price_shopping_cart;
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   rollup(category_id int, total numeric(20,10), item_count int) AS (
     -- Base: calculate each category's direct total and item count
@@ -676,91 +676,91 @@ JOIN has_subcategories s USING (category_id);
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Project (#0)
+      Project (#0{category_id})
         ReadStorage materialize.public.categories
     cte l1 =
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{category_id}]]
         Get l0
     cte l2 =
-      Project (#0, #2)
-        Join on=(#0 = #1) type=differential
+      Project (#0{category_id}, #2{price})
+        Join on=(#0{category_id} = #1{category_id}) type=differential
           Get l1
-          ArrangeBy keys=[[#0]]
-            Project (#2, #4)
+          ArrangeBy keys=[[#0{category_id}]]
+            Project (#2{category_id}, #4{price})
               ReadIndex on=dynamic_price_shopping_cart dynamic_price_shopping_cart_idx=[*** full scan ***]
     cte l3 =
-      Project (#0, #1, #3)
-        Map (bigint_to_integer(#2))
+      Project (#0{category_id}, #1, #3)
+        Map (bigint_to_integer(#2{count_price}))
           Union
-            Project (#0, #3, #2)
-              Map (adjust_numeric_scale(coalesce(#1, 0)))
-                Reduce group_by=[#0] aggregates=[sum(#1), count(#1)]
+            Project (#0{category_id}, #3, #2{count_price})
+              Map (adjust_numeric_scale(coalesce(#1{sum_price}, 0)))
+                Reduce group_by=[#0{category_id}] aggregates=[sum(#1{price}), count(#1{price})]
                   Union
                     Map (null)
                       Union
                         Negate
-                          Project (#0)
-                            Join on=(#0 = #1) type=differential
+                          Project (#0{category_id})
+                            Join on=(#0{category_id} = #1{category_id}) type=differential
                               Get l1
-                              ArrangeBy keys=[[#0]]
-                                Distinct project=[#0]
-                                  Project (#0)
+                              ArrangeBy keys=[[#0{category_id}]]
+                                Distinct project=[#0{category_id}]
+                                  Project (#0{category_id})
                                     Get l2
                         Get l0
                     Get l2
-            Project (#4, #1, #5)
+            Project (#4{parent_id}, #1, #5)
               Map (integer_to_bigint(#2))
-                Join on=(#0 = #3) type=differential
-                  ArrangeBy keys=[[#0]]
+                Join on=(#0 = #3{category_id}) type=differential
+                  ArrangeBy keys=[[#0{category_id}]]
                     Get l3
-                  ArrangeBy keys=[[#0]]
-                    Project (#0, #2)
-                      Filter (#2) IS NOT NULL
+                  ArrangeBy keys=[[#0{category_id}]]
+                    Project (#0{category_id}, #2{parent_id})
+                      Filter (#2{parent_id}) IS NOT NULL
                         ReadStorage materialize.public.categories
   Return
     With
       cte l4 =
-        Project (#0)
+        Project (#0{category_id})
           ReadStorage materialize.public.categories
       cte l5 =
-        ArrangeBy keys=[[#0]]
+        ArrangeBy keys=[[#0{category_id}]]
           Get l4
       cte l6 =
-        Project (#0)
-          Join on=(#0 = #1) type=differential
+        Project (#0{category_id})
+          Join on=(#0{category_id} = #1{parent_id}) type=differential
             Get l5
-            ArrangeBy keys=[[#0]]
-              Project (#2)
-                Filter (#2) IS NOT NULL
+            ArrangeBy keys=[[#0{parent_id}]]
+              Project (#2{parent_id})
+                Filter (#2{parent_id}) IS NOT NULL
                   ReadStorage materialize.public.categories
     Return
-      Project (#0, #5, #9, #4, #1, #8)
-        Filter (#2 > 0)
-          Map (bigint_to_integer(#2), (#7 > 0))
-            Join on=(#0 = #3 = #6) type=delta
-              ArrangeBy keys=[[#0]]
-                Reduce group_by=[#0] aggregates=[sum(#1), sum(#2)]
-                  Project (#0, #2, #3)
-                    Join on=(#0 = #1) type=differential
+      Project (#0{category_id}, #5{parent_id}, #9, #4{category_name}, #1{sum}, #8)
+        Filter (#2{sum} > 0)
+          Map (bigint_to_integer(#2{sum}), (#7{count} > 0))
+            Join on=(#0{category_id} = #3{category_id} = #6{category_id}) type=delta
+              ArrangeBy keys=[[#0{category_id}]]
+                Reduce group_by=[#0{category_id}] aggregates=[sum(#1), sum(#2)]
+                  Project (#0{category_id}, #2, #3)
+                    Join on=(#0{category_id} = #1{category_id}) type=differential
                       Get l5
-                      ArrangeBy keys=[[#0]]
+                      ArrangeBy keys=[[#0{category_id}]]
                         Get l3
-              ArrangeBy keys=[[#0]]
+              ArrangeBy keys=[[#0{category_id}]]
                 ReadStorage materialize.public.categories
-              ArrangeBy keys=[[#0]]
-                Reduce group_by=[#0] aggregates=[count((null OR (#1) IS NOT NULL))]
+              ArrangeBy keys=[[#0{category_id}]]
+                Reduce group_by=[#0{category_id}] aggregates=[count((null OR (#1{category_id}) IS NOT NULL))]
                   Union
                     Map (null)
                       Union
                         Negate
-                          Project (#0)
-                            Join on=(#0 = #1) type=differential
+                          Project (#0{category_id})
+                            Join on=(#0{category_id} = #1{category_id}) type=differential
                               Get l5
-                              ArrangeBy keys=[[#0]]
-                                Distinct project=[#0]
+                              ArrangeBy keys=[[#0{category_id}]]
+                                Distinct project=[#0{category_id}]
                                   Get l6
                         Get l4
-                    Project (#0, #0)
+                    Project (#0{category_id}, #0{category_id})
                       Get l6
 
 Source materialize.public.categories
@@ -833,7 +833,7 @@ statement ok
 CREATE INDEX IF NOT EXISTS category_totals_parent_id_idx ON category_totals (parent_id);
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT EXISTS( SELECT 1 FROM inventory WHERE product_id = 1 );
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT EXISTS( SELECT 1 FROM inventory WHERE product_id = 1 );
 ----
 Explained Query:
   With
@@ -860,7 +860,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH selected_product AS (
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR WITH selected_product AS (
                         SELECT product_id, product_name, category_id, base_price
                         FROM products
                         WHERE product_id != 1
@@ -871,8 +871,8 @@ SELECT product_id, product_name, category_id, base_price
 ----
 Explained Query:
   TopK limit=1
-    Project (#0, #1, #3, #2)
-      Filter (#0 != 1)
+    Project (#0{product_id}, #1{product_name}, #3{category_id}, #2{base_price})
+      Filter (#0{product_id} != 1)
         ReadIndex on=products idx_products_product_name=[*** full scan ***]
 
 Used Indexes:
@@ -882,13 +882,13 @@ Target cluster: quickstart
 
 EOF
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT product_id, adjusted_price, last_update_time
 FROM dynamic_pricing
 WHERE product_id = 5;
 ----
 Explained Query (fast path):
-  Project (#0..=#2)
+  Project (#0{product_id}..=#2{last_update_time})
     ReadIndex on=materialize.public.dynamic_pricing dynamic_pricing_product_id_idx=[lookup value=(5)]
 
 Used Indexes:
@@ -899,13 +899,13 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT product_id, adjusted_price, last_update_time
 FROM mv_dynamic_pricing
 WHERE product_id = 5;
 ----
 Explained Query (fast path):
-  Project (#0..=#2)
+  Project (#0{product_id}..=#2{last_update_time})
     ReadIndex on=materialize.public.mv_dynamic_pricing idx_product_id=[lookup value=(5)]
 
 Used Indexes:
@@ -916,15 +916,15 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT DISTINCT category_id, category_name
 FROM categories
 ORDER BY category_name;
 ----
 Explained Query:
-  Finish order_by=[#1 asc nulls_last] output=[#0, #1]
-    Distinct project=[#0, #1]
-      Project (#0, #1)
+  Finish order_by=[#1{category_name} asc nulls_last] output=[#0, #1]
+    Distinct project=[#0{category_id}, #1{category_name}]
+      Project (#0{category_id}, #1{category_name})
         ReadStorage materialize.public.categories
 
 Source materialize.public.categories
@@ -934,7 +934,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
     category_name,
     item_count,
@@ -944,7 +944,7 @@ ORDER BY category_name ASC;
 ----
 Explained Query (fast path):
   Finish order_by=[#0 asc nulls_last] output=[#0..=#2]
-    Project (#3, #5, #4)
+    Project (#3{category_name}, #5{item_count}, #4{total})
       ReadIndex on=materialize.public.category_totals category_totals_category_id_idx=[*** full scan ***]
 
 Used Indexes:

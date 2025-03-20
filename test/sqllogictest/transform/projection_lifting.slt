@@ -17,7 +17,7 @@ CREATE TABLE edges (src int, dst int)
 # Lifting the projections from the inner SELECT enables join fusion, resulting
 # in a single 3-way join in the optimized plan.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 SELECT
   a, b, c
 FROM
@@ -40,20 +40,20 @@ WHERE
 Explained Query:
   With
     cte l0 =
-      Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+      Filter (#0{src}) IS NOT NULL AND (#1{dst}) IS NOT NULL
         ReadStorage materialize.public.edges
   Return
-    Project (#1, #3, #0)
-      Join on=(#0 = #5 AND #1 = #2 AND #3 = #4) type=differential
-        ArrangeBy keys=[[#1]]
+    Project (#1{dst}, #3{dst}, #0{src})
+      Join on=(#0{src} = #5{dst} AND #1{dst} = #2{src} AND #3{dst} = #4{src}) type=differential
+        ArrangeBy keys=[[#1{dst}]]
           Get l0
-        ArrangeBy keys=[[#0]]
+        ArrangeBy keys=[[#0{src}]]
           Get l0
-        ArrangeBy keys=[[#0, #1]]
+        ArrangeBy keys=[[#0{src}, #1{dst}]]
           Get l0
 
 Source materialize.public.edges
-  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+  filter=((#0{src}) IS NOT NULL AND (#1{dst}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -62,7 +62,7 @@ EOF
 
 # The above works also in WMR blocks.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 WITH MUTUALLY RECURSIVE
   triangles(a int, b int, c int) AS (
     SELECT
@@ -94,26 +94,26 @@ SELECT * FROM triangle_cycles;
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+      Filter (#0{src}) IS NOT NULL AND (#1{dst}) IS NOT NULL
         ReadStorage materialize.public.edges
     cte l1 =
-      Distinct project=[#0..=#2]
+      Distinct project=[#0{dst}..=#2{src}]
         Union
-          Project (#1, #3, #0)
-            Join on=(#0 = #5 AND #1 = #2 AND #3 = #4) type=differential
-              ArrangeBy keys=[[#1]]
+          Project (#1{dst}, #3{dst}, #0{src})
+            Join on=(#0{src} = #5{dst} AND #1{dst} = #2{src} AND #3{dst} = #4{src}) type=differential
+              ArrangeBy keys=[[#1{dst}]]
                 Get l0
-              ArrangeBy keys=[[#0]]
+              ArrangeBy keys=[[#0{src}]]
                 Get l0
-              ArrangeBy keys=[[#0, #1]]
+              ArrangeBy keys=[[#0{src}, #1{dst}]]
                 Get l0
-          Project (#2, #0, #1)
+          Project (#2{src}, #0{dst}, #1{dst})
             Get l1
   Return
     Get l1
 
 Source materialize.public.edges
-  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+  filter=((#0{src}) IS NOT NULL AND (#1{dst}) IS NOT NULL)
 
 Target cluster: quickstart
 

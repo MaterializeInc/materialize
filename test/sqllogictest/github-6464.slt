@@ -47,13 +47,13 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW distinct_on_group_by_limit;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW distinct_on_group_by_limit;
 ----
 materialize.public.distinct_on_group_by_limit:
-  TopK order_by=[#1 asc nulls_last, #0 asc nulls_last] limit=2 exp_group_size=1000
-    TopK group_by=[#1] order_by=[#0 asc nulls_last] limit=1 exp_group_size=1000
-      Reduce group_by=[#0, #1] aggregates=[max(#2)] exp_group_size=1000
-        Project (#0..=#2)
+  TopK order_by=[#1{teacher_id} asc nulls_last, #0{id} asc nulls_last] limit=2 exp_group_size=1000
+    TopK group_by=[#1{teacher_id}] order_by=[#0{id} asc nulls_last] limit=1 exp_group_size=1000
+      Reduce group_by=[#0{id}, #1{teacher_id}] aggregates=[max(#2{course_id})] exp_group_size=1000
+        Project (#0{id}..=#2{course_id})
           ReadStorage materialize.public.sections
 
 Source materialize.public.sections

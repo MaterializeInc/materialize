@@ -186,7 +186,7 @@ ORDER BY 1, 2
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT o_orderkey,
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT o_orderkey,
        l_suppkey
 FROM lineitem
 JOIN orders ON (l_orderkey = o_orderkey)
@@ -195,14 +195,14 @@ WHERE l_quantity = 24
   AND l_quantity BETWEEN 3 AND 2 + 2
 ----
 Explained Query:
-  Project (#0, #2) // { arity: 2 }
-    Filter ((#4 = 24) OR ((#3 = 6) AND (#4 <= 4) AND (#4 >= 3))) // { arity: 25 }
-      Join on=(#0 = #16) type=differential // { arity: 25 }
+  Project (#0{l_orderkey}, #2{l_suppkey}) // { arity: 2 }
+    Filter ((#4{l_quantity} = 24) OR ((#3{l_linenumber} = 6) AND (#4{l_quantity} <= 4) AND (#4{l_quantity} >= 3))) // { arity: 25 }
+      Join on=(#0{l_orderkey} = #16{o_orderkey}) type=differential // { arity: 25 }
         implementation
           %0:lineitem[#0]KAeif » %1:orders[#0]KAeif
-        ArrangeBy keys=[[#0]] // { arity: 16 }
+        ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
           ReadIndex on=lineitem fk_lineitem_orderkey=[differential join] // { arity: 16 }
-        ArrangeBy keys=[[#0]] // { arity: 9 }
+        ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 9 }
           ReadIndex on=orders pk_orders_orderkey=[differential join] // { arity: 9 }
 
 Used Indexes:
@@ -230,7 +230,7 @@ WHERE c_acctbal >= o_totalprice
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT o_orderkey,
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT o_orderkey,
        l_quantity,
        o_custkey,
        c_nationkey
@@ -242,18 +242,18 @@ WHERE c_acctbal >= o_totalprice
   AND l_shipDATE >= o_orderdate
 ----
 Explained Query:
-  Project (#0, #4, #17, #28) // { arity: 4 }
-    Filter (#11 > #20) AND (#10 >= #20) AND (#30 >= #19) // { arity: 33 }
-      Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
+  Project (#0{l_orderkey}, #4{l_quantity}, #17{o_custkey}, #28{c_nationkey}) // { arity: 4 }
+    Filter (#11{l_commitdate} > #20{o_orderdate}) AND (#10{l_shipdate} >= #20{o_orderdate}) AND (#30{c_acctbal} >= #19{o_totalprice}) // { arity: 33 }
+      Join on=(#0{l_orderkey} = #16{o_orderkey} AND #17{o_custkey} = #25{c_custkey}) type=delta // { arity: 33 }
         implementation
           %0:lineitem » %1:orders[#0]KA » %2:customer[#0]KA
           %1:orders » %0:lineitem[#0]KA » %2:customer[#0]KA
           %2:customer » %1:orders[#1]KA » %0:lineitem[#0]KA
-        ArrangeBy keys=[[#0]] // { arity: 16 }
+        ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
           ReadIndex on=lineitem fk_lineitem_orderkey=[delta join 1st input (full scan)] // { arity: 16 }
-        ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
+        ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] // { arity: 9 }
           ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
-        ArrangeBy keys=[[#0]] // { arity: 8 }
+        ArrangeBy keys=[[#0{c_custkey}]] // { arity: 8 }
           ReadIndex on=customer pk_customer_custkey=[delta join lookup] // { arity: 8 }
 
 Used Indexes:
@@ -290,7 +290,7 @@ ORDER BY 1,
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT l_partkey,
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT l_partkey,
        c_nationkey,
        COUNT(c_nationkey),
        MIN(c_nationkey),
@@ -308,30 +308,30 @@ GROUP BY 1,
 Explained Query:
   With
     cte l0 =
-      Project (#0, #1, #28) // { arity: 3 }
-        Filter (#10 <= 1995-11-14) AND (#30 <= 12907776) AND (#10 >= 1995-04-19) AND (#30 >= #5) // { arity: 33 }
-          Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
+      Project (#0{l_orderkey}, #1{l_partkey}, #28{c_nationkey}) // { arity: 3 }
+        Filter (#10{l_shipdate} <= 1995-11-14) AND (#30{c_acctbal} <= 12907776) AND (#10{l_shipdate} >= 1995-04-19) AND (#30{c_acctbal} >= #5{l_extendedprice}) // { arity: 33 }
+          Join on=(#0{l_orderkey} = #16{o_orderkey} AND #17{o_custkey} = #25{c_custkey}) type=delta // { arity: 33 }
             implementation
               %0:lineitem » %1:orders[#0]KA » %2:customer[#0]KAif
               %1:orders » %0:lineitem[#0]KAiif » %2:customer[#0]KAif
               %2:customer » %1:orders[#1]KA » %0:lineitem[#0]KAiif
-            ArrangeBy keys=[[#0]] // { arity: 16 }
+            ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
               ReadIndex on=lineitem fk_lineitem_orderkey=[delta join 1st input (full scan)] // { arity: 16 }
-            ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
+            ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] // { arity: 9 }
               ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
-            ArrangeBy keys=[[#0]] // { arity: 8 }
+            ArrangeBy keys=[[#0{c_custkey}]] // { arity: 8 }
               ReadIndex on=customer pk_customer_custkey=[delta join lookup] // { arity: 8 }
   Return // { arity: 6 }
-    Project (#0, #1, #6, #2, #3, #2) // { arity: 6 }
-      Join on=(#0 = #4 AND #1 = #5) type=differential // { arity: 7 }
+    Project (#0{l_partkey}, #1{c_nationkey}, #6{count}, #2{min_c_nationkey}, #3{min_l_orderkey}, #2{min_c_nationkey}) // { arity: 6 }
+      Join on=(#0{l_partkey} = #4{l_partkey} AND #1{c_nationkey} = #5{c_nationkey}) type=differential // { arity: 7 }
         implementation
           %0[#0, #1]UKKA » %1[#0, #1]UKKA
-        ArrangeBy keys=[[#0, #1]] // { arity: 4 }
-          Reduce group_by=[#1, #2] aggregates=[min(#2), min(#0)] // { arity: 4 }
+        ArrangeBy keys=[[#0{l_partkey}, #1{c_nationkey}]] // { arity: 4 }
+          Reduce group_by=[#1{l_partkey}, #2{c_nationkey}] aggregates=[min(#2{c_nationkey}), min(#0{l_orderkey})] // { arity: 4 }
             Get l0 // { arity: 3 }
-        ArrangeBy keys=[[#0, #1]] // { arity: 3 }
-          Reduce group_by=[#0, #1] aggregates=[count(*)] // { arity: 3 }
-            Project (#1, #2) // { arity: 2 }
+        ArrangeBy keys=[[#0{l_partkey}, #1{c_nationkey}]] // { arity: 3 }
+          Reduce group_by=[#0{l_partkey}, #1{c_nationkey}] aggregates=[count(*)] // { arity: 3 }
+            Project (#1{l_partkey}, #2{c_nationkey}) // { arity: 2 }
               Get l0 // { arity: 3 }
 
 Used Indexes:
@@ -365,7 +365,7 @@ GROUP BY 1,
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT l_quantity * l_extendedprice,
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT l_quantity * l_extendedprice,
        c_nationkey,
        MAX(l_linenumber),
        MAX(l_suppkey)
@@ -381,22 +381,22 @@ GROUP BY 1,
          2
 ----
 Explained Query:
-  Reduce group_by=[(#2 * #3), #4] aggregates=[max(#1), max(#0)] // { arity: 4 }
-    Project (#0..=#3, #11) // { arity: 5 }
-      Filter (#13 < #6) AND (#13 <= #3) // { arity: 16 }
-        Join on=(#4 = #7 AND #5 = #8) type=delta // { arity: 16 }
+  Reduce group_by=[(#2{l_quantity} * #3{l_extendedprice}), #4{c_nationkey}] aggregates=[max(#1{l_linenumber}), max(#0{l_suppkey})] // { arity: 4 }
+    Project (#0{l_suppkey}..=#3{l_extendedprice}, #11{c_nationkey}) // { arity: 5 }
+      Filter (#13{c_acctbal} < #6{o_totalprice}) AND (#13{c_acctbal} <= #3{l_extendedprice}) // { arity: 16 }
+        Join on=(#4{l_receiptdate} = #7{o_orderdate} AND #5{o_custkey} = #8{c_custkey}) type=delta // { arity: 16 }
           implementation
             %0:lineitem » %1:orders[#2]K » %2:customer[#0]KA
             %1:orders » %2:customer[#0]KA » %0:lineitem[#4]Kf
             %2:customer » %1:orders[#0]KA » %0:lineitem[#4]Kf
-          ArrangeBy keys=[[#4]] // { arity: 5 }
-            Project (#2..=#5, #12) // { arity: 5 }
-              Filter (#3 != 1) AND (#3 != 2) AND (#3 != 6) // { arity: 16 }
+          ArrangeBy keys=[[#4{l_receiptdate}]] // { arity: 5 }
+            Project (#2{l_suppkey}..=#5{l_extendedprice}, #12{l_receiptdate}) // { arity: 5 }
+              Filter (#3{l_linenumber} != 1) AND (#3{l_linenumber} != 2) AND (#3{l_linenumber} != 6) // { arity: 16 }
                 ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
-          ArrangeBy keys=[[#0], [#2]] // { arity: 3 }
-            Project (#1, #3, #4) // { arity: 3 }
+          ArrangeBy keys=[[#0{o_custkey}], [#2{o_orderdate}]] // { arity: 3 }
+            Project (#1{o_custkey}, #3{o_totalprice}, #4{o_orderdate}) // { arity: 3 }
               ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
-          ArrangeBy keys=[[#0]] // { arity: 8 }
+          ArrangeBy keys=[[#0{c_custkey}]] // { arity: 8 }
             ReadIndex on=customer pk_customer_custkey=[delta join lookup] // { arity: 8 }
 
 Used Indexes:
@@ -422,7 +422,7 @@ WHERE l_commitDATE >= '1998-03-22'
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT o_orderkey,
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT o_orderkey,
        l_quantity
 FROM lineitem
 LEFT JOIN orders ON (l_commitDATE = o_orderdate)
@@ -433,40 +433,40 @@ WHERE l_commitDATE >= '1998-03-22'
 Explained Query:
   With
     cte l0 =
-      Project (#0..=#4) // { arity: 5 }
-        Join on=(#2 = #5) type=differential // { arity: 6 }
+      Project (#0{l_orderkey}..=#4{o_orderkey}) // { arity: 5 }
+        Join on=(#2{l_commitdate} = #5{o_orderdate}) type=differential // { arity: 6 }
           implementation
             %0:lineitem[#2]K » %1:orders[#1]K
-          ArrangeBy keys=[[#2]] // { arity: 4 }
-            Project (#0, #4, #11, #12) // { arity: 4 }
+          ArrangeBy keys=[[#2{l_commitdate}]] // { arity: 4 }
+            Project (#0{l_orderkey}, #4{l_quantity}, #11{l_commitdate}, #12{l_receiptdate}) // { arity: 4 }
               ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
-          ArrangeBy keys=[[#1]] // { arity: 2 }
-            Project (#0, #4) // { arity: 2 }
+          ArrangeBy keys=[[#1{o_orderdate}]] // { arity: 2 }
+            Project (#0{o_orderkey}, #4{o_orderdate}) // { arity: 2 }
               ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
     cte l1 =
-      Project (#4, #11) // { arity: 2 }
-        Filter (null OR ((#0 <= 100) AND (#0 >= 59) AND (#11 >= 1998-03-22))) // { arity: 16 }
+      Project (#4{l_quantity}, #11{l_commitdate}) // { arity: 2 }
+        Filter (null OR ((#0{l_orderkey} <= 100) AND (#0{l_orderkey} >= 59) AND (#11{l_commitdate} >= 1998-03-22))) // { arity: 16 }
           ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
   Return // { arity: 2 }
     Union // { arity: 2 }
-      Project (#1, #0) // { arity: 2 }
+      Project (#1, #0{l_quantity}) // { arity: 2 }
         Map (null) // { arity: 2 }
           Union // { arity: 1 }
             Negate // { arity: 1 }
-              Project (#0) // { arity: 1 }
-                Join on=(#1 = #2) type=differential // { arity: 3 }
+              Project (#0{l_quantity}) // { arity: 1 }
+                Join on=(#1{l_commitdate} = #2{l_commitdate}) type=differential // { arity: 3 }
                   implementation
                     %1[#0]UKA » %0:l1[#1]Kif
-                  ArrangeBy keys=[[#1]] // { arity: 2 }
+                  ArrangeBy keys=[[#1{l_commitdate}]] // { arity: 2 }
                     Get l1 // { arity: 2 }
-                  ArrangeBy keys=[[#0]] // { arity: 1 }
-                    Distinct project=[#0] // { arity: 1 }
-                      Project (#2) // { arity: 1 }
+                  ArrangeBy keys=[[#0{l_commitdate}]] // { arity: 1 }
+                    Distinct project=[#0{l_commitdate}] // { arity: 1 }
+                      Project (#2{l_commitdate}) // { arity: 1 }
                         Get l0 // { arity: 5 }
-            Project (#0) // { arity: 1 }
+            Project (#0{l_quantity}) // { arity: 1 }
               Get l1 // { arity: 2 }
-      Project (#4, #1) // { arity: 2 }
-        Filter ((#2 = #3) OR ((#0 <= 100) AND (#0 >= 59) AND (#2 >= 1998-03-22))) // { arity: 5 }
+      Project (#4{o_orderkey}, #1{l_quantity}) // { arity: 2 }
+        Filter ((#2{l_commitdate} = #3{l_receiptdate}) OR ((#0{l_orderkey} <= 100) AND (#0{l_orderkey} >= 59) AND (#2{l_commitdate} >= 1998-03-22))) // { arity: 5 }
           Get l0 // { arity: 5 }
 
 Used Indexes:
@@ -493,7 +493,7 @@ WHERE l_quantity = 17
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT c_custkey,
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT c_custkey,
        o_custkey
 FROM lineitem
 JOIN orders ON (l_orderkey = o_orderkey)
@@ -504,21 +504,21 @@ WHERE l_quantity = 17
                     33)
 ----
 Explained Query:
-  Project (#11, #3) // { arity: 2 }
-    Filter (#12 <= #5) AND ((#1 = 7) OR (#1 = 33) OR ((#1 = 17) AND (#13 <= "x") AND (#13 >= "s"))) // { arity: 14 }
-      Join on=(#0 = #2) type=delta // { arity: 14 }
+  Project (#11{c_custkey}, #3{o_custkey}) // { arity: 2 }
+    Filter (#12{c_acctbal} <= #5{o_totalprice}) AND ((#1{l_quantity} = 7) OR (#1{l_quantity} = 33) OR ((#1{l_quantity} = 17) AND (#13{c_comment} <= "x") AND (#13{c_comment} >= "s"))) // { arity: 14 }
+      Join on=(#0{l_orderkey} = #2{o_orderkey}) type=delta // { arity: 14 }
         implementation
           %0:lineitem » %1:orders[#0]KA » %2:customer[×]
           %1:orders » %0:lineitem[#0]KAef » %2:customer[×]
           %2:customer » %0:lineitem[×]ef » %1:orders[#0]KA
-        ArrangeBy keys=[[], [#0]] // { arity: 2 }
-          Project (#0, #4) // { arity: 2 }
-            Filter ((#4 = 7) OR (#4 = 17) OR (#4 = 33)) // { arity: 16 }
+        ArrangeBy keys=[[], [#0{l_orderkey}]] // { arity: 2 }
+          Project (#0{l_orderkey}, #4{l_quantity}) // { arity: 2 }
+            Filter ((#4{l_quantity} = 7) OR (#4{l_quantity} = 17) OR (#4{l_quantity} = 33)) // { arity: 16 }
               ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
-        ArrangeBy keys=[[#0]] // { arity: 9 }
+        ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 9 }
           ReadIndex on=orders pk_orders_orderkey=[delta join lookup] // { arity: 9 }
         ArrangeBy keys=[[]] // { arity: 3 }
-          Project (#0, #5, #7) // { arity: 3 }
+          Project (#0{c_custkey}, #5{c_acctbal}, #7{c_comment}) // { arity: 3 }
             ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
 
 Used Indexes:
@@ -550,7 +550,7 @@ ORDER BY 1
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT o_orderkey,
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT o_orderkey,
        COUNT(o_orderkey),
        COUNT(DISTINCT c_custkey)
 FROM lineitem
@@ -562,19 +562,19 @@ WHERE l_receiptDATE BETWEEN '1992-06-21' AND '1992-11-22'
 GROUP BY 1
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[count(*), count(distinct #1)] // { arity: 3 }
-    Project (#0, #17) // { arity: 2 }
-      Filter (#4 <= 30) AND (#12 <= 1998-11-27) AND (#12 <= 1992-11-22) AND (#4 >= 1) AND (#12 >= 1992-06-21) AND (#12 >= 1992-07-13) // { arity: 33 }
-        Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
+  Reduce group_by=[#0{l_orderkey}] aggregates=[count(*), count(distinct #1{o_custkey})] // { arity: 3 }
+    Project (#0{l_orderkey}, #17{o_custkey}) // { arity: 2 }
+      Filter (#4{l_quantity} <= 30) AND (#12{l_receiptdate} <= 1998-11-27) AND (#12{l_receiptdate} <= 1992-11-22) AND (#4{l_quantity} >= 1) AND (#12{l_receiptdate} >= 1992-06-21) AND (#12{l_receiptdate} >= 1992-07-13) // { arity: 33 }
+        Join on=(#0{l_orderkey} = #16{o_orderkey} AND #17{o_custkey} = #25{c_custkey}) type=delta // { arity: 33 }
           implementation
             %0:lineitem » %1:orders[#0]KA » %2:customer[#0]KA
             %1:orders » %0:lineitem[#0]KAiiiiiif » %2:customer[#0]KA
             %2:customer » %1:orders[#1]KA » %0:lineitem[#0]KAiiiiiif
-          ArrangeBy keys=[[#0]] // { arity: 16 }
+          ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
             ReadIndex on=lineitem fk_lineitem_orderkey=[delta join 1st input (full scan)] // { arity: 16 }
-          ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
+          ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] // { arity: 9 }
             ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
-          ArrangeBy keys=[[#0]] // { arity: 8 }
+          ArrangeBy keys=[[#0{c_custkey}]] // { arity: 8 }
             ReadIndex on=customer pk_customer_custkey=[delta join lookup] // { arity: 8 }
 
 Used Indexes:
@@ -606,7 +606,7 @@ GROUP BY 1,
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT o_custkey,
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT o_custkey,
        c_custkey,
        MIN(o_orderkey),
        COUNT(c_nationkey)
@@ -622,33 +622,33 @@ GROUP BY 1,
 Explained Query:
   With
     cte l0 =
-      Project (#2, #3) // { arity: 2 }
-        Filter (#1 < #5) AND (#11 > #4) AND (#11 >= #0) // { arity: 14 }
-          Join on=(#3 = #6) type=delta // { arity: 14 }
+      Project (#2{o_orderkey}, #3{o_custkey}) // { arity: 2 }
+        Filter (#1{l_shipdate} < #5{o_orderdate}) AND (#11{c_acctbal} > #4{o_totalprice}) AND (#11{c_acctbal} >= #0{l_extendedprice}) // { arity: 14 }
+          Join on=(#3{o_custkey} = #6{c_custkey}) type=delta // { arity: 14 }
             implementation
               %0:lineitem » %1:orders[×] » %2:customer[#0]KA
               %1:orders » %2:customer[#0]KA » %0:lineitem[×]f
               %2:customer » %1:orders[#1]KA » %0:lineitem[×]f
             ArrangeBy keys=[[]] // { arity: 2 }
-              Project (#5, #10) // { arity: 2 }
-                Filter (#3 != 4) // { arity: 16 }
+              Project (#5{l_extendedprice}, #10{l_shipdate}) // { arity: 2 }
+                Filter (#3{l_linenumber} != 4) // { arity: 16 }
                   ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
-            ArrangeBy keys=[[], [#1]] // { arity: 4 }
-              Project (#0, #1, #3, #4) // { arity: 4 }
+            ArrangeBy keys=[[], [#1{o_custkey}]] // { arity: 4 }
+              Project (#0{o_orderkey}, #1{o_custkey}, #3{o_totalprice}, #4{o_orderdate}) // { arity: 4 }
                 ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 9 }
-            ArrangeBy keys=[[#0]] // { arity: 8 }
+            ArrangeBy keys=[[#0{c_custkey}]] // { arity: 8 }
               ReadIndex on=customer pk_customer_custkey=[delta join lookup] // { arity: 8 }
   Return // { arity: 4 }
-    Project (#0, #0, #1, #3) // { arity: 4 }
-      Join on=(#0 = #2) type=differential // { arity: 4 }
+    Project (#0{o_custkey}, #0{o_custkey}, #1{min_o_orderkey}, #3{count}) // { arity: 4 }
+      Join on=(#0{o_custkey} = #2{o_custkey}) type=differential // { arity: 4 }
         implementation
           %0[#0]UKA » %1[#0]UKA
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Reduce group_by=[#1] aggregates=[min(#0)] // { arity: 2 }
+        ArrangeBy keys=[[#0{o_custkey}]] // { arity: 2 }
+          Reduce group_by=[#1{o_custkey}] aggregates=[min(#0{o_orderkey})] // { arity: 2 }
             Get l0 // { arity: 2 }
-        ArrangeBy keys=[[#0]] // { arity: 2 }
-          Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
-            Project (#1) // { arity: 1 }
+        ArrangeBy keys=[[#0{o_custkey}]] // { arity: 2 }
+          Reduce group_by=[#0{o_custkey}] aggregates=[count(*)] // { arity: 2 }
+            Project (#1{o_custkey}) // { arity: 1 }
               Get l0 // { arity: 2 }
 
 Used Indexes:
@@ -678,7 +678,7 @@ GROUP BY 1
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT c_nationkey,
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT c_nationkey,
        MAX(l_suppkey),
        MAX(o_orderkey)
 FROM lineitem
@@ -690,19 +690,19 @@ WHERE o_orderkey BETWEEN 117 AND 165 + 124
 GROUP BY 1
 ----
 Explained Query:
-  Reduce group_by=[#2] aggregates=[max(#1), max(#0)] // { arity: 3 }
-    Project (#0, #2, #28) // { arity: 3 }
-      Filter (#0 <= 280) AND (#0 <= 289) AND (#0 >= 62) AND (#0 >= 117) AND (#10 > #20) // { arity: 33 }
-        Join on=(#0 = #16 AND #17 = #25) type=delta // { arity: 33 }
+  Reduce group_by=[#2{c_nationkey}] aggregates=[max(#1{l_suppkey}), max(#0{l_orderkey})] // { arity: 3 }
+    Project (#0{l_orderkey}, #2{l_suppkey}, #28{c_nationkey}) // { arity: 3 }
+      Filter (#0{l_orderkey} <= 280) AND (#0{l_orderkey} <= 289) AND (#0{l_orderkey} >= 62) AND (#0{l_orderkey} >= 117) AND (#10{l_shipdate} > #20{o_orderdate}) // { arity: 33 }
+        Join on=(#0{l_orderkey} = #16{o_orderkey} AND #17{o_custkey} = #25{c_custkey}) type=delta // { arity: 33 }
           implementation
             %0:lineitem » %1:orders[#0]KAiiiif » %2:customer[#0]KA
             %1:orders » %0:lineitem[#0]KAiiiif » %2:customer[#0]KA
             %2:customer » %1:orders[#1]KAiiiif » %0:lineitem[#0]KAiiiif
-          ArrangeBy keys=[[#0]] // { arity: 16 }
+          ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
             ReadIndex on=lineitem fk_lineitem_orderkey=[delta join 1st input (full scan)] // { arity: 16 }
-          ArrangeBy keys=[[#0], [#1]] // { arity: 9 }
+          ArrangeBy keys=[[#0{o_orderkey}], [#1{o_custkey}]] // { arity: 9 }
             ReadIndex on=orders pk_orders_orderkey=[delta join lookup] fk_orders_custkey=[delta join lookup] // { arity: 9 }
-          ArrangeBy keys=[[#0]] // { arity: 8 }
+          ArrangeBy keys=[[#0{c_custkey}]] // { arity: 8 }
             ReadIndex on=customer pk_customer_custkey=[delta join lookup] // { arity: 8 }
 
 Used Indexes:
@@ -732,7 +732,7 @@ GROUP BY 1
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT c_custkey,
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT c_custkey,
        COUNT(l_commitDATE),
        COUNT(DISTINCT c_custkey)
 FROM lineitem
@@ -744,22 +744,22 @@ WHERE l_extendedprice < o_totalprice
 GROUP BY 1
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[count(*), count(distinct #0)] // { arity: 3 }
-    Project (#11) // { arity: 1 }
-      Filter (#0 >= 53) AND (#1 < #5) AND (#12 < #5) // { arity: 13 }
-        Join on=(#0 = #2) type=delta // { arity: 13 }
+  Reduce group_by=[#0{c_custkey}] aggregates=[count(*), count(distinct #0{c_custkey})] // { arity: 3 }
+    Project (#11{c_custkey}) // { arity: 1 }
+      Filter (#0{l_orderkey} >= 53) AND (#1{l_extendedprice} < #5{o_totalprice}) AND (#12{c_acctbal} < #5{o_totalprice}) // { arity: 13 }
+        Join on=(#0{l_orderkey} = #2{o_orderkey}) type=delta // { arity: 13 }
           implementation
             %0:lineitem » %1:orders[#0]KAif » %2:customer[×]
             %1:orders » %0:lineitem[#0]KAiif » %2:customer[×]
             %2:customer » %0:lineitem[×]iif » %1:orders[#0]KAif
-          ArrangeBy keys=[[], [#0]] // { arity: 2 }
-            Project (#0, #5) // { arity: 2 }
-              Filter (#10 <= 1994-03-17) AND (#0 >= 53) // { arity: 16 }
+          ArrangeBy keys=[[], [#0{l_orderkey}]] // { arity: 2 }
+            Project (#0{l_orderkey}, #5{l_extendedprice}) // { arity: 2 }
+              Filter (#10{l_shipdate} <= 1994-03-17) AND (#0{l_orderkey} >= 53) // { arity: 16 }
                 ReadIndex on=lineitem pk_lineitem_orderkey_linenumber=[*** full scan ***] // { arity: 16 }
-          ArrangeBy keys=[[#0]] // { arity: 9 }
+          ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 9 }
             ReadIndex on=orders pk_orders_orderkey=[delta join lookup] // { arity: 9 }
           ArrangeBy keys=[[]] // { arity: 2 }
-            Project (#0, #5) // { arity: 2 }
+            Project (#0{c_custkey}, #5{c_acctbal}) // { arity: 2 }
               ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
 
 Used Indexes:

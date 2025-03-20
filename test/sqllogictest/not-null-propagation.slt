@@ -32,7 +32,7 @@ INSERT INTO json_table VALUES(null, '{}');
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT 1;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT 1;
 ----
 Explained Query:
   Constant // { types: "(integer)" }
@@ -45,7 +45,7 @@ EOF
 # NULL literal is NULL-able
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT NULL;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT NULL;
 ----
 Explained Query:
   Constant // { types: "(text?)" }
@@ -60,7 +60,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT * FROM (VALUES(1), (2));
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM (VALUES(1), (2));
 ----
 Explained Query:
   Constant // { types: "(integer)" }
@@ -73,7 +73,7 @@ EOF
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT * FROM (VALUES(1), (NULL));
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM (VALUES(1), (NULL));
 ----
 Explained Query:
   Constant // { types: "(integer?)" }
@@ -90,11 +90,11 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT CAST(col_null AS BIGINT), CAST(col_not_null AS BIGINT) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT CAST(col_null AS BIGINT), CAST(col_not_null AS BIGINT) FROM int_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(bigint?, bigint)" }
-    Map (integer_to_bigint(#0), integer_to_bigint(#1)) // { types: "(integer?, integer, bigint?, bigint)" }
+    Map (integer_to_bigint(#0{col_null}), integer_to_bigint(#1{col_not_null})) // { types: "(integer?, integer, bigint?, bigint)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -108,11 +108,11 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_null IS NULL, col_null IS NOT NULL FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_null IS NULL, col_null IS NOT NULL FROM int_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(boolean, boolean)" }
-    Map ((#0) IS NULL, NOT(#2)) // { types: "(integer?, integer, boolean, boolean)" }
+    Map ((#0{col_null}) IS NULL, NOT(#2)) // { types: "(integer?, integer, boolean, boolean)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -122,11 +122,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_null IS TRUE, col_null IS NOT TRUE FROM bool_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_null IS TRUE, col_null IS NOT TRUE FROM bool_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(boolean, boolean)" }
-    Map ((#0) IS TRUE, NOT(#2)) // { types: "(boolean?, boolean, boolean, boolean)" }
+    Map ((#0{col_null}) IS TRUE, NOT(#2)) // { types: "(boolean?, boolean, boolean, boolean)" }
       ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
 Source materialize.public.bool_table
@@ -136,11 +136,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_null IS UNKNOWN, col_null IS NOT UNKNOWN FROM bool_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_null IS UNKNOWN, col_null IS NOT UNKNOWN FROM bool_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(boolean, boolean)" }
-    Map ((#0) IS NULL, NOT(#2)) // { types: "(boolean?, boolean, boolean, boolean)" }
+    Map ((#0{col_null}) IS NULL, NOT(#2)) // { types: "(boolean?, boolean, boolean, boolean)" }
       ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
 Source materialize.public.bool_table
@@ -154,11 +154,11 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_not_null + col_not_null , col_not_null + 1 , col_not_null % col_not_null , col_not_null % 2 FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_not_null + col_not_null , col_not_null + 1 , col_not_null % col_not_null , col_not_null % 2 FROM int_table;
 ----
 Explained Query:
   Project (#2..=#5) // { types: "(integer, integer, integer, integer)" }
-    Map ((#1 + #1), (#1 + 1), (#1 % #1), (#1 % 2)) // { types: "(integer?, integer, integer, integer, integer, integer)" }
+    Map ((#1{col_not_null} + #1{col_not_null}), (#1{col_not_null} + 1), (#1{col_not_null} % #1{col_not_null}), (#1{col_not_null} % 2)) // { types: "(integer?, integer, integer, integer, integer, integer)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -173,11 +173,11 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT GREATEST(col_not_null), GREATEST(col_not_null, col_not_null), GREATEST(col_not_null, col_null), GREATEST(col_null, col_null) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT GREATEST(col_not_null), GREATEST(col_not_null, col_not_null), GREATEST(col_not_null, col_null), GREATEST(col_null, col_null) FROM int_table;
 ----
 Explained Query:
   Project (#2..=#5) // { types: "(integer, integer, integer?, integer?)" }
-    Map (greatest(#1), greatest(#1, #1), greatest(#1, #0), greatest(#0, #0)) // { types: "(integer?, integer, integer, integer, integer?, integer?)" }
+    Map (greatest(#1{col_not_null}), greatest(#1{col_not_null}, #1{col_not_null}), greatest(#1{col_not_null}, #0{col_null}), greatest(#0{col_null}, #0{col_null})) // { types: "(integer?, integer, integer, integer, integer?, integer?)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -187,11 +187,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT LEAST(col_not_null), LEAST(col_not_null, col_not_null), LEAST(col_not_null, col_null), LEAST(col_null, col_null) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT LEAST(col_not_null), LEAST(col_not_null, col_not_null), LEAST(col_not_null, col_null), LEAST(col_null, col_null) FROM int_table;
 ----
 Explained Query:
   Project (#2..=#5) // { types: "(integer, integer, integer?, integer?)" }
-    Map (least(#1), least(#1, #1), least(#1, #0), least(#0, #0)) // { types: "(integer?, integer, integer, integer, integer?, integer?)" }
+    Map (least(#1{col_not_null}), least(#1{col_not_null}, #1{col_not_null}), least(#1{col_not_null}, #0{col_null}), least(#0{col_null}, #0{col_null})) // { types: "(integer?, integer, integer, integer, integer?, integer?)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -201,10 +201,10 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT COALESCE(col_not_null), COALESCE(col_not_null, col_not_null), COALESCE(col_not_null, col_null), COALESCE(col_null, col_null) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT COALESCE(col_not_null), COALESCE(col_not_null, col_not_null), COALESCE(col_not_null, col_null), COALESCE(col_null, col_null) FROM int_table;
 ----
 Explained Query:
-  Project (#1, #1, #1, #0) // { types: "(integer, integer, integer, integer?)" }
+  Project (#1{col_not_null}, #1{col_not_null}, #1{col_not_null}, #0{col_null}) // { types: "(integer, integer, integer, integer?)" }
     ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -219,11 +219,11 @@ EOF
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT NULLIF(col_not_null, 'a') , NULLIF(col_not_null, NULL), NULLIF(col_null, NULL) , NULLIF(col_null, col_not_null) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT NULLIF(col_not_null, 'a') , NULLIF(col_not_null, NULL), NULLIF(col_null, NULL) , NULLIF(col_null, col_not_null) FROM int_table;
 ----
 Explained Query:
-  Project (#3, #1, #0, #2) // { types: "(integer?, integer, integer?, integer?)" }
-    Map (case when (#0 = #1) then null else #0 end, error("invalid input syntax for type integer: invalid digit found in string: \"a\"")) // { types: "(integer?, integer, integer?, integer?)" }
+  Project (#3, #1{col_not_null}, #0{col_null}, #2) // { types: "(integer?, integer, integer?, integer?)" }
+    Map (case when (#0{col_null} = #1{col_not_null}) then null else #0{col_null} end, error("invalid input syntax for type integer: invalid digit found in string: \"a\"")) // { types: "(integer?, integer, integer?, integer?)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -237,11 +237,11 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_not_null = 1 FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_not_null = 1 FROM int_table;
 ----
 Explained Query:
   Project (#2) // { types: "(boolean)" }
-    Map ((#1 = 1)) // { types: "(integer?, integer, boolean)" }
+    Map ((#1{col_not_null} = 1)) // { types: "(integer?, integer, boolean)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -251,10 +251,10 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_not_null AND col_not_null , col_not_null OR col_not_null FROM bool_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_not_null AND col_not_null , col_not_null OR col_not_null FROM bool_table;
 ----
 Explained Query:
-  Project (#1, #1) // { types: "(boolean, boolean)" }
+  Project (#1{col_not_null}, #1{col_not_null}) // { types: "(boolean, boolean)" }
     ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
 Source materialize.public.bool_table
@@ -264,11 +264,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_null AND col_not_null , col_null OR col_not_null FROM bool_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_null AND col_not_null , col_null OR col_not_null FROM bool_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(boolean?, boolean?)" }
-    Map ((#0 AND #1), (#0 OR #1)) // { types: "(boolean?, boolean, boolean?, boolean?)" }
+    Map ((#0{col_null} AND #1{col_not_null}), (#0{col_null} OR #1{col_not_null})) // { types: "(boolean?, boolean, boolean?, boolean?)" }
       ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
 Source materialize.public.bool_table
@@ -278,11 +278,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT NOT col_null , NOT col_not_null FROM bool_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT NOT col_null , NOT col_not_null FROM bool_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(boolean?, boolean)" }
-    Map (NOT(#0), NOT(#1)) // { types: "(boolean?, boolean, boolean?, boolean)" }
+    Map (NOT(#0{col_null}), NOT(#1{col_not_null})) // { types: "(boolean?, boolean, boolean?, boolean)" }
       ReadStorage materialize.public.bool_table // { types: "(boolean?, boolean)" }
 
 Source materialize.public.bool_table
@@ -296,11 +296,11 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT ABS(col_not_null), LOG(col_not_null), ROUND(col_not_null), COS(col_not_null), col_not_null << col_not_null FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT ABS(col_not_null), LOG(col_not_null), ROUND(col_not_null), COS(col_not_null), col_not_null << col_not_null FROM int_table;
 ----
 Explained Query:
   Project (#2, #4..=#7) // { types: "(integer, double precision, double precision, double precision, integer)" }
-    Map (abs(#1), integer_to_double(#1), log10f64(#3), roundf64(#3), cos(#3), (#1 << #1)) // { types: "(integer?, integer, integer, double precision, double precision, double precision, double precision, integer)" }
+    Map (abs(#1{col_not_null}), integer_to_double(#1{col_not_null}), log10f64(#3), roundf64(#3), cos(#3), (#1{col_not_null} << #1{col_not_null})) // { types: "(integer?, integer, integer, double precision, double precision, double precision, double precision, integer)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -314,27 +314,27 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT MIN(col_not_null), MAX(col_not_null), AVG(col_not_null), STDDEV(col_not_null), LIST_AGG(col_not_null) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT MIN(col_not_null), MAX(col_not_null), AVG(col_not_null), STDDEV(col_not_null), LIST_AGG(col_not_null) FROM int_table;
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#1) // { types: "(integer)" }
+      Project (#1{col_not_null}) // { types: "(integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     cte l1 =
       CrossJoin type=delta // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
         ArrangeBy keys=[[]] // { types: "(integer, integer)" }
-          Reduce aggregates=[min(#0), max(#0)] // { types: "(integer, integer)" }
+          Reduce aggregates=[min(#0{col_not_null}), max(#0{col_not_null})] // { types: "(integer, integer)" }
             Get l0 // { types: "(integer)" }
         ArrangeBy keys=[[]] // { types: "(bigint, bigint, numeric, numeric, bigint)" }
-          Reduce aggregates=[sum(#0), count(*), sum((integer_to_numeric(#0) * integer_to_numeric(#0))), sum(integer_to_numeric(#0)), count(integer_to_numeric(#0))] // { types: "(bigint, bigint, numeric, numeric, bigint)" }
+          Reduce aggregates=[sum(#0{col_not_null}), count(*), sum((integer_to_numeric(#0{col_not_null}) * integer_to_numeric(#0{col_not_null}))), sum(integer_to_numeric(#0{col_not_null})), count(integer_to_numeric(#0{col_not_null}))] // { types: "(bigint, bigint, numeric, numeric, bigint)" }
             Get l0 // { types: "(integer)" }
         ArrangeBy keys=[[]] // { types: "(integer list)" }
-          Reduce aggregates=[list_agg[order_by=[]](row(list[#0]))] // { types: "(integer list)" }
+          Reduce aggregates=[list_agg[order_by=[]](row(list[#0{col_not_null}]))] // { types: "(integer list)" }
             Get l0 // { types: "(integer)" }
   Return // { types: "(integer?, integer?, numeric?, numeric?, integer list?)" }
-    Project (#0, #1, #8, #9, #7) // { types: "(integer?, integer?, numeric?, numeric?, integer list?)" }
-      Map ((bigint_to_numeric(#2) / bigint_to_numeric(case when (#3 = 0) then null else #3 end)), sqrtnumeric(case when ((#4) IS NULL OR (#5) IS NULL OR (case when (#6 = 0) then null else #6 end) IS NULL OR (case when (0 = (#6 - 1)) then null else (#6 - 1) end) IS NULL) then null else greatest(((#4 - ((#5 * #5) / bigint_to_numeric(case when (#6 = 0) then null else #6 end))) / bigint_to_numeric(case when (0 = (#6 - 1)) then null else (#6 - 1) end)), 0) end)) // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?, numeric?, numeric?)" }
+    Project (#0{min_col_not_null}, #1{max_col_not_null}, #8, #9, #7{list_agg}) // { types: "(integer?, integer?, numeric?, numeric?, integer list?)" }
+      Map ((bigint_to_numeric(#2{sum_col_not_null}) / bigint_to_numeric(case when (#3{count} = 0) then null else #3{count} end)), sqrtnumeric(case when ((#4{sum}) IS NULL OR (#5{sum}) IS NULL OR (case when (#6{count} = 0) then null else #6{count} end) IS NULL OR (case when (0 = (#6{count} - 1)) then null else (#6{count} - 1) end) IS NULL) then null else greatest(((#4{sum} - ((#5{sum} * #5{sum}) / bigint_to_numeric(case when (#6{count} = 0) then null else #6{count} end))) / bigint_to_numeric(case when (0 = (#6{count} - 1)) then null else (#6{count} - 1) end)), 0) end)) // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?, numeric?, numeric?)" }
         Union // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)" }
           Get l1 // { types: "(integer, integer, bigint, bigint, numeric, numeric, bigint, integer list)" }
           Map (null, null, null, 0, null, null, 0, null) // { types: "(integer?, integer?, bigint?, bigint, numeric?, numeric?, bigint, integer list?)" }
@@ -356,13 +356,13 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT COUNT(col_not_null), COUNT(DISTINCT col_not_null) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT COUNT(col_not_null), COUNT(DISTINCT col_not_null) FROM int_table;
 ----
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[count(*), count(distinct #0)] // { types: "(bigint, bigint)" }
-        Project (#1) // { types: "(integer)" }
+      Reduce aggregates=[count(*), count(distinct #0{col_not_null})] // { types: "(bigint, bigint)" }
+        Project (#1{col_not_null}) // { types: "(integer)" }
           ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
   Return // { types: "(bigint, bigint)" }
     Union // { types: "(bigint, bigint)" }
@@ -386,11 +386,11 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_not_null LIKE col_not_null, col_null LIKE col_not_null, col_not_null LIKE col_null FROM str_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_not_null LIKE col_not_null, col_null LIKE col_not_null, col_not_null LIKE col_null FROM str_table;
 ----
 Explained Query:
   Project (#2..=#4) // { types: "(boolean, boolean?, boolean?)" }
-    Map ((#1 like #1), (#0 like #1), (#1 like #0)) // { types: "(text?, text, boolean, boolean?, boolean?)" }
+    Map ((#1{col_not_null} like #1{col_not_null}), (#0{col_null} like #1{col_not_null}), (#1{col_not_null} like #0{col_null})) // { types: "(text?, text, boolean, boolean?, boolean?)" }
       ReadStorage materialize.public.str_table // { types: "(text?, text)" }
 
 Source materialize.public.str_table
@@ -402,11 +402,11 @@ EOF
 # VARIADIC FUNCTIONS
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_not_null || col_not_null, substr(col_not_null, 3, 2), regexp_match(col_not_null, col_not_null), lpad(col_not_null, 3, col_not_null) FROM str_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_not_null || col_not_null, substr(col_not_null, 3, 2), regexp_match(col_not_null, col_not_null), lpad(col_not_null, 3, col_not_null) FROM str_table;
 ----
 Explained Query:
   Project (#2..=#5) // { types: "(text, text, text[]?, text)" }
-    Map ((#1 || #1), substr(#1, 3, 2), regexp_match(#1, #1), lpad(#1, 3, #1)) // { types: "(text?, text, text, text, text[]?, text)" }
+    Map ((#1{col_not_null} || #1{col_not_null}), substr(#1{col_not_null}, 3, 2), regexp_match(#1{col_not_null}, #1{col_not_null}), lpad(#1{col_not_null}, 3, #1{col_not_null})) // { types: "(text?, text, text, text, text[]?, text)" }
       ReadStorage materialize.public.str_table // { types: "(text?, text)" }
 
 Source materialize.public.str_table
@@ -435,11 +435,11 @@ true  true  true  true  true  true  true  true  true
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT REGEXP_MATCH(col_not_null, 'aaa'), REGEXP_MATCH('aaa', col_not_null) FROM str_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT REGEXP_MATCH(col_not_null, 'aaa'), REGEXP_MATCH('aaa', col_not_null) FROM str_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(text[]?, text[]?)" }
-    Map (regexp_match["aaa", case_insensitive=false](#1), regexp_match("aaa", #1)) // { types: "(text?, text, text[]?, text[]?)" }
+    Map (regexp_match["aaa", case_insensitive=false](#1{col_not_null}), regexp_match("aaa", #1{col_not_null})) // { types: "(text?, text, text[]?, text[]?)" }
       ReadStorage materialize.public.str_table // { types: "(text?, text)" }
 
 Source materialize.public.str_table
@@ -453,11 +453,11 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT SPLIT_PART(col_not_null, 'a', 100), SPLIT_PART('a', col_not_null, 100), SPLIT_PART('a', 'a', col_not_null::int) FROM str_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT SPLIT_PART(col_not_null, 'a', 100), SPLIT_PART('a', col_not_null, 100), SPLIT_PART('a', 'a', col_not_null::int) FROM str_table;
 ----
 Explained Query:
   Project (#2..=#4) // { types: "(text, text, text)" }
-    Map (split_string(#1, "a", 100), split_string("a", #1, 100), split_string("a", "a", text_to_integer(#1))) // { types: "(text?, text, text, text, text)" }
+    Map (split_string(#1{col_not_null}, "a", 100), split_string("a", #1{col_not_null}, 100), split_string("a", "a", text_to_integer(#1{col_not_null}))) // { types: "(text?, text, text, text, text)" }
       ReadStorage materialize.public.str_table // { types: "(text?, text)" }
 
 Source materialize.public.str_table
@@ -471,11 +471,11 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_not_null IN (1), 1 IN (col_not_null), 1 IN (1, col_null) , 1 IN (NULL), NULL IN (1), NULL IN (col_not_null) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_not_null IN (1), 1 IN (col_not_null), 1 IN (1, col_null) , 1 IN (NULL), NULL IN (1), NULL IN (col_not_null) FROM int_table;
 ----
 Explained Query:
   Project (#2, #2..=#6) // { types: "(boolean, boolean, boolean, boolean?, boolean?, boolean?)" }
-    Map ((#1 = 1), true, null, null, null) // { types: "(integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)" }
+    Map ((#1{col_not_null} = 1), true, null, null, null) // { types: "(integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -485,11 +485,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_not_null NOT IN (1), 1 not IN (col_not_null), 1 NOT IN (1, col_null) , 1 NOT IN (NULL), NULL NOT IN (1), NULL NOT IN (col_not_null) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_not_null NOT IN (1), 1 not IN (col_not_null), 1 NOT IN (1, col_null) , 1 NOT IN (NULL), NULL NOT IN (1), NULL NOT IN (col_not_null) FROM int_table;
 ----
 Explained Query:
   Project (#2, #2..=#6) // { types: "(boolean, boolean, boolean, boolean?, boolean?, boolean?)" }
-    Map ((#1 != 1), false, null, null, null) // { types: "(integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)" }
+    Map ((#1{col_not_null} != 1), false, null, null, null) // { types: "(integer?, integer, boolean, boolean, boolean?, boolean?, boolean?)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -503,28 +503,28 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT 1 = SOME (VALUES(col_null)), 1 = SOME (VALUES(col_not_null)), col_null = SOME (VALUES(NULL::int)), col_not_null = SOME (VALUES(NULL::int)) , col_null = SOME (VALUES(col_not_null)) , col_not_null = SOME (VALUES(col_null)) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT 1 = SOME (VALUES(col_null)), 1 = SOME (VALUES(col_not_null)), col_null = SOME (VALUES(NULL::int)), col_not_null = SOME (VALUES(NULL::int)) , col_null = SOME (VALUES(col_not_null)) , col_not_null = SOME (VALUES(col_null)) FROM int_table;
 ----
 Explained Query:
   With
     cte l0 =
-      Distinct project=[#0, #1] // { types: "(integer?, integer)" }
+      Distinct project=[#0{col_null}, #1{col_not_null}] // { types: "(integer?, integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
   Return // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
     Project (#5, #4, #7, #8, #6, #6) // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
-      Map ((#0 = 1), (#0 = #1), null, null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?, boolean?)" }
-        Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer, boolean)" }
-          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+      Map ((#0{col_null} = 1), (#0{col_null} = #1{col_not_null}), null, null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?, boolean?)" }
+        Join on=(#0{col_null} = #2{col_null} AND #1{col_not_null} = #3{col_not_null}) type=differential // { types: "(integer?, integer, integer?, integer, boolean)" }
+          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(integer?, integer)" }
             ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
-          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean)" }
+          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(integer?, integer, boolean)" }
             Union // { types: "(integer?, integer, boolean)" }
-              Filter (#1 = 1) // { types: "(integer?, integer, boolean)" }
+              Filter (#1{col_not_null} = 1) // { types: "(integer?, integer, boolean)" }
                 Map (true) // { types: "(integer?, integer, boolean)" }
                   Get l0 // { types: "(integer?, integer)" }
               Map (false) // { types: "(integer?, integer, boolean)" }
                 Union // { types: "(integer?, integer)" }
                   Negate // { types: "(integer?, integer)" }
-                    Filter (#1 = 1) // { types: "(integer?, integer)" }
+                    Filter (#1{col_not_null} = 1) // { types: "(integer?, integer)" }
                       Get l0 // { types: "(integer?, integer)" }
                   Get l0 // { types: "(integer?, integer)" }
 
@@ -536,28 +536,28 @@ EOF
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT 1 > ANY (VALUES(col_null)), 1 > ANY (VALUES(col_not_null)), col_null > ANY (VALUES(NULL::int)), col_not_null > ANY (VALUES(NULL::int)) , col_null > ANY (VALUES(col_not_null)) , col_not_null > ANY (VALUES(col_null)) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT 1 > ANY (VALUES(col_null)), 1 > ANY (VALUES(col_not_null)), col_null > ANY (VALUES(NULL::int)), col_not_null > ANY (VALUES(NULL::int)) , col_null > ANY (VALUES(col_not_null)) , col_not_null > ANY (VALUES(col_null)) FROM int_table;
 ----
 Explained Query:
   With
     cte l0 =
-      Distinct project=[#0, #1] // { types: "(integer?, integer)" }
+      Distinct project=[#0{col_null}, #1{col_not_null}] // { types: "(integer?, integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
   Return // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
     Project (#5, #4, #8, #9, #6, #7) // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
-      Map ((1 > #0), (#0 > #1), (#1 > #0), null, null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?, boolean?, boolean?)" }
-        Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer, boolean)" }
-          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+      Map ((1 > #0{col_null}), (#0{col_null} > #1{col_not_null}), (#1{col_not_null} > #0{col_null}), null, null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?, boolean?, boolean?)" }
+        Join on=(#0{col_null} = #2{col_null} AND #1{col_not_null} = #3{col_not_null}) type=differential // { types: "(integer?, integer, integer?, integer, boolean)" }
+          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(integer?, integer)" }
             ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
-          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean)" }
+          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(integer?, integer, boolean)" }
             Union // { types: "(integer?, integer, boolean)" }
-              Filter (1 > #1) // { types: "(integer?, integer, boolean)" }
+              Filter (1 > #1{col_not_null}) // { types: "(integer?, integer, boolean)" }
                 Map (true) // { types: "(integer?, integer, boolean)" }
                   Get l0 // { types: "(integer?, integer)" }
               Map (false) // { types: "(integer?, integer, boolean)" }
                 Union // { types: "(integer?, integer)" }
                   Negate // { types: "(integer?, integer)" }
-                    Filter (1 > #1) // { types: "(integer?, integer)" }
+                    Filter (1 > #1{col_not_null}) // { types: "(integer?, integer)" }
                       Get l0 // { types: "(integer?, integer)" }
                   Get l0 // { types: "(integer?, integer)" }
 
@@ -568,28 +568,28 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT 1 < ALL (VALUES(col_null)), 1 < ALL (VALUES(col_not_null)), col_null < ALL (VALUES(NULL::int)), col_not_null < ALL (VALUES(NULL::int)) , col_null < ALL (VALUES(col_not_null)) , col_not_null < ALL (VALUES(col_null)) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT 1 < ALL (VALUES(col_null)), 1 < ALL (VALUES(col_not_null)), col_null < ALL (VALUES(NULL::int)), col_not_null < ALL (VALUES(NULL::int)) , col_null < ALL (VALUES(col_not_null)) , col_not_null < ALL (VALUES(col_null)) FROM int_table;
 ----
 Explained Query:
   With
     cte l0 =
-      Distinct project=[#0, #1] // { types: "(integer?, integer)" }
+      Distinct project=[#0{col_null}, #1{col_not_null}] // { types: "(integer?, integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
   Return // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
     Project (#5, #8..=#10, #6, #7) // { types: "(boolean?, boolean, boolean?, boolean?, boolean?, boolean?)" }
-      Map ((1 < #0), (#0 < #1), (#1 < #0), NOT(#4), null, null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?, boolean, boolean?, boolean?)" }
-        Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer, boolean)" }
-          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+      Map ((1 < #0{col_null}), (#0{col_null} < #1{col_not_null}), (#1{col_not_null} < #0{col_null}), NOT(#4), null, null) // { types: "(integer?, integer, integer?, integer, boolean, boolean?, boolean?, boolean?, boolean, boolean?, boolean?)" }
+        Join on=(#0{col_null} = #2{col_null} AND #1{col_not_null} = #3{col_not_null}) type=differential // { types: "(integer?, integer, integer?, integer, boolean)" }
+          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(integer?, integer)" }
             ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
-          ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean)" }
+          ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(integer?, integer, boolean)" }
             Union // { types: "(integer?, integer, boolean)" }
-              Filter (1 >= #1) // { types: "(integer?, integer, boolean)" }
+              Filter (1 >= #1{col_not_null}) // { types: "(integer?, integer, boolean)" }
                 Map (true) // { types: "(integer?, integer, boolean)" }
                   Get l0 // { types: "(integer?, integer)" }
               Map (false) // { types: "(integer?, integer, boolean)" }
                 Union // { types: "(integer?, integer)" }
                   Negate // { types: "(integer?, integer)" }
-                    Filter (1 >= #1) // { types: "(integer?, integer)" }
+                    Filter (1 >= #1{col_not_null}) // { types: "(integer?, integer)" }
                       Get l0 // { types: "(integer?, integer)" }
                   Get l0 // { types: "(integer?, integer)" }
 
@@ -600,7 +600,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT 1 = SOME(VALUES(1), (NULL::int)), 1 = ALL (VALUES(1), (NULL::int)) , 1 = ANY (VALUES(1), (NULL::int));
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT 1 = SOME(VALUES(1), (NULL::int)), 1 = ALL (VALUES(1), (NULL::int)) , 1 = ANY (VALUES(1), (NULL::int));
 ----
 Explained Query:
   Constant // { types: "(boolean, boolean?, boolean)" }
@@ -611,7 +611,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT 1 = SOME(VALUES(NULL::int), (1)), 1 = ALL (VALUES(NULL::int), (1)) , 1 = ANY (VALUES(NULL::int), (1));
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT 1 = SOME(VALUES(NULL::int), (1)), 1 = ALL (VALUES(NULL::int), (1)) , 1 = ANY (VALUES(NULL::int), (1));
 ----
 Explained Query:
   Constant // { types: "(boolean, boolean?, boolean)" }
@@ -622,21 +622,21 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT 1 = SOME(VALUES(col_not_null), (NULL::int)), 1 = ALL (VALUES(col_not_null), (NULL::int)) , 1 = ANY (VALUES(col_not_null), (NULL::int)) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT 1 = SOME(VALUES(col_not_null), (NULL::int)), 1 = ALL (VALUES(col_not_null), (NULL::int)) , 1 = ANY (VALUES(col_not_null), (NULL::int)) FROM int_table;
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#1) // { types: "(integer)" }
+      Project (#1{col_not_null}) // { types: "(integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     cte l1 =
-      Distinct project=[#0] // { types: "(integer)" }
+      Distinct project=[#0{col_not_null}] // { types: "(integer)" }
         Get l0 // { types: "(integer)" }
     cte l2 =
-      FlatMap wrap1(#0, null) // { types: "(integer, integer?)" }
+      FlatMap wrap1(#0{col_not_null}, null) // { types: "(integer, integer?)" }
         Get l1 // { types: "(integer)" }
     cte l3 =
-      Reduce group_by=[#0] aggregates=[any((#1 = 1))] // { types: "(integer, boolean?)" }
+      Reduce group_by=[#0{col_not_null}] aggregates=[any((#1 = 1))] // { types: "(integer, boolean?)" }
         Get l2 // { types: "(integer, integer?)" }
     cte l4 =
       Union // { types: "(integer, boolean?)" }
@@ -644,11 +644,11 @@ Explained Query:
         Map (false) // { types: "(integer, boolean)" }
           Union // { types: "(integer)" }
             Negate // { types: "(integer)" }
-              Project (#0) // { types: "(integer)" }
+              Project (#0{col_not_null}) // { types: "(integer)" }
                 Get l3 // { types: "(integer, boolean?)" }
             Get l1 // { types: "(integer)" }
     cte l5 =
-      Reduce group_by=[#0] aggregates=[all((#1 = 1))] // { types: "(integer, boolean?)" }
+      Reduce group_by=[#0{col_not_null}] aggregates=[all((#1 = 1))] // { types: "(integer, boolean?)" }
         Get l2 // { types: "(integer, integer?)" }
     cte l6 =
       Union // { types: "(integer, boolean?)" }
@@ -656,30 +656,30 @@ Explained Query:
         Map (true) // { types: "(integer, boolean)" }
           Union // { types: "(integer)" }
             Negate // { types: "(integer)" }
-              Project (#0) // { types: "(integer)" }
+              Project (#0{col_not_null}) // { types: "(integer)" }
                 Get l5 // { types: "(integer, boolean?)" }
             Get l1 // { types: "(integer)" }
   Return // { types: "(boolean?, boolean?, boolean?)" }
-    Project (#2, #4, #2) // { types: "(boolean?, boolean?, boolean?)" }
-      Join on=(#0 = #1 = #3) type=delta // { types: "(integer, integer, boolean?, integer, boolean?)" }
-        ArrangeBy keys=[[#0]] // { types: "(integer)" }
+    Project (#2{any}, #4{all}, #2{any}) // { types: "(boolean?, boolean?, boolean?)" }
+      Join on=(#0{col_not_null} = #1{col_not_null} = #3{col_not_null}) type=delta // { types: "(integer, integer, boolean?, integer, boolean?)" }
+        ArrangeBy keys=[[#0{col_not_null}]] // { types: "(integer)" }
           Get l0 // { types: "(integer)" }
-        ArrangeBy keys=[[#0]] // { types: "(integer, boolean?)" }
+        ArrangeBy keys=[[#0{col_not_null}]] // { types: "(integer, boolean?)" }
           Union // { types: "(integer, boolean?)" }
             Get l4 // { types: "(integer, boolean?)" }
             Map (null) // { types: "(integer, boolean?)" }
               Union // { types: "(integer)" }
                 Negate // { types: "(integer)" }
-                  Project (#0) // { types: "(integer)" }
+                  Project (#0{col_not_null}) // { types: "(integer)" }
                     Get l4 // { types: "(integer, boolean?)" }
                 Get l1 // { types: "(integer)" }
-        ArrangeBy keys=[[#0]] // { types: "(integer, boolean?)" }
+        ArrangeBy keys=[[#0{col_not_null}]] // { types: "(integer, boolean?)" }
           Union // { types: "(integer, boolean?)" }
             Get l6 // { types: "(integer, boolean?)" }
             Map (null) // { types: "(integer, boolean?)" }
               Union // { types: "(integer)" }
                 Negate // { types: "(integer)" }
-                  Project (#0) // { types: "(integer)" }
+                  Project (#0{col_not_null}) // { types: "(integer)" }
                     Get l6 // { types: "(integer, boolean?)" }
                 Get l1 // { types: "(integer)" }
 
@@ -694,7 +694,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT (SELECT col_not_null FROM int_table) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT (SELECT col_not_null FROM int_table) FROM int_table;
 ----
 Explained Query:
   With
@@ -703,11 +703,11 @@ Explained Query:
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     cte l1 =
       Union // { types: "(integer)" }
-        Project (#1) // { types: "(integer)" }
+        Project (#1{col_not_null}) // { types: "(integer)" }
           ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
         Map (error("more than one record produced in subquery")) // { types: "(integer)" }
           Project () // { types: "()" }
-            Filter (#0 > 1) // { types: "(bigint)" }
+            Filter (#0{count} > 1) // { types: "(bigint)" }
               Reduce aggregates=[count(*)] // { types: "(bigint)" }
                 Get l0 // { types: "()" }
   Return // { types: "(integer?)" }
@@ -737,14 +737,14 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT 1 IN (SELECT col_not_null FROM int_table), 1 NOT IN (SELECT col_not_null FROM int_table) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT 1 IN (SELECT col_not_null FROM int_table), 1 NOT IN (SELECT col_not_null FROM int_table) FROM int_table;
 ----
 Explained Query:
   With
     cte l0 =
       Distinct project=[] // { types: "()" }
         Project () // { types: "()" }
-          Filter (#1 = 1) // { types: "(integer?, integer)" }
+          Filter (#1{col_not_null} = 1) // { types: "(integer?, integer)" }
             ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     cte l1 =
       ArrangeBy keys=[[]] // { types: "(boolean)" }
@@ -774,7 +774,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT EXISTS (SELECT col_not_null FROM int_table), NOT EXISTS (SELECT col_not_null FROM int_table) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT EXISTS (SELECT col_not_null FROM int_table), NOT EXISTS (SELECT col_not_null FROM int_table) FROM int_table;
 ----
 Explained Query:
   With
@@ -807,29 +807,29 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT 1 = SOME (SELECT col_not_null FROM int_table), col_not_null = SOME (SELECT 1), col_null = SOME ( SELECT col_not_null FROM int_table ) FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT 1 = SOME (SELECT col_not_null FROM int_table), col_not_null = SOME (SELECT 1), col_null = SOME ( SELECT col_not_null FROM int_table ) FROM int_table;
 ----
 Explained Query:
   With
     cte l0 =
       Distinct project=[] // { types: "()" }
         Project () // { types: "()" }
-          Filter (#1 = 1) // { types: "(integer?, integer)" }
+          Filter (#1{col_not_null} = 1) // { types: "(integer?, integer)" }
             ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     cte l1 =
-      Distinct project=[#0, #1] // { types: "(integer?, integer)" }
+      Distinct project=[#0{col_null}, #1{col_not_null}] // { types: "(integer?, integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     cte l2 =
-      Distinct project=[#0] // { types: "(integer?)" }
-        Project (#0) // { types: "(integer?)" }
+      Distinct project=[#0{col_null}] // { types: "(integer?)" }
+        Project (#0{col_null}) // { types: "(integer?)" }
           ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     cte l3 =
-      Reduce group_by=[#0] aggregates=[any((#0 = #1))] // { types: "(integer?, boolean?)" }
+      Reduce group_by=[#0{col_null}] aggregates=[any((#0{col_null} = #1{col_not_null}))] // { types: "(integer?, boolean?)" }
         CrossJoin type=differential // { types: "(integer?, integer)" }
           ArrangeBy keys=[[]] // { types: "(integer?)" }
             Get l2 // { types: "(integer?)" }
           ArrangeBy keys=[[]] // { types: "(integer)" }
-            Project (#1) // { types: "(integer)" }
+            Project (#1{col_not_null}) // { types: "(integer)" }
               ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     cte l4 =
       Union // { types: "(integer?, boolean?)" }
@@ -837,13 +837,13 @@ Explained Query:
         Map (false) // { types: "(integer?, boolean)" }
           Union // { types: "(integer?)" }
             Negate // { types: "(integer?)" }
-              Project (#0) // { types: "(integer?)" }
+              Project (#0{col_null}) // { types: "(integer?)" }
                 Get l3 // { types: "(integer?, boolean?)" }
             Get l2 // { types: "(integer?)" }
   Return // { types: "(boolean, boolean, boolean?)" }
-    Project (#2, #5, #7) // { types: "(boolean, boolean, boolean?)" }
-      Join on=(#0 = #3 = #6 AND #1 = #4) type=delta // { types: "(integer?, integer, boolean, integer?, integer, boolean, integer?, boolean?)" }
-        ArrangeBy keys=[[], [#0], [#0, #1]] // { types: "(integer?, integer)" }
+    Project (#2, #5, #7{any}) // { types: "(boolean, boolean, boolean?)" }
+      Join on=(#0{col_null} = #3{col_null} = #6{col_null} AND #1{col_not_null} = #4{col_not_null}) type=delta // { types: "(integer?, integer, boolean, integer?, integer, boolean, integer?, boolean?)" }
+        ArrangeBy keys=[[], [#0{col_null}], [#0{col_null}, #1{col_not_null}]] // { types: "(integer?, integer)" }
           ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
         ArrangeBy keys=[[]] // { types: "(boolean)" }
           Union // { types: "(boolean)" }
@@ -855,24 +855,24 @@ Explained Query:
                   Get l0 // { types: "()" }
                 Constant // { types: "()" }
                   - ()
-        ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer, boolean)" }
+        ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(integer?, integer, boolean)" }
           Union // { types: "(integer?, integer, boolean)" }
-            Filter (#1 = 1) // { types: "(integer?, integer, boolean)" }
+            Filter (#1{col_not_null} = 1) // { types: "(integer?, integer, boolean)" }
               Map (true) // { types: "(integer?, integer, boolean)" }
                 Get l1 // { types: "(integer?, integer)" }
             Map (false) // { types: "(integer?, integer, boolean)" }
               Union // { types: "(integer?, integer)" }
                 Negate // { types: "(integer?, integer)" }
-                  Filter (#1 = 1) // { types: "(integer?, integer)" }
+                  Filter (#1{col_not_null} = 1) // { types: "(integer?, integer)" }
                     Get l1 // { types: "(integer?, integer)" }
                 Get l1 // { types: "(integer?, integer)" }
-        ArrangeBy keys=[[#0]] // { types: "(integer?, boolean?)" }
+        ArrangeBy keys=[[#0{col_null}]] // { types: "(integer?, boolean?)" }
           Union // { types: "(integer?, boolean?)" }
             Get l4 // { types: "(integer?, boolean?)" }
             Map (null) // { types: "(integer?, boolean?)" }
               Union // { types: "(integer?)" }
                 Negate // { types: "(integer?)" }
-                  Project (#0) // { types: "(integer?)" }
+                  Project (#0{col_null}) // { types: "(integer?)" }
                     Get l4 // { types: "(integer?, boolean?)" }
                 Get l2 // { types: "(integer?)" }
 
@@ -886,11 +886,11 @@ EOF
 # DATE / TIME functions
 #
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_null - INTERVAL '1 second' , col_not_null - INTERVAL '1 second' FROM ts_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_null - INTERVAL '1 second' , col_not_null - INTERVAL '1 second' FROM ts_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(timestamp without time zone?, timestamp without time zone)" }
-    Map ((#0 - 00:00:01), (#1 - 00:00:01)) // { types: "(timestamp without time zone?, timestamp without time zone, timestamp without time zone?, timestamp without time zone)" }
+    Map ((#0{col_null} - 00:00:01), (#1{col_not_null} - 00:00:01)) // { types: "(timestamp without time zone?, timestamp without time zone, timestamp without time zone?, timestamp without time zone)" }
       ReadStorage materialize.public.ts_table // { types: "(timestamp without time zone?, timestamp without time zone)" }
 
 Source materialize.public.ts_table
@@ -900,11 +900,11 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_null - col_not_null, col_not_null - col_null FROM ts_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_null - col_not_null, col_not_null - col_null FROM ts_table;
 ----
 Explained Query:
   Project (#2, #3) // { types: "(interval?, interval?)" }
-    Map ((#0 - #1), (#1 - #0)) // { types: "(timestamp without time zone?, timestamp without time zone, interval?, interval?)" }
+    Map ((#0{col_null} - #1{col_not_null}), (#1{col_not_null} - #0{col_null})) // { types: "(timestamp without time zone?, timestamp without time zone, interval?, interval?)" }
       ReadStorage materialize.public.ts_table // { types: "(timestamp without time zone?, timestamp without time zone)" }
 
 Source materialize.public.ts_table
@@ -919,13 +919,13 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 INNER JOIN int_table AS a2 ON TRUE;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 INNER JOIN int_table AS a2 ON TRUE;
 ----
 Explained Query:
   With
     cte l0 =
       ArrangeBy keys=[[]] // { types: "(integer)" }
-        Project (#1) // { types: "(integer)" }
+        Project (#1{col_not_null}) // { types: "(integer)" }
           ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
   Return // { types: "(integer, integer)" }
     CrossJoin type=differential // { types: "(integer, integer)" }
@@ -943,7 +943,7 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 LEFT JOIN int_table AS a2 ON TRUE;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 LEFT JOIN int_table AS a2 ON TRUE;
 ----
 Explained Query:
   With
@@ -952,24 +952,24 @@ Explained Query:
         ArrangeBy keys=[[]] // { types: "(integer?, integer)" }
           ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
         ArrangeBy keys=[[]] // { types: "(integer)" }
-          Project (#1) // { types: "(integer)" }
+          Project (#1{col_not_null}) // { types: "(integer)" }
             ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
   Return // { types: "(integer, integer?)" }
     Union // { types: "(integer, integer?)" }
-      Project (#1, #2) // { types: "(integer, integer)" }
+      Project (#1{col_not_null}, #2{col_not_null}) // { types: "(integer, integer)" }
         Get l0 // { types: "(integer?, integer, integer)" }
-      Project (#1, #4) // { types: "(integer, integer?)" }
+      Project (#1{col_not_null}, #4) // { types: "(integer, integer?)" }
         Map (null) // { types: "(integer?, integer, integer?, integer, integer?)" }
-          Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer)" }
-            ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+          Join on=(#0{col_null} = #2{col_null} AND #1{col_not_null} = #3{col_not_null}) type=differential // { types: "(integer?, integer, integer?, integer)" }
+            ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(integer?, integer)" }
               Union // { types: "(integer?, integer)" }
                 Negate // { types: "(integer?, integer)" }
-                  Distinct project=[#0, #1] // { types: "(integer?, integer)" }
-                    Project (#0, #1) // { types: "(integer?, integer)" }
+                  Distinct project=[#0{col_null}, #1{col_not_null}] // { types: "(integer?, integer)" }
+                    Project (#0{col_null}, #1{col_not_null}) // { types: "(integer?, integer)" }
                       Get l0 // { types: "(integer?, integer, integer)" }
-                Distinct project=[#0, #1] // { types: "(integer?, integer)" }
+                Distinct project=[#0{col_null}, #1{col_not_null}] // { types: "(integer?, integer)" }
                   ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
-            ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+            ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(integer?, integer)" }
               ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -979,7 +979,7 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 FULL OUTER JOIN int_table AS a2 ON TRUE;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT a1.col_not_null, a2.col_not_null FROM int_table AS a1 FULL OUTER JOIN int_table AS a2 ON TRUE;
 ----
 Explained Query:
   With
@@ -991,34 +991,34 @@ Explained Query:
         Get l0 // { types: "(integer?, integer)" }
         Get l0 // { types: "(integer?, integer)" }
     cte l2 =
-      Distinct project=[#0, #1] // { types: "(integer?, integer)" }
+      Distinct project=[#0{col_null}, #1{col_not_null}] // { types: "(integer?, integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
     cte l3 =
-      ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+      ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(integer?, integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
   Return // { types: "(integer?, integer?)" }
     Union // { types: "(integer?, integer?)" }
-      Project (#1, #3) // { types: "(integer, integer)" }
+      Project (#1{col_not_null}, #3{col_not_null}) // { types: "(integer, integer)" }
         Get l1 // { types: "(integer?, integer, integer?, integer)" }
-      Project (#1, #4) // { types: "(integer, integer?)" }
+      Project (#1{col_not_null}, #4) // { types: "(integer, integer?)" }
         Map (null) // { types: "(integer?, integer, integer?, integer, integer?)" }
-          Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer)" }
-            ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+          Join on=(#0{col_null} = #2{col_null} AND #1{col_not_null} = #3{col_not_null}) type=differential // { types: "(integer?, integer, integer?, integer)" }
+            ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(integer?, integer)" }
               Union // { types: "(integer?, integer)" }
                 Negate // { types: "(integer?, integer)" }
-                  Distinct project=[#0, #1] // { types: "(integer?, integer)" }
-                    Project (#0, #1) // { types: "(integer?, integer)" }
+                  Distinct project=[#0{col_null}, #1{col_not_null}] // { types: "(integer?, integer)" }
+                    Project (#0{col_null}, #1{col_not_null}) // { types: "(integer?, integer)" }
                       Get l1 // { types: "(integer?, integer, integer?, integer)" }
                 Get l2 // { types: "(integer?, integer)" }
             Get l3 // { types: "(integer?, integer)" }
-      Project (#4, #1) // { types: "(integer?, integer)" }
+      Project (#4, #1{col_not_null}) // { types: "(integer?, integer)" }
         Map (null) // { types: "(integer?, integer, integer?, integer, integer?)" }
-          Join on=(#0 = #2 AND #1 = #3) type=differential // { types: "(integer?, integer, integer?, integer)" }
-            ArrangeBy keys=[[#0, #1]] // { types: "(integer?, integer)" }
+          Join on=(#0{col_null} = #2{col_null} AND #1{col_not_null} = #3{col_not_null}) type=differential // { types: "(integer?, integer, integer?, integer)" }
+            ArrangeBy keys=[[#0{col_null}, #1{col_not_null}]] // { types: "(integer?, integer)" }
               Union // { types: "(integer?, integer)" }
                 Negate // { types: "(integer?, integer)" }
-                  Distinct project=[#0, #1] // { types: "(integer?, integer)" }
-                    Project (#2, #3) // { types: "(integer?, integer)" }
+                  Distinct project=[#0{col_null}, #1{col_not_null}] // { types: "(integer?, integer)" }
+                    Project (#2{col_null}, #3{col_not_null}) // { types: "(integer?, integer)" }
                       Get l1 // { types: "(integer?, integer, integer?, integer)" }
                 Get l2 // { types: "(integer?, integer)" }
             Get l3 // { types: "(integer?, integer)" }
@@ -1035,12 +1035,12 @@ EOF
 
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_not_null FROM int_table UNION ALL SELECT col_not_null FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_not_null FROM int_table UNION ALL SELECT col_not_null FROM int_table;
 ----
 Explained Query:
   With
     cte l0 =
-      Project (#1) // { types: "(integer)" }
+      Project (#1{col_not_null}) // { types: "(integer)" }
         ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
   Return // { types: "(integer)" }
     Union // { types: "(integer)" }
@@ -1054,13 +1054,13 @@ Target cluster: quickstart
 EOF
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT col_not_null FROM int_table UNION ALL SELECT col_null FROM int_table;
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT col_not_null FROM int_table UNION ALL SELECT col_null FROM int_table;
 ----
 Explained Query:
   Union // { types: "(integer?)" }
-    Project (#1) // { types: "(integer)" }
+    Project (#1{col_not_null}) // { types: "(integer)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
-    Project (#0) // { types: "(integer?)" }
+    Project (#0{col_null}) // { types: "(integer?)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table
@@ -1074,11 +1074,11 @@ EOF
 #
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(types, no fast path) AS VERBOSE TEXT FOR SELECT f1 + 1 FROM (SELECT col_not_null + 1 AS f1 FROM int_table);
+EXPLAIN OPTIMIZED PLAN WITH(types, no fast path, humanized expressions) AS VERBOSE TEXT FOR SELECT f1 + 1 FROM (SELECT col_not_null + 1 AS f1 FROM int_table);
 ----
 Explained Query:
   Project (#2) // { types: "(integer)" }
-    Map (((#1 + 1) + 1)) // { types: "(integer?, integer, integer)" }
+    Map (((#1{col_not_null} + 1) + 1)) // { types: "(integer?, integer, integer)" }
       ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
 
 Source materialize.public.int_table

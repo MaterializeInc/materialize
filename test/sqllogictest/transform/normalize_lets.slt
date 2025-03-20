@@ -11,7 +11,7 @@ mode cockroach
 
 ## Test a plausibly correct recursive query.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
     bar (a int) as (SELECT a FROM foo)
 SELECT * FROM bar;
@@ -38,7 +38,7 @@ EOF
 ## Test a nested recursive query.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
     foo (a int8) AS (
         WITH MUTUALLY RECURSIVE
             bar (b int8) AS (
@@ -59,7 +59,7 @@ EOF
 ## `bar` is used only in `baz`, so it should be inlined. The inner WMR should have only one cte.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
     foo (a int8) AS (
         WITH MUTUALLY RECURSIVE
             bar (b int8) AS (
@@ -84,7 +84,7 @@ CREATE TABLE t1(f0 int);
 
 ## Test inlining a cte from a `Let` into a `LetRec`.
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(raw) AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH(raw, humanized expressions) AS VERBOSE TEXT FOR
 WITH
   cte0 AS (
     SELECT * from t1 where f0 < 27
@@ -122,7 +122,7 @@ EOF
 ## Test consolidation of not-really nested recursive query.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
     foo (a int8) AS (
         WITH MUTUALLY RECURSIVE
             bar (b int8) AS (
@@ -142,7 +142,7 @@ EOF
 ## Test consolidation of independent recursive query blocks.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM (
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM (
     WITH MUTUALLY RECURSIVE
         foo (a int8) AS (SELECT DISTINCT a FROM foo)
     SELECT * FROM foo
@@ -166,7 +166,7 @@ CREATE TABLE edges (src int, dst int);
 
 ## Complex inlining and other things
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE
     label (node int, comp int) AS (
         SELECT dst, MIN(comp)
         FROM (
@@ -198,33 +198,33 @@ GROUP BY round;
 Explained Query:
   With Mutually Recursive
     cte l0 =
-      Reduce group_by=[#0] aggregates=[min(#1)]
+      Reduce group_by=[#0{dst}] aggregates=[min(#1{dst})]
         Union
-          Project (#1, #1)
+          Project (#1{dst}, #1{dst})
             ReadStorage materialize.public.edges
-          Project (#1, #3)
-            Join on=(#0 = #2) type=differential
-              ArrangeBy keys=[[#0]]
-                Filter (#0) IS NOT NULL
+          Project (#1{dst}, #3)
+            Join on=(#0{src} = #2) type=differential
+              ArrangeBy keys=[[#0{src}]]
+                Filter (#0{src}) IS NOT NULL
                   ReadStorage materialize.public.edges
               ArrangeBy keys=[[#0]]
-                Filter (#0) IS NOT NULL
+                Filter (#0{dst}) IS NOT NULL
                   Get l0
   Return
     With Mutually Recursive
       cte l1 =
-        TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=1
+        TopK group_by=[#0{dst}] order_by=[#1{min_dst} asc nulls_last] limit=1
           Union
             Map (0)
               Get l0
-            Project (#1, #3, #5)
+            Project (#1{dst}, #3, #5)
               Map ((#4 + 1))
-                Join on=(#0 = #2) type=differential
-                  ArrangeBy keys=[[#0]]
-                    Filter (#0) IS NOT NULL
+                Join on=(#0{src} = #2) type=differential
+                  ArrangeBy keys=[[#0{src}]]
+                    Filter (#0{src}) IS NOT NULL
                       ReadStorage materialize.public.edges
                   ArrangeBy keys=[[#0]]
-                    Filter (#0) IS NOT NULL
+                    Filter (#0{dst}) IS NOT NULL
                       Get l1
     Return
       Reduce group_by=[#0] aggregates=[count(*)]
@@ -242,7 +242,7 @@ EOF
 ## RECURSION LIMIT -- Simple test
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE (RECURSION LIMIT 10)
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE (RECURSION LIMIT 10)
   cnt (i int) AS (
     SELECT 1 AS i
     UNION
@@ -269,7 +269,7 @@ EOF
 ## RECURSION LIMIT -- RETURN AT RECURSION LIMIT
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 10)
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 10)
   cnt (i int) AS (
     SELECT 1 AS i
     UNION
@@ -296,7 +296,7 @@ EOF
 ## RECURSION LIMIT -- ERROR AT RECURSION LIMIT
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 10)
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 10)
   cnt (i int) AS (
     SELECT 1 AS i
     UNION
@@ -324,7 +324,7 @@ EOF
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM (
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM (
     WITH MUTUALLY RECURSIVE (RECURSION LIMIT 5)
         foo (a int8) AS (SELECT DISTINCT a FROM foo)
     SELECT * FROM foo
@@ -348,7 +348,7 @@ EOF
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM (
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM (
     WITH MUTUALLY RECURSIVE (RECURSION LIMIT 27)
         foo (a int8) AS (SELECT DISTINCT a FROM foo)
     SELECT * FROM foo
@@ -371,7 +371,7 @@ EOF
 ## Here, the ITERATION RECURSION of the inner WMR is irrelevant, because it's not recursive.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE (RECURSION LIMIT 9)
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE (RECURSION LIMIT 9)
     foo (a int8) AS (
         WITH MUTUALLY RECURSIVE (RECURSION LIMIT 3)
             bar (b int8) AS (
@@ -391,7 +391,7 @@ EOF
 # ITERATION RECURSION -- a nested recursive query.
 # With materialize#27389 this stopped testing a thing; see issue database-issues#8294.
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE (RECURSION LIMIT 17)
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE (RECURSION LIMIT 17)
     foo (a int8) AS (
         WITH MUTUALLY RECURSIVE (RECURSION LIMIT 11)
             bar (b int8) AS (
@@ -411,7 +411,7 @@ EOF
 ## ITERATION RECURSION -- Complex inlining and other things.
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE (RECURSION LIMIT 21)
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR WITH MUTUALLY RECURSIVE (RECURSION LIMIT 21)
     label (node int, comp int) AS (
         SELECT dst, MIN(comp)
         FROM (
@@ -443,33 +443,33 @@ GROUP BY round;
 Explained Query:
   With Mutually Recursive [recursion_limit=21]
     cte l0 =
-      Reduce group_by=[#0] aggregates=[min(#1)]
+      Reduce group_by=[#0{dst}] aggregates=[min(#1{dst})]
         Union
-          Project (#1, #1)
+          Project (#1{dst}, #1{dst})
             ReadStorage materialize.public.edges
-          Project (#1, #3)
-            Join on=(#0 = #2) type=differential
-              ArrangeBy keys=[[#0]]
-                Filter (#0) IS NOT NULL
+          Project (#1{dst}, #3)
+            Join on=(#0{src} = #2) type=differential
+              ArrangeBy keys=[[#0{src}]]
+                Filter (#0{src}) IS NOT NULL
                   ReadStorage materialize.public.edges
               ArrangeBy keys=[[#0]]
-                Filter (#0) IS NOT NULL
+                Filter (#0{dst}) IS NOT NULL
                   Get l0
   Return
     With Mutually Recursive [recursion_limit=23]
       cte l1 =
-        TopK group_by=[#0] order_by=[#1 asc nulls_last] limit=1
+        TopK group_by=[#0{dst}] order_by=[#1{min_dst} asc nulls_last] limit=1
           Union
             Map (0)
               Get l0
-            Project (#1, #3, #5)
+            Project (#1{dst}, #3, #5)
               Map ((#4 + 1))
-                Join on=(#0 = #2) type=differential
-                  ArrangeBy keys=[[#0]]
-                    Filter (#0) IS NOT NULL
+                Join on=(#0{src} = #2) type=differential
+                  ArrangeBy keys=[[#0{src}]]
+                    Filter (#0{src}) IS NOT NULL
                       ReadStorage materialize.public.edges
                   ArrangeBy keys=[[#0]]
-                    Filter (#0) IS NOT NULL
+                    Filter (#0{dst}) IS NOT NULL
                       Get l1
     Return
       Reduce group_by=[#0] aggregates=[count(*)]
@@ -489,7 +489,7 @@ statement ok
 CREATE TABLE t (a int2, b int4, c int8, d uint2, e uint4, f uint8, g text);
 
 statement ok
-EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
 select
   subq_0."c2" as c0,
   ((select "attlen" from pg_catalog.pg_attribute limit 1 offset 4)
