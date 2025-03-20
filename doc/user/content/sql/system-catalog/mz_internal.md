@@ -1224,6 +1224,17 @@ operations in the system.
 | `created_at`             | [`timestamp with time zone`] | The time at which the subscription was created.                                                                            |
 | `referenced_object_ids`  | [`text list`]                | The IDs of objects referenced by the subscription. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects)             |
 
+## `mz_wallclock_global_lag`
+
+The `mz_wallclock_global_lag` view contains the most recently recorded wallclock lag
+for each table, source, index, materialized view, and sink in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_wallclock_global_lag -->
+| Field         | Type         | Meaning
+| --------------| -------------| --------
+| `object_id`   | [`text`]     | The ID of the table, source, materialized view, index, or sink. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).
+| `lag`         | [`interval`] | The amount of time the object's write frontier lags behind wallclock time.
+
 ## `mz_wallclock_lag_history`
 
 The `mz_wallclock_lag_history` table records the historical wallclock lag,
