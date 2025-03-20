@@ -39,7 +39,7 @@ impl crate::Transform for WillDistinct {
     #[mz_ore::instrument(
         target = "optimizer"
         level = "trace",
-        fields(path.segment = "distinct_by")
+        fields(path.segment = "will_distinct")
     )]
     fn actually_perform_transform(
         &self,
