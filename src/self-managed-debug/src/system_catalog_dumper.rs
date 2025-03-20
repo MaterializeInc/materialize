@@ -15,7 +15,7 @@
 
 //! Dumps catalog information to files.
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use mz_tls_util::make_tls;
@@ -695,7 +695,8 @@ pub async fn copy_relation_to_csv(
 
     let copy_stream = transaction
         .copy_out(&copy_query)
-        .await?
+        .await
+        .context(format!("Failed to COPY TO for {}", relation_name))?
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
     let copy_stream = std::pin::pin!(copy_stream);
     let mut reader = StreamReader::new(copy_stream);
@@ -721,7 +722,11 @@ pub async fn query_relation(
                 &format!("SET LOCAL CLUSTER = '{}'", cluster_replica.cluster_name),
                 &[],
             )
-            .await?;
+            .await
+            .context(format!(
+                "Failed to set cluster to {}",
+                cluster_replica.cluster_name
+            ))?;
         transaction
             .execute(
                 &format!(
@@ -730,14 +735,19 @@ pub async fn query_relation(
                 ),
                 &[],
             )
-            .await?;
+            .await
+            .context(format!(
+                "Failed to set cluster replica to {}",
+                cluster_replica.replica_name
+            ))?;
     }
 
     // We query the column names to write the header row of the CSV file.
     // TODO (SangJunBak): Use `WITH (HEADER TRUE)` once database-issues#2846 is implemented.
     let mut column_names = transaction
         .query(&format!("SHOW COLUMNS FROM {}", &relation_name), &[])
-        .await?
+        .await
+        .context(format!("Failed to get column names for {}", relation_name))?
         .into_iter()
         .map(|row| row.get::<_, String>("name"))
         .collect::<Vec<_>>();
@@ -802,7 +812,8 @@ impl<'n> SystemCatalogDumper<'n> {
                 "SET search_path = mz_internal, mz_catalog, mz_introspection",
                 &[],
             )
-            .await?;
+            .await
+            .context("Failed to set search path")?;
 
         // We need to get all cluster replicas to dump introspection relations.
         let cluster_replicas = match pg_client
