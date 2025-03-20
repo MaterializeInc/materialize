@@ -516,9 +516,9 @@ pub(crate) fn generate_column_casts(
                 Err(_) => {
                     table_cast.push((
                         CastType::Natural,
-                        HirScalarExpr::CallVariadic {
-                            func: mz_expr::VariadicFunc::ErrorIfNull,
-                            exprs: vec![
+                        HirScalarExpr::call_variadic(
+                            mz_expr::VariadicFunc::ErrorIfNull,
+                            vec![
                                 HirScalarExpr::literal_null(ScalarType::String),
                                 HirScalarExpr::literal(
                                     mz_repr::Datum::from(
@@ -528,8 +528,7 @@ pub(crate) fn generate_column_casts(
                                     ScalarType::String,
                                 ),
                             ],
-                            name: None,
-                        }
+                        )
                         .lower_uncorrelated()
                         .expect("no correlation"),
                     ));
@@ -541,7 +540,7 @@ pub(crate) fn generate_column_casts(
         let data_type = scx.resolve_type(ty)?;
         let scalar_type = crate::plan::query::scalar_type_from_sql(scx, &data_type)?;
 
-        let col_expr = HirScalarExpr::Column(
+        let col_expr = HirScalarExpr::named_column(
             ColumnRef {
                 level: 0,
                 column: i,
@@ -559,9 +558,7 @@ pub(crate) fn generate_column_casts(
             // constraint changes and we want to error subsource if
             // e.g. the constraint is dropped and we don't notice
             // it.
-            HirScalarExpr::CallVariadic {
-                            func: mz_expr::VariadicFunc::ErrorIfNull,
-                            exprs: vec![
+            HirScalarExpr::call_variadic(mz_expr::VariadicFunc::ErrorIfNull, vec![
                                 cast_expr,
                                 HirScalarExpr::literal(
                                     mz_repr::Datum::from(
@@ -575,8 +572,7 @@ pub(crate) fn generate_column_casts(
                                     ScalarType::String,
                                 ),
                             ],
-                            name: None,
-                        }
+                            )
         };
 
         // We expect only reg* types to encounter this issue. Users

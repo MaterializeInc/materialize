@@ -21,7 +21,7 @@ use mz_ore::stack::RecursionLimitError;
 use mz_repr::{ColumnName, ColumnType, RelationType, ScalarType};
 
 use crate::plan::hir::{
-    AbstractExpr, AggregateFunc, AggregateWindowExpr, ColumnRef, HirRelationExpr, HirScalarExpr,
+    AbstractExpr, AggregateFunc, AggregateWindowExpr, HirRelationExpr, HirScalarExpr,
     ValueWindowExpr, ValueWindowFunc, WindowExpr,
 };
 use crate::plan::{AggregateExpr, WindowExprType};
@@ -509,8 +509,8 @@ pub fn fuse_window_functions(
                             }
                         })
                         .unzip();
-                    let fused_args = HirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    let fused_args = HirScalarExpr::call_variadic(
+                        VariadicFunc::RecordCreate {
                             // These field names are not important, because this record will only be an
                             // intermediate expression, which we'll manipulate further before it ends up
                             // anywhere where a column name would be visible.
@@ -518,23 +518,19 @@ pub fn fuse_window_functions(
                                 .take(fused_args.len())
                                 .collect(),
                         },
-                        exprs: fused_args,
-                        name: None,
-                    };
-                    HirScalarExpr::Windowing(
-                        WindowExpr {
-                            func: WindowExprType::Value(ValueWindowExpr {
-                                func: ValueWindowFunc::Fused(fused_funcs),
-                                args: Box::new(fused_args),
-                                order_by: options.inner_order_by,
-                                window_frame: options.window_frame,
-                                ignore_nulls: options.ignore_nulls,
-                            }),
-                            partition_by: options.partition_by,
-                            order_by: options.outer_order_by,
-                        },
-                        None,
-                    )
+                        fused_args,
+                    );
+                    HirScalarExpr::windowing(WindowExpr {
+                        func: WindowExprType::Value(ValueWindowExpr {
+                            func: ValueWindowFunc::Fused(fused_funcs),
+                            args: Box::new(fused_args),
+                            order_by: options.inner_order_by,
+                            window_frame: options.window_frame,
+                            ignore_nulls: options.ignore_nulls,
+                        }),
+                        partition_by: options.partition_by,
+                        order_by: options.outer_order_by,
+                    })
                 }
                 WindowFuncCallOptions::Agg(options) => {
                     let (fused_funcs, fused_args): (Vec<_>, Vec<_>) = self
@@ -566,45 +562,34 @@ pub fn fuse_window_functions(
                             }
                         })
                         .unzip();
-                    let fused_args = HirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    let fused_args = HirScalarExpr::call_variadic(
+                        VariadicFunc::RecordCreate {
                             field_names: iter::repeat(ColumnName::from(""))
                                 .take(fused_args.len())
                                 .collect(),
                         },
-                        exprs: fused_args,
-                        name: None,
-                    };
-                    HirScalarExpr::Windowing(
-                        WindowExpr {
-                            func: WindowExprType::Aggregate(AggregateWindowExpr {
-                                aggregate_expr: AggregateExpr {
-                                    func: AggregateFunc::FusedWindowAgg { funcs: fused_funcs },
-                                    expr: Box::new(fused_args),
-                                    distinct: options.distinct,
-                                },
-                                order_by: options.inner_order_by,
-                                window_frame: options.window_frame,
-                            }),
-                            partition_by: options.partition_by,
-                            order_by: options.outer_order_by,
-                        },
-                        None,
-                    )
+                        fused_args,
+                    );
+                    HirScalarExpr::windowing(WindowExpr {
+                        func: WindowExprType::Aggregate(AggregateWindowExpr {
+                            aggregate_expr: AggregateExpr {
+                                func: AggregateFunc::FusedWindowAgg { funcs: fused_funcs },
+                                expr: Box::new(fused_args),
+                                distinct: options.distinct,
+                            },
+                            order_by: options.inner_order_by,
+                            window_frame: options.window_frame,
+                        }),
+                        partition_by: options.partition_by,
+                        order_by: options.outer_order_by,
+                    })
                 }
             };
 
             let decompositions = (0..self.calls.len())
-                .map(|field| HirScalarExpr::CallUnary {
-                    func: UnaryFunc::RecordGet(mz_expr::func::RecordGet(field)),
-                    expr: Box::new(HirScalarExpr::Column(
-                        ColumnRef {
-                            level: 0,
-                            column: new_col,
-                        },
-                        None,
-                    )),
-                    name: None,
+                .map(|field| {
+                    HirScalarExpr::column(new_col)
+                        .call_unary(UnaryFunc::RecordGet(mz_expr::func::RecordGet(field)))
                 })
                 .collect();
 

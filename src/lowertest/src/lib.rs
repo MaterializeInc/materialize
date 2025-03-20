@@ -14,9 +14,9 @@
 use std::collections::BTreeMap;
 
 pub use mz_lowertest_derive::MzReflect;
-use mz_ore::incomparable::Incomparable;
 use mz_ore::result::ResultExt;
 use mz_ore::str::{separated, StrExt};
+use mz_ore::treat_as_equal::TreatAsEqual;
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -41,7 +41,7 @@ impl<T: MzReflect> MzReflect for Vec<T> {
     }
 }
 
-impl<T> MzReflect for Incomparable<T> {
+impl<T> MzReflect for TreatAsEqual<T> {
     fn add_to_reflected_type_info(_rti: &mut ReflectedTypeInfo) {}
 }
 

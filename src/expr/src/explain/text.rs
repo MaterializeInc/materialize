@@ -13,9 +13,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use mz_ore::incomparable::Incomparable;
 use mz_ore::soft_assert_eq_or_log;
 use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
+use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
     CompactScalars, ExprHumanizer, HumanizedAnalyses, IndexUsageType, Indices,
@@ -1228,11 +1228,11 @@ where
         use MirScalarExpr::*;
 
         match self.expr {
-            Column(i, Incomparable(None)) => {
+            Column(i, TreatAsEqual(None)) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation (plain column reference).
                 self.child(i).fmt(f)
             }
-            Column(i, Incomparable(Some(name))) => {
+            Column(i, TreatAsEqual(Some(name))) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation (with stored name information)
                 self.child(&(i, name)).fmt(f)
             }

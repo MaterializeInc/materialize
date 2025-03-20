@@ -23,34 +23,34 @@ use std::ops::Deref;
 
 /// Behaves like `T`, but has trivial `Hash`, `Eq`, `MzReflect`, and `Ord`
 /// implementations.
-#[derive(Clone)]
-pub struct Incomparable<T>(pub T);
+#[derive(Clone, Default)]
+pub struct TreatAsEqual<T>(pub T);
 
-impl<T> Hash for Incomparable<T> {
+impl<T> Hash for TreatAsEqual<T> {
     fn hash<H: Hasher>(&self, _state: &mut H) {}
 }
 
-impl<T> Eq for Incomparable<T> {}
+impl<T> Eq for TreatAsEqual<T> {}
 
-impl<T> PartialEq for Incomparable<T> {
+impl<T> PartialEq for TreatAsEqual<T> {
     fn eq(&self, _other: &Self) -> bool {
         true
     }
 }
 
-impl<T> PartialOrd for Incomparable<T> {
+impl<T> PartialOrd for TreatAsEqual<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T> Ord for Incomparable<T> {
+impl<T> Ord for TreatAsEqual<T> {
     fn cmp(&self, _other: &Self) -> Ordering {
         Ordering::Equal
     }
 }
 
-impl<T> Deref for Incomparable<T> {
+impl<T> Deref for TreatAsEqual<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -58,20 +58,20 @@ impl<T> Deref for Incomparable<T> {
     }
 }
 
-impl<T: std::fmt::Debug> std::fmt::Debug for Incomparable<T> {
+impl<T: std::fmt::Debug> std::fmt::Debug for TreatAsEqual<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self.0)
     }
 }
 
-impl<T: Serialize> Serialize for Incomparable<T> {
+impl<T: Serialize> Serialize for TreatAsEqual<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.0.serialize(serializer)
     }
 }
 
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for Incomparable<T> {
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for TreatAsEqual<T> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(Incomparable(T::deserialize(deserializer)?))
+        Ok(TreatAsEqual(T::deserialize(deserializer)?))
     }
 }

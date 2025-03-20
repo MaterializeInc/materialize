@@ -1905,7 +1905,7 @@ Finish order_by=[#0 asc nulls_last] output=[#0, #1]
   Project (#1, #2)
     With
       cte [l3 as subquery-3] =
-        Reduce aggregates=[any((#^0{supplier.s_suppkey} = #0{subquery.right_8143d7bd-648e-43fe-9adc-44aa03aa5524}))]
+        Reduce aggregates=[any((#^0{supplier.s_suppkey} = #0{subquery.right_3d22c100-8e8b-4a13-8600-cd43eaa3571d}))]
           Project (#1)
             With
               cte [l2 as subquery-2] =
@@ -1915,7 +1915,7 @@ Finish order_by=[#0 asc nulls_last] output=[#0, #1]
                       Filter ((((#1{lineitem.l_partkey} = #^0{partsupp.ps_partkey}) AND (#2{lineitem.l_suppkey} = #^1{partsupp.ps_suppkey})) AND (#10{lineitem.l_shipdate} >= text_to_date("1995-01-01"))) AND (date_to_timestamp(#10{lineitem.l_shipdate}) < (text_to_date("1995-01-01") + 1 year)))
                         Get materialize.public.lineitem
               cte [l1 as subquery-1] =
-                Reduce aggregates=[any((#^0{partsupp.ps_partkey} = #0{subquery.right_7210e54a-af2c-4c6f-8f87-9d98ed93dfcb}))]
+                Reduce aggregates=[any((#^0{partsupp.ps_partkey} = #0{subquery.right_b4903b09-b39b-4e53-ac01-cfd6aea6d5a7}))]
                   Project (#0)
                     Filter (varchar_to_text(#1{part.p_name}) like "forest%")
                       Get materialize.public.part

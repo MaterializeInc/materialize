@@ -16,10 +16,10 @@ use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::incomparable::Incomparable;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
+use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_ore::vec::swap_remove_multiple;
 use mz_pgrepr::TypeFromOidError;
 use mz_pgtz::timezone::TimezoneSpec;
@@ -53,7 +53,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
 pub enum MirScalarExpr {
     /// A column of the input row
-    Column(usize, Incomparable<Option<Arc<str>>>),
+    Column(usize, TreatAsEqual<Option<Arc<str>>>),
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum)
     Literal(Result<Row, EvalError>, ColumnType),
@@ -250,11 +250,11 @@ impl MirScalarExpr {
     }
 
     pub fn column(column: usize) -> Self {
-        MirScalarExpr::Column(column, Incomparable(None))
+        MirScalarExpr::Column(column, TreatAsEqual(None))
     }
 
     pub fn named_column(column: usize, name: Option<Arc<str>>) -> Self {
-        MirScalarExpr::Column(column, Incomparable(name))
+        MirScalarExpr::Column(column, TreatAsEqual(name))
     }
 
     pub fn literal(res: Result<Datum, EvalError>, typ: ScalarType) -> Self {
