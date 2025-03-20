@@ -88,6 +88,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new("mz_self_managed_debug=info"))
         .without_time()
+        .with_target(false)
         .init();
 
     let args: Args = cli::parse_args(CliConfig {
@@ -255,7 +256,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
     };
 
     if let Some(dumper) = catalog_dumper {
-        handles.extend(dumper.dump_all_relations());
+        dumper.dump_all_relations().await;
     }
 
     join_all(handles).await;

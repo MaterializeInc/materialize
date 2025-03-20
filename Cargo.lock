@@ -6839,6 +6839,7 @@ dependencies = [
  "mz-cloud-resources",
  "mz-ore",
  "mz-tls-util",
+ "postgres-openssl",
  "serde",
  "serde_yaml",
  "tokio",

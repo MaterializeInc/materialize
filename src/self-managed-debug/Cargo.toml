@@ -20,6 +20,7 @@ mz-build-info = { path = "../build-info" }
 mz-cloud-resources = { path = "../cloud-resources"}
 mz-ore = { path = "../ore", features = ["cli", "test"] }
 mz-tls-util = { path = "../tls-util" }
+postgres-openssl = { version = "0.5.0" }
 serde = "1.0.219"
 serde_yaml = "0.9.25"
 tokio = "1.44.1"
