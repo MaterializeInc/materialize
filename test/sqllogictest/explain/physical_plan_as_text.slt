@@ -187,7 +187,7 @@ SELECT a + b, 1 FROM t
 Explained Query:
   Get::Arrangement materialize.public.t
     project=(#2, #3)
-    map=((#0 + #1), 1)
+    map=((#0{t.a} + #1{t.b}), 1)
     key=#0{a}
     raw=false
     arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
@@ -211,7 +211,7 @@ Explained Query:
 
 Source materialize.public.u
   project=(#2, #3)
-  map=((#0 + #1), 1)
+  map=((#0{u.c} + #1{u.d}), 1)
 
 Target cluster: quickstart
 
@@ -329,14 +329,14 @@ Explained Query:
     Union
       Get::Arrangement l0
         project=(#1)
-        map=((#0 + 1))
+        map=((#0{cte.x} + 1))
         key=#0
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
         types=[integer?]
       Get::Arrangement l0
         project=(#1)
-        map=((#0 - 1))
+        map=((#0{cte.x} - 1))
         key=#0
         raw=false
         arrangements[0]={ key=[#0], permutation=id, thinning=() }
@@ -392,7 +392,7 @@ Explained Query:
 
 Source materialize.public.mv
   project=(#1)
-  filter=((#1 = 5))
+  filter=((#1{cte.x} = 5))
 
 Used Indexes:
   - materialize.public.t_a_idx (lookup)
@@ -407,7 +407,7 @@ EXPLAIN PHYSICAL PLAN AS TEXT FOR
 SELECT generate_series(a, b) from t
 ----
 Explained Query:
-  FlatMap generate_series(#0, #1, 1)
+  FlatMap generate_series(#0{t.a}, #1{t.b}, 1)
     mfp_after
       project=(#2)
     input_key=#0{a}
@@ -458,8 +458,8 @@ GROUP BY a
 ----
 Explained Query:
   Reduce::Accumulable
-    simple_aggrs[0]=(0, 0, sum(#1))
-    distinct_aggrs[0]=(1, 1, count(distinct #1))
+    simple_aggrs[0]=(0, 0, sum(#1{t.b}))
+    distinct_aggrs[0]=(1, 1, count(distinct #1{t.b}))
     val_plan
       project=(#1, #1)
     key_plan
@@ -489,8 +489,8 @@ Explained Query:
   With
     cte l0 =
       Reduce::Accumulable
-        simple_aggrs[0]=(0, 0, sum(#0))
-        distinct_aggrs[0]=(1, 1, count(distinct #0))
+        simple_aggrs[0]=(0, 0, sum(#0{t.b}))
+        distinct_aggrs[0]=(1, 1, count(distinct #0{t.b}))
         val_plan
           project=(#0, #0)
         key_plan
@@ -702,10 +702,10 @@ Explained Query:
       stream={ key=[#0], thinning=(#1) }
     source={ relation=0, key=[#0] }
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1) || "1"), ","))))
+      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{t.b}) || "1"), ","))))
       val_plan
         project=(#2)
-        map=(row(row((integer_to_text(#1) || "1"), ",")))
+        map=(row(row((integer_to_text(#1{t.b}) || "1"), ",")))
       key_plan
         project=(#0)
       input_key=#0{a}
@@ -714,10 +714,10 @@ Explained Query:
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
         types=[integer?, integer?]
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1) || "2"), ","))))
+      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{t.b}) || "2"), ","))))
       val_plan
         project=(#2)
-        map=(row(row((integer_to_text(#1) || "2"), ",")))
+        map=(row(row((integer_to_text(#1{t.b}) || "2"), ",")))
       key_plan
         project=(#0)
       input_key=#0{a}
@@ -757,19 +757,19 @@ Explained Query:
           stream={ key=[], thinning=(#0) }
         source={ relation=0, key=[] }
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0) || "1"), ","))))
+          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{t.b}) || "1"), ","))))
           val_plan
             project=(#1)
-            map=(row(row((integer_to_text(#0) || "1"), ",")))
+            map=(row(row((integer_to_text(#0{t.b}) || "1"), ",")))
           key_plan
             project=()
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0) || "2"), ","))))
+          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{t.b}) || "2"), ","))))
           val_plan
             project=(#1)
-            map=(row(row((integer_to_text(#0) || "2"), ",")))
+            map=(row(row((integer_to_text(#0{t.b}) || "2"), ",")))
           key_plan
             project=()
           Get::PassArrangements l0
@@ -881,8 +881,8 @@ materialize.public.collated_group_by_mv:
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
         types=[integer?, integer?]
     Reduce::Accumulable
-      simple_aggrs[0]=(1, 1, sum(#1))
-      distinct_aggrs[0]=(0, 0, count(distinct #1))
+      simple_aggrs[0]=(1, 1, sum(#1{t.b}))
+      distinct_aggrs[0]=(0, 0, count(distinct #1{t.b}))
       val_plan
         project=(#1, #1)
       key_plan
@@ -893,10 +893,10 @@ materialize.public.collated_group_by_mv:
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
         types=[integer?, integer?]
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1) || "1"), ","))))
+      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{t.b}) || "1"), ","))))
       val_plan
         project=(#2)
-        map=(row(row((integer_to_text(#1) || "1"), ",")))
+        map=(row(row((integer_to_text(#1{t.b}) || "1"), ",")))
       key_plan
         project=(#0)
       input_key=#0{a}
@@ -905,10 +905,10 @@ materialize.public.collated_group_by_mv:
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
         types=[integer?, integer?]
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1) || "2"), ","))))
+      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{t.b}) || "2"), ","))))
       val_plan
         project=(#2)
-        map=(row(row((integer_to_text(#1) || "2"), ",")))
+        map=(row(row((integer_to_text(#1{t.b}) || "2"), ",")))
       key_plan
         project=(#0)
       input_key=#0{a}
@@ -1010,8 +1010,8 @@ Explained Query:
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
         types=[integer?, integer?]
     Reduce::Accumulable
-      simple_aggrs[0]=(1, 1, sum(#1))
-      distinct_aggrs[0]=(0, 0, count(distinct #1))
+      simple_aggrs[0]=(1, 1, sum(#1{t.b}))
+      distinct_aggrs[0]=(0, 0, count(distinct #1{t.b}))
       val_plan
         project=(#1, #1)
       key_plan
@@ -1022,10 +1022,10 @@ Explained Query:
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
         types=[integer?, integer?]
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1) || "1"), ","))))
+      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{t.b}) || "1"), ","))))
       val_plan
         project=(#2)
-        map=(row(row((integer_to_text(#1) || "1"), ",")))
+        map=(row(row((integer_to_text(#1{t.b}) || "1"), ",")))
       key_plan
         project=(#0)
       input_key=#0{a}
@@ -1034,10 +1034,10 @@ Explained Query:
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
         types=[integer?, integer?]
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1) || "2"), ","))))
+      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{t.b}) || "2"), ","))))
       val_plan
         project=(#2)
-        map=(row(row((integer_to_text(#1) || "2"), ",")))
+        map=(row(row((integer_to_text(#1{t.b}) || "2"), ",")))
       key_plan
         project=(#0)
       input_key=#0{a}
@@ -1136,8 +1136,8 @@ materialize.public.collated_global_mv:
           Get::PassArrangements l0
             raw=true
         Reduce::Accumulable
-          simple_aggrs[0]=(1, 1, sum(#0))
-          distinct_aggrs[0]=(0, 0, count(distinct #0))
+          simple_aggrs[0]=(1, 1, sum(#0{t.b}))
+          distinct_aggrs[0]=(0, 0, count(distinct #0{t.b}))
           val_plan
             project=(#0, #0)
           key_plan
@@ -1145,19 +1145,19 @@ materialize.public.collated_global_mv:
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0) || "1"), ","))))
+          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{t.b}) || "1"), ","))))
           val_plan
             project=(#1)
-            map=(row(row((integer_to_text(#0) || "1"), ",")))
+            map=(row(row((integer_to_text(#0{t.b}) || "1"), ",")))
           key_plan
             project=()
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0) || "2"), ","))))
+          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{t.b}) || "2"), ","))))
           val_plan
             project=(#1)
-            map=(row(row((integer_to_text(#0) || "2"), ",")))
+            map=(row(row((integer_to_text(#0{t.b}) || "2"), ",")))
           key_plan
             project=()
           Get::PassArrangements l0
@@ -1269,8 +1269,8 @@ Explained Query:
           Get::PassArrangements l0
             raw=true
         Reduce::Accumulable
-          simple_aggrs[0]=(1, 1, sum(#0))
-          distinct_aggrs[0]=(0, 0, count(distinct #0))
+          simple_aggrs[0]=(1, 1, sum(#0{t.b}))
+          distinct_aggrs[0]=(0, 0, count(distinct #0{t.b}))
           val_plan
             project=(#0, #0)
           key_plan
@@ -1278,19 +1278,19 @@ Explained Query:
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0) || "1"), ","))))
+          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{t.b}) || "1"), ","))))
           val_plan
             project=(#1)
-            map=(row(row((integer_to_text(#0) || "1"), ",")))
+            map=(row(row((integer_to_text(#0{t.b}) || "1"), ",")))
           key_plan
             project=()
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0) || "2"), ","))))
+          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{t.b}) || "2"), ","))))
           val_plan
             project=(#1)
-            map=(row(row((integer_to_text(#0) || "2"), ",")))
+            map=(row(row((integer_to_text(#0{t.b}) || "2"), ",")))
           key_plan
             project=()
           Get::PassArrangements l0
@@ -1409,15 +1409,15 @@ Explained Query:
       delta_stage[1]
         closure
           project=(#1, #2)
-        lookup={ relation=2, key=[#0] }
-        stream={ key=[#0], thinning=(#1, #2) }
+        lookup={ relation=2, key=[#0{v.e}] }
+        stream={ key=[#0{u.d}], thinning=(#1, #2) }
       delta_stage[0]
         closure
           project=(#2..=#4)
           filter=((#3 > 42))
-          map=((#1 + #2), (#0 + #2))
-        lookup={ relation=1, key=[#0] }
-        stream={ key=[#0], thinning=(#1) }
+          map=((#1{t.b} + #2{u.d}), (#0{t.a} + #2{u.d}))
+        lookup={ relation=1, key=[#0{u.c}] }
+        stream={ key=[#0{t.a}], thinning=(#1) }
       source={ relation=0, key=[#0{a}] }
     plan_path[1]
       final_closure
@@ -1425,16 +1425,16 @@ Explained Query:
       delta_stage[1]
         closure
           project=(#1, #2)
-        lookup={ relation=2, key=[#0] }
-        stream={ key=[#0], thinning=(#1, #2) }
+        lookup={ relation=2, key=[#0{v.e}] }
+        stream={ key=[#0{u.d}], thinning=(#1, #2) }
       delta_stage[0]
         closure
           project=(#1, #3, #4)
           filter=((#3 > 42))
-          map=((#2 + #1), (#0 + #1))
+          map=((#2{t.b} + #1{u.d}), (#0{t.a} + #1{u.d}))
         lookup={ relation=0, key=[#0{a}] }
-        stream={ key=[#0], thinning=(#1) }
-      source={ relation=1, key=[#0] }
+        stream={ key=[#0{u.c}], thinning=(#1) }
+      source={ relation=1, key=[#0{u.c}] }
     plan_path[2]
       final_closure
         project=(#0, #1, #1)
@@ -1442,38 +1442,38 @@ Explained Query:
         closure
           project=(#3, #4)
           filter=((#3 > 42))
-          map=((#2 + #1), (#0 + #1))
+          map=((#2{t.b} + #1{u.d}), (#0{t.a} + #1{u.d}))
         lookup={ relation=0, key=[#0{a}] }
-        stream={ key=[#0], thinning=(#1) }
+        stream={ key=[#0{u.c}], thinning=(#1) }
       delta_stage[0]
         closure
           project=(#1, #0)
-        lookup={ relation=1, key=[#1] }
-        stream={ key=[#0], thinning=() }
-      source={ relation=2, key=[#0] }
+        lookup={ relation=1, key=[#1{u.d}] }
+        stream={ key=[#0{v.e}], thinning=() }
+      source={ relation=2, key=[#0{v.e}] }
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
       types=[integer?, integer?]
     ArrangeBy
       raw=true
-      arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-      arrangements[1]={ key=[#1], permutation={#0: #1, #1: #0}, thinning=(#0) }
+      arrangements[0]={ key=[#0{u.c}], permutation=id, thinning=(#1) }
+      arrangements[1]={ key=[#1{u.d}], permutation={#0: #1, #1: #0}, thinning=(#0) }
       types=[integer, integer]
       Get::Collection materialize.public.u
         raw=true
     ArrangeBy
       raw=true
-      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      arrangements[0]={ key=[#0{v.e}], permutation=id, thinning=() }
       types=[integer]
       Get::Collection materialize.public.v
         raw=true
 
 Source materialize.public.u
-  filter=((#0) IS NOT NULL AND (#1) IS NOT NULL)
+  filter=((#0{u.c}) IS NOT NULL AND (#1{u.d}) IS NOT NULL)
 Source materialize.public.v
   project=(#0)
-  filter=((#0) IS NOT NULL)
+  filter=((#0{v.e}) IS NOT NULL)
 
 Used Indexes:
   - materialize.public.t_a_idx (delta join 1st input (full scan))
@@ -1508,16 +1508,16 @@ Explained Query:
       delta_stage[1]
         closure
           project=(#1, #2, #0)
-          ready_equivalences=#3 = #1
+          ready_equivalences=#3{v.f} = #1{t.a}
         lookup={ relation=2, key=[#0{e}] }
-        stream={ key=[#2], thinning=(#0, #1) }
+        stream={ key=[#2{u.d}], thinning=(#0, #1) }
       delta_stage[0]
         closure
-          filter=((#2) IS NOT NULL)
+          filter=((#2{u.d}) IS NOT NULL)
         lookup={ relation=1, key=[#0{c}] }
-        stream={ key=[#0], thinning=(#1) }
+        stream={ key=[#0{t.a}], thinning=(#1) }
       initial_closure
-        filter=((#0) IS NOT NULL)
+        filter=((#0{t.a}) IS NOT NULL)
       source={ relation=0, key=[#0{a}] }
     plan_path[1]
       final_closure
@@ -1525,17 +1525,17 @@ Explained Query:
       delta_stage[1]
         closure
           project=(#1, #2, #0)
-          ready_equivalences=#4 = #3
+          ready_equivalences=#4{v.f} = #3{u.c}
         lookup={ relation=2, key=[#0{e}] }
-        stream={ key=[#3], thinning=(#0..=#2) }
+        stream={ key=[#3{u.d}], thinning=(#0..=#2) }
       delta_stage[0]
         closure
           project=(#0, #2, #0, #1)
-          filter=((#0) IS NOT NULL)
+          filter=((#0{t.a}) IS NOT NULL)
         lookup={ relation=0, key=[#0{a}] }
-        stream={ key=[#0], thinning=(#1) }
+        stream={ key=[#0{u.c}], thinning=(#1) }
       initial_closure
-        filter=((#1) IS NOT NULL)
+        filter=((#1{u.d}) IS NOT NULL)
       source={ relation=1, key=[#0{c}] }
     plan_path[2]
       final_closure
@@ -1543,16 +1543,16 @@ Explained Query:
       delta_stage[1]
         closure
           project=(#1, #2, #0)
-          filter=((#0) IS NOT NULL)
-          ready_equivalences=#3 = #4
+          filter=((#0{u.d}) IS NOT NULL)
+          ready_equivalences=#3{v.f} = #4{u.c}
         lookup={ relation=1, key=[#1{d}] }
-        stream={ key=[#2], thinning=(#0, #1, #3) }
+        stream={ key=[#2{v.e}], thinning=(#0, #1, #3) }
       delta_stage[0]
         closure
           project=(#0, #2, #1, #0)
-          filter=((#0) IS NOT NULL)
+          filter=((#0{t.a}) IS NOT NULL)
         lookup={ relation=0, key=[#0{a}] }
-        stream={ key=[#1], thinning=(#0) }
+        stream={ key=[#1{v.f}], thinning=(#0) }
       source={ relation=2, key=[#0{e}] }
     Get::PassArrangements materialize.public.t
       raw=false
@@ -1592,12 +1592,12 @@ Explained Query:
         project=(#0, #1, #0, #2, #0, #3)
       delta_stage[1]
         lookup={ relation=2, key=[#0{e}] }
-        stream={ key=[#0], thinning=(#1, #2) }
+        stream={ key=[#0{t.a}], thinning=(#1, #2) }
       delta_stage[0]
         lookup={ relation=1, key=[#0{c}] }
-        stream={ key=[#0], thinning=(#1) }
+        stream={ key=[#0{t.a}], thinning=(#1) }
       initial_closure
-        filter=((#0) IS NOT NULL)
+        filter=((#0{t.a}) IS NOT NULL)
       source={ relation=0, key=[#0{a}] }
     plan_path[1]
       final_closure
@@ -1606,13 +1606,13 @@ Explained Query:
         closure
           project=(#1..=#4)
         lookup={ relation=2, key=[#0{e}] }
-        stream={ key=[#2], thinning=(#0, #1, #3) }
+        stream={ key=[#2{u.c}], thinning=(#0, #1, #3) }
       delta_stage[0]
         closure
           project=(#0, #2, #0, #1)
-          filter=((#0) IS NOT NULL)
+          filter=((#0{t.a}) IS NOT NULL)
         lookup={ relation=0, key=[#0{a}] }
-        stream={ key=[#0], thinning=(#1) }
+        stream={ key=[#0{u.c}], thinning=(#1) }
       source={ relation=1, key=[#0{c}] }
     plan_path[2]
       final_closure
@@ -1621,13 +1621,13 @@ Explained Query:
         closure
           project=(#1, #2, #4, #3)
         lookup={ relation=1, key=[#0{c}] }
-        stream={ key=[#2], thinning=(#0, #1, #3) }
+        stream={ key=[#2{v.e}], thinning=(#0, #1, #3) }
       delta_stage[0]
         closure
           project=(#0, #2, #0, #1)
-          filter=((#0) IS NOT NULL)
+          filter=((#0{t.a}) IS NOT NULL)
         lookup={ relation=0, key=[#0{a}] }
-        stream={ key=[#0], thinning=(#1) }
+        stream={ key=[#0{v.e}], thinning=(#1) }
       source={ relation=2, key=[#0{e}] }
     Get::PassArrangements materialize.public.t
       raw=false
@@ -1676,17 +1676,17 @@ WHERE
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16]]
-        Filter (#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL
+      ArrangeBy keys=[[#0{r0.f0}, #2{r0.f2}..=#4{r0.f4}, #6{r0.f6}, #8{r0.f8}, #9{r0.f9}, #11{r0.f11}..=#13{r0.f13}, #15{r0.f15}, #16{r0.f16}]]
+        Filter (#0{r0.f0}) IS NOT NULL AND (#2{r0.f2}) IS NOT NULL AND (#3{r0.f3}) IS NOT NULL AND (#4{r0.f4}) IS NOT NULL AND (#6{r0.f6}) IS NOT NULL AND (#8{r0.f8}) IS NOT NULL AND (#9{r0.f9}) IS NOT NULL AND (#11{r0.f11}) IS NOT NULL AND (#12{r0.f12}) IS NOT NULL AND (#13{r0.f13}) IS NOT NULL AND (#15{r0.f15}) IS NOT NULL AND (#16{r0.f16}) IS NOT NULL
           ReadStorage materialize.public.r
   Return
     Project (#0..=#16, #0, #18, #2..=#4, #22, #6, #24, #8, #9, #27, #11..=#13, #31, #15, #16)
-      Join on=(#0 = #17 AND #2 = #19 AND #3 = #20 AND #4 = #21 AND #6 = #23 AND #8 = #25 AND #9 = #26 AND #11 = #28 AND #12 = #29 AND #13 = #30 AND #15 = #32 AND #16 = #33) type=differential
+      Join on=(#0{r0.f0} = #17{r1.f0} AND #2{r0.f2} = #19{r1.f2} AND #3{r0.f3} = #20{r1.f3} AND #4{r0.f4} = #21{r1.f4} AND #6{r0.f6} = #23{r1.f6} AND #8{r0.f8} = #25{r1.f8} AND #9{r0.f9} = #26{r1.f9} AND #11{r0.f11} = #28{r1.f11} AND #12{r0.f12} = #29{r1.f12} AND #13{r0.f13} = #30{r1.f13} AND #15{r0.f15} = #32{r1.f15} AND #16{r0.f16} = #33{r1.f16}) type=differential
         Get l0
         Get l0
 
 Source materialize.public.r
-  filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)
+  filter=((#0{r0.f0}) IS NOT NULL AND (#2{r0.f2}) IS NOT NULL AND (#3{r0.f3}) IS NOT NULL AND (#4{r0.f4}) IS NOT NULL AND (#6{r0.f6}) IS NOT NULL AND (#8{r0.f8}) IS NOT NULL AND (#9{r0.f9}) IS NOT NULL AND (#11{r0.f11}) IS NOT NULL AND (#12{r0.f12}) IS NOT NULL AND (#13{r0.f13}) IS NOT NULL AND (#15{r0.f15}) IS NOT NULL AND (#16{r0.f16}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -1726,10 +1726,10 @@ Explained Query:
     map=(record_get[0](#0))
     input_key=
     Reduce::Basic
-      aggr=(0, lead[ignore_nulls=true, order_by=[]](row(row(row(#0, #1), row(#1, 3, -5)))), fused_unnest_list=true)
+      aggr=(0, lead[ignore_nulls=true, order_by=[]](row(row(row(#0, #1), row(#1{t.b}, 3, -5)))), fused_unnest_list=true)
       val_plan
         project=(#2)
-        map=(row(row(row(#0, #1), row(#1, 3, -5))))
+        map=(row(row(row(#0, #1), row(#1{t.b}, 3, -5))))
       key_plan
         project=()
       input_key=#0{a}
@@ -1756,10 +1756,10 @@ Explained Query:
     map=(record_get[0](#2))
     input_key=#0, #1
     Reduce::Basic
-      aggr=(0, lag[ignore_nulls=true, order_by=[#0 asc nulls_last, #1 asc nulls_last]](row(row(row(#0, #1), row(#1, 3, -5)), (#1 + 8), (#0 - 7))), fused_unnest_list=true)
+      aggr=(0, lag[ignore_nulls=true, order_by=[#0 asc nulls_last, #1 asc nulls_last]](row(row(row(#0, #1), row(#1{t.b}, 3, -5)), (#1{t.b} + 8), (#0{t.a} - 7))), fused_unnest_list=true)
       val_plan
         project=(#2)
-        map=(row(row(row(#0, #1), row(#1, 3, -5)), (#1 + 8), (#0 - 7)))
+        map=(row(row(row(#0, #1), row(#1{t.b}, 3, -5)), (#1{t.b} + 8), (#0{t.a} - 7)))
       key_plan
         project=(#1, #0)
       input_key=#0{a}
@@ -1815,7 +1815,7 @@ Explained Query:
 
 Source materialize.public.mv
   project=(#1)
-  filter=((#1 = 5))
+  filter=((#1{cte.x} = 5))
 
 Used Indexes:
   - materialize.public.t_a_idx (lookup)
@@ -1841,11 +1841,11 @@ Explained Query:
   With
     cte l0 =
       Reduce::Basic
-        aggrs[0]=(0, string_agg[order_by=[]](row(row((integer_to_text(#0) || "1"), ","))))
-        aggrs[1]=(1, string_agg[order_by=[]](row(row((integer_to_text(#0) || "2"), ","))))
+        aggrs[0]=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{t.b}) || "1"), ","))))
+        aggrs[1]=(1, string_agg[order_by=[]](row(row((integer_to_text(#0{t.b}) || "2"), ","))))
         val_plan
           project=(#2, #3)
-          map=(integer_to_text(#0), row(row((#1 || "1"), ",")), row(row((#1 || "2"), ",")))
+          map=(integer_to_text(#0{t.b}), row(row((#1 || "1"), ",")), row(row((#1 || "2"), ",")))
         key_plan
           project=()
         Get::Arrangement materialize.public.t

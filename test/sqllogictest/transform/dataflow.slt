@@ -26,11 +26,11 @@ EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SEL
 ----
 Explained Query:
   Project (#1) // { arity: 1 }
-    Filter (#0 = 5) AND (#1 = 6) // { arity: 2 }
+    Filter (#0{foo.a} = 5) AND (#1{foo2.b} = 6) // { arity: 2 }
       ReadStorage materialize.public.foo // { arity: 2 }
 
 Source materialize.public.foo
-  filter=((#0 = 5) AND (#1 = 6))
+  filter=((#0{foo.a} = 5) AND (#1{foo2.b} = 6))
 
 Target cluster: quickstart
 

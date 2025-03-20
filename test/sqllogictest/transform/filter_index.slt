@@ -32,11 +32,11 @@ EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR sel
 ----
 Explained Query:
   Project (#1, #2) // { arity: 2 }
-    Filter (#0 = 5) // { arity: 3 }
+    Filter (#0{foo.a} = 5) // { arity: 3 }
       ReadStorage materialize.public.foo // { arity: 3 }
 
 Source materialize.public.foo
-  filter=((#0 = 5))
+  filter=((#0{foo.a} = 5))
 
 Target cluster: quickstart
 
@@ -55,11 +55,11 @@ EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR sel
 ----
 Explained Query:
   Project (#1, #2) // { arity: 2 }
-    Filter (#0 = 5) // { arity: 3 }
+    Filter (#0{foo.a} = 5) // { arity: 3 }
       ReadStorage materialize.public.foo // { arity: 3 }
 
 Source materialize.public.foo
-  filter=((#0 = 5))
+  filter=((#0{foo.a} = 5))
 
 Target cluster: quickstart
 
@@ -81,16 +81,16 @@ Explained Query:
     implementation
       %0:foo[×]ef » %1:bar[×]ef
     ArrangeBy keys=[[]] // { arity: 3 }
-      Filter (#0 = 3) // { arity: 3 }
+      Filter (#0{foo.a} = 3) // { arity: 3 }
         ReadStorage materialize.public.foo // { arity: 3 }
     ArrangeBy keys=[[]] // { arity: 3 }
-      Filter (3 = abs(#0)) // { arity: 3 }
+      Filter (3 = abs(#0{bar.a})) // { arity: 3 }
         ReadStorage materialize.public.bar // { arity: 3 }
 
 Source materialize.public.foo
-  filter=((#0 = 3))
+  filter=((#0{foo.a} = 3))
 Source materialize.public.bar
-  filter=((3 = abs(#0)))
+  filter=((3 = abs(#0{bar.a})))
 
 Target cluster: quickstart
 
@@ -134,7 +134,7 @@ EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR sel
 ----
 Explained Query (fast path):
   Project (#1, #2)
-    Filter ("this" = varchar_to_text(#1))
+    Filter ("this" = varchar_to_text(#1{foo.b}))
       ReadIndex on=materialize.public.foo foo_idx=[lookup value=(5)]
 
 Used Indexes:
@@ -178,10 +178,10 @@ EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR sel
 ----
 Explained Query:
   Project (#0..=#2, #5, #6) // { arity: 5 }
-    Join on=(#0 = #4) type=differential // { arity: 7 }
+    Join on=(#0{foo.a} = #4{bar.a}) type=differential // { arity: 7 }
       implementation
-        %0:foo[#0]KAe » %1:bar[#0{a}]KAe
-      ArrangeBy keys=[[#0]] // { arity: 4 }
+        %0:foo[#0{foo.a}]KAe » %1:bar[#0{a}]KAe
+      ArrangeBy keys=[[#0{foo.a}]] // { arity: 4 }
         ReadIndex on=materialize.public.foo foo_idx3=[lookup value=("this")] // { arity: 4 }
       ArrangeBy keys=[[#0{a}]] // { arity: 3 }
         ReadIndex on=bar bar_idx=[differential join] // { arity: 3 }

@@ -163,13 +163,13 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                     "expr1": {
                       "Column": [
                         0,
-                        null
+                        "t.a"
                       ]
                     },
                     "expr2": {
                       "Column": [
                         1,
-                        null
+                        "t.b"
                       ]
                     }
                   }
@@ -200,7 +200,7 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                       "expr1": {
                         "Column": [
                           0,
-                          null
+                          "t.a"
                         ]
                       },
                       "expr2": {
@@ -229,7 +229,7 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
                       "expr1": {
                         "Column": [
                           1,
-                          null
+                          "t.b"
                         ]
                       },
                       "expr2": {
@@ -340,13 +340,13 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                         "expr1": {
                           "Column": [
                             0,
-                            null
+                            "mv.a"
                           ]
                         },
                         "expr2": {
                           "Column": [
                             1,
-                            null
+                            "mv.b"
                           ]
                         }
                       }
@@ -377,7 +377,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                     "expr1": {
                       "Column": [
                         1,
-                        null
+                        "mv.b"
                       ]
                     },
                     "expr2": {
@@ -403,7 +403,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                     "expr1": {
                       "Column": [
                         0,
-                        null
+                        "mv.a"
                       ]
                     },
                     "expr2": {
@@ -476,7 +476,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                 "expr1": {
                   "Column": [
                     0,
-                    null
+                    "mv.a"
                   ]
                 },
                 "expr2": {
@@ -505,7 +505,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                 "expr1": {
                   "Column": [
                     1,
-                    null
+                    "mv.b"
                   ]
                 },
                 "expr2": {
@@ -537,13 +537,13 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                     "expr1": {
                       "Column": [
                         0,
-                        null
+                        "mv.a"
                       ]
                     },
                     "expr2": {
                       "Column": [
                         1,
-                        null
+                        "mv.b"
                       ]
                     }
                   }
@@ -628,13 +628,13 @@ SELECT generate_series(a, b) from t
                 {
                   "Column": [
                     0,
-                    null
+                    "t.a"
                   ]
                 },
                 {
                   "Column": [
                     1,
-                    null
+                    "t.b"
                   ]
                 },
                 {
@@ -1087,7 +1087,7 @@ SELECT abs(min(a) - max(a)) FROM t
                   "expr": {
                     "Column": [
                       0,
-                      null
+                      "t.a"
                     ]
                   },
                   "distinct": false
@@ -1097,7 +1097,7 @@ SELECT abs(min(a) - max(a)) FROM t
                   "expr": {
                     "Column": [
                       0,
-                      null
+                      "t.a"
                     ]
                   },
                   "distinct": false
@@ -1244,13 +1244,13 @@ SELECT abs(min(a) - max(a)) FROM t
                             "expr1": {
                               "Column": [
                                 0,
-                                null
+                                "?column?"
                               ]
                             },
                             "expr2": {
                               "Column": [
                                 1,
-                                null
+                                "?column?"
                               ]
                             }
                           }
@@ -1334,7 +1334,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                       "expr": {
                         "Column": [
                           0,
-                          null
+                          "t.a"
                         ]
                       },
                       "distinct": false
@@ -1344,7 +1344,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                       "expr": {
                         "Column": [
                           0,
-                          null
+                          "t.a"
                         ]
                       },
                       "distinct": false
@@ -1366,13 +1366,13 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                         "expr1": {
                           "Column": [
                             1,
-                            null
+                            "?column?"
                           ]
                         },
                         "expr2": {
                           "Column": [
                             2,
-                            null
+                            "?column?"
                           ]
                         }
                       }
@@ -1624,13 +1624,13 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                           "expr1": {
                                             "Column": [
                                               0,
-                                              null
+                                              "t.a"
                                             ]
                                           },
                                           "expr2": {
                                             "Column": [
                                               1,
-                                              null
+                                              "mv.a"
                                             ]
                                           }
                                         }
@@ -1952,13 +1952,13 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                           "expr1": {
                                             "Column": [
                                               0,
-                                              null
+                                              "t.b"
                                             ]
                                           },
                                           "expr2": {
                                             "Column": [
                                               1,
-                                              null
+                                              "mv.b"
                                             ]
                                           }
                                         }
@@ -2215,7 +2215,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                           {
                             "Column": [
                               0,
-                              null
+                              "t.b"
                             ]
                           }
                         ]
@@ -2303,7 +2303,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                       "expr": {
                                                         "Column": [
                                                           1,
-                                                          null
+                                                          "iv.b"
                                                         ]
                                                       }
                                                     }
@@ -2318,7 +2318,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             {
                                               "Column": [
                                                 1,
-                                                null
+                                                "iv.b"
                                               ]
                                             }
                                           ]
@@ -2331,13 +2331,13 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                       {
                                         "Column": [
                                           0,
-                                          null
+                                          "t.b"
                                         ]
                                       },
                                       {
                                         "Column": [
                                           2,
-                                          null
+                                          "iv.b"
                                         ]
                                       }
                                     ]
@@ -2350,7 +2350,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           {
                                             "Column": [
                                               0,
-                                              null
+                                              "t.b"
                                             ]
                                           }
                                         ],
@@ -2379,7 +2379,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                             {
                                               "Column": [
                                                 1,
-                                                null
+                                                "iv.b"
                                               ]
                                             }
                                           ],
@@ -2509,7 +2509,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                           "expr": {
                                                             "Column": [
                                                               1,
-                                                              null
+                                                              "mv.b"
                                                             ]
                                                           }
                                                         }
@@ -2524,7 +2524,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                 {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "mv.b"
                                                   ]
                                                 }
                                               ]
@@ -2537,13 +2537,13 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           {
                                             "Column": [
                                               0,
-                                              null
+                                              "t.b"
                                             ]
                                           },
                                           {
                                             "Column": [
                                               2,
-                                              null
+                                              "mv.b"
                                             ]
                                           }
                                         ]
@@ -2556,7 +2556,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                               {
                                                 "Column": [
                                                   0,
-                                                  null
+                                                  "t.b"
                                                 ]
                                               }
                                             ],
@@ -2585,7 +2585,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                 {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "mv.b"
                                                   ]
                                                 }
                                               ],
@@ -3181,7 +3181,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                     "expr": {
                       "Column": [
                         1,
-                        null
+                        "mv.b"
                       ]
                     }
                   }
@@ -3264,7 +3264,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                         "expr": {
                           "Column": [
                             1,
-                            null
+                            "t1.b"
                           ]
                         }
                       }
@@ -3305,7 +3305,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                       {
                         "Column": [
                           1,
-                          null
+                          "t1.b"
                         ]
                       }
                     ]
@@ -3350,7 +3350,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                           {
                             "Column": [
                               0,
-                              null
+                              "t3.b"
                             ]
                           }
                         ]
@@ -3430,19 +3430,19 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                   {
                                     "Column": [
                                       1,
-                                      null
+                                      "t1.b"
                                     ]
                                   },
                                   {
                                     "Column": [
                                       3,
-                                      null
+                                      "t2.b"
                                     ]
                                   },
                                   {
                                     "Column": [
                                       4,
-                                      null
+                                      "t3.b"
                                     ]
                                   }
                                 ]
@@ -3456,7 +3456,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                         {
                                           "Column": [
                                             1,
-                                            null
+                                            "t2.b"
                                           ]
                                         }
                                       ],
@@ -3484,7 +3484,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                         {
                                           "Column": [
                                             0,
-                                            null
+                                            "t3.b"
                                           ]
                                         }
                                       ],
@@ -3514,7 +3514,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                         {
                                           "Column": [
                                             1,
-                                            null
+                                            "t1.b"
                                           ]
                                         }
                                       ],
@@ -3542,7 +3542,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                         {
                                           "Column": [
                                             0,
-                                            null
+                                            "t3.b"
                                           ]
                                         }
                                       ],
@@ -3572,7 +3572,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                         {
                                           "Column": [
                                             1,
-                                            null
+                                            "t1.b"
                                           ]
                                         }
                                       ],
@@ -3600,7 +3600,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                         {
                                           "Column": [
                                             1,
-                                            null
+                                            "t2.b"
                                           ]
                                         }
                                       ],
@@ -3731,7 +3731,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                   {
                                                     "Column": [
                                                       0,
-                                                      null
+                                                      "t3.b"
                                                     ]
                                                   },
                                                   {
@@ -3779,7 +3779,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                         {
                                                           "Column": [
                                                             0,
-                                                            null
+                                                            "t3.b"
                                                           ]
                                                         }
                                                       ],
@@ -4221,13 +4221,13 @@ FROM
                                                 "expr1": {
                                                   "Column": [
                                                     0,
-                                                    null
+                                                    "r1.a"
                                                   ]
                                                 },
                                                 "expr2": {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "t.a"
                                                   ]
                                                 }
                                               }
@@ -4345,7 +4345,7 @@ FROM
                                 "expr2": {
                                   "Column": [
                                     3,
-                                    null
+                                    "r2.m"
                                   ]
                                 }
                               }
@@ -4553,13 +4553,13 @@ FROM
                                                 "expr1": {
                                                   "Column": [
                                                     0,
-                                                    null
+                                                    "r1.a"
                                                   ]
                                                 },
                                                 "expr2": {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "t.a"
                                                   ]
                                                 }
                                               }
@@ -4677,7 +4677,7 @@ FROM
                                 "expr2": {
                                   "Column": [
                                     4,
-                                    null
+                                    "r4.m"
                                   ]
                                 }
                               }
@@ -4925,7 +4925,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                         "expr": {
                           "Column": [
                             1,
-                            null
+                            "t1.b"
                           ]
                         }
                       }
@@ -4966,7 +4966,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                       {
                         "Column": [
                           1,
-                          null
+                          "t1.b"
                         ]
                       }
                     ]
@@ -5055,7 +5055,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 {
                                   "Column": [
                                     0,
-                                    null
+                                    "t3.b"
                                   ]
                                 }
                               ]
@@ -5068,19 +5068,19 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                           {
                             "Column": [
                               1,
-                              null
+                              "t1.b"
                             ]
                           },
                           {
                             "Column": [
                               3,
-                              null
+                              "t2.b"
                             ]
                           },
                           {
                             "Column": [
                               4,
-                              null
+                              "t3.b"
                             ]
                           }
                         ]
@@ -5094,7 +5094,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 {
                                   "Column": [
                                     1,
-                                    null
+                                    "t2.b"
                                   ]
                                 }
                               ],
@@ -5122,7 +5122,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 {
                                   "Column": [
                                     0,
-                                    null
+                                    "t3.b"
                                   ]
                                 }
                               ],
@@ -5152,7 +5152,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 {
                                   "Column": [
                                     1,
-                                    null
+                                    "t1.b"
                                   ]
                                 }
                               ],
@@ -5180,7 +5180,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 {
                                   "Column": [
                                     0,
-                                    null
+                                    "t3.b"
                                   ]
                                 }
                               ],
@@ -5210,7 +5210,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 {
                                   "Column": [
                                     1,
-                                    null
+                                    "t1.b"
                                   ]
                                 }
                               ],
@@ -5238,7 +5238,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                                 {
                                   "Column": [
                                     1,
-                                    null
+                                    "t2.b"
                                   ]
                                 }
                               ],
@@ -5476,13 +5476,13 @@ WHERE a = c and d = e and b = f
                       {
                         "Column": [
                           0,
-                          null
+                          "t.a"
                         ]
                       },
                       {
                         "Column": [
                           2,
-                          null
+                          "u.c"
                         ]
                       }
                     ],
@@ -5490,13 +5490,13 @@ WHERE a = c and d = e and b = f
                       {
                         "Column": [
                           1,
-                          null
+                          "t.b"
                         ]
                       },
                       {
                         "Column": [
                           5,
-                          null
+                          "v.f"
                         ]
                       }
                     ],
@@ -5504,13 +5504,13 @@ WHERE a = c and d = e and b = f
                       {
                         "Column": [
                           3,
-                          null
+                          "u.d"
                         ]
                       },
                       {
                         "Column": [
                           4,
-                          null
+                          "v.e"
                         ]
                       }
                     ]
@@ -5709,7 +5709,7 @@ WHERE a = c and d = e and b = f
                         "expr": {
                           "Column": [
                             0,
-                            null
+                            "t.a"
                           ]
                         }
                       }
@@ -5729,7 +5729,7 @@ WHERE a = c and d = e and b = f
                         "expr": {
                           "Column": [
                             1,
-                            null
+                            "t.b"
                           ]
                         }
                       }
@@ -5749,7 +5749,7 @@ WHERE a = c and d = e and b = f
                         "expr": {
                           "Column": [
                             3,
-                            null
+                            "u.d"
                           ]
                         }
                       }
@@ -5964,13 +5964,13 @@ WHERE b = c and d = e
                       {
                         "Column": [
                           1,
-                          null
+                          "t.b"
                         ]
                       },
                       {
                         "Column": [
                           2,
-                          null
+                          "u.c"
                         ]
                       }
                     ],
@@ -5978,13 +5978,13 @@ WHERE b = c and d = e
                       {
                         "Column": [
                           3,
-                          null
+                          "u.d"
                         ]
                       },
                       {
                         "Column": [
                           4,
-                          null
+                          "v.e"
                         ]
                       }
                     ]
@@ -6183,7 +6183,7 @@ WHERE b = c and d = e
                         "expr": {
                           "Column": [
                             1,
-                            null
+                            "t.b"
                           ]
                         }
                       }
@@ -6203,7 +6203,7 @@ WHERE b = c and d = e
                         "expr": {
                           "Column": [
                             3,
-                            null
+                            "u.d"
                           ]
                         }
                       }
@@ -6290,7 +6290,7 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
                     "expr": {
                       "Column": [
                         0,
-                        null
+                        "t2.s"
                       ]
                     }
                   }
@@ -6327,7 +6327,7 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
                 "expr": {
                   "Column": [
                     0,
-                    null
+                    "t2.s"
                   ]
                 }
               }

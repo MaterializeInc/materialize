@@ -7,17 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::hash::{Hash, Hasher};
-use std::ops::{BitOrAssign, Deref};
+use std::ops::BitOrAssign;
 use std::sync::Arc;
 use std::{fmt, mem};
 
 use itertools::Itertools;
-use mz_lowertest::{MzReflect, ReflectedTypeInfo};
+use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::incomparable::Incomparable;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
@@ -35,7 +34,7 @@ use mz_repr::strconv::{ParseError, ParseHexError};
 use mz_repr::{arb_datum, ColumnType, Datum, Row, RowArena, ScalarType};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::{
@@ -51,69 +50,10 @@ pub mod like_pattern;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
 
-/// Behaves like `T`, but has trivial `Hash`, `Eq`, `MzReflect`, and `Ord`
-/// implementations.
-#[derive(Clone)]
-pub struct Opaque<T>(pub T);
-
-impl<T> Deref for Opaque<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T: std::fmt::Debug> std::fmt::Debug for Opaque<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self.0)
-    }
-}
-
-impl<T: Serialize> Serialize for Opaque<T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(serializer)
-    }
-}
-
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for Opaque<T> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(Opaque(T::deserialize(deserializer)?))
-    }
-}
-
-impl<T> MzReflect for Opaque<T> {
-    fn add_to_reflected_type_info(_rti: &mut ReflectedTypeInfo) {}
-}
-
-impl<T> Hash for Opaque<T> {
-    fn hash<H: Hasher>(&self, _state: &mut H) {}
-}
-
-impl<T> Eq for Opaque<T> {}
-
-impl<T> PartialEq for Opaque<T> {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
-impl<T> PartialOrd for Opaque<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<T> Ord for Opaque<T> {
-    fn cmp(&self, _other: &Self) -> Ordering {
-        Ordering::Equal
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
 pub enum MirScalarExpr {
     /// A column of the input row
-    Column(usize, Opaque<Option<Arc<str>>>),
+    Column(usize, Incomparable<Option<Arc<str>>>),
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum)
     Literal(Result<Row, EvalError>, ColumnType),
@@ -310,7 +250,11 @@ impl MirScalarExpr {
     }
 
     pub fn column(column: usize) -> Self {
-        MirScalarExpr::Column(column, Opaque(None))
+        MirScalarExpr::Column(column, Incomparable(None))
+    }
+
+    pub fn named_column(column: usize, name: Option<Arc<str>>) -> Self {
+        MirScalarExpr::Column(column, Incomparable(name))
     }
 
     pub fn literal(res: Result<Datum, EvalError>, typ: ScalarType) -> Self {

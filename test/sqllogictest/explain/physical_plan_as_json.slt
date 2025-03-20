@@ -346,13 +346,13 @@ SELECT a + b, 1 FROM t
                         "expr1": {
                           "Column": [
                             0,
-                            null
+                            "t.a"
                           ]
                         },
                         "expr2": {
                           "Column": [
                             1,
-                            null
+                            "t.b"
                           ]
                         }
                       }
@@ -444,13 +444,13 @@ SELECT c + d, 1 FROM u
               "expr1": {
                 "Column": [
                   0,
-                  null
+                  "u.c"
                 ]
               },
               "expr2": {
                 "Column": [
                   1,
-                  null
+                  "u.d"
                 ]
               }
             }
@@ -1195,7 +1195,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                       "expr1": {
                                         "Column": [
                                           0,
-                                          null
+                                          "cte.x"
                                         ]
                                       },
                                       "expr2": {
@@ -1279,7 +1279,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                       "expr1": {
                                         "Column": [
                                           0,
-                                          null
+                                          "cte.x"
                                         ]
                                       },
                                       "expr2": {
@@ -1687,7 +1687,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                 "expr1": {
                   "Column": [
                     1,
-                    null
+                    "cte.x"
                   ]
                 },
                 "expr2": {
@@ -1783,13 +1783,13 @@ SELECT generate_series(a, b) from t
               {
                 "Column": [
                   0,
-                  null
+                  "t.a"
                 ]
               },
               {
                 "Column": [
                   1,
-                  null
+                  "t.b"
                 ]
               },
               {
@@ -2034,7 +2034,7 @@ GROUP BY a
                     "expr": {
                       "Column": [
                         1,
-                        null
+                        "t.b"
                       ]
                     },
                     "distinct": false
@@ -2044,7 +2044,7 @@ GROUP BY a
                     "expr": {
                       "Column": [
                         1,
-                        null
+                        "t.b"
                       ]
                     },
                     "distinct": true
@@ -2059,7 +2059,7 @@ GROUP BY a
                       "expr": {
                         "Column": [
                           1,
-                          null
+                          "t.b"
                         ]
                       },
                       "distinct": false
@@ -2075,7 +2075,7 @@ GROUP BY a
                       "expr": {
                         "Column": [
                           1,
-                          null
+                          "t.b"
                         ]
                       },
                       "distinct": true
@@ -2226,7 +2226,7 @@ FROM t
                           "expr": {
                             "Column": [
                               0,
-                              null
+                              "t.b"
                             ]
                           },
                           "distinct": false
@@ -2236,7 +2236,7 @@ FROM t
                           "expr": {
                             "Column": [
                               0,
-                              null
+                              "t.b"
                             ]
                           },
                           "distinct": true
@@ -2251,7 +2251,7 @@ FROM t
                             "expr": {
                               "Column": [
                                 0,
-                                null
+                                "t.b"
                               ]
                             },
                             "distinct": false
@@ -2267,7 +2267,7 @@ FROM t
                             "expr": {
                               "Column": [
                                 0,
-                                null
+                                "t.b"
                               ]
                             },
                             "distinct": true
@@ -3371,7 +3371,7 @@ GROUP BY a
                                                 "expr": {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "t.b"
                                                   ]
                                                 }
                                               }
@@ -3469,7 +3469,7 @@ GROUP BY a
                                                 "expr": {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "t.b"
                                                   ]
                                                 }
                                               }
@@ -3637,7 +3637,7 @@ GROUP BY a
                                                 "expr": {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "t.b"
                                                   ]
                                                 }
                                               }
@@ -3735,7 +3735,7 @@ GROUP BY a
                                                 "expr": {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "t.b"
                                                   ]
                                                 }
                                               }
@@ -4028,7 +4028,7 @@ FROM t
                                                             "expr": {
                                                               "Column": [
                                                                 0,
-                                                                null
+                                                                "t.b"
                                                               ]
                                                             }
                                                           }
@@ -4126,7 +4126,7 @@ FROM t
                                                             "expr": {
                                                               "Column": [
                                                                 0,
-                                                                null
+                                                                "t.b"
                                                               ]
                                                             }
                                                           }
@@ -4255,7 +4255,7 @@ FROM t
                                                             "expr": {
                                                               "Column": [
                                                                 0,
-                                                                null
+                                                                "t.b"
                                                               ]
                                                             }
                                                           }
@@ -4353,7 +4353,7 @@ FROM t
                                                             "expr": {
                                                               "Column": [
                                                                 0,
-                                                                null
+                                                                "t.b"
                                                               ]
                                                             }
                                                           }
@@ -4808,7 +4808,7 @@ MATERIALIZED VIEW collated_group_by_mv
                             "expr": {
                               "Column": [
                                 1,
-                                null
+                                "t.b"
                               ]
                             },
                             "distinct": true
@@ -4818,7 +4818,7 @@ MATERIALIZED VIEW collated_group_by_mv
                             "expr": {
                               "Column": [
                                 1,
-                                null
+                                "t.b"
                               ]
                             },
                             "distinct": false
@@ -4833,7 +4833,7 @@ MATERIALIZED VIEW collated_group_by_mv
                               "expr": {
                                 "Column": [
                                   1,
-                                  null
+                                  "t.b"
                                 ]
                               },
                               "distinct": false
@@ -4849,7 +4849,7 @@ MATERIALIZED VIEW collated_group_by_mv
                               "expr": {
                                 "Column": [
                                   1,
-                                  null
+                                  "t.b"
                                 ]
                               },
                               "distinct": true
@@ -4974,7 +4974,7 @@ MATERIALIZED VIEW collated_group_by_mv
                                                 "expr": {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "t.b"
                                                   ]
                                                 }
                                               }
@@ -5072,7 +5072,7 @@ MATERIALIZED VIEW collated_group_by_mv
                                                 "expr": {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "t.b"
                                                   ]
                                                 }
                                               }
@@ -5240,7 +5240,7 @@ MATERIALIZED VIEW collated_group_by_mv
                                                 "expr": {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "t.b"
                                                   ]
                                                 }
                                               }
@@ -5338,7 +5338,7 @@ MATERIALIZED VIEW collated_group_by_mv
                                                 "expr": {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "t.b"
                                                   ]
                                                 }
                                               }
@@ -6261,7 +6261,7 @@ SELECT * FROM collated_group_by
                             "expr": {
                               "Column": [
                                 1,
-                                null
+                                "t.b"
                               ]
                             },
                             "distinct": true
@@ -6271,7 +6271,7 @@ SELECT * FROM collated_group_by
                             "expr": {
                               "Column": [
                                 1,
-                                null
+                                "t.b"
                               ]
                             },
                             "distinct": false
@@ -6286,7 +6286,7 @@ SELECT * FROM collated_group_by
                               "expr": {
                                 "Column": [
                                   1,
-                                  null
+                                  "t.b"
                                 ]
                               },
                               "distinct": false
@@ -6302,7 +6302,7 @@ SELECT * FROM collated_group_by
                               "expr": {
                                 "Column": [
                                   1,
-                                  null
+                                  "t.b"
                                 ]
                               },
                               "distinct": true
@@ -6427,7 +6427,7 @@ SELECT * FROM collated_group_by
                                                 "expr": {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "t.b"
                                                   ]
                                                 }
                                               }
@@ -6525,7 +6525,7 @@ SELECT * FROM collated_group_by
                                                 "expr": {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "t.b"
                                                   ]
                                                 }
                                               }
@@ -6693,7 +6693,7 @@ SELECT * FROM collated_group_by
                                                 "expr": {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "t.b"
                                                   ]
                                                 }
                                               }
@@ -6791,7 +6791,7 @@ SELECT * FROM collated_group_by
                                                 "expr": {
                                                   "Column": [
                                                     1,
-                                                    null
+                                                    "t.b"
                                                   ]
                                                 }
                                               }
@@ -7727,7 +7727,7 @@ MATERIALIZED VIEW collated_global_mv
                                         "expr": {
                                           "Column": [
                                             0,
-                                            null
+                                            "t.b"
                                           ]
                                         },
                                         "distinct": true
@@ -7737,7 +7737,7 @@ MATERIALIZED VIEW collated_global_mv
                                         "expr": {
                                           "Column": [
                                             0,
-                                            null
+                                            "t.b"
                                           ]
                                         },
                                         "distinct": false
@@ -7752,7 +7752,7 @@ MATERIALIZED VIEW collated_global_mv
                                           "expr": {
                                             "Column": [
                                               0,
-                                              null
+                                              "t.b"
                                             ]
                                           },
                                           "distinct": false
@@ -7768,7 +7768,7 @@ MATERIALIZED VIEW collated_global_mv
                                           "expr": {
                                             "Column": [
                                               0,
-                                              null
+                                              "t.b"
                                             ]
                                           },
                                           "distinct": true
@@ -7854,7 +7854,7 @@ MATERIALIZED VIEW collated_global_mv
                                                             "expr": {
                                                               "Column": [
                                                                 0,
-                                                                null
+                                                                "t.b"
                                                               ]
                                                             }
                                                           }
@@ -7952,7 +7952,7 @@ MATERIALIZED VIEW collated_global_mv
                                                             "expr": {
                                                               "Column": [
                                                                 0,
-                                                                null
+                                                                "t.b"
                                                               ]
                                                             }
                                                           }
@@ -8081,7 +8081,7 @@ MATERIALIZED VIEW collated_global_mv
                                                             "expr": {
                                                               "Column": [
                                                                 0,
-                                                                null
+                                                                "t.b"
                                                               ]
                                                             }
                                                           }
@@ -8179,7 +8179,7 @@ MATERIALIZED VIEW collated_global_mv
                                                             "expr": {
                                                               "Column": [
                                                                 0,
-                                                                null
+                                                                "t.b"
                                                               ]
                                                             }
                                                           }
@@ -9091,7 +9091,7 @@ SELECT * FROM collated_global
                                         "expr": {
                                           "Column": [
                                             0,
-                                            null
+                                            "t.b"
                                           ]
                                         },
                                         "distinct": true
@@ -9101,7 +9101,7 @@ SELECT * FROM collated_global
                                         "expr": {
                                           "Column": [
                                             0,
-                                            null
+                                            "t.b"
                                           ]
                                         },
                                         "distinct": false
@@ -9116,7 +9116,7 @@ SELECT * FROM collated_global
                                           "expr": {
                                             "Column": [
                                               0,
-                                              null
+                                              "t.b"
                                             ]
                                           },
                                           "distinct": false
@@ -9132,7 +9132,7 @@ SELECT * FROM collated_global
                                           "expr": {
                                             "Column": [
                                               0,
-                                              null
+                                              "t.b"
                                             ]
                                           },
                                           "distinct": true
@@ -9218,7 +9218,7 @@ SELECT * FROM collated_global
                                                             "expr": {
                                                               "Column": [
                                                                 0,
-                                                                null
+                                                                "t.b"
                                                               ]
                                                             }
                                                           }
@@ -9316,7 +9316,7 @@ SELECT * FROM collated_global
                                                             "expr": {
                                                               "Column": [
                                                                 0,
-                                                                null
+                                                                "t.b"
                                                               ]
                                                             }
                                                           }
@@ -9445,7 +9445,7 @@ SELECT * FROM collated_global
                                                             "expr": {
                                                               "Column": [
                                                                 0,
-                                                                null
+                                                                "t.b"
                                                               ]
                                                             }
                                                           }
@@ -9543,7 +9543,7 @@ SELECT * FROM collated_global
                                                             "expr": {
                                                               "Column": [
                                                                 0,
-                                                                null
+                                                                "t.b"
                                                               ]
                                                             }
                                                           }
@@ -10349,7 +10349,7 @@ WHERE a = c AND d = e AND b + d > 42
                             {
                               "Column": [
                                 0,
-                                null
+                                "u.c"
                               ]
                             }
                           ],
@@ -10366,7 +10366,7 @@ WHERE a = c AND d = e AND b + d > 42
                             {
                               "Column": [
                                 1,
-                                null
+                                "u.d"
                               ]
                             }
                           ],
@@ -10442,7 +10442,7 @@ WHERE a = c AND d = e AND b + d > 42
                             {
                               "Column": [
                                 0,
-                                null
+                                "v.e"
                               ]
                             }
                           ],
@@ -10506,7 +10506,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              null
+                              "t.a"
                             ]
                           }
                         ],
@@ -10517,7 +10517,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              null
+                              "u.c"
                             ]
                           }
                         ],
@@ -10532,13 +10532,13 @@ WHERE a = c AND d = e AND b + d > 42
                                     "expr1": {
                                       "Column": [
                                         1,
-                                        null
+                                        "t.b"
                                       ]
                                     },
                                     "expr2": {
                                       "Column": [
                                         2,
-                                        null
+                                        "u.d"
                                       ]
                                     }
                                   }
@@ -10549,13 +10549,13 @@ WHERE a = c AND d = e AND b + d > 42
                                     "expr1": {
                                       "Column": [
                                         0,
-                                        null
+                                        "t.a"
                                       ]
                                     },
                                     "expr2": {
                                       "Column": [
                                         2,
-                                        null
+                                        "u.d"
                                       ]
                                     }
                                   }
@@ -10609,7 +10609,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              null
+                              "u.d"
                             ]
                           }
                         ],
@@ -10621,7 +10621,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              null
+                              "v.e"
                             ]
                           }
                         ],
@@ -10663,7 +10663,7 @@ WHERE a = c AND d = e AND b + d > 42
                       {
                         "Column": [
                           0,
-                          null
+                          "u.c"
                         ]
                       }
                     ],
@@ -10688,7 +10688,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              null
+                              "u.c"
                             ]
                           }
                         ],
@@ -10714,13 +10714,13 @@ WHERE a = c AND d = e AND b + d > 42
                                     "expr1": {
                                       "Column": [
                                         2,
-                                        null
+                                        "t.b"
                                       ]
                                     },
                                     "expr2": {
                                       "Column": [
                                         1,
-                                        null
+                                        "u.d"
                                       ]
                                     }
                                   }
@@ -10731,13 +10731,13 @@ WHERE a = c AND d = e AND b + d > 42
                                     "expr1": {
                                       "Column": [
                                         0,
-                                        null
+                                        "t.a"
                                       ]
                                     },
                                     "expr2": {
                                       "Column": [
                                         1,
-                                        null
+                                        "u.d"
                                       ]
                                     }
                                   }
@@ -10791,7 +10791,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              null
+                              "u.d"
                             ]
                           }
                         ],
@@ -10803,7 +10803,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              null
+                              "v.e"
                             ]
                           }
                         ],
@@ -10845,7 +10845,7 @@ WHERE a = c AND d = e AND b + d > 42
                       {
                         "Column": [
                           0,
-                          null
+                          "v.e"
                         ]
                       }
                     ],
@@ -10869,7 +10869,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              null
+                              "v.e"
                             ]
                           }
                         ],
@@ -10878,7 +10878,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               1,
-                              null
+                              "u.d"
                             ]
                           }
                         ],
@@ -10903,7 +10903,7 @@ WHERE a = c AND d = e AND b + d > 42
                           {
                             "Column": [
                               0,
-                              null
+                              "u.c"
                             ]
                           }
                         ],
@@ -10929,13 +10929,13 @@ WHERE a = c AND d = e AND b + d > 42
                                     "expr1": {
                                       "Column": [
                                         2,
-                                        null
+                                        "t.b"
                                       ]
                                     },
                                     "expr2": {
                                       "Column": [
                                         1,
-                                        null
+                                        "u.d"
                                       ]
                                     }
                                   }
@@ -10946,13 +10946,13 @@ WHERE a = c AND d = e AND b + d > 42
                                     "expr1": {
                                       "Column": [
                                         0,
-                                        null
+                                        "t.a"
                                       ]
                                     },
                                     "expr2": {
                                       "Column": [
                                         1,
-                                        null
+                                        "u.d"
                                       ]
                                     }
                                   }
@@ -11047,7 +11047,7 @@ WHERE a = c AND d = e AND b + d > 42
                     "expr": {
                       "Column": [
                         0,
-                        null
+                        "u.c"
                       ]
                     }
                   }
@@ -11070,7 +11070,7 @@ WHERE a = c AND d = e AND b + d > 42
                     "expr": {
                       "Column": [
                         1,
-                        null
+                        "u.d"
                       ]
                     }
                   }
@@ -11108,7 +11108,7 @@ WHERE a = c AND d = e AND b + d > 42
                     "expr": {
                       "Column": [
                         0,
-                        null
+                        "v.e"
                       ]
                     }
                   }
@@ -11341,7 +11341,7 @@ WHERE a = c AND d = e AND f = a
                                       "expr": {
                                         "Column": [
                                           0,
-                                          null
+                                          "t.a"
                                         ]
                                       }
                                     }
@@ -11365,7 +11365,7 @@ WHERE a = c AND d = e AND f = a
                           {
                             "Column": [
                               0,
-                              null
+                              "t.a"
                             ]
                           }
                         ],
@@ -11401,7 +11401,7 @@ WHERE a = c AND d = e AND f = a
                                           "expr": {
                                             "Column": [
                                               2,
-                                              null
+                                              "u.d"
                                             ]
                                           }
                                         }
@@ -11426,7 +11426,7 @@ WHERE a = c AND d = e AND f = a
                           {
                             "Column": [
                               2,
-                              null
+                              "u.d"
                             ]
                           }
                         ],
@@ -11448,13 +11448,13 @@ WHERE a = c AND d = e AND f = a
                               {
                                 "Column": [
                                   3,
-                                  null
+                                  "v.f"
                                 ]
                               },
                               {
                                 "Column": [
                                   1,
-                                  null
+                                  "t.a"
                                 ]
                               }
                             ]
@@ -11524,7 +11524,7 @@ WHERE a = c AND d = e AND f = a
                                       "expr": {
                                         "Column": [
                                           1,
-                                          null
+                                          "u.d"
                                         ]
                                       }
                                     }
@@ -11548,7 +11548,7 @@ WHERE a = c AND d = e AND f = a
                           {
                             "Column": [
                               0,
-                              null
+                              "u.c"
                             ]
                           }
                         ],
@@ -11584,7 +11584,7 @@ WHERE a = c AND d = e AND f = a
                                           "expr": {
                                             "Column": [
                                               0,
-                                              null
+                                              "t.a"
                                             ]
                                           }
                                         }
@@ -11610,7 +11610,7 @@ WHERE a = c AND d = e AND f = a
                           {
                             "Column": [
                               3,
-                              null
+                              "u.d"
                             ]
                           }
                         ],
@@ -11633,13 +11633,13 @@ WHERE a = c AND d = e AND f = a
                               {
                                 "Column": [
                                   4,
-                                  null
+                                  "v.f"
                                 ]
                               },
                               {
                                 "Column": [
                                   3,
-                                  null
+                                  "u.c"
                                 ]
                               }
                             ]
@@ -11709,7 +11709,7 @@ WHERE a = c AND d = e AND f = a
                           {
                             "Column": [
                               1,
-                              null
+                              "v.f"
                             ]
                           }
                         ],
@@ -11745,7 +11745,7 @@ WHERE a = c AND d = e AND f = a
                                           "expr": {
                                             "Column": [
                                               0,
-                                              null
+                                              "t.a"
                                             ]
                                           }
                                         }
@@ -11771,7 +11771,7 @@ WHERE a = c AND d = e AND f = a
                           {
                             "Column": [
                               2,
-                              null
+                              "v.e"
                             ]
                           }
                         ],
@@ -11794,13 +11794,13 @@ WHERE a = c AND d = e AND f = a
                               {
                                 "Column": [
                                   3,
-                                  null
+                                  "v.f"
                                 ]
                               },
                               {
                                 "Column": [
                                   4,
-                                  null
+                                  "u.c"
                                 ]
                               }
                             ]
@@ -11824,7 +11824,7 @@ WHERE a = c AND d = e AND f = a
                                           "expr": {
                                             "Column": [
                                               0,
-                                              null
+                                              "u.d"
                                             ]
                                           }
                                         }
@@ -12061,7 +12061,7 @@ WHERE a = c and a = e
                                       "expr": {
                                         "Column": [
                                           0,
-                                          null
+                                          "t.a"
                                         ]
                                       }
                                     }
@@ -12085,7 +12085,7 @@ WHERE a = c and a = e
                           {
                             "Column": [
                               0,
-                              null
+                              "t.a"
                             ]
                           }
                         ],
@@ -12122,7 +12122,7 @@ WHERE a = c and a = e
                           {
                             "Column": [
                               0,
-                              null
+                              "t.a"
                             ]
                           }
                         ],
@@ -12206,7 +12206,7 @@ WHERE a = c and a = e
                           {
                             "Column": [
                               0,
-                              null
+                              "u.c"
                             ]
                           }
                         ],
@@ -12242,7 +12242,7 @@ WHERE a = c and a = e
                                           "expr": {
                                             "Column": [
                                               0,
-                                              null
+                                              "t.a"
                                             ]
                                           }
                                         }
@@ -12268,7 +12268,7 @@ WHERE a = c and a = e
                           {
                             "Column": [
                               2,
-                              null
+                              "u.c"
                             ]
                           }
                         ],
@@ -12353,7 +12353,7 @@ WHERE a = c and a = e
                           {
                             "Column": [
                               0,
-                              null
+                              "v.e"
                             ]
                           }
                         ],
@@ -12389,7 +12389,7 @@ WHERE a = c and a = e
                                           "expr": {
                                             "Column": [
                                               0,
-                                              null
+                                              "t.a"
                                             ]
                                           }
                                         }
@@ -12415,7 +12415,7 @@ WHERE a = c and a = e
                           {
                             "Column": [
                               2,
-                              null
+                              "v.e"
                             ]
                           }
                         ],

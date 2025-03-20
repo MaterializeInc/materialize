@@ -118,26 +118,26 @@ WHERE l1.la + 1 = l2.la AND l3.la = l1.la + l2.la
 Explained Query:
   With
     cte l0 =
-      Filter (#0) IS NOT NULL // { arity: 2 }
+      Filter (#0{l1.la}) IS NOT NULL // { arity: 2 }
         ReadStorage materialize.public.l // { arity: 2 }
     cte l1 =
-      ArrangeBy keys=[[#0]] // { arity: 2 }
+      ArrangeBy keys=[[#0{l2.la}]] // { arity: 2 }
         Get l0 // { arity: 2 }
   Return // { arity: 3 }
     Project (#0, #2, #4) // { arity: 3 }
-      Join on=(#1 = (#0 + 1) AND #3 = (#0 + #1)) type=delta // { arity: 5 }
+      Join on=(#1{l2.la} = (#0{l1.la} + 1) AND #3{l3.la} = (#0{l1.la} + #1{l2.la})) type=delta // { arity: 5 }
         implementation
-          %0:l0 » %1:l1[#0]K » %2:l1[#0]K
-          %1:l1 » %0:l0[(#0 + 1)]K » %2:l1[#0]K
-          %2:l1 » %0:l0[×] » %1:l1[#0]K
-        ArrangeBy keys=[[], [(#0 + 1)]] // { arity: 1 }
+          %0:l0 » %1:l1[#0{l2.la}]K » %2:l1[#0{l3.la}]K
+          %1:l1 » %0:l0[(#0{l1.la} + 1)]K » %2:l1[#0{l3.la}]K
+          %2:l1 » %0:l0[×] » %1:l1[#0{l2.la}]K
+        ArrangeBy keys=[[], [(#0{l1.la} + 1)]] // { arity: 1 }
           Project (#0) // { arity: 1 }
             Get l0 // { arity: 2 }
         Get l1 // { arity: 2 }
         Get l1 // { arity: 2 }
 
 Source materialize.public.l
-  filter=((#0) IS NOT NULL)
+  filter=((#0{l1.la}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -192,7 +192,7 @@ Explained Query:
                   %1 » %2[#0]UKA » %0:l1[#1]Kf
                   %2 » %1[#0]UKA » %0:l1[#1]Kf
                 ArrangeBy keys=[[#1]] // { arity: 2 }
-                  Filter (#0 = (#1 + 1)) // { arity: 2 }
+                  Filter (#0 = (#1{l2.la} + 1)) // { arity: 2 }
                     Get l1 // { arity: 2 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Distinct project=[#0] // { arity: 1 }
@@ -200,9 +200,9 @@ Explained Query:
                       Filter (#1) IS NOT NULL // { arity: 2 }
                         Get l1 // { arity: 2 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
-                  Distinct project=[(#0 + 1)] // { arity: 1 }
+                  Distinct project=[(#0{l3.la} + 1)] // { arity: 1 }
                     Project (#0) // { arity: 1 }
-                      Filter (#0) IS NOT NULL // { arity: 2 }
+                      Filter (#0{l3.la}) IS NOT NULL // { arity: 2 }
                         ReadStorage materialize.public.l // { arity: 2 }
 
 Source materialize.public.l
@@ -331,17 +331,17 @@ SELECT * FROM l LEFT JOIN r ON l.la = r.ra
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#0{l.la}]] // { arity: 2 }
+        Filter (#0{l.la}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.l // { arity: 2 }
     cte l1 =
       Project (#0, #1, #3) // { arity: 3 }
-        Join on=(#0 = #2) type=differential // { arity: 4 }
+        Join on=(#0{l.la} = #2{r.ra}) type=differential // { arity: 4 }
           implementation
-            %0:l0[#0]K » %1:r[#0]K
+            %0:l0[#0{l.la}]K » %1:r[#0{r.ra}]K
           Get l0 // { arity: 2 }
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0) IS NOT NULL // { arity: 2 }
+          ArrangeBy keys=[[#0{r.ra}]] // { arity: 2 }
+            Filter (#0{r.ra}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.r // { arity: 2 }
   Return // { arity: 4 }
     Union // { arity: 4 }
@@ -349,9 +349,9 @@ Explained Query:
         Union // { arity: 2 }
           Negate // { arity: 2 }
             Project (#0, #1) // { arity: 2 }
-              Join on=(#0 = #2) type=differential // { arity: 3 }
+              Join on=(#0{l.la} = #2) type=differential // { arity: 3 }
                 implementation
-                  %1[#0]UKA » %0:l0[#0]K
+                  %1[#0]UKA » %0:l0[#0{l.la}]K
                 Get l0 // { arity: 2 }
                 ArrangeBy keys=[[#0]] // { arity: 1 }
                   Distinct project=[#0] // { arity: 1 }
@@ -363,7 +363,7 @@ Explained Query:
 
 Source materialize.public.l
 Source materialize.public.r
-  filter=((#0) IS NOT NULL)
+  filter=((#0{r.ra}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -376,16 +376,16 @@ SELECT * FROM l RIGHT JOIN r ON l.la = r.ra
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#0{r.ra}]] // { arity: 2 }
+        Filter (#0{r.ra}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.r // { arity: 2 }
     cte l1 =
       Project (#0, #1, #3) // { arity: 3 }
-        Join on=(#0 = #2) type=differential // { arity: 4 }
+        Join on=(#0{l.la} = #2{r.ra}) type=differential // { arity: 4 }
           implementation
-            %0:l[#0]K » %1:l0[#0]K
-          ArrangeBy keys=[[#0]] // { arity: 2 }
-            Filter (#0) IS NOT NULL // { arity: 2 }
+            %0:l[#0{l.la}]K » %1:l0[#0{r.ra}]K
+          ArrangeBy keys=[[#0{l.la}]] // { arity: 2 }
+            Filter (#0{l.la}) IS NOT NULL // { arity: 2 }
               ReadStorage materialize.public.l // { arity: 2 }
           Get l0 // { arity: 2 }
   Return // { arity: 4 }
@@ -395,9 +395,9 @@ Explained Query:
           Union // { arity: 2 }
             Negate // { arity: 2 }
               Project (#0, #1) // { arity: 2 }
-                Join on=(#0 = #2) type=differential // { arity: 3 }
+                Join on=(#0{r.ra} = #2) type=differential // { arity: 3 }
                   implementation
-                    %1[#0]UKA » %0:l0[#0]K
+                    %1[#0]UKA » %0:l0[#0{r.ra}]K
                   Get l0 // { arity: 2 }
                   ArrangeBy keys=[[#0]] // { arity: 1 }
                     Distinct project=[#0] // { arity: 1 }
@@ -408,7 +408,7 @@ Explained Query:
         Get l1 // { arity: 3 }
 
 Source materialize.public.l
-  filter=((#0) IS NOT NULL)
+  filter=((#0{l.la}) IS NOT NULL)
 Source materialize.public.r
 
 Target cluster: quickstart
@@ -422,18 +422,18 @@ SELECT * FROM l FULL JOIN r ON l.la = r.ra
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#0{l.la}]] // { arity: 2 }
+        Filter (#0{l.la}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.l // { arity: 2 }
     cte l1 =
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#0{r.ra}]] // { arity: 2 }
+        Filter (#0{r.ra}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.r // { arity: 2 }
     cte l2 =
       Project (#0, #1, #3) // { arity: 3 }
-        Join on=(#0 = #2) type=differential // { arity: 4 }
+        Join on=(#0{l.la} = #2{r.ra}) type=differential // { arity: 4 }
           implementation
-            %0:l0[#0]K » %1:l1[#0]K
+            %0:l0[#0{l.la}]K » %1:l1[#0{r.ra}]K
           Get l0 // { arity: 2 }
           Get l1 // { arity: 2 }
     cte l3 =
@@ -448,9 +448,9 @@ Explained Query:
           Union // { arity: 2 }
             Negate // { arity: 2 }
               Project (#0, #1) // { arity: 2 }
-                Join on=(#0 = #2) type=differential // { arity: 3 }
+                Join on=(#0{r.ra} = #2) type=differential // { arity: 3 }
                   implementation
-                    %1:l3[#0]UKA » %0:l1[#0]K
+                    %1:l3[#0]UKA » %0:l1[#0{r.ra}]K
                   Get l1 // { arity: 2 }
                   Get l3 // { arity: 1 }
             ReadStorage materialize.public.r // { arity: 2 }
@@ -458,9 +458,9 @@ Explained Query:
         Union // { arity: 2 }
           Negate // { arity: 2 }
             Project (#0, #1) // { arity: 2 }
-              Join on=(#0 = #2) type=differential // { arity: 3 }
+              Join on=(#0{l.la} = #2) type=differential // { arity: 3 }
                 implementation
-                  %1:l3[#0]UKA » %0:l0[#0]K
+                  %1:l3[#0]UKA » %0:l0[#0{l.la}]K
                 Get l0 // { arity: 2 }
                 Get l3 // { arity: 1 }
           ReadStorage materialize.public.l // { arity: 2 }
@@ -489,20 +489,20 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SELECT * FROM l INNER JOIN r ON mod(l.la, 2) = mod(r.ra, 2)
 ----
 Explained Query:
-  Join on=((#0 % 2) = (#2 % 2)) type=differential // { arity: 4 }
+  Join on=((#0{l.la} % 2) = (#2{r.ra} % 2)) type=differential // { arity: 4 }
     implementation
-      %0:l[(#0 % 2)]K » %1:r[(#0 % 2)]K
-    ArrangeBy keys=[[(#0 % 2)]] // { arity: 2 }
-      Filter (#0) IS NOT NULL // { arity: 2 }
+      %0:l[(#0{l.la} % 2)]K » %1:r[(#0{r.ra} % 2)]K
+    ArrangeBy keys=[[(#0{l.la} % 2)]] // { arity: 2 }
+      Filter (#0{l.la}) IS NOT NULL // { arity: 2 }
         ReadStorage materialize.public.l // { arity: 2 }
-    ArrangeBy keys=[[(#0 % 2)]] // { arity: 2 }
-      Filter (#0) IS NOT NULL // { arity: 2 }
+    ArrangeBy keys=[[(#0{r.ra} % 2)]] // { arity: 2 }
+      Filter (#0{r.ra}) IS NOT NULL // { arity: 2 }
         ReadStorage materialize.public.r // { arity: 2 }
 
 Source materialize.public.l
-  filter=((#0) IS NOT NULL)
+  filter=((#0{l.la}) IS NOT NULL)
 Source materialize.public.r
-  filter=((#0) IS NOT NULL)
+  filter=((#0{r.ra}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -550,14 +550,14 @@ Explained Query:
   With
     cte l0 =
       Project (#0) // { arity: 1 }
-        Filter (#1 = 1) // { arity: 2 }
+        Filter (#1{v4362.id} = 1) // { arity: 2 }
           ReadStorage materialize.public.t4362 // { arity: 2 }
   Return // { arity: 2 }
     Project (#0, #1) // { arity: 2 }
-      Join on=(#0 = #2) type=differential // { arity: 3 }
+      Join on=(#0{v4362.name} = #2) type=differential // { arity: 3 }
         implementation
-          %0:t4362[#0]K » %1[#0]K
-        ArrangeBy keys=[[#0]] // { arity: 2 }
+          %0:t4362[#0{v4362.name}]K » %1[#0]K
+        ArrangeBy keys=[[#0{v4362.name}]] // { arity: 2 }
           ReadStorage materialize.public.t4362 // { arity: 2 }
         ArrangeBy keys=[[#0]] // { arity: 1 }
           Union // { arity: 1 }
@@ -626,20 +626,20 @@ EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SEL
 ----
 Explained Query:
   Project (#1, #3) // { arity: 2 }
-    Join on=(#0 = #2) type=differential // { arity: 4 }
+    Join on=(#0{l3.la} = #2{r3.ra}) type=differential // { arity: 4 }
       implementation
-        %0:l3[#0]K » %1:r3[#0]K
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
+        %0:l3[#0{l3.la}]K » %1:r3[#0{r3.ra}]K
+      ArrangeBy keys=[[#0{l3.la}]] // { arity: 2 }
+        Filter (#0{l3.la}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.l3 // { arity: 2 }
-      ArrangeBy keys=[[#0]] // { arity: 2 }
-        Filter (#0) IS NOT NULL // { arity: 2 }
+      ArrangeBy keys=[[#0{r3.ra}]] // { arity: 2 }
+        Filter (#0{r3.ra}) IS NOT NULL // { arity: 2 }
           ReadStorage materialize.public.r3 // { arity: 2 }
 
 Source materialize.public.l3
-  filter=((#0) IS NOT NULL)
+  filter=((#0{l3.la}) IS NOT NULL)
 Source materialize.public.r3
-  filter=((#0) IS NOT NULL)
+  filter=((#0{r3.ra}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -656,12 +656,12 @@ EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SEL
 ----
 Explained Query:
   Project (#1, #3) // { arity: 2 }
-    Join on=(#0 = #2) type=differential // { arity: 4 }
+    Join on=(#0{l3.la} = #2{r3.ra}) type=differential // { arity: 4 }
       implementation
-        %0:l3[#0]K » %1:r3[#0]K
-      ArrangeBy keys=[[#0]] // { arity: 2 }
+        %0:l3[#0{l3.la}]K » %1:r3[#0{r3.ra}]K
+      ArrangeBy keys=[[#0{l3.la}]] // { arity: 2 }
         ReadStorage materialize.public.l3 // { arity: 2 }
-      ArrangeBy keys=[[#0]] // { arity: 2 }
+      ArrangeBy keys=[[#0{r3.ra}]] // { arity: 2 }
         ReadStorage materialize.public.r3 // { arity: 2 }
 
 Source materialize.public.l3
@@ -683,12 +683,12 @@ EXPLAIN OPTIMIZED PLAN WITH(arity, join implementations) AS VERBOSE TEXT FOR SEL
 ----
 Explained Query:
   Project (#1, #3) // { arity: 2 }
-    Join on=(#0 = #2) type=differential // { arity: 4 }
+    Join on=(#0{l3.la} = #2{r3.ra}) type=differential // { arity: 4 }
       implementation
-        %0:l3[#0]K » %1:r3[#0]K
-      ArrangeBy keys=[[#0]] // { arity: 2 }
+        %0:l3[#0{l3.la}]K » %1:r3[#0{r3.ra}]K
+      ArrangeBy keys=[[#0{l3.la}]] // { arity: 2 }
         ReadStorage materialize.public.l3 // { arity: 2 }
-      ArrangeBy keys=[[#0]] // { arity: 2 }
+      ArrangeBy keys=[[#0{r3.ra}]] // { arity: 2 }
         ReadStorage materialize.public.r3 // { arity: 2 }
 
 Source materialize.public.l3
@@ -1231,7 +1231,7 @@ EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT sum(a + b) FROM fuel_test_1, f
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[sum((#0 + #1))]
+      Reduce aggregates=[sum((#0{fuel_test_1.a} + #1{fuel_test_2.b}))]
         CrossJoin type=differential
           ArrangeBy keys=[[]]
             ReadStorage materialize.public.fuel_test_1

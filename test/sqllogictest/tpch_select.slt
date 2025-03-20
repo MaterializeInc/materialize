@@ -278,7 +278,7 @@ Explained Query:
       Project (#5{s_acctbal}, #2{s_name}, #8{n_name}, #0{p_partkey}, #1{p_mfgr}, #3{s_address}, #4{s_phone}, #6{s_comment}) // { arity: 8 }
         Join on=(#0{p_partkey} = #9{p_partkey} AND #7{ps_supplycost} = #10{min_ps_supplycost}) type=differential // { arity: 11 }
           implementation
-            %1[#0, #1]UKK » %0:l4[#0, #7]KK
+            %1[#0, #1]UKK » %0:l4[#0, #7{partsupp.ps_supplycost}]KK
           ArrangeBy keys=[[#0{p_partkey}, #7{ps_supplycost}]] // { arity: 9 }
             Get l4 // { arity: 9 }
           ArrangeBy keys=[[#0{p_partkey}, #1{min_ps_supplycost}]] // { arity: 2 }
@@ -976,7 +976,7 @@ Explained Query:
         Filter (#21{l_receiptdate} >= 1994-01-01) AND (#19{l_shipdate} < #20{l_commitdate}) AND (#20{l_commitdate} < #21{l_receiptdate}) AND (date_to_timestamp(#21{l_receiptdate}) < 1995-01-01 00:00:00) AND ((#23{l_shipmode} = "MAIL") OR (#23{l_shipmode} = "SHIP")) // { arity: 25 }
           Join on=(#0{o_orderkey} = #9{l_orderkey}) type=differential // { arity: 25 }
             implementation
-              %1:lineitem[#0]KAeiif » %0:orders[#0{o_orderkey}]KAeiif
+              %1:lineitem[#0{lineitem.l_orderkey}]KAeiif » %0:orders[#0{o_orderkey}]KAeiif
             ArrangeBy keys=[[#0{o_orderkey}]] // { arity: 9 }
               ReadIndex on=orders pk_orders_orderkey=[differential join] // { arity: 9 }
             ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 16 }
@@ -1026,7 +1026,7 @@ Explained Query:
           Filter NOT(like["%special%requests%"](varchar_to_text(#16{o_comment}))) // { arity: 17 }
             Join on=(#0{c_custkey} = #9{o_custkey}) type=differential // { arity: 17 }
               implementation
-                %1:orders[#1]KAf » %0:l0[#0{c_custkey}]KAf
+                %1:orders[#1{orders.o_custkey}]KAf » %0:l0[#0{c_custkey}]KAf
               Get l0 // { arity: 8 }
               ArrangeBy keys=[[#1{o_custkey}]] // { arity: 9 }
                 ReadIndex on=orders fk_orders_custkey=[differential join] // { arity: 9 }
@@ -1085,7 +1085,7 @@ Explained Query:
           Filter (#10{l_shipdate} >= 1995-09-01) AND (date_to_timestamp(#10{l_shipdate}) < 1995-10-01 00:00:00) // { arity: 25 }
             Join on=(#1{l_partkey} = #16{p_partkey}) type=differential // { arity: 25 }
               implementation
-                %0:lineitem[#1]KAiif » %1:part[#0{p_partkey}]KAiif
+                %0:lineitem[#1{lineitem.l_partkey}]KAiif » %1:part[#0{p_partkey}]KAiif
               ArrangeBy keys=[[#1{l_partkey}]] // { arity: 16 }
                 ReadIndex on=lineitem fk_lineitem_partkey=[differential join] // { arity: 16 }
               ArrangeBy keys=[[#0{p_partkey}]] // { arity: 9 }
@@ -1162,7 +1162,7 @@ Explained Query:
           implementation
             %0:supplier » %1:l0[#0]UKA » %2[#0]UK
             %1:l0 » %2[#0]UK » %0:supplier[#0{s_suppkey}]KA
-            %2 » %1:l0[#1]K » %0:supplier[#0{s_suppkey}]KA
+            %2 » %1:l0[#1{revenue.total_revenue}]K » %0:supplier[#0{s_suppkey}]KA
           ArrangeBy keys=[[#0{s_suppkey}]] // { arity: 7 }
             ReadIndex on=supplier pk_supplier_suppkey=[delta join 1st input (full scan)] // { arity: 7 }
           ArrangeBy keys=[[#0{l_suppkey}], [#1{sum}]] // { arity: 2 }
@@ -1226,7 +1226,7 @@ Explained Query:
           Filter (#8{p_brand} != "Brand#45") AND NOT(like["MEDIUM POLISHED%"](varchar_to_text(#9{p_type}))) AND ((#10{p_size} = 3) OR (#10{p_size} = 9) OR (#10{p_size} = 14) OR (#10{p_size} = 19) OR (#10{p_size} = 23) OR (#10{p_size} = 36) OR (#10{p_size} = 45) OR (#10{p_size} = 49)) // { arity: 14 }
             Join on=(#0{ps_partkey} = #5{p_partkey}) type=differential // { arity: 14 }
               implementation
-                %1:part[#0]KAef » %0:partsupp[#0{ps_partkey}]KAef
+                %1:part[#0{part.p_partkey}]KAef » %0:partsupp[#0{ps_partkey}]KAef
               ArrangeBy keys=[[#0{ps_partkey}]] // { arity: 5 }
                 ReadIndex on=partsupp fk_partsupp_partkey=[differential join] // { arity: 5 }
               ArrangeBy keys=[[#0{p_partkey}]] // { arity: 9 }
@@ -1301,7 +1301,7 @@ Explained Query:
         Filter (#19{p_brand} = "Brand#23") AND (#22{p_container} = "MED BOX") // { arity: 25 }
           Join on=(#1{l_partkey} = #16{p_partkey}) type=differential // { arity: 25 }
             implementation
-              %1:part[#0]KAef » %0:l0[#1{l_partkey}]KAef
+              %1:part[#0{part.p_partkey}]KAef » %0:l0[#1{l_partkey}]KAef
             Get l0 // { arity: 16 }
             ArrangeBy keys=[[#0{p_partkey}]] // { arity: 9 }
               ReadIndex on=part pk_part_partkey=[differential join] // { arity: 9 }
@@ -1319,7 +1319,7 @@ Explained Query:
                   Project (#0{l_partkey}, #5{l_quantity}) // { arity: 2 }
                     Join on=(#0{l_partkey} = #2{l_partkey}) type=differential // { arity: 17 }
                       implementation
-                        %0[#0]UKA » %1:l0[#1{l_partkey}]KA
+                        %0[#0{part.p_partkey}]UKA » %1:l0[#1{l_partkey}]KA
                       ArrangeBy keys=[[#0{l_partkey}]] // { arity: 1 }
                         Distinct project=[#0{l_partkey}] // { arity: 1 }
                           Project (#0{l_partkey}) // { arity: 1 }
@@ -1481,7 +1481,7 @@ Explained Query:
             Map ((#4{l_quantity} <= 20), (#4{l_quantity} >= 10), (#4{l_quantity} <= 30), (#4{l_quantity} >= 20), (#4{l_quantity} <= 11), (#4{l_quantity} >= 1), (#19{p_brand} = "Brand#12"), (#21{p_size} <= 5), ((#22{p_container} = "SM BOX") OR (#22{p_container} = "SM PKG") OR (#22{p_container} = "SM CASE") OR (#22{p_container} = "SM PACK")), (#19{p_brand} = "Brand#23"), (#21{p_size} <= 10), ((#22{p_container} = "MED BAG") OR (#22{p_container} = "MED BOX") OR (#22{p_container} = "MED PKG") OR (#22{p_container} = "MED PACK")), (#19{p_brand} = "Brand#34"), (#21{p_size} <= 15), ((#22{p_container} = "LG BOX") OR (#22{p_container} = "LG PKG") OR (#22{p_container} = "LG CASE") OR (#22{p_container} = "LG PACK"))) // { arity: 40 }
               Join on=(#1{l_partkey} = #16{p_partkey}) type=differential // { arity: 25 }
                 implementation
-                  %1:part[#0]KAeiiif » %0:lineitem[#1{l_partkey}]KAeiiiiif
+                  %1:part[#0{part.p_partkey}]KAeiiif » %0:lineitem[#1{l_partkey}]KAeiiiiif
                 ArrangeBy keys=[[#1{l_partkey}]] // { arity: 16 }
                   ReadIndex on=lineitem fk_lineitem_partkey=[differential join] // { arity: 16 }
                 ArrangeBy keys=[[#0{p_partkey}]] // { arity: 9 }
@@ -1555,7 +1555,7 @@ Explained Query:
           Filter (#8{n_name} = "CANADA") // { arity: 11 }
             Join on=(#3{s_nationkey} = #7{n_nationkey}) type=differential // { arity: 11 }
               implementation
-                %1:nation[#0]KAef » %0:supplier[#3{s_nationkey}]KAef
+                %1:nation[#0{nation.n_nationkey}]KAef » %0:supplier[#3{s_nationkey}]KAef
               ArrangeBy keys=[[#3{s_nationkey}]] // { arity: 7 }
                 ReadIndex on=supplier fk_supplier_nationkey=[differential join] // { arity: 7 }
               ArrangeBy keys=[[#0{n_nationkey}]] // { arity: 4 }
@@ -1592,7 +1592,7 @@ Explained Query:
                 Filter (integer_to_numeric(#2{ps_availqty}) > #5) // { arity: 6 }
                   Join on=(#0{s_suppkey} = #4{ps_suppkey} AND #1{ps_partkey} = #3{ps_partkey}) type=differential // { arity: 6 }
                     implementation
-                      %1[#1, #0]UKK » %0:l1[#0, #1]KKf
+                      %1[#1, #0]UKK » %0:l1[#0{supplier.s_suppkey}, #1]KKf
                     ArrangeBy keys=[[#0{s_suppkey}, #1{ps_partkey}]] // { arity: 3 }
                       Project (#0{s_suppkey}, #1{ps_partkey}, #3{ps_availqty}) // { arity: 3 }
                         Filter (#0{s_suppkey} = #2{ps_suppkey}) // { arity: 4 }
@@ -1605,7 +1605,7 @@ Explained Query:
                               Filter (#12{l_shipdate} >= 1995-01-01) AND (date_to_timestamp(#12{l_shipdate}) < 1996-01-01 00:00:00) // { arity: 18 }
                                 Join on=(#0{ps_partkey} = #3{l_partkey} AND #1{ps_suppkey} = #4{l_suppkey}) type=differential // { arity: 18 }
                                   implementation
-                                    %0[#0, #1]UKKA » %1:lineitem[#1{l_partkey}, #2{l_suppkey}]KKAiif
+                                    %0[#0{partsupp.ps_partkey}, #1{partsupp.ps_suppkey}]UKKA » %1:lineitem[#1{l_partkey}, #2{l_suppkey}]KKAiif
                                   ArrangeBy keys=[[#0{ps_partkey}, #1{ps_suppkey}]] // { arity: 2 }
                                     Distinct project=[#0{ps_partkey}, #1{ps_suppkey}] // { arity: 2 }
                                       Project (#1{ps_partkey}, #2{ps_suppkey}) // { arity: 2 }
@@ -1704,7 +1704,7 @@ Explained Query:
                   Filter (#1{s_suppkey} != #4{l_suppkey}) // { arity: 18 }
                     Join on=(#0{l_orderkey} = #2{l_orderkey}) type=differential // { arity: 18 }
                       implementation
-                        %1:l1[#0]KA » %0[#0]K
+                        %1:l1[#0{l2.l_orderkey}]KA » %0[#0{l1.l_orderkey}]K
                       ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 2 }
                         Distinct project=[#1{l_orderkey}, #0{s_suppkey}] // { arity: 2 }
                           Project (#0{s_suppkey}, #2{l_orderkey}) // { arity: 2 }
@@ -1730,7 +1730,7 @@ Explained Query:
                       Filter (#1{s_suppkey} != #4{l_suppkey}) AND (#14{l_receiptdate} > #13{l_commitdate}) // { arity: 18 }
                         Join on=(#0{l_orderkey} = #2{l_orderkey}) type=differential // { arity: 18 }
                           implementation
-                            %1:l1[#0]KAf » %0:l3[#0]Kf
+                            %1:l1[#0{l3.l_orderkey}]KAf » %0:l3[#0{l1.l_orderkey}]Kf
                           ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 2 }
                             Get l3 // { arity: 2 }
                           Get l1 // { arity: 16 }
@@ -1905,7 +1905,7 @@ Finish order_by=[#0 asc nulls_last] output=[#0, #1]
   Project (#1, #2)
     With
       cte [l3 as subquery-3] =
-        Reduce aggregates=[any((#^0{supplier.s_suppkey} = #0{subquery.right_e1b936d0-9d53-4d3e-a36d-f9bca2e71491}))]
+        Reduce aggregates=[any((#^0{supplier.s_suppkey} = #0{subquery.right_8143d7bd-648e-43fe-9adc-44aa03aa5524}))]
           Project (#1)
             With
               cte [l2 as subquery-2] =
@@ -1915,7 +1915,7 @@ Finish order_by=[#0 asc nulls_last] output=[#0, #1]
                       Filter ((((#1{lineitem.l_partkey} = #^0{partsupp.ps_partkey}) AND (#2{lineitem.l_suppkey} = #^1{partsupp.ps_suppkey})) AND (#10{lineitem.l_shipdate} >= text_to_date("1995-01-01"))) AND (date_to_timestamp(#10{lineitem.l_shipdate}) < (text_to_date("1995-01-01") + 1 year)))
                         Get materialize.public.lineitem
               cte [l1 as subquery-1] =
-                Reduce aggregates=[any((#^0{partsupp.ps_partkey} = #0{subquery.right_65739a0a-d43b-42ce-905f-4df8d2d804bb}))]
+                Reduce aggregates=[any((#^0{partsupp.ps_partkey} = #0{subquery.right_7210e54a-af2c-4c6f-8f87-9d98ed93dfcb}))]
                   Project (#0)
                     Filter (varchar_to_text(#1{part.p_name}) like "forest%")
                       Get materialize.public.part

@@ -48,6 +48,7 @@ pub mod hash;
 pub mod hint;
 #[cfg(feature = "id_gen")]
 pub mod id_gen;
+pub mod incomparable;
 pub mod iter;
 pub mod lex;
 #[cfg_attr(

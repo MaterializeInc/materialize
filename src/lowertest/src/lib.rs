@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 
 pub use mz_lowertest_derive::MzReflect;
+use mz_ore::incomparable::Incomparable;
 use mz_ore::result::ResultExt;
 use mz_ore::str::{separated, StrExt};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
@@ -38,6 +39,10 @@ impl<T: MzReflect> MzReflect for Vec<T> {
     fn add_to_reflected_type_info(rti: &mut ReflectedTypeInfo) {
         T::add_to_reflected_type_info(rti);
     }
+}
+
+impl<T> MzReflect for Incomparable<T> {
+    fn add_to_reflected_type_info(_rti: &mut ReflectedTypeInfo) {}
 }
 
 /// Info that must be combined with a spec to form deserializable JSON.

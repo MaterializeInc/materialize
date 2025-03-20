@@ -12,7 +12,6 @@ use std::fmt::Debug;
 
 use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
-use crate::scalar::Opaque;
 use crate::{
     BinaryFunc, EvalError, MapFilterProject, MfpPlan, MirScalarExpr, UnaryFunc,
     UnmaterializableFunc, VariadicFunc,
@@ -560,7 +559,7 @@ impl SpecialUnary {
                         func: UnaryFunc::TryParseMonotonicIso8601Timestamp(
                             crate::func::TryParseMonotonicIso8601Timestamp,
                         ),
-                        expr: Box::new(MirScalarExpr::Column(0, Opaque(None))),
+                        expr: Box::new(MirScalarExpr::column(0)),
                     };
                     let eval = |d| specs.eval_result(expr.eval(&[d], specs.arena));
 

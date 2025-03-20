@@ -27,7 +27,7 @@ EXPLAIN OPTIMIZED PLAN WITH(keys) AS VERBOSE TEXT FOR SELECT sum(a) FROM t
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[sum(#0)] // { keys: "([])" }
+      Reduce aggregates=[sum(#0{t.a})] // { keys: "([])" }
         Project (#0) // { keys: "()" }
           ReadStorage materialize.public.t // { keys: "()" }
   Return // { keys: "([])" }
@@ -79,13 +79,13 @@ ON t.b = u.d;
 ----
 Explained Query:
   Project (#1, #0, #2, #0) // { keys: "([1])" }
-    Join on=(#0 = #3) type=differential // { keys: "([0])" }
-      ArrangeBy keys=[[#0]] // { keys: "([0])" }
-        Reduce group_by=[#1] aggregates=[sum(#0)] // { keys: "([0])" }
+    Join on=(#0{t.b} = #3{u.d}) type=differential // { keys: "([0])" }
+      ArrangeBy keys=[[#0{t.b}]] // { keys: "([0])" }
+        Reduce group_by=[#1] aggregates=[sum(#0{t.a})] // { keys: "([0])" }
           Filter (#1) IS NOT NULL // { keys: "()" }
             ReadStorage materialize.public.t // { keys: "()" }
-      ArrangeBy keys=[[#1]] // { keys: "([0], [1])" }
-        Filter (#0 = #1) // { keys: "([0], [1])" }
+      ArrangeBy keys=[[#1{u.d}]] // { keys: "([0], [1])" }
+        Filter (#0{v.c} = #1{v.d}) // { keys: "([0], [1])" }
           ReadIndex on=v v_primary_idx=[*** full scan ***] // { keys: "([0, 1])" }
 
 Source materialize.public.t
@@ -116,26 +116,26 @@ Explained Query:
   Threshold // { keys: "()" }
     Union // { keys: "()" }
       Project (#1, #2) // { keys: "([1])" }
-        Map (integer_to_double(#0)) // { keys: "([0], [2])" }
+        Map (integer_to_double(#0{grp.c})) // { keys: "([0], [2])" }
           TopK group_by=[#0] limit=1 // { keys: "([0])" }
             Project (#0, #1) // { keys: "()" }
-              Join on=(#0 = #2) type=differential // { keys: "()" }
-                ArrangeBy keys=[[#0]] // { keys: "([0])" }
+              Join on=(#0{grp.c} = #2{t.b}) type=differential // { keys: "()" }
+                ArrangeBy keys=[[#0{grp.c}]] // { keys: "([0])" }
                   Distinct project=[#0] // { keys: "([0])" }
                     Project (#0) // { keys: "()" }
                       Filter (#0) IS NOT NULL // { keys: "()" }
                         ReadStorage materialize.public.u // { keys: "()" }
-                ArrangeBy keys=[[#1]] // { keys: "()" }
-                  Filter (#1) IS NOT NULL // { keys: "()" }
+                ArrangeBy keys=[[#1{t.b}]] // { keys: "()" }
+                  Filter (#1{t.b}) IS NOT NULL // { keys: "()" }
                     ReadStorage materialize.public.t // { keys: "()" }
       Negate // { keys: "()" }
         Project (#0, #2) // { keys: "([1])" }
-          Filter (#0 = 1) // { keys: "([1], [2])" }
-            Map (integer_to_double(#1)) // { keys: "([0, 1], [0, 2])" }
+          Filter (#0{v.c} = 1) // { keys: "([1], [2])" }
+            Map (integer_to_double(#1{v.d})) // { keys: "([0, 1], [0, 2])" }
               ReadIndex on=v v_primary_idx=[*** full scan ***] // { keys: "([0, 1])" }
 
 Source materialize.public.t
-  filter=((#1) IS NOT NULL)
+  filter=((#1{t.b}) IS NOT NULL)
 Source materialize.public.u
   filter=((#0) IS NOT NULL)
 

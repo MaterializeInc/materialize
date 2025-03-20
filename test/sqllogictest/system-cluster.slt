@@ -33,7 +33,7 @@ EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW SCHEMAS
 ----
 Explained Query (fast path):
   Project (#1, #2)
-    Filter ((#0) IS NULL OR (#0 = "u1"))
+    Filter ((#0{mz_show_schemas.database_id}) IS NULL OR (#0{mz_show_schemas.database_id} = "u1"))
       ReadIndex on=mz_internal.mz_show_schemas mz_show_schemas_ind=[*** full scan ***]
 
 Used Indexes:
@@ -118,7 +118,7 @@ EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW MATERIALIZED VIEWS IN CLUSTER qu
 ----
 Explained Query (fast path):
   Project (#2, #3, #5)
-    Filter (#4 = "u1")
+    Filter (#4{mz_show_materialized_views.cluster_id} = "u1")
       ReadIndex on=mz_internal.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
 
 Used Indexes:
@@ -133,7 +133,7 @@ EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW INDEXES
 ----
 Explained Query (fast path):
   Project (#2..=#5, #8)
-    Filter NOT(like["s%"](#6))
+    Filter NOT(like["s%"](#6{mz_show_indexes.on_id}))
       ReadIndex on=mz_internal.mz_show_indexes mz_show_indexes_ind=[lookup value=("u3")]
 
 Used Indexes:
@@ -148,7 +148,7 @@ EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SHOW INDEXES IN CLUSTER quickstart
 ----
 Explained Query (fast path):
   Project (#2..=#5, #8)
-    Filter (#7 = "u1")
+    Filter (#7{mz_show_indexes.cluster_id} = "u1")
       ReadIndex on=mz_internal.mz_show_indexes mz_show_indexes_ind=[*** full scan ***]
 
 Used Indexes:
@@ -411,16 +411,16 @@ ORDER BY r.id;
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
     Project (#0..=#3, #5, #29)
-      Map (((uint8_to_double(#27) / uint8_to_double(#21)) * 100))
-        Join on=(#0 = #15 = #24 AND #2 = #4 AND #16 = #17) type=delta
-          ArrangeBy keys=[[#0{id}], [#2]]
+      Map (((uint8_to_double(#27{m.memory_bytes}) / uint8_to_double(#21{s.memory_bytes})) * 100))
+        Join on=(#0{r.id} = #15{u.replica_id} = #24{m.replica_id} AND #2{r.cluster_id} = #4{c.id} AND #16{r.size} = #17{s.size}) type=delta
+          ArrangeBy keys=[[#0{id}], [#2{r.cluster_id}]]
             Project (#0..=#3)
               ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[*** full scan ***]
           ArrangeBy keys=[[#0{id}]]
             ReadIndex on=mz_clusters mz_clusters_ind=[delta join lookup]
-          ArrangeBy keys=[[#0{id}], [#1]]
+          ArrangeBy keys=[[#0{id}], [#1{r.size}]]
             Project (#0, #3)
-              Filter (#3) IS NOT NULL
+              Filter (#3{r.size}) IS NOT NULL
                 ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[*** full scan ***]
           ArrangeBy keys=[[#0{size}]]
             ReadIndex on=mz_cluster_replica_sizes mz_cluster_replica_sizes_ind=[delta join lookup]
@@ -447,12 +447,12 @@ WHERE s.id LIKE 'u%';
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0]]
+      ArrangeBy keys=[[#0{s.id}]]
         ReadIndex on=mz_sources mz_sources_ind=[differential join]
     cte l1 =
       Project (#0, #1, #3, #4, #6, #19, #20)
         Filter like["u%"](#0)
-          Join on=(#0 = #15) type=differential
+          Join on=(#0{s.id} = #15{st.id}) type=differential
             Get l0
             ArrangeBy keys=[[#0{id}]]
               ReadIndex on=mz_source_statuses mz_source_statuses_ind=[differential join]
@@ -463,7 +463,7 @@ Explained Query:
           Negate
             Project (#0, #1, #3, #4, #6)
               Filter like["u%"](#0)
-                Join on=(#0 = #15) type=differential
+                Join on=(#0{s.id} = #15) type=differential
                   Get l0
                   ArrangeBy keys=[[#0]]
                     Distinct project=[#0]
@@ -497,14 +497,14 @@ Explained Query:
     With
       cte l0 =
         Project (#0, #3)
-          Filter (#7 <= 100) AND (#7 >= 0) AND (#3) IS NOT NULL
-            Map (timestamp_tz_to_mz_timestamp(#0))
+          Filter (#7 <= 100) AND (#7 >= 0) AND (#3{h.error}) IS NOT NULL
+            Map (timestamp_tz_to_mz_timestamp(#0{h.occurred_at}))
               ReadIndex on=mz_internal.mz_source_status_history mz_source_status_history_ind=[lookup value=("u6")]
     Return
       Project (#1, #0, #3)
         Join on=(#0 = #2) type=differential
           ArrangeBy keys=[[#0]]
-            Reduce group_by=[#1] aggregates=[max((extract_epoch_tstz(#0) * 1000))]
+            Reduce group_by=[#1] aggregates=[max((extract_epoch_tstz(#0{h.occurred_at}) * 1000))]
               Get l0
           ArrangeBy keys=[[#0]]
             Reduce group_by=[#0] aggregates=[count(*)]

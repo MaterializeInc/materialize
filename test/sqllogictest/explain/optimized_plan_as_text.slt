@@ -544,7 +544,7 @@ Explained Query:
             ReadIndex on=t t_a_idx=[*** full scan ***]
   Return
     Project (#2)
-      Map ((#0 + #1))
+      Map ((#0{a.v} + #1{b.v}))
         CrossJoin type=differential
           Get l0
           Get l0
@@ -874,8 +874,8 @@ WHERE b = c and d = e
 ----
 Explained Query:
   Project (#0, #1, #1, #3, #3, #5)
-    Filter (#1) IS NOT NULL AND (#3) IS NOT NULL
-      Join on=(#1 = #2 AND #3 = #4) type=delta
+    Filter (#1{t.b}) IS NOT NULL AND (#3{u.d}) IS NOT NULL
+      Join on=(#1{t.b} = #2{u.c} AND #3{u.d} = #4{v.e}) type=delta
         implementation
           %0:t » %1:u[#0{c}]KA » %2:v[#0{e}]KA
           %1:u » %0:t[#1{b}]KA » %2:v[#0{e}]KA
@@ -906,8 +906,8 @@ WHERE a = c and b = e
 ----
 Explained Query:
   Project (#0, #1, #0, #3, #1, #5)
-    Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
-      Join on=(#0 = #2 AND #1 = #4) type=delta
+    Filter (#0{t.a}) IS NOT NULL AND (#1{t.b}) IS NOT NULL
+      Join on=(#0{t.a} = #2{u.c} AND #1{t.b} = #4{v.e}) type=delta
         implementation
           %0:t » %1:u[#0{c}]KA » %2:v[#0{e}]KA
           %1:u » %0:t[#0{a}]KA » %2:v[#0{e}]KA
@@ -965,7 +965,7 @@ WHERE (a = 0 AND b = 1) OR (a = 3 AND b = 4) OR (a = 7 AND b = 8)
 GROUP BY a
 ----
 Explained Query:
-  Reduce group_by=[#0] aggregates=[max(#1)]
+  Reduce group_by=[#0] aggregates=[max(#1{t.b})]
     Project (#0, #1)
       ReadIndex on=materialize.public.t t_a_b_idx=[lookup values=[(0, 1); (3, 4); (7, 8)]]
 
@@ -1019,17 +1019,17 @@ WHERE
 Explained Query:
   With
     cte l0 =
-      ArrangeBy keys=[[#0, #2..=#4, #6, #8, #9, #11..=#13, #15, #16]]
-        Filter (#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL
+      ArrangeBy keys=[[#0{r0.f0}, #2{r0.f2}..=#4{r0.f4}, #6{r0.f6}, #8{r0.f8}, #9{r0.f9}, #11{r0.f11}..=#13{r0.f13}, #15{r0.f15}, #16{r0.f16}]]
+        Filter (#0{r0.f0}) IS NOT NULL AND (#2{r0.f2}) IS NOT NULL AND (#3{r0.f3}) IS NOT NULL AND (#4{r0.f4}) IS NOT NULL AND (#6{r0.f6}) IS NOT NULL AND (#8{r0.f8}) IS NOT NULL AND (#9{r0.f9}) IS NOT NULL AND (#11{r0.f11}) IS NOT NULL AND (#12{r0.f12}) IS NOT NULL AND (#13{r0.f13}) IS NOT NULL AND (#15{r0.f15}) IS NOT NULL AND (#16{r0.f16}) IS NOT NULL
           ReadStorage materialize.public.r
   Return
     Project (#0..=#16, #0, #18, #2..=#4, #22, #6, #24, #8, #9, #27, #11..=#13, #31, #15, #16)
-      Join on=(#0 = #17 AND #2 = #19 AND #3 = #20 AND #4 = #21 AND #6 = #23 AND #8 = #25 AND #9 = #26 AND #11 = #28 AND #12 = #29 AND #13 = #30 AND #15 = #32 AND #16 = #33) type=differential
+      Join on=(#0{r0.f0} = #17{r1.f0} AND #2{r0.f2} = #19{r1.f2} AND #3{r0.f3} = #20{r1.f3} AND #4{r0.f4} = #21{r1.f4} AND #6{r0.f6} = #23{r1.f6} AND #8{r0.f8} = #25{r1.f8} AND #9{r0.f9} = #26{r1.f9} AND #11{r0.f11} = #28{r1.f11} AND #12{r0.f12} = #29{r1.f12} AND #13{r0.f13} = #30{r1.f13} AND #15{r0.f15} = #32{r1.f15} AND #16{r0.f16} = #33{r1.f16}) type=differential
         Get l0
         Get l0
 
 Source materialize.public.r
-  filter=((#0) IS NOT NULL AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND (#4) IS NOT NULL AND (#6) IS NOT NULL AND (#8) IS NOT NULL AND (#9) IS NOT NULL AND (#11) IS NOT NULL AND (#12) IS NOT NULL AND (#13) IS NOT NULL AND (#15) IS NOT NULL AND (#16) IS NOT NULL)
+  filter=((#0{r0.f0}) IS NOT NULL AND (#2{r0.f2}) IS NOT NULL AND (#3{r0.f3}) IS NOT NULL AND (#4{r0.f4}) IS NOT NULL AND (#6{r0.f6}) IS NOT NULL AND (#8{r0.f8}) IS NOT NULL AND (#9{r0.f9}) IS NOT NULL AND (#11{r0.f11}) IS NOT NULL AND (#12{r0.f12}) IS NOT NULL AND (#13{r0.f13}) IS NOT NULL AND (#15{r0.f15}) IS NOT NULL AND (#16{r0.f16}) IS NOT NULL)
 
 Target cluster: quickstart
 
@@ -1608,19 +1608,19 @@ FROM t5, t6
 WHERE x = a AND b IN (8,9);
 ----
 Explained Query:
-  Project (#0..=#2, #0, #4) // { equivs: "[[#0, #3], [false, (#0) IS NULL, (#1) IS NULL], [true, ((#4 = 8) OR (#4 = 9))]]" }
-    Join on=(#0 = #3) type=differential // { equivs: "[[#0, #3], [false, (#0) IS NULL, (#1) IS NULL], [true, ((#4 = 8) OR (#4 = 9))]]" }
-      ArrangeBy keys=[[#0]] // { equivs: "[[false, (#0) IS NULL, (#1) IS NULL]]" }
-        Filter (#0) IS NOT NULL // { equivs: "[[false, (#0) IS NULL, (#1) IS NULL]]" }
+  Project (#0..=#2, #0, #4) // { equivs: "[[#0, #3], [false, (#0) IS NULL, (#1) IS NULL], [true, ((#4{t6.b} = 8) OR (#4{t6.b} = 9))]]" }
+    Join on=(#0{t5.x} = #3{t6.a}) type=differential // { equivs: "[[#0{t5.x}, #3{t6.a}], [false, (#0) IS NULL, (#1) IS NULL], [true, ((#4{t6.b} = 8) OR (#4{t6.b} = 9))]]" }
+      ArrangeBy keys=[[#0{t5.x}]] // { equivs: "[[false, (#0) IS NULL, (#1) IS NULL]]" }
+        Filter (#0{t5.x}) IS NOT NULL // { equivs: "[[false, (#0) IS NULL, (#1) IS NULL]]" }
           ReadStorage materialize.public.t5 // { equivs: "[[false, (#1) IS NULL]]" }
-      ArrangeBy keys=[[#0]] // { equivs: "[[false, (#0) IS NULL], [true, ((#1 = 8) OR (#1 = 9))]]" }
-        Filter ((#1 = 8) OR (#1 = 9)) // { equivs: "[[false, (#0) IS NULL], [true, ((#1 = 8) OR (#1 = 9))]]" }
+      ArrangeBy keys=[[#0{t6.a}]] // { equivs: "[[false, (#0) IS NULL], [true, ((#1{t6.b} = 8) OR (#1{t6.b} = 9))]]" }
+        Filter ((#1{t6.b} = 8) OR (#1{t6.b} = 9)) // { equivs: "[[false, (#0) IS NULL], [true, ((#1{t6.b} = 8) OR (#1{t6.b} = 9))]]" }
           ReadStorage materialize.public.t6 // { equivs: "[[false, (#0) IS NULL]]" }
 
 Source materialize.public.t5
-  filter=((#0) IS NOT NULL)
+  filter=((#0{t5.x}) IS NOT NULL)
 Source materialize.public.t6
-  filter=(((#1 = 8) OR (#1 = 9)))
+  filter=(((#1{t6.b} = 8) OR (#1{t6.b} = 9)))
 
 Target cluster: no_replicas
 
@@ -1752,7 +1752,7 @@ SELECT a+b FROM t4;
 ----
 Explained Query:
   Project (#3)
-    Map ((#0 + #1))
+    Map ((#0{t4.a} + #1{t4.b}))
       ReadStorage materialize.public.t4
 
 Source materialize.public.t4

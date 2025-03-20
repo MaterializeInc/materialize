@@ -41,7 +41,7 @@ use std::iter::repeat;
 
 use itertools::Itertools;
 use mz_expr::visit::Visit;
-use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr, Opaque};
+use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;
@@ -951,7 +951,7 @@ impl HirScalarExpr {
             }
 
             Ok::<MirScalarExpr, PlanError>(match self {
-                Column(col_ref, _name) => SS::column(col_map.get(&col_ref)),
+                Column(col_ref, name) => SS::named_column(col_map.get(&col_ref), name),
                 Literal(row, typ, _name) => SS::Literal(Ok(row), typ),
                 Parameter(_, _name) => {
                     panic!("cannot decorrelate expression with unbound parameters")
@@ -1638,7 +1638,7 @@ impl HirScalarExpr {
         use HirScalarExpr::*;
 
         Ok(match self {
-            Column(ColumnRef { level: 0, column }, name) => SS::Column(column, Opaque(name)),
+            Column(ColumnRef { level: 0, column }, name) => SS::named_column(column, name),
             Literal(datum, typ, _name) => SS::Literal(Ok(datum), typ),
             CallUnmaterializable(func, _name) => SS::CallUnmaterializable(func),
             CallUnary {

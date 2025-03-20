@@ -15,7 +15,6 @@ use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::linear::proto_map_filter_project::ProtoPredicate;
-use crate::scalar::Opaque;
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
 
@@ -1512,13 +1511,13 @@ pub fn memoize_expr(
                     if let Some(position) = memoized_parts.iter().position(|e2| e2 == e) {
                         // Any complex expression that already exists as a prior column can
                         // be replaced by a reference to that column.
-                        *e = MirScalarExpr::Column(input_arity + position, Opaque(None));
+                        *e = MirScalarExpr::column(input_arity + position);
                     } else {
                         // A complex expression that does not exist should be memoized, and
                         // replaced by a reference to the column.
                         memoized_parts.push(std::mem::replace(
                             e,
-                            MirScalarExpr::Column(input_arity + memoized_parts.len(), Opaque(None)),
+                            MirScalarExpr::column(input_arity + memoized_parts.len()),
                         ));
                     }
                 }

@@ -47,7 +47,6 @@ use serde::{Deserialize, Serialize};
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::row::{RowCollection, SortedRowCollectionIter};
-use crate::scalar::Opaque;
 use crate::visit::{Visit, VisitChildren};
 use crate::Id::Local;
 use crate::{
@@ -1025,7 +1024,7 @@ impl MirRelationExpr {
                 for key_set in input_keys.next().unwrap() {
                     if key_set
                         .iter()
-                        .all(|k| group_key.contains(&MirScalarExpr::Column(*k, Opaque(None))))
+                        .all(|k| group_key.contains(&MirScalarExpr::column(*k)))
                     {
                         result.push(
                             key_set
@@ -1033,7 +1032,7 @@ impl MirRelationExpr {
                                 .map(|i| {
                                     group_key
                                         .iter()
-                                        .position(|k| k == &MirScalarExpr::Column(*i, Opaque(None)))
+                                        .position(|k| k == &MirScalarExpr::column(*i))
                                         .unwrap()
                                 })
                                 .collect::<Vec<_>>(),
@@ -1486,9 +1485,7 @@ impl MirRelationExpr {
             .into_iter()
             .map(|vs| {
                 vs.into_iter()
-                    .map(|(r, c)| {
-                        input_mapper.map_expr_to_global(MirScalarExpr::Column(c, Opaque(None)), r)
-                    })
+                    .map(|(r, c)| input_mapper.map_expr_to_global(MirScalarExpr::column(c), r))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();

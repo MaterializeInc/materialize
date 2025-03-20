@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
+use mz_ore::incomparable::Incomparable;
 use mz_ore::soft_assert_eq_or_log;
 use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
 use mz_repr::explain::text::DisplayText;
@@ -26,7 +27,7 @@ use mz_sql_parser::ast::Ident;
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
 use crate::{
     AccessStrategy, AggregateExpr, EvalError, Id, JoinImplementation, JoinInputCharacteristics,
-    LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, Opaque, RowSetFinishing,
+    LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
 };
 
 impl<'a, T: 'a> DisplayText for ExplainSinglePlan<'a, T>
@@ -1227,11 +1228,11 @@ where
         use MirScalarExpr::*;
 
         match self.expr {
-            Column(i, Opaque(None)) => {
+            Column(i, Incomparable(None)) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation (plain column reference).
                 self.child(i).fmt(f)
             }
-            Column(i, Opaque(Some(name))) => {
+            Column(i, Incomparable(Some(name))) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation (with stored name information)
                 self.child(&(i, name)).fmt(f)
             }

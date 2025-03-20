@@ -69,14 +69,14 @@ WITH t AS (SELECT * FROM y WHERE a < 3)
 ----
 With
   cte l0 =
-    Filter (#0 < 3) // { arity: 1 }
+    Filter (#0{y.a} < 3) // { arity: 1 }
       CrossJoin // { arity: 1 }
         Constant // { arity: 0 }
           - ()
         Get materialize.public.y // { arity: 1 }
 Return // { arity: 1 }
   Project (#0) // { arity: 1 }
-    Filter (#0 = #1) // { arity: 2 }
+    Filter (#0{t.a} = #1{a.a}) // { arity: 2 }
       Project (#0, #1) // { arity: 2 }
         CrossJoin // { arity: 2 }
           Get l0 // { arity: 1 }
@@ -104,8 +104,8 @@ With
     Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l2 =
-    Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
-      Filter (#1 < #0) // { arity: 2 }
+    Reduce group_by=[#0] aggregates=[max(#1{y.a})] // { arity: 2 }
+      Filter (#1{y.a} < #0{x.a}) // { arity: 2 }
         CrossJoin // { arity: 2 }
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
@@ -163,8 +163,8 @@ With
     Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l2 =
-    Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
-      Filter (#1 < #0) // { arity: 2 }
+    Reduce group_by=[#0] aggregates=[max(#1{y.a})] // { arity: 2 }
+      Filter (#1{y.a} < #0{x.a}) // { arity: 2 }
         CrossJoin // { arity: 2 }
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
@@ -254,8 +254,8 @@ With
     Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l2 =
-    Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
-      Filter (#1 < #0) // { arity: 2 }
+    Reduce group_by=[#0] aggregates=[max(#1{y.a})] // { arity: 2 }
+      Filter (#1{y.a} < #0{x.a}) // { arity: 2 }
         CrossJoin // { arity: 2 }
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
@@ -278,7 +278,7 @@ Return // { arity: 3 }
   Project (#0, #2, #3) // { arity: 3 }
     Join on=(#0 = #1) // { arity: 4 }
       Get l0 // { arity: 1 }
-      Filter (#1 = #2) // { arity: 3 }
+      Filter (#1{a.m} = #2{b.m}) // { arity: 3 }
         Project (#0, #1, #3) // { arity: 3 }
           Join on=(#0 = #2) // { arity: 4 }
             Get l3 // { arity: 2 }
@@ -325,8 +325,8 @@ With
     Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l2 =
-    Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
-      Filter (#1 < #0) // { arity: 2 }
+    Reduce group_by=[#0] aggregates=[max(#1{y.a})] // { arity: 2 }
+      Filter (#1{y.a} < #0{x.a}) // { arity: 2 }
         CrossJoin // { arity: 2 }
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
@@ -436,8 +436,8 @@ With
     Distinct project=[#0] // { arity: 1 }
       Get l0 // { arity: 1 }
   cte l2 =
-    Reduce group_by=[#0] aggregates=[max(#1)] // { arity: 2 }
-      Filter (#1 < #0) // { arity: 2 }
+    Reduce group_by=[#0] aggregates=[max(#1{y.a})] // { arity: 2 }
+      Filter (#1{y.a} < #0{x.a}) // { arity: 2 }
         CrossJoin // { arity: 2 }
           Get l1 // { arity: 1 }
           Get materialize.public.y // { arity: 1 }
@@ -487,7 +487,7 @@ Return // { arity: 3 }
         Join on=(#1 = #2) // { arity: 4 }
           Get l3 // { arity: 2 }
           Project (#0, #2) // { arity: 2 }
-            Map (#0) // { arity: 3 }
+            Map (#0{y.a}) // { arity: 3 }
               Project (#0, #1) // { arity: 2 }
                 Filter (#2 > 0) // { arity: 3 }
                   Project (#0, #1, #3) // { arity: 3 }
