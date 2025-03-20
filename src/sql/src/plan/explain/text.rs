@@ -19,6 +19,7 @@
 //!    default, can be turned off with `WITH(raw_syntax)`).
 
 use itertools::Itertools;
+use mz_ore::incomparable::Incomparable;
 use std::fmt;
 
 use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
@@ -283,13 +284,13 @@ impl fmt::Display for HirScalarExpr {
         use HirRelationExpr::Get;
         use HirScalarExpr::*;
         match self {
-            Column(i, None) => write!(
+            Column(i, Incomparable(None)) => write!(
                 f,
                 "#{}{}",
                 (0..i.level).map(|_| '^').collect::<String>(),
                 i.column
             ),
-            Column(i, Some(name)) => write!(
+            Column(i, Incomparable(Some(name))) => write!(
                 f,
                 "#{}{}{{{name}}}",
                 (0..i.level).map(|_| '^').collect::<String>(),

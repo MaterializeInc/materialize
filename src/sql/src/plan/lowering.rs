@@ -951,7 +951,7 @@ impl HirScalarExpr {
             }
 
             Ok::<MirScalarExpr, PlanError>(match self {
-                Column(col_ref, name) => SS::named_column(col_map.get(&col_ref), name),
+                Column(col_ref, name) => SS::Column(col_map.get(&col_ref), name),
                 Literal(row, typ, _name) => SS::Literal(Ok(row), typ),
                 Parameter(_, _name) => {
                     panic!("cannot decorrelate expression with unbound parameters")
@@ -1638,7 +1638,7 @@ impl HirScalarExpr {
         use HirScalarExpr::*;
 
         Ok(match self {
-            Column(ColumnRef { level: 0, column }, name) => SS::named_column(column, name),
+            Column(ColumnRef { level: 0, column }, name) => SS::Column(column, name),
             Literal(datum, typ, _name) => SS::Literal(Ok(datum), typ),
             CallUnmaterializable(func, _name) => SS::CallUnmaterializable(func),
             CallUnary {

@@ -23,7 +23,7 @@ use std::ops::Deref;
 
 /// Behaves like `T`, but has trivial `Hash`, `Eq`, `MzReflect`, and `Ord`
 /// implementations.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Incomparable<T>(pub T);
 
 impl<T> Hash for Incomparable<T> {
