@@ -752,7 +752,11 @@ pub async fn query_relation(
         .await
         .context(format!("Failed to get column names for {}", relation_name))?
         .into_iter()
-        .map(|row| row.get::<_, String>("name"))
+        .map(|row| match row.try_get::<_, String>("name") {
+            Ok(name) => Some(name),
+            Err(_) => None,
+        })
+        .filter_map(|row| row)
         .collect::<Vec<_>>();
 
     match relation_category {
@@ -819,10 +823,20 @@ impl<'n> SystemCatalogDumper<'n> {
         let cluster_replicas = match pg_client.query(SELECT_CLUSTER_REPLICAS_QUERY, &[]).await {
             Ok(rows) => rows
                 .into_iter()
-                .map(|row| ClusterReplica {
-                    cluster_name: row.get::<_, String>("cluster_name"),
-                    replica_name: row.get::<_, String>("replica_name"),
+                .map(|row| {
+                    let cluster_name = row.try_get::<_, String>("cluster_name");
+                    let replica_name = row.try_get::<_, String>("replica_name");
+
+                    if let (Ok(cluster_name), Ok(replica_name)) = (cluster_name, replica_name) {
+                        Some(ClusterReplica {
+                            cluster_name,
+                            replica_name,
+                        })
+                    } else {
+                        None
+                    }
                 })
+                .filter_map(|row| row)
                 .collect::<Vec<_>>(),
             Err(e) => {
                 error!("Failed to get replica names: {}", e);
