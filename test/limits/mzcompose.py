@@ -1789,7 +1789,7 @@ SERVICES = [
     Cockroach(in_memory=True),
     Materialized(
         memory="8G",
-        cpu=2,
+        cpu="2",
         default_size=1,
         options=[
             # Enable TLS on the public port to verify that balancerd is connecting to the balancerd port.
@@ -1816,7 +1816,7 @@ for cluster_id in range(1, MAX_CLUSTERS + 1):
     for replica_id in range(1, MAX_REPLICAS + 1):
         for node_id in range(1, MAX_NODES + 1):
             SERVICES.append(
-                Clusterd(name=f"clusterd_{cluster_id}_{replica_id}_{node_id}", cpu=2)
+                Clusterd(name=f"clusterd_{cluster_id}_{replica_id}_{node_id}", cpu="2")
             )
 
 
