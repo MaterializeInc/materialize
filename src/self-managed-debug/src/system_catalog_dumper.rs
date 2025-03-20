@@ -889,7 +889,7 @@ impl<'n> SystemCatalogDumper<'n> {
                         Ok(()) => Ok(()),
                         Err(err) => {
                             error!(
-                                "{}: {}. Retrying...",
+                                "{}: {:#}. Retrying...",
                                 format_catalog_dump_error_message(relation_name, cluster_replica),
                                 err
                             );
@@ -991,7 +991,7 @@ impl<'n> SystemCatalogDumper<'n> {
                 };
 
                 error!(
-                    "{}: {}.\nConsider increasing the size of the cluster {}",
+                    "{}: {:#}.\nConsider increasing the size of the cluster {}",
                     format_catalog_dump_error_message(relation.name, replica),
                     err,
                     docs_link
