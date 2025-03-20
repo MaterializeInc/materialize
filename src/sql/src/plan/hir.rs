@@ -3612,3 +3612,307 @@ impl AggregateExpr {
         self.func == AggregateFunc::Count && self.expr.is_literal_true() && !self.distinct
     }
 }
+
+/// A wrapper that allows `HirScalarExpr` to be compared without considering
+/// the `name` field.
+pub struct NamelessHirRelationExpr<'a>(pub &'a HirRelationExpr);
+
+impl<'a> PartialEq for NamelessHirRelationExpr<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        use HirRelationExpr::*;
+        match (&self.0, &other.0) {
+            (Constant { .. }, _) | (Get { .. }, _) => self.0 == other.0,
+            (
+                LetRec {
+                    limit: limit1,
+                    bindings: bindings1,
+                    body: body1,
+                },
+                LetRec {
+                    limit: limit2,
+                    bindings: bindings2,
+                    body: body2,
+                },
+            ) => {
+                limit1 == limit2
+                    && bindings1.len() == bindings2.len()
+                    && bindings1.iter().zip_eq(bindings2.iter()).all(|(b1, b2)| {
+                        b1.0 == b2.0
+                            && b1.1 == b2.1
+                            && NamelessHirRelationExpr(&b1.2) == NamelessHirRelationExpr(&b2.2)
+                    })
+                    && NamelessHirRelationExpr(&body1) == NamelessHirRelationExpr(&body2)
+            }
+            (
+                Let {
+                    name: name1,
+                    id: id1,
+                    value: value1,
+                    body: body1,
+                },
+                Let {
+                    name: name2,
+                    id: id2,
+                    value: value2,
+                    body: body2,
+                },
+            ) => {
+                name1 == name2
+                    && id1 == id2
+                    && NamelessHirRelationExpr(value1.as_ref())
+                        == NamelessHirRelationExpr(value2.as_ref())
+                    && NamelessHirRelationExpr(body1.as_ref())
+                        == NamelessHirRelationExpr(body2.as_ref())
+            }
+            (
+                Project {
+                    input: input1,
+                    outputs: outputs1,
+                },
+                Project {
+                    input: input2,
+                    outputs: outputs2,
+                },
+            ) => {
+                NamelessHirRelationExpr(input1) == NamelessHirRelationExpr(input2)
+                    && outputs1 == outputs2
+            }
+            (
+                Map {
+                    input: input1,
+                    scalars: exprs1,
+                },
+                Map {
+                    input: input2,
+                    scalars: exprs2,
+                },
+            ) => {
+                NamelessHirRelationExpr(input1) == NamelessHirRelationExpr(input2)
+                    && exprs1.len() == exprs2.len()
+                    && exprs1
+                        .iter()
+                        .zip_eq(exprs2.iter())
+                        .all(|(e1, e2)| NamelessHirScalarExpr(e1) == NamelessHirScalarExpr(e2))
+            }
+            (
+                CallTable {
+                    func: func1,
+                    exprs: exprs1,
+                },
+                CallTable {
+                    func: func2,
+                    exprs: exprs2,
+                },
+            ) => {
+                func1 == func2
+                    && exprs1.len() == exprs2.len()
+                    && exprs1
+                        .iter()
+                        .zip_eq(exprs2.iter())
+                        .all(|(e1, e2)| NamelessHirScalarExpr(e1) == NamelessHirScalarExpr(e2))
+            }
+            (
+                Filter {
+                    input: input1,
+                    predicates: predicates1,
+                },
+                Filter {
+                    input: input2,
+                    predicates: predicates2,
+                },
+            ) => {
+                NamelessHirRelationExpr(input1) == NamelessHirRelationExpr(input2)
+                    && predicates1.len() == predicates2.len()
+                    && predicates1
+                        .iter()
+                        .zip_eq(predicates2.iter())
+                        .all(|(p1, p2)| NamelessHirScalarExpr(p1) == NamelessHirScalarExpr(p2))
+            }
+            (
+                Join {
+                    left: left1,
+                    right: right1,
+                    on: on1,
+                    kind: kind1,
+                },
+                Join {
+                    left: left2,
+                    right: right2,
+                    on: on2,
+                    kind: kind2,
+                },
+            ) => {
+                NamelessHirRelationExpr(left1) == NamelessHirRelationExpr(right1)
+                    && NamelessHirRelationExpr(left2) == NamelessHirRelationExpr(right2)
+                    && NamelessHirScalarExpr(on1) == NamelessHirScalarExpr(on2)
+                    && kind1 == kind2
+            }
+            (
+                Reduce {
+                    input: input1,
+                    group_key: group_key1,
+                    aggregates: aggregates1,
+                    expected_group_size: expected_group_size1,
+                },
+                Reduce {
+                    input: input2,
+                    group_key: group_key2,
+                    aggregates: aggregates2,
+                    expected_group_size: expected_group_size2,
+                },
+            ) => {
+                NamelessHirRelationExpr(input1) == NamelessHirRelationExpr(input2)
+                    && group_key1 == group_key2
+                    && aggregates1.len() == aggregates2.len()
+                    && aggregates1
+                        .iter()
+                        .zip_eq(aggregates2.iter())
+                        .all(|(a1, a2)| NamelessAggregateExpr(a1) == NamelessAggregateExpr(a2))
+                    && expected_group_size1 == expected_group_size2
+            }
+            (Distinct { input: input1 }, Distinct { input: input2 })
+            | (Negate { input: input1 }, Negate { input: input2 })
+            | (Threshold { input: input1 }, Threshold { input: input2 }) => {
+                NamelessHirRelationExpr(input1) == NamelessHirRelationExpr(input2)
+            }
+            (
+                TopK {
+                    input: input1,
+                    group_key: group_key1,
+                    order_key: order_key1,
+                    limit: limit1,
+                    offset: offset1,
+                    expected_group_size: expected_group_size1,
+                },
+                TopK {
+                    input: input2,
+                    group_key: group_key2,
+                    order_key: order_key2,
+                    limit: limit2,
+                    offset: offset2,
+                    expected_group_size: expected_group_size2,
+                },
+            ) => {
+                NamelessHirRelationExpr(input1) == NamelessHirRelationExpr(input2)
+                    && group_key1 == group_key2
+                    && order_key1 == order_key2
+                    && limit1.as_ref().map(NamelessHirScalarExpr)
+                        == limit2.as_ref().map(NamelessHirScalarExpr)
+                    && offset1 == offset2
+                    && expected_group_size1 == expected_group_size2
+            }
+            (
+                Union {
+                    base: base1,
+                    inputs: inputs1,
+                },
+                Union {
+                    base: base2,
+                    inputs: inputs2,
+                },
+            ) => {
+                NamelessHirRelationExpr(base1) == NamelessHirRelationExpr(base2)
+                    && inputs1.len() == inputs2.len()
+                    && inputs1
+                        .iter()
+                        .zip_eq(inputs2.iter())
+                        .all(|(i1, i2)| NamelessHirRelationExpr(i1) == NamelessHirRelationExpr(i2))
+            }
+            (_, _) => false,
+        }
+    }
+}
+
+/// A wrapper that allows `HirScalarExpr` to be compared without considering
+/// the `name` field.
+pub struct NamelessHirScalarExpr<'a>(pub &'a HirScalarExpr);
+
+impl<'a> PartialEq for NamelessHirScalarExpr<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        use HirScalarExpr::*;
+        match (&self.0, &other.0) {
+            (Column(i1, _), Column(i2, _)) => i1 == i2,
+            (Parameter(i1, _), Parameter(i2, _)) => i1 == i2,
+            (Literal(_, t1, _), Literal(_, t2, _)) => t1 == t2,
+            (CallUnmaterializable(f1, _), CallUnmaterializable(f2, _)) => f1 == f2,
+            (
+                CallUnary {
+                    expr: e1,
+                    func: f1,
+                    name: _,
+                },
+                CallUnary {
+                    expr: e2,
+                    func: f2,
+                    name: _,
+                },
+            ) => NamelessHirScalarExpr(e1) == NamelessHirScalarExpr(e2) && f1 == f2,
+            (
+                CallBinary {
+                    expr1: e11,
+                    expr2: e12,
+                    func: f1,
+                    name: _,
+                },
+                CallBinary {
+                    expr1: e21,
+                    expr2: e22,
+                    func: f2,
+                    name: _,
+                },
+            ) => {
+                NamelessHirScalarExpr(e11) == NamelessHirScalarExpr(e21)
+                    && NamelessHirScalarExpr(e12) == NamelessHirScalarExpr(e22)
+                    && f1 == f2
+            }
+            (
+                If {
+                    cond: cond1,
+                    then: then1,
+                    els: els1,
+                    name: _,
+                },
+                If {
+                    cond: cond2,
+                    then: then2,
+                    els: els2,
+                    name: _,
+                },
+            ) => {
+                NamelessHirScalarExpr(cond1) == NamelessHirScalarExpr(cond2)
+                    && NamelessHirScalarExpr(then1) == NamelessHirScalarExpr(then2)
+                    && NamelessHirScalarExpr(els1) == NamelessHirScalarExpr(els2)
+            }
+            (Exists(e1, _), Exists(e2, _)) | (Select(e1, _), Select(e2, _)) => {
+                NamelessHirRelationExpr(&e1) == NamelessHirRelationExpr(&e2)
+            }
+            (Windowing(we1, _), Windowing(we2, _)) => {
+                we1.partition_by.len() == we2.partition_by.len()
+                    && we1.order_by.len() == we2.order_by.len()
+                    && we1
+                        .partition_by
+                        .iter()
+                        .zip_eq(we2.order_by.iter())
+                        .all(|(o1, o2)| NamelessHirScalarExpr(o1) == NamelessHirScalarExpr(o2))
+                    && we1
+                        .order_by
+                        .iter()
+                        .zip_eq(we2.order_by.iter())
+                        .all(|(o1, o2)| NamelessHirScalarExpr(o1) == NamelessHirScalarExpr(o2))
+            }
+            (_, _) => false,
+        }
+    }
+}
+
+/// A wrapper that allows `AggregateExpr` to be compared without considering
+/// the `name` field in the underlying `HirScalarExpr`s.
+pub struct NamelessAggregateExpr<'a>(pub &'a AggregateExpr);
+
+impl<'a> PartialEq for NamelessAggregateExpr<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.func == other.0.func
+            && NamelessHirScalarExpr(&self.0.expr) == NamelessHirScalarExpr(&other.0.expr)
+            && self.0.distinct == other.0.distinct
+    }
+}

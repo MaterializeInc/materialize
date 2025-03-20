@@ -89,8 +89,9 @@ use crate::plan::error::PlanError;
 use crate::plan::hir::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, AggregateWindowExpr,
     BinaryFunc, CoercibleScalarExpr, CoercibleScalarType, ColumnOrder, ColumnRef, Hir,
-    HirRelationExpr, HirScalarExpr, JoinKind, ScalarWindowExpr, ScalarWindowFunc, UnaryFunc,
-    ValueWindowExpr, ValueWindowFunc, VariadicFunc, WindowExpr, WindowExprType,
+    HirRelationExpr, HirScalarExpr, JoinKind, NamelessHirScalarExpr, ScalarWindowExpr,
+    ScalarWindowFunc, UnaryFunc, ValueWindowExpr, ValueWindowFunc, VariadicFunc, WindowExpr,
+    WindowExprType,
 };
 use crate::plan::plan_utils::{self, GroupSizeHints, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem, ScopeUngroupedColumn};
@@ -2606,12 +2607,20 @@ fn plan_select_from_where(
                 for ord in order_by.iter().take(distinct_exprs.len()) {
                     // The unusual construction of `expr` here is to ensure the
                     // temporary column expression lives long enough.
+                    //
+                    // We then have to make sure we do a `NamelessHirScalarExpr`
+                    // comparison, since this raw column reference has no name information.
                     let mut expr = &HirScalarExpr::column(ord.column);
                     if ord.column >= arity {
                         expr = &map_exprs[ord.column - arity];
                     };
-                    match distinct_exprs.iter().position(move |e| e == expr) {
-                        None => sql_bail!("SELECT DISTINCT ON expressions must match initial ORDER BY expressions"),
+                    match distinct_exprs
+                        .iter()
+                        .position(move |e| NamelessHirScalarExpr(e) == NamelessHirScalarExpr(&expr))
+                    {
+                        None => sql_bail!(
+                            "SELECT DISTINCT ON expressions must match initial ORDER BY expressions"
+                        ),
                         Some(pos) => {
                             distinct_exprs.remove(pos);
                         }
