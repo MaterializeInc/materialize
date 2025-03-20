@@ -263,6 +263,15 @@ pub const SINK_PROGRESS_SEARCH: Config<bool> = Config::new(
     "If set, iteratively search the progress topic for a progress record with increasing lookback.",
 );
 
+/// Configure how to behave when trying to create an existing topic with specified configs.
+pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
+    "storage_sink_ensure_topic_config",
+    "skip",
+    "If `skip`, don't check the config of existing topics; if `check`, fetch the config and \
+    warn if it does not match the expected configs; if `alter`, attempt to change the upstream to \
+    match the expected configs.",
+);
+
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -293,4 +302,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
         .add(&SINK_PROGRESS_SEARCH)
+        .add(&SINK_ENSURE_TOPIC_CONFIG)
 }
