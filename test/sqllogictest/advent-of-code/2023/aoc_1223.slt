@@ -311,38 +311,37 @@ Explained Query:
         Distinct project=[#0..=#3] // { arity: 4 }
           Union // { arity: 4 }
             Project (#0..=#2, #1) // { arity: 4 }
-              Distinct project=[#0..=#2] // { arity: 3 }
-                Union // { arity: 3 }
-                  Project (#0, #1, #4) // { arity: 3 }
-                    Map ((#0{r} + 1)) // { arity: 5 }
-                      Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
-                        implementation
-                          %1[#0, #1]UKKA » %0:l2[#0, #1]KK
-                        Get l2 // { arity: 2 }
-                        ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                          Distinct project=[#0, #1] // { arity: 2 }
-                            Project (#0, #1) // { arity: 2 }
-                              Join on=(#1{c} = #3{right_col1_13} AND #2{right_col0_12} = (#0{r} + 1)) type=differential // { arity: 4 }
-                                implementation
-                                  %0:l1[(#0{r} + 1), #1{c}]KK » %1:l2[#0{right_col0_12}, #1{right_col1_13}]KK
-                                ArrangeBy keys=[[(#0{r} + 1), #1{c}]] // { arity: 2 }
-                                  Get l1 // { arity: 2 }
-                                Get l2 // { arity: 2 }
-                  Project (#0, #1, #4) // { arity: 3 }
-                    Map ((#0{r} - 1)) // { arity: 5 }
-                      Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
-                        implementation
-                          %1[#0, #1]UKKA » %0:l2[#0, #1]KK
-                        Get l2 // { arity: 2 }
-                        ArrangeBy keys=[[#0, #1]] // { arity: 2 }
-                          Distinct project=[#0, #1] // { arity: 2 }
-                            Project (#0, #1) // { arity: 2 }
-                              Join on=(#1{c} = #3{right_col1_16} AND #2{right_col0_15} = (#0{r} - 1)) type=differential // { arity: 4 }
-                                implementation
-                                  %0:l1[(#0{r} - 1), #1{c}]KK » %1:l2[#0{right_col0_15}, #1{right_col1_16}]KK
-                                ArrangeBy keys=[[(#0{r} - 1), #1{c}]] // { arity: 2 }
-                                  Get l1 // { arity: 2 }
-                                Get l2 // { arity: 2 }
+              Union // { arity: 3 }
+                Project (#0, #1, #4) // { arity: 3 }
+                  Map ((#0{r} + 1)) // { arity: 5 }
+                    Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+                      implementation
+                        %1[#0, #1]UKKA » %0:l2[#0, #1]KK
+                      Get l2 // { arity: 2 }
+                      ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                        Distinct project=[#0, #1] // { arity: 2 }
+                          Project (#0, #1) // { arity: 2 }
+                            Join on=(#1{c} = #3{right_col1_13} AND #2{right_col0_12} = (#0{r} + 1)) type=differential // { arity: 4 }
+                              implementation
+                                %0:l1[(#0{r} + 1), #1{c}]KK » %1:l2[#0{right_col0_12}, #1{right_col1_13}]KK
+                              ArrangeBy keys=[[(#0{r} + 1), #1{c}]] // { arity: 2 }
+                                Get l1 // { arity: 2 }
+                              Get l2 // { arity: 2 }
+                Project (#0, #1, #4) // { arity: 3 }
+                  Map ((#0{r} - 1)) // { arity: 5 }
+                    Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
+                      implementation
+                        %1[#0, #1]UKKA » %0:l2[#0, #1]KK
+                      Get l2 // { arity: 2 }
+                      ArrangeBy keys=[[#0, #1]] // { arity: 2 }
+                        Distinct project=[#0, #1] // { arity: 2 }
+                          Project (#0, #1) // { arity: 2 }
+                            Join on=(#1{c} = #3{right_col1_16} AND #2{right_col0_15} = (#0{r} - 1)) type=differential // { arity: 4 }
+                              implementation
+                                %0:l1[(#0{r} - 1), #1{c}]KK » %1:l2[#0{right_col0_15}, #1{right_col1_16}]KK
+                              ArrangeBy keys=[[(#0{r} - 1), #1{c}]] // { arity: 2 }
+                                Get l1 // { arity: 2 }
+                              Get l2 // { arity: 2 }
             Project (#0, #1, #0, #4) // { arity: 4 }
               Map ((#1{c} + 1)) // { arity: 5 }
                 Join on=(#0 = #2 AND #1 = #3) type=differential // { arity: 4 }
