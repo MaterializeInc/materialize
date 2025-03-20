@@ -362,7 +362,7 @@ where
             let mut health_cap = Some(caps.remove(0));
 
             move |frontiers| {
-                let mut statuses = vec![];
+                let mut last_status = None;
                 let mut health_output = health_output.activate();
 
                 if frontiers[0].is_empty() {
@@ -392,8 +392,9 @@ where
                             namespace: C::STATUS_NAMESPACE.clone(),
                             update: status,
                         };
-                        if statuses.last() != Some(&status) {
-                            statuses.push(status);
+                        if last_status.as_ref() != Some(&status) {
+                            last_status = Some(status.clone());
+                            health_output.session(&health_cap).give(status);
                         }
 
                         match message {
@@ -409,13 +410,6 @@ where
                     }
                     let mut output = output.activate();
                     output.session(&cap).give_container(data);
-
-                    if !statuses.is_empty() {
-                        health_output
-                            .session(&health_cap)
-                            .give_container(&mut statuses);
-                        statuses.clear();
-                    }
                 }
             }
         });
