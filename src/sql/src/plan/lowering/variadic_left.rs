@@ -341,11 +341,13 @@ pub(crate) fn attempt_left_join_magic(
                 .map(
                     (oa + ba..oa + ba + ra)
                         .map(|col| MirScalarExpr::If {
-                            cond: Box::new(MirScalarExpr::Column(oa + ba + ra).call_is_null()),
+                            cond: Box::new(
+                                MirScalarExpr::Column(oa + ba + ra, None).call_is_null(),
+                            ),
                             then: Box::new(MirScalarExpr::literal_null(
                                 rt[col - (oa + ba)].scalar_type.clone(),
                             )),
-                            els: Box::new(MirScalarExpr::Column(col)),
+                            els: Box::new(MirScalarExpr::Column(col, None)),
                         })
                         .collect(),
                 )
@@ -409,7 +411,8 @@ fn decompose_equations(predicate: &MirScalarExpr) -> Option<Vec<(usize, usize)>>
                 expr1,
                 expr2,
             } => {
-                if let (MirScalarExpr::Column(c1), MirScalarExpr::Column(c2)) = (&**expr1, &**expr2)
+                if let (MirScalarExpr::Column(c1, _name1), MirScalarExpr::Column(c2, _name2)) =
+                    (&**expr1, &**expr2)
                 {
                     if c1 < c2 {
                         equations.push((*c1, *c2));
@@ -449,14 +452,14 @@ fn recompose_equations(pairs: Vec<(usize, usize)>) -> Vec<MirScalarExpr> {
             exprs: vec![
                 MirScalarExpr::CallBinary {
                     func: BinaryFunc::Eq,
-                    expr1: Box::new(MirScalarExpr::Column(*x)),
-                    expr2: Box::new(MirScalarExpr::Column(*y)),
+                    expr1: Box::new(MirScalarExpr::Column(*x, None)),
+                    expr2: Box::new(MirScalarExpr::Column(*y, None)),
                 },
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::And,
                     exprs: vec![
-                        MirScalarExpr::Column(*x).call_is_null(),
-                        MirScalarExpr::Column(*y).call_is_null(),
+                        MirScalarExpr::Column(*x, None).call_is_null(),
+                        MirScalarExpr::Column(*y, None).call_is_null(),
                     ],
                 },
             ],

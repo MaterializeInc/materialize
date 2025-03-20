@@ -41,6 +41,8 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::{TryFrom, TryInto};
 use std::num::NonZeroU64;
+use std::rc::Rc;
+use std::sync::Arc;
 use std::{iter, mem};
 
 use itertools::Itertools;
@@ -87,8 +89,9 @@ use crate::plan::error::PlanError;
 use crate::plan::hir::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, AggregateWindowExpr,
     BinaryFunc, CoercibleScalarExpr, CoercibleScalarType, ColumnOrder, ColumnRef, Hir,
-    HirRelationExpr, HirScalarExpr, JoinKind, ScalarWindowExpr, ScalarWindowFunc, UnaryFunc,
-    ValueWindowExpr, ValueWindowFunc, VariadicFunc, WindowExpr, WindowExprType,
+    HirRelationExpr, HirScalarExpr, JoinKind, NamelessHirScalarExpr, ScalarWindowExpr,
+    ScalarWindowFunc, UnaryFunc, ValueWindowExpr, ValueWindowFunc, VariadicFunc, WindowExpr,
+    WindowExprType,
 };
 use crate::plan::plan_utils::{self, GroupSizeHints, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem, ScopeUngroupedColumn};
@@ -942,7 +945,7 @@ fn handle_mutation_using_clause(
         // local import to not get confused with `mz_sql_parser::ast::visit::Visit`
         use mz_expr::visit::Visit;
         expr.visit_mut_post(&mut |e| {
-            if let HirScalarExpr::Column(c) = e {
+            if let HirScalarExpr::Column(c, _name) = e {
                 if c.column >= using_rel_arity {
                     c.level += 1;
                     c.column -= using_rel_arity;
@@ -2315,10 +2318,13 @@ fn plan_select_from_where(
                 }
             }
 
-            let mut scope_item = if let HirScalarExpr::Column(ColumnRef {
-                level: 0,
-                column: old_column,
-            }) = &expr
+            let mut scope_item = if let HirScalarExpr::Column(
+                ColumnRef {
+                    level: 0,
+                    column: old_column,
+                },
+                _name,
+            ) = &expr
             {
                 // If we later have `SELECT foo.*` then we have to find all
                 // the `foo` items in `from_scope` and figure out where they
@@ -2505,7 +2511,7 @@ fn plan_select_from_where(
                 }
                 ExpandedSelectItem::Expr(expr) => plan_expr(ecx, expr)?.type_as_any(ecx)?,
             };
-            if let HirScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
+            if let HirScalarExpr::Column(ColumnRef { level: 0, column }, _name) = expr {
                 // Simple column reference; no need to map on a new expression.
                 output_columns.push((column, column_name));
             } else {
@@ -2601,12 +2607,20 @@ fn plan_select_from_where(
                 for ord in order_by.iter().take(distinct_exprs.len()) {
                     // The unusual construction of `expr` here is to ensure the
                     // temporary column expression lives long enough.
+                    //
+                    // We then have to make sure we do a `NamelessHirScalarExpr`
+                    // comparison, since this raw column reference has no name information.
                     let mut expr = &HirScalarExpr::column(ord.column);
                     if ord.column >= arity {
                         expr = &map_exprs[ord.column - arity];
                     };
-                    match distinct_exprs.iter().position(move |e| e == expr) {
-                        None => sql_bail!("SELECT DISTINCT ON expressions must match initial ORDER BY expressions"),
+                    match distinct_exprs
+                        .iter()
+                        .position(move |e| NamelessHirScalarExpr(e) == NamelessHirScalarExpr(&expr))
+                    {
+                        None => sql_bail!(
+                            "SELECT DISTINCT ON expressions must match initial ORDER BY expressions"
+                        ),
                         Some(pos) => {
                             distinct_exprs.remove(pos);
                         }
@@ -2619,7 +2633,7 @@ fn plan_select_from_where(
                     // If the expression is a reference to an existing column,
                     // do not introduce a new column to support it.
                     let column = match expr {
-                        HirScalarExpr::Column(ColumnRef { level: 0, column }) => column,
+                        HirScalarExpr::Column(ColumnRef { level: 0, column }, _name) => column,
                         _ => {
                             map_exprs.push(expr);
                             arity + map_exprs.len() - 1
@@ -2812,7 +2826,7 @@ pub(crate) fn plan_order_by_exprs(
         // If the expression is a reference to an existing column,
         // do not introduce a new column to support it.
         let column = match expr {
-            HirScalarExpr::Column(ColumnRef { level: 0, column }) => column,
+            HirScalarExpr::Column(ColumnRef { level: 0, column }, _name) => column,
             _ => {
                 map_exprs.push(expr);
                 ecx.relation_type.arity() + map_exprs.len() - 1
@@ -3080,6 +3094,7 @@ fn plan_rows_from_internal<'a>(
             func: BinaryFunc::Eq,
             expr1: Box::new(HirScalarExpr::column(left_col)),
             expr2: Box::new(HirScalarExpr::column(right_col)),
+            name: None,
         };
         left_expr = left_expr
             .join(right_expr, on, JoinKind::FullOuter)
@@ -3089,6 +3104,7 @@ fn plan_rows_from_internal<'a>(
                     HirScalarExpr::column(left_col),
                     HirScalarExpr::column(right_col),
                 ],
+                name: None,
             }]);
 
         // Project off the previous iteration's coalesced column, but keep both of this
@@ -3250,14 +3266,17 @@ fn plan_table_function_internal(
     };
 
     if with_ordinality {
-        expr = expr.map(vec![HirScalarExpr::Windowing(WindowExpr {
-            func: WindowExprType::Scalar(ScalarWindowExpr {
-                func: ScalarWindowFunc::RowNumber,
+        expr = expr.map(vec![HirScalarExpr::Windowing(
+            WindowExpr {
+                func: WindowExprType::Scalar(ScalarWindowExpr {
+                    func: ScalarWindowFunc::RowNumber,
+                    order_by: vec![],
+                }),
+                partition_by: vec![],
                 order_by: vec![],
-            }),
-            partition_by: vec![],
-            order_by: vec![],
-        })]);
+            },
+            None,
+        )]);
         scope
             .items
             .push(ScopeItem::from_name(scope_name, "ordinality"));
@@ -3743,8 +3762,17 @@ fn plan_using_constraint(
     let mut hidden_cols = vec![];
 
     for column_name in column_names {
-        let lhs = left_scope.resolve_using_column(column_name, JoinSide::Left)?;
-        let mut rhs = right_scope.resolve_using_column(column_name, JoinSide::Right)?;
+        // the two sides will have different names (e.g., `t1.a` and `t2.a`)
+        let (lhs, lhs_name) = left_scope.resolve_using_column(
+            column_name,
+            JoinSide::Left,
+            &mut left_qcx.name_manager.borrow_mut(),
+        )?;
+        let (mut rhs, rhs_name) = right_scope.resolve_using_column(
+            column_name,
+            JoinSide::Right,
+            &mut right_qcx.name_manager.borrow_mut(),
+        )?;
 
         // Adjust the RHS reference to its post-join location.
         rhs.column += left_scope.len();
@@ -3756,8 +3784,14 @@ fn plan_using_constraint(
                 column_name.as_str().quoted()
             )),
             vec![
-                CoercibleScalarExpr::Coerced(HirScalarExpr::Column(lhs)),
-                CoercibleScalarExpr::Coerced(HirScalarExpr::Column(rhs)),
+                CoercibleScalarExpr::Coerced(HirScalarExpr::Column(
+                    lhs,
+                    Some(Arc::clone(&lhs_name)),
+                )),
+                CoercibleScalarExpr::Coerced(HirScalarExpr::Column(
+                    rhs,
+                    Some(Arc::clone(&rhs_name)),
+                )),
             ],
             None,
         )?;
@@ -3781,6 +3815,7 @@ fn plan_using_constraint(
                 map_exprs.push(HirScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
                     exprs: vec![expr1.clone(), expr2.clone()],
+                    name: Some(Arc::clone(&lhs_name)), // arbitrarily choose the left name
                 });
                 new_items.push(ScopeItem::from_column_name(column_name));
             }
@@ -3802,13 +3837,15 @@ fn plan_using_constraint(
 
             // Should be safe to use either `lhs` or `rhs` here since the column
             // is available in both scopes and must have the same type of the new item.
-            map_exprs.push(HirScalarExpr::Column(lhs));
+            // We (arbitrarily) choose the left name.
+            map_exprs.push(HirScalarExpr::Column(lhs, Some(Arc::clone(&lhs_name))));
         }
 
         join_exprs.push(HirScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
             expr1: Box::new(expr1),
             expr2: Box::new(expr2),
+            name: None,
         });
     }
     both_scope.items.extend(new_items);
@@ -3849,9 +3886,13 @@ fn plan_expr_inner<'a>(
     ecx: &'a ExprContext,
     e: &Expr<Aug>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
-    if let Some(i) = ecx.scope.resolve_expr(e) {
+    if let Some((i, item)) = ecx.scope.resolve_expr(e) {
         // We've already calculated this expression.
-        return Ok(HirScalarExpr::Column(i).into());
+        return Ok(HirScalarExpr::Column(
+            i,
+            Some(ecx.qcx.name_manager.borrow_mut().intern_scope_item(item)),
+        )
+        .into());
     }
 
     match e {
@@ -3954,7 +3995,7 @@ fn plan_parameter(ecx: &ExprContext, n: usize) -> Result<CoercibleScalarExpr, Pl
         return Err(PlanError::UnknownParameter(n));
     }
     if ecx.param_types().borrow().contains_key(&n) {
-        Ok(HirScalarExpr::Parameter(n).into())
+        Ok(HirScalarExpr::Parameter(n, None).into())
     } else {
         Ok(CoercibleScalarExpr::Parameter(n))
     }
@@ -3999,6 +4040,7 @@ fn plan_not(ecx: &ExprContext, expr: &Expr<Aug>) -> Result<CoercibleScalarExpr, 
     Ok(HirScalarExpr::CallUnary {
         func: UnaryFunc::Not(expr_func::Not),
         expr: Box::new(plan_expr(&ecx, expr)?.type_as(&ecx, &ScalarType::Bool)?),
+        name: None,
     }
     .into())
 }
@@ -4069,6 +4111,7 @@ fn plan_homogenizing_function(
             plan_exprs(ecx, exprs)?,
             None,
         )?,
+        name: None,
     };
     Ok(expr.into())
 }
@@ -4178,6 +4221,7 @@ fn plan_subscript_array(
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ArrayIndex { offset },
         exprs,
+        name: None,
     }
     .into())
 }
@@ -4265,6 +4309,7 @@ fn plan_index_list(
         HirScalarExpr::CallVariadic {
             func: VariadicFunc::ListIndex,
             exprs,
+            name: None,
         },
     ))
 }
@@ -4302,6 +4347,7 @@ fn plan_slice_list(
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ListSliceLinear,
         exprs,
+        name: None,
     })
 }
 
@@ -4373,6 +4419,7 @@ fn plan_subscript_jsonb(
                 elem_type: ScalarType::String,
             },
             exprs,
+            name: None,
         },
         BinaryFunc::JsonbGetPath { stringify: false },
     );
@@ -4517,6 +4564,7 @@ where
     let aggregation_exprs: Vec<_> = iter::once(HirScalarExpr::CallVariadic {
         func: vector_create(elem_type.clone()),
         exprs: vec![HirScalarExpr::column(project_column)],
+        name: None,
     })
     .chain(
         planned_query
@@ -4550,6 +4598,7 @@ where
                             .collect(),
                     },
                     exprs: aggregation_exprs,
+                    name: None,
                 }),
                 distinct: false,
             }],
@@ -4560,8 +4609,9 @@ where
     // If `expr` has no rows, return an empty array/list rather than NULL.
     Ok(HirScalarExpr::CallBinary {
         func: binary_concat,
-        expr1: Box::new(HirScalarExpr::Select(Box::new(reduced_expr))),
+        expr1: Box::new(HirScalarExpr::Select(Box::new(reduced_expr), None)),
         expr2: Box::new(empty_literal(elem_type)),
+        name: None,
     }
     .into())
 }
@@ -4611,6 +4661,7 @@ fn plan_map_subquery(
             HirScalarExpr::column(key_column),
             HirScalarExpr::column(value_column),
         ],
+        name: None,
     })
     .chain(
         query
@@ -4641,6 +4692,7 @@ fn plan_map_subquery(
                             .collect(),
                     },
                     exprs: aggregation_exprs,
+                    name: None,
                 }),
                 distinct: false,
             }],
@@ -4652,7 +4704,7 @@ fn plan_map_subquery(
     let expr = HirScalarExpr::CallVariadic {
         func: VariadicFunc::Coalesce,
         exprs: vec![
-            HirScalarExpr::Select(Box::new(expr)),
+            HirScalarExpr::Select(Box::new(expr), None),
             HirScalarExpr::literal(
                 Datum::empty_map(),
                 ScalarType::Map {
@@ -4661,6 +4713,7 @@ fn plan_map_subquery(
                 },
             ),
         ],
+        name: None,
     };
 
     Ok(expr.into())
@@ -4769,6 +4822,7 @@ fn plan_array(
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ArrayCreate { elem_type },
         exprs,
+        name: None,
     }
     .into())
 }
@@ -4810,6 +4864,7 @@ fn plan_list(
     Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ListCreate { elem_type },
         exprs,
+        name: None,
     }
     .into())
 }
@@ -4857,6 +4912,7 @@ fn plan_map(
     let expr = HirScalarExpr::CallVariadic {
         func: VariadicFunc::MapBuild { value_type },
         exprs,
+        name: None,
     };
     Ok(expr.into())
 }
@@ -5031,6 +5087,7 @@ fn plan_aggregate_common(
             cond: Box::new(cond),
             then: Box::new(expr),
             els: Box::new(HirScalarExpr::literal(func.identity_datum(), expr_typ)),
+            name: None,
         };
     }
 
@@ -5062,6 +5119,7 @@ fn plan_aggregate_common(
         expr = HirScalarExpr::CallVariadic {
             func: VariadicFunc::RecordCreate { field_names },
             exprs,
+            name: None,
         };
     }
 
@@ -5079,16 +5137,25 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
     // If the name is qualified, it must refer to a column in a table.
     if !names.is_empty() {
         let table_name = normalize::unresolved_item_name(UnresolvedItemName(names))?;
-        let i = ecx
-            .scope
-            .resolve_table_column(&ecx.qcx.outer_scopes, &table_name, &col_name)?;
-        return Ok(HirScalarExpr::Column(i));
+        let (i, i_name) = ecx.scope.resolve_table_column(
+            &ecx.qcx.outer_scopes,
+            &table_name,
+            &col_name,
+            &mut ecx.qcx.name_manager.borrow_mut(),
+        )?;
+        return Ok(HirScalarExpr::Column(i, Some(i_name)));
     }
 
     // If the name is unqualified, first check if it refers to a column. Track any similar names
     // that might exist for a better error message.
-    let similar_names = match ecx.scope.resolve_column(&ecx.qcx.outer_scopes, &col_name) {
-        Ok(i) => return Ok(HirScalarExpr::Column(i)),
+    let similar_names = match ecx.scope.resolve_column(
+        &ecx.qcx.outer_scopes,
+        &col_name,
+        &mut ecx.qcx.name_manager.borrow_mut(),
+    ) {
+        Ok((i, i_name)) => {
+            return Ok(HirScalarExpr::Column(i, Some(i_name)));
+        }
         Err(PlanError::UnknownColumn { similar, .. }) => similar,
         Err(e) => return Err(e),
     };
@@ -5114,7 +5181,10 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
         // returned a single column. Per PostgreSQL, this is a special case
         // that returns the value directly.
         // See: https://github.com/postgres/postgres/blob/22592e10b/src/backend/parser/parse_expr.c#L2519-L2524
-        [(column, item)] if item.from_single_column_function => Ok(HirScalarExpr::Column(*column)),
+        [(column, item)] if item.from_single_column_function => Ok(HirScalarExpr::Column(
+            *column,
+            Some(ecx.qcx.name_manager.borrow_mut().intern_scope_item(item)),
+        )),
         // The name refers to a normal table. Return a record containing all the
         // columns of the table.
         _ => {
@@ -5126,7 +5196,10 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
                         has_exists_column = Some(column);
                         None
                     } else {
-                        let expr = HirScalarExpr::Column(column);
+                        let expr = HirScalarExpr::Column(
+                            column,
+                            Some(ecx.qcx.name_manager.borrow_mut().intern_scope_item(item)),
+                        );
                         let name = item.column_name.clone();
                         Some((expr, name))
                     }
@@ -5139,16 +5212,19 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
                 HirScalarExpr::CallVariadic {
                     func: VariadicFunc::RecordCreate { field_names },
                     exprs,
+                    name: None,
                 }
             };
             if let Some(has_exists_column) = has_exists_column {
                 Ok(HirScalarExpr::If {
                     cond: Box::new(HirScalarExpr::CallUnary {
                         func: UnaryFunc::IsNull(mz_expr::func::IsNull),
-                        expr: Box::new(HirScalarExpr::Column(has_exists_column)),
+                        expr: Box::new(HirScalarExpr::Column(has_exists_column, None)),
+                        name: None,
                     }),
                     then: Box::new(HirScalarExpr::literal_null(ecx.scalar_type(&expr))),
                     els: Box::new(expr),
+                    name: None,
                 })
             } else {
                 Ok(expr)
@@ -5234,14 +5310,17 @@ fn plan_function<'a>(
                 bail_unsupported!(IGNORE_NULLS_ERROR_MSG);
             }
 
-            return Ok(HirScalarExpr::Windowing(WindowExpr {
-                func: WindowExprType::Scalar(ScalarWindowExpr {
-                    func,
-                    order_by: col_orders,
-                }),
-                partition_by,
-                order_by: order_by_exprs,
-            }));
+            return Ok(HirScalarExpr::Windowing(
+                WindowExpr {
+                    func: WindowExprType::Scalar(ScalarWindowExpr {
+                        func,
+                        order_by: col_orders,
+                    }),
+                    partition_by,
+                    order_by: order_by_exprs,
+                },
+                None,
+            ));
         }
         Func::ValueWindow(impls) => {
             let (ignore_nulls, order_by_exprs, col_orders, window_frame, partition_by, scalar_args) =
@@ -5257,17 +5336,20 @@ fn plan_function<'a>(
                 }
             }
 
-            return Ok(HirScalarExpr::Windowing(WindowExpr {
-                func: WindowExprType::Value(ValueWindowExpr {
-                    func,
-                    args: Box::new(args_encoded),
-                    order_by: col_orders,
-                    window_frame,
-                    ignore_nulls, // (RESPECT NULLS is the default)
-                }),
-                partition_by,
-                order_by: order_by_exprs,
-            }));
+            return Ok(HirScalarExpr::Windowing(
+                WindowExpr {
+                    func: WindowExprType::Value(ValueWindowExpr {
+                        func,
+                        args: Box::new(args_encoded),
+                        order_by: col_orders,
+                        window_frame,
+                        ignore_nulls, // (RESPECT NULLS is the default)
+                    }),
+                    partition_by,
+                    order_by: order_by_exprs,
+                },
+                None,
+            ));
         }
         Func::Aggregate(_) => {
             if f.over.is_none() {
@@ -5327,15 +5409,18 @@ fn plan_function<'a>(
                     bail_unsupported!("DISTINCT in window aggregates");
                 }
 
-                return Ok(HirScalarExpr::Windowing(WindowExpr {
-                    func: WindowExprType::Aggregate(AggregateWindowExpr {
-                        aggregate_expr,
-                        order_by: col_orders,
-                        window_frame,
-                    }),
-                    partition_by,
-                    order_by: order_by_exprs,
-                }));
+                return Ok(HirScalarExpr::Windowing(
+                    WindowExpr {
+                        func: WindowExprType::Aggregate(AggregateWindowExpr {
+                            aggregate_expr,
+                            order_by: col_orders,
+                            window_frame,
+                        }),
+                        partition_by,
+                        order_by: order_by_exprs,
+                    },
+                    None,
+                ));
             }
         }
     };
@@ -5526,6 +5611,7 @@ fn plan_case<'a>(
             cond: Box::new(cexpr),
             then: Box::new(rexpr),
             els: Box::new(expr),
+            name: None,
         }
     }
     Ok(expr)
@@ -6307,6 +6393,8 @@ pub struct QueryContext<'a> {
     pub outer_relation_types: Vec<RelationType>,
     /// CTEs for this query, mapping their assigned LocalIds to their definition.
     pub ctes: BTreeMap<LocalId, CteDesc>,
+    /// A name manager, for interning column names that will be stored in HIR and MIR.
+    pub name_manager: Rc<RefCell<NameManager>>,
     pub recursion_guard: RecursionGuard,
 }
 
@@ -6324,6 +6412,7 @@ impl<'a> QueryContext<'a> {
             outer_scopes: vec![],
             outer_relation_types: vec![],
             ctes: BTreeMap::new(),
+            name_manager: Rc::new(RefCell::new(NameManager::new())),
             recursion_guard: RecursionGuard::with_limit(1024), // chosen arbitrarily
         }
     }
@@ -6340,6 +6429,8 @@ impl<'a> QueryContext<'a> {
         let outer_relation_types = iter::once(relation_type)
             .chain(self.outer_relation_types.clone())
             .collect();
+        // These shenanigans are simpler than adding `&mut NameManager` arguments everywhere.
+        let name_manager = Rc::clone(&self.name_manager);
 
         QueryContext {
             scx: self.scx,
@@ -6347,6 +6438,7 @@ impl<'a> QueryContext<'a> {
             outer_scopes,
             outer_relation_types,
             ctes,
+            name_manager,
             recursion_guard: self.recursion_guard.clone(),
         }
     }
@@ -6494,5 +6586,84 @@ impl<'a> ExprContext<'a> {
     /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
     pub fn humanize_scalar_type(&self, typ: &ScalarType, postgres_compat: bool) -> String {
         self.qcx.scx.humanize_scalar_type(typ, postgres_compat)
+    }
+
+    pub fn intern(&self, item: &ScopeItem) -> Arc<str> {
+        self.qcx.name_manager.borrow_mut().intern_scope_item(item)
+    }
+}
+
+/// Manages column names, doing lightweight string internment.
+///
+/// Names are stored in `HirScalarExpr` and `MirScalarExpr` using
+/// `Option<Arc<str>>`; we use the `NameManager` when lowering from SQL to HIR
+/// to ensure maximal sharing.
+#[derive(Debug, Clone)]
+pub struct NameManager(BTreeSet<Arc<str>>);
+
+impl NameManager {
+    /// Creates a new `NameManager`, with no interned names
+    pub fn new() -> Self {
+        Self(BTreeSet::new())
+    }
+
+    /// Interns a string, returning a reference-counted pointer to the interned
+    /// string.
+    fn intern<S: AsRef<str>>(&mut self, s: S) -> Arc<str> {
+        let s = s.as_ref();
+        if let Some(interned) = self.0.get(s) {
+            Arc::clone(interned)
+        } else {
+            let interned: Arc<str> = Arc::from(s);
+            self.0.insert(Arc::clone(&interned));
+            interned
+        }
+    }
+
+    /// Interns a string representing a reference to a `ScopeItem`, returning a
+    /// reference-counted pointer to the interned string.
+    pub fn intern_scope_item(&mut self, item: &ScopeItem) -> Arc<str> {
+        if let Some(table_name) = &item.table_name {
+            // In order to avoid clutter, we're just going to use the table name (not database or schema)
+            self.intern(format!("{}.{}", table_name.item, item.column_name))
+        } else {
+            self.intern(item.column_name.as_str())
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// Ensure that `NameManager`'s string interning works as expected.
+    ///
+    /// In particular, structurally but not referentially identical strings should
+    /// be interned to the same `Arc`ed pointer.
+    #[mz_ore::test]
+    pub fn test_name_manager_string_interning() {
+        let mut nm = NameManager::new();
+
+        let orig_hi = "hi";
+        let hi = nm.intern(orig_hi);
+        let hello = nm.intern("hello");
+
+        assert_ne!(hi.as_ptr(), hello.as_ptr());
+
+        // this static string is _likely_ the same as `orig_hi``
+        let hi2 = nm.intern("hi");
+        assert_eq!(hi.as_ptr(), hi2.as_ptr());
+
+        // generate a "hi" string that doesn't get optimized to the same static string
+        let s = format!(
+            "{}{}",
+            hi.chars().nth(0).unwrap(),
+            hi2.chars().nth(1).unwrap()
+        );
+        // make sure that we're testing with a fresh string!
+        assert_ne!(orig_hi.as_ptr(), s.as_ptr());
+
+        let hi3 = nm.intern(s);
+        assert_eq!(hi.as_ptr(), hi3.as_ptr());
     }
 }

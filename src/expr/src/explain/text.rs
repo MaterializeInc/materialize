@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 use mz_ore::soft_assert_eq_or_log;
 use mz_ore::str::{closure_to_display, separated, Indent, IndentLike, StrExt};
@@ -1173,6 +1174,18 @@ where
     }
 }
 
+// A stored name.
+impl<'a, M> fmt::Display for HumanizedExpr<'a, (&usize, &Arc<str>), M>
+where
+    M: HumanizerMode,
+{
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Write the stored name.
+        write!(f, "#{}{{{}}}", self.expr.0, self.expr.1)
+    }
+}
+
 impl<'a, M> ScalarOps for HumanizedExpr<'a, MirScalarExpr, M> {
     fn match_col_ref(&self) -> Option<usize> {
         self.expr.match_col_ref()
@@ -1201,9 +1214,13 @@ where
         use MirScalarExpr::*;
 
         match self.expr {
-            Column(i) => {
-                // Delegate to the `HumanizedExpr<'a, _>` implementation.
+            Column(i, None) => {
+                // Delegate to the `HumanizedExpr<'a, _>` implementation (plain column reference).
                 self.child(i).fmt(f)
+            }
+            Column(i, Some(name)) => {
+                // Delegate to the `HumanizedExpr<'a, _>` implementation (with stored name information)
+                self.child(&(i, name)).fmt(f)
             }
             Literal(row, _) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation.

@@ -1036,14 +1036,14 @@ impl MapFilterProject {
                         expr2,
                     } = predicate
                     {
-                        if let MirScalarExpr::Column(c) = &**expr1 {
+                        if let MirScalarExpr::Column(c, name) = &**expr1 {
                             if *c < index + self.input_arity && &**expr2 == expr {
-                                *expr = MirScalarExpr::Column(*c);
+                                *expr = MirScalarExpr::Column(*c, name.clone());
                             }
                         }
-                        if let MirScalarExpr::Column(c) = &**expr2 {
+                        if let MirScalarExpr::Column(c, name) = &**expr2 {
                             if *c < index + self.input_arity && &**expr1 == expr {
-                                *expr = MirScalarExpr::Column(*c);
+                                *expr = MirScalarExpr::Column(*c, name.clone());
                             }
                         }
                     }
@@ -1295,14 +1295,14 @@ impl MapFilterProject {
         // Increment reference counts for each use
         for expr in self.expressions.iter() {
             expr.visit_pre(|e| {
-                if let MirScalarExpr::Column(i) = e {
+                if let MirScalarExpr::Column(i, _name) = e {
                     reference_count[*i] += 1;
                 }
             });
         }
         for (_, pred) in self.predicates.iter() {
             pred.visit_pre(|e| {
-                if let MirScalarExpr::Column(i) = e {
+                if let MirScalarExpr::Column(i, _name) = e {
                     reference_count[*i] += 1;
                 }
             });
@@ -1325,7 +1325,7 @@ impl MapFilterProject {
         // or 2c. reference temporal expressions (which cannot be evaluated).
         let mut should_inline = vec![false; reference_count.len()];
         for i in (input_arity..reference_count.len()).rev() {
-            if let MirScalarExpr::Column(c) = self.expressions[i - input_arity] {
+            if let MirScalarExpr::Column(c, _) = self.expressions[i - input_arity] {
                 should_inline[i] = true;
                 // The reference count of the referenced column should be
                 // incremented with the number of references
@@ -1342,7 +1342,8 @@ impl MapFilterProject {
         // We can only inline column references in `self.projection`, but we should.
         for proj in self.projection.iter_mut() {
             if *proj >= self.input_arity {
-                if let MirScalarExpr::Column(i) = self.expressions[*proj - self.input_arity] {
+                if let MirScalarExpr::Column(i, _) = self.expressions[*proj - self.input_arity] {
+                    // TODO(mgree) !!! propagate name information to projection
                     *proj = i;
                 }
             }
@@ -1356,7 +1357,7 @@ impl MapFilterProject {
             let (prior, expr) = self.expressions.split_at_mut(index);
             #[allow(deprecated)]
             expr[0].visit_mut_post_nolimit(&mut |e| {
-                if let MirScalarExpr::Column(i) = e {
+                if let MirScalarExpr::Column(i, _name) = e {
                     if should_inline[*i] {
                         *e = prior[*i - self.input_arity].clone();
                     }
@@ -1367,7 +1368,7 @@ impl MapFilterProject {
             let expressions = &self.expressions;
             #[allow(deprecated)]
             pred.visit_mut_post_nolimit(&mut |e| {
-                if let MirScalarExpr::Column(i) = e {
+                if let MirScalarExpr::Column(i, _name) = e {
                     if should_inline[*i] {
                         *e = expressions[*i - self.input_arity].clone();
                     }
@@ -1495,11 +1496,13 @@ pub fn memoize_expr(
                 MirScalarExpr::Literal(_, _) => {
                     // Literals do not need to be memoized.
                 }
-                MirScalarExpr::Column(col) => {
+                MirScalarExpr::Column(col, _) => {
                     // Column references do not need to be memoized, but may need to be
                     // updated if they reference a column reference themselves.
                     if *col > input_arity {
-                        if let MirScalarExpr::Column(col2) = memoized_parts[*col - input_arity] {
+                        if let MirScalarExpr::Column(col2, _) = memoized_parts[*col - input_arity] {
+                            // We do _not_ propagate column names, since mis-associationg names and column
+                            // references will be very confusing (and possibly bug inducing).
                             *col = col2;
                         }
                     }
@@ -1508,13 +1511,13 @@ pub fn memoize_expr(
                     if let Some(position) = memoized_parts.iter().position(|e2| e2 == e) {
                         // Any complex expression that already exists as a prior column can
                         // be replaced by a reference to that column.
-                        *e = MirScalarExpr::Column(input_arity + position);
+                        *e = MirScalarExpr::Column(input_arity + position, None);
                     } else {
                         // A complex expression that does not exist should be memoized, and
                         // replaced by a reference to the column.
                         memoized_parts.push(std::mem::replace(
                             e,
-                            MirScalarExpr::Column(input_arity + memoized_parts.len()),
+                            MirScalarExpr::Column(input_arity + memoized_parts.len(), None),
                         ));
                     }
                 }

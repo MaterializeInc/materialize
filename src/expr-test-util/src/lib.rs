@@ -222,6 +222,7 @@ impl MirScalarExprDeserializeContext {
                     .to_string()
                     .parse::<usize>()
                     .map_err_to_string_with_causes()?,
+                None,
             ));
         }
         Err(format!(
@@ -321,7 +322,12 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
             assert_eq!(map.len(), 1);
             for (variant, data) in map.iter() {
                 match &variant[..] {
-                    "Column" => return Some(format!("#{}", data.as_u64().unwrap())),
+                    "Column" => {
+                        return Some(format!(
+                            "#{}",
+                            data.as_array().unwrap()[0].as_u64().unwrap()
+                        ));
+                    }
                     "Literal" => {
                         let column_type: ColumnType =
                             serde_json::from_value(data.as_array().unwrap()[1].clone()).unwrap();

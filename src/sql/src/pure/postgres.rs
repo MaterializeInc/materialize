@@ -10,6 +10,7 @@
 //! Postgres utilities for SQL purification.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -527,6 +528,7 @@ pub(crate) fn generate_column_casts(
                                     ScalarType::String,
                                 ),
                             ],
+                            name: None,
                         }
                         .lower_uncorrelated()
                         .expect("no correlation"),
@@ -539,10 +541,13 @@ pub(crate) fn generate_column_casts(
         let data_type = scx.resolve_type(ty)?;
         let scalar_type = crate::plan::query::scalar_type_from_sql(scx, &data_type)?;
 
-        let col_expr = HirScalarExpr::Column(ColumnRef {
-            level: 0,
-            column: i,
-        });
+        let col_expr = HirScalarExpr::Column(
+            ColumnRef {
+                level: 0,
+                column: i,
+            },
+            Some(Arc::from(column.name.as_str())),
+        );
 
         let cast_expr = plan_cast(&cast_ecx, CastContext::Explicit, col_expr, &scalar_type)?;
 
@@ -570,6 +575,7 @@ pub(crate) fn generate_column_casts(
                                     ScalarType::String,
                                 ),
                             ],
+                            name: None,
                         }
         };
 
