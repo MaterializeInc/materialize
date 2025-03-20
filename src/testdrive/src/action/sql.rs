@@ -91,18 +91,17 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     }
     .retry_async_with_state(state, |retry_state, state| async move {
         let should_continue = retry_state.i + 1 < state.max_tries && should_retry;
+        let start = SystemTime::now();
         match try_run_sql(state, query, expected_output, should_continue).await {
             Ok(()) => {
+                let now = SystemTime::now();
+                let epoch = SystemTime::UNIX_EPOCH;
+                let ts = now.duration_since(epoch).unwrap().as_secs_f64();
+                let delay = now.duration_since(start).unwrap().as_secs_f64();
                 if retry_state.i != 0 {
                     println!();
                 }
-                println!(
-                    "rows match; continuing at ts {}",
-                    SystemTime::now()
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs_f64()
-                );
+                println!("rows match; continuing at ts {ts}, took {delay}s");
                 (state, Ok(()))
             }
             Err(e) => {
