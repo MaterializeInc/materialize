@@ -1013,7 +1013,7 @@ mod column_names {
         fn extend_with_scalars(column_names: &mut Vec<ColumnName>, scalars: &Vec<MirScalarExpr>) {
             for scalar in scalars {
                 column_names.push(match scalar {
-                    MirScalarExpr::Column(c, name) => column_names[*c].cloned_or_annotated(name),
+                    MirScalarExpr::Column(c, name) => column_names[*c].cloned_or_annotated(&name),
                     _ => ColumnName::Unknown,
                 });
             }

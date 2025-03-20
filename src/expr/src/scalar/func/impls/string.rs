@@ -35,6 +35,7 @@ use crate::func::regexp_match_static;
 use crate::scalar::func::{
     array_create_scalar, regexp_split_to_array_re, EagerUnaryFunc, LazyUnaryFunc,
 };
+use crate::scalar::Opaque;
 use crate::{like_pattern, EvalError, MirScalarExpr, UnaryFunc};
 
 sqlfunc!(
@@ -742,7 +743,7 @@ impl fmt::Display for CastStringToVarChar {
 // position akin to array parsing.
 static INT2VECTOR_CAST_EXPR: LazyLock<MirScalarExpr> = LazyLock::new(|| MirScalarExpr::CallUnary {
     func: UnaryFunc::CastStringToInt16(CastStringToInt16),
-    expr: Box::new(MirScalarExpr::Column(0, None)),
+    expr: Box::new(MirScalarExpr::Column(0, Opaque(None))),
 });
 
 #[derive(

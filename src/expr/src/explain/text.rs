@@ -24,6 +24,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql_parser::ast::Ident;
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
+use crate::scalar::Opaque;
 use crate::{
     AccessStrategy, AggregateExpr, EvalError, Id, JoinImplementation, JoinInputCharacteristics,
     LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
@@ -1214,11 +1215,11 @@ where
         use MirScalarExpr::*;
 
         match self.expr {
-            Column(i, None) => {
+            Column(i, Opaque(None)) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation (plain column reference).
                 self.child(i).fmt(f)
             }
-            Column(i, Some(name)) => {
+            Column(i, Opaque(Some(name))) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation (with stored name information)
                 self.child(&(i, name)).fmt(f)
             }

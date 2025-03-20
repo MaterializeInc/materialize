@@ -341,13 +341,11 @@ pub(crate) fn attempt_left_join_magic(
                 .map(
                     (oa + ba..oa + ba + ra)
                         .map(|col| MirScalarExpr::If {
-                            cond: Box::new(
-                                MirScalarExpr::Column(oa + ba + ra, None).call_is_null(),
-                            ),
+                            cond: Box::new(MirScalarExpr::column(oa + ba + ra).call_is_null()),
                             then: Box::new(MirScalarExpr::literal_null(
                                 rt[col - (oa + ba)].scalar_type.clone(),
                             )),
-                            els: Box::new(MirScalarExpr::Column(col, None)),
+                            els: Box::new(MirScalarExpr::column(col)),
                         })
                         .collect(),
                 )
@@ -452,14 +450,14 @@ fn recompose_equations(pairs: Vec<(usize, usize)>) -> Vec<MirScalarExpr> {
             exprs: vec![
                 MirScalarExpr::CallBinary {
                     func: BinaryFunc::Eq,
-                    expr1: Box::new(MirScalarExpr::Column(*x, None)),
-                    expr2: Box::new(MirScalarExpr::Column(*y, None)),
+                    expr1: Box::new(MirScalarExpr::column(*x)),
+                    expr2: Box::new(MirScalarExpr::column(*y)),
                 },
                 MirScalarExpr::CallVariadic {
                     func: VariadicFunc::And,
                     exprs: vec![
-                        MirScalarExpr::Column(*x, None).call_is_null(),
-                        MirScalarExpr::Column(*y, None).call_is_null(),
+                        MirScalarExpr::column(*x).call_is_null(),
+                        MirScalarExpr::column(*y).call_is_null(),
                     ],
                 },
             ],

@@ -339,7 +339,7 @@ fn try_push_reduce_through_join(
         .map(|cls| {
             cls.into_iter()
                 .map(|(idx, col)| {
-                    MirScalarExpr::Column(new_join_mapper.map_column_to_global(col, idx), None)
+                    MirScalarExpr::column(new_join_mapper.map_column_to_global(col, idx))
                 })
                 .collect::<Vec<_>>()
         })

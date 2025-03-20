@@ -390,7 +390,7 @@ impl RedundantJoin {
                     for prov in result.iter_mut() {
                         let projection = outputs
                             .iter()
-                            .map(|c| prov.dereference(&MirScalarExpr::Column(*c, None)))
+                            .map(|c| prov.dereference(&MirScalarExpr::column(*c)))
                             .collect_vec();
                         prov.dereferenced_projection = projection;
                     }
@@ -703,9 +703,8 @@ fn try_build_expression_using_other(
     for (other_col, derefed) in other_prov.dereferenced_projection.iter().enumerate() {
         if let Some(derefed) = derefed {
             if derefed == root_expr {
-                return Some(MirScalarExpr::Column(
+                return Some(MirScalarExpr::column(
                     input_mapper.map_column_to_global(other_col, other),
-                    None,
                 ));
             }
         }

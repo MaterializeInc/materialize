@@ -7,13 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::BitOrAssign;
+use std::hash::{Hash, Hasher};
+use std::ops::{BitOrAssign, Deref};
 use std::sync::Arc;
 use std::{fmt, mem};
 
 use itertools::Itertools;
-use mz_lowertest::MzReflect;
+use mz_lowertest::{MzReflect, ReflectedTypeInfo};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
@@ -49,10 +51,51 @@ pub mod like_pattern;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
 
+/// Behaves like `T`, but has trivial `Hash`, `Eq`, `MzReflect`, and `Ord`
+/// implementations.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Opaque<T>(pub T);
+
+impl<T> Deref for Opaque<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> MzReflect for Opaque<T> {
+    fn add_to_reflected_type_info(_rti: &mut ReflectedTypeInfo) {}
+}
+
+impl<T> Hash for Opaque<T> {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
+}
+
+impl<T> Eq for Opaque<T> {}
+
+impl<T> PartialEq for Opaque<T> {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl<T> PartialOrd for Opaque<T> {
+    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+        Some(Ordering::Equal)
+    }
+}
+
+impl<T> Ord for Opaque<T> {
+    fn cmp(&self, _other: &Self) -> Ordering {
+        Ordering::Equal
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
 pub enum MirScalarExpr {
     /// A column of the input row
-    Column(usize, Option<Arc<str>>),
+    Column(usize, Opaque<Option<Arc<str>>>),
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum)
     Literal(Result<Row, EvalError>, ColumnType),
@@ -184,7 +227,7 @@ impl RustType<ProtoMirScalarExpr> for MirScalarExpr {
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoMirScalarExpr::kind"))?;
         Ok(match kind {
-            Column(i) => MirScalarExpr::Column(usize::from_proto(i)?, None),
+            Column(i) => MirScalarExpr::column(usize::from_proto(i)?),
             Literal(ProtoLiteral { lit, typ }) => MirScalarExpr::Literal(
                 lit.into_rust_if_some("ProtoLiteral::lit")?,
                 typ.into_rust_if_some("ProtoLiteral::typ")?,
@@ -245,11 +288,11 @@ impl RustType<proto_literal::ProtoLiteralData> for Result<Row, EvalError> {
 
 impl MirScalarExpr {
     pub fn columns(is: &[usize]) -> Vec<MirScalarExpr> {
-        is.iter().map(|i| MirScalarExpr::Column(*i, None)).collect()
+        is.iter().map(|i| MirScalarExpr::column(*i)).collect()
     }
 
     pub fn column(column: usize) -> Self {
-        MirScalarExpr::Column(column, None)
+        MirScalarExpr::Column(column, Opaque(None))
     }
 
     pub fn literal(res: Result<Datum, EvalError>, typ: ScalarType) -> Self {
@@ -581,7 +624,7 @@ impl MirScalarExpr {
         F: FnMut(&mut usize),
     {
         self.visit_pre_mut(|e| {
-            if let MirScalarExpr::Column(col, None) = e {
+            if let MirScalarExpr::Column(col, _) = e {
                 action(col);
             }
         });
@@ -595,7 +638,7 @@ impl MirScalarExpr {
 
     pub fn support_into(&self, support: &mut BTreeSet<usize>) {
         self.visit_pre(|e| {
-            if let MirScalarExpr::Column(i, None) = e {
+            if let MirScalarExpr::Column(i, _) = e {
                 support.insert(*i);
             }
         });

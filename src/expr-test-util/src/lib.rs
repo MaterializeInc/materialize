@@ -217,12 +217,11 @@ pub struct MirScalarExprDeserializeContext;
 impl MirScalarExprDeserializeContext {
     fn build_column(&self, token: Option<TokenTree>) -> Result<MirScalarExpr, String> {
         if let Some(TokenTree::Literal(literal)) = token {
-            return Ok(MirScalarExpr::Column(
+            return Ok(MirScalarExpr::column(
                 literal
                     .to_string()
                     .parse::<usize>()
                     .map_err_to_string_with_causes()?,
-                None,
             ));
         }
         Err(format!(

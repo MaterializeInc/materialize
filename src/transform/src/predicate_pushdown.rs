@@ -691,7 +691,7 @@ impl PredicatePushdown {
                                                 // TODO(mgree) !!! is it safe to propagate the name here?
                                                 return Some((
                                                     Some(pos),
-                                                    MirScalarExpr::Column(local_col.0, None),
+                                                    MirScalarExpr::column(local_col.0),
                                                 ));
                                             } else {
                                                 return None;
@@ -968,7 +968,7 @@ impl PredicatePushdown {
 
             // Seed with `map_exprs` support in `expr`.
             expr.visit_pre(|e| {
-                if let MirScalarExpr::Column(c, None) = e {
+                if let MirScalarExpr::Column(c, _) = e {
                     if *c >= input_arity {
                         support.insert(*c);
                     }
@@ -984,7 +984,7 @@ impl PredicatePushdown {
                 // Drain the `buffer` and update `support` and `workset`.
                 for c in buffer.drain(..) {
                     map_exprs[c - input_arity].visit_pre(|e| {
-                        if let MirScalarExpr::Column(c, None) = e {
+                        if let MirScalarExpr::Column(c, _) = e {
                             if *c >= input_arity {
                                 if support.insert(*c) {
                                     workset.push(*c);

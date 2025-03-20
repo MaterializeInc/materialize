@@ -1064,7 +1064,7 @@ impl<'a> Orderer<'a> {
             for key in keys.iter() {
                 unique_arrangement[input].push(unique_keys[input].iter().any(|cols| {
                     cols.iter()
-                        .all(|c| key.contains(&MirScalarExpr::Column(*c, None)))
+                        .all(|c| key.contains(&MirScalarExpr::column(*c)))
                 }));
             }
         }
@@ -1201,7 +1201,7 @@ impl<'a> Orderer<'a> {
                 let cardinality = self.cardinalities[start];
                 let is_unique = self.unique_keys[start].iter().any(|cols| {
                     cols.iter()
-                        .all(|c| candidate_start_key.contains(&MirScalarExpr::Column(*c, None)))
+                        .all(|c| candidate_start_key.contains(&MirScalarExpr::column(*c)))
                 });
                 let arranged = self.arrangements[start]
                     .iter()
@@ -1318,7 +1318,7 @@ impl<'a> Orderer<'a> {
                                 // does the relation we're joining on have a unique key wrt what's already bound?
                                 let is_unique = self.unique_keys[rel].iter().any(|cols| {
                                     cols.iter().all(|c| {
-                                        self.bound[rel].contains(&MirScalarExpr::Column(*c, None))
+                                        self.bound[rel].contains(&MirScalarExpr::column(*c))
                                     })
                                 });
                                 self.priority_queue.push((

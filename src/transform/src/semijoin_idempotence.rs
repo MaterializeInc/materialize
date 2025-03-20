@@ -237,8 +237,7 @@ fn attempt_join_simplification(
                             if !typ1.column_types[*col1].nullable
                                 && typ0.column_types[*col0].nullable
                             {
-                                is_not_nulls
-                                    .push(MirScalarExpr::Column(*col0, None).call_is_null().not())
+                                is_not_nulls.push(MirScalarExpr::column(*col0).call_is_null().not())
                             }
                         }
                         if !is_not_nulls.is_empty() {
@@ -270,8 +269,7 @@ fn attempt_join_simplification(
                             if !typ0.column_types[*col0].nullable
                                 && typ1.column_types[*col1].nullable
                             {
-                                is_not_nulls
-                                    .push(MirScalarExpr::Column(*col1, None).call_is_null().not())
+                                is_not_nulls.push(MirScalarExpr::column(*col1).call_is_null().not())
                             }
                         }
                         if !is_not_nulls.is_empty() {

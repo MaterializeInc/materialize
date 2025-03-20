@@ -3924,7 +3924,7 @@ pub fn plan_create_index(
                 .iter()
                 .map(|k| match k {
                     mz_expr::MirScalarExpr::Column(i, name) => {
-                        match (on_desc.get_unambiguous_name(*i), name) {
+                        match (on_desc.get_unambiguous_name(*i), &name.0) {
                             (Some(col_name), _) => col_name.to_string(),
                             (None, Some(name)) => name.to_string(),
                             (None, None) => format!("{}", i + 1),

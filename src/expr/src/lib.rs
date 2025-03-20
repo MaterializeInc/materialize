@@ -51,7 +51,7 @@ pub use relation::{
 };
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{
-    like_pattern, EvalError, FilterCharacteristics, MirScalarExpr, ProtoDomainLimit,
+    like_pattern, EvalError, FilterCharacteristics, MirScalarExpr, Opaque, ProtoDomainLimit,
     ProtoEvalError, ProtoMirScalarExpr,
 };
 

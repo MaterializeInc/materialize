@@ -41,7 +41,7 @@ use std::iter::repeat;
 
 use itertools::Itertools;
 use mz_expr::visit::Visit;
-use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
+use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr, Opaque};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;
@@ -289,8 +289,8 @@ impl HirRelationExpr {
                             let equivalences = (0..cte_outer_columns)
                                 .map(|pos| {
                                     vec![
-                                        MirScalarExpr::Column(pos, None),
-                                        MirScalarExpr::Column(pos + oa, None),
+                                        MirScalarExpr::column(pos),
+                                        MirScalarExpr::column(pos + oa),
                                     ]
                                 })
                                 .collect();
@@ -946,12 +946,12 @@ impl HirScalarExpr {
 
             if let Some(subquery_map) = subquery_map {
                 if let Some(col) = subquery_map.get(&self) {
-                    return Ok(SS::Column(*col, None));
+                    return Ok(SS::column(*col));
                 }
             }
 
             Ok::<MirScalarExpr, PlanError>(match self {
-                Column(col_ref, _name) => SS::Column(col_map.get(&col_ref), None),
+                Column(col_ref, _name) => SS::column(col_map.get(&col_ref)),
                 Literal(row, typ, _name) => SS::Literal(Ok(row), typ),
                 Parameter(_, _name) => {
                     panic!("cannot decorrelate expression with unbound parameters")
@@ -1107,7 +1107,7 @@ impl HirScalarExpr {
                             Ok::<MirRelationExpr, PlanError>(then_inner.union(else_inner))
                         })?;
 
-                        SS::Column(inner_arity, None)
+                        SS::column(inner_arity)
                     }
                 }
 
@@ -1133,7 +1133,7 @@ impl HirScalarExpr {
                         apply_requires_distinct_outer,
                         context,
                     )?;
-                    SS::Column(inner.arity() - 1, None)
+                    SS::column(inner.arity() - 1)
                 }
 
                 Select(expr, _name) => {
@@ -1147,7 +1147,7 @@ impl HirScalarExpr {
                         apply_requires_distinct_outer,
                         context,
                     )?;
-                    SS::Column(inner.arity() - 1, None)
+                    SS::column(inner.arity() - 1)
                 }
                 Windowing(expr, _name) => {
                     let partition_by = expr.partition_by;
@@ -1502,7 +1502,7 @@ impl HirScalarExpr {
                                     .unwrap_list_element_type()
                                     .clone(),
                             },
-                            vec![MirScalarExpr::Column(group_key.len(), None)],
+                            vec![MirScalarExpr::column(group_key.len())],
                         );
                     let record_col = reduce.arity() - 1;
 
@@ -1512,7 +1512,7 @@ impl HirScalarExpr {
                             func: mz_expr::UnaryFunc::RecordGet(mz_expr::func::RecordGet(c)),
                             expr: Box::new(MirScalarExpr::CallUnary {
                                 func: mz_expr::UnaryFunc::RecordGet(mz_expr::func::RecordGet(1)),
-                                expr: Box::new(MirScalarExpr::Column(record_col, None)),
+                                expr: Box::new(MirScalarExpr::column(record_col)),
                             }),
                         });
                     }
@@ -1520,14 +1520,14 @@ impl HirScalarExpr {
                     // Append the column with the result of the window function.
                     reduce = reduce.take_dangerous().map_one(MirScalarExpr::CallUnary {
                         func: mz_expr::UnaryFunc::RecordGet(mz_expr::func::RecordGet(0)),
-                        expr: Box::new(MirScalarExpr::Column(record_col, None)),
+                        expr: Box::new(MirScalarExpr::column(record_col)),
                     });
 
                     let agg_col = record_col + 1 + input_arity;
                     Ok::<_, PlanError>(reduce.project((record_col + 1..agg_col + 1).collect_vec()))
                 })
             })?;
-        Ok(MirScalarExpr::Column(inner.arity() - 1, None))
+        Ok(MirScalarExpr::column(inner.arity() - 1))
     }
 
     /// Applies the subqueries in the given list of scalar expressions to every distinct
@@ -1620,10 +1620,7 @@ impl HirScalarExpr {
                             .iter()
                             .enumerate()
                             .map(|(input, _)| {
-                                MirScalarExpr::Column(
-                                    input_mapper.map_column_to_global(col, input),
-                                    None,
-                                )
+                                MirScalarExpr::column(input_mapper.map_column_to_global(col, input))
                             })
                             .collect_vec()
                     })
@@ -1641,7 +1638,7 @@ impl HirScalarExpr {
         use HirScalarExpr::*;
 
         Ok(match self {
-            Column(ColumnRef { level: 0, column }, name) => SS::Column(column, name),
+            Column(ColumnRef { level: 0, column }, name) => SS::Column(column, Opaque(name)),
             Literal(datum, typ, _name) => SS::Literal(Ok(datum), typ),
             CallUnmaterializable(func, _name) => SS::CallUnmaterializable(func),
             CallUnary {
@@ -1939,7 +1936,7 @@ fn apply_scalar_subquery(
                 );
                 // Errors should result from counts > 1.
                 let errors = counts
-                    .filter(vec![MirScalarExpr::Column(inner_arity, None).call_binary(
+                    .filter(vec![MirScalarExpr::column(inner_arity).call_binary(
                         MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
                         mz_expr::BinaryFunc::Gt,
                     )])
