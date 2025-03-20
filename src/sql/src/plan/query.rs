@@ -2616,7 +2616,7 @@ fn plan_select_from_where(
                     };
                     match distinct_exprs
                         .iter()
-                        .position(move |e| NamelessHirScalarExpr(e) == NamelessHirScalarExpr(&expr))
+                        .position(move |e| NamelessHirScalarExpr(e) == NamelessHirScalarExpr(expr))
                     {
                         None => sql_bail!(
                             "SELECT DISTINCT ON expressions must match initial ORDER BY expressions"

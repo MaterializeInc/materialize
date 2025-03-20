@@ -3613,8 +3613,9 @@ impl AggregateExpr {
     }
 }
 
-/// A wrapper that allows `HirScalarExpr` to be compared without considering
+/// A wrapper that allows `HirRelationExpr` to be compared without considering
 /// the `name` field.
+#[derive(Eq)]
 pub struct NamelessHirRelationExpr<'a>(pub &'a HirRelationExpr);
 
 impl<'a> PartialEq for NamelessHirRelationExpr<'a> {
@@ -3641,7 +3642,7 @@ impl<'a> PartialEq for NamelessHirRelationExpr<'a> {
                             && b1.1 == b2.1
                             && NamelessHirRelationExpr(&b1.2) == NamelessHirRelationExpr(&b2.2)
                     })
-                    && NamelessHirRelationExpr(&body1) == NamelessHirRelationExpr(&body2)
+                    && NamelessHirRelationExpr(body1) == NamelessHirRelationExpr(body2)
             }
             (
                 Let {
@@ -3825,6 +3826,8 @@ impl<'a> PartialEq for NamelessHirRelationExpr<'a> {
 
 /// A wrapper that allows `HirScalarExpr` to be compared without considering
 /// the `name` field.
+///
+#[derive(Eq)]
 pub struct NamelessHirScalarExpr<'a>(pub &'a HirScalarExpr);
 
 impl<'a> PartialEq for NamelessHirScalarExpr<'a> {
@@ -3884,7 +3887,7 @@ impl<'a> PartialEq for NamelessHirScalarExpr<'a> {
                     && NamelessHirScalarExpr(els1) == NamelessHirScalarExpr(els2)
             }
             (Exists(e1, _), Exists(e2, _)) | (Select(e1, _), Select(e2, _)) => {
-                NamelessHirRelationExpr(&e1) == NamelessHirRelationExpr(&e2)
+                NamelessHirRelationExpr(e1) == NamelessHirRelationExpr(e2)
             }
             (Windowing(we1, _), Windowing(we2, _)) => {
                 we1.partition_by.len() == we2.partition_by.len()
@@ -3907,6 +3910,8 @@ impl<'a> PartialEq for NamelessHirScalarExpr<'a> {
 
 /// A wrapper that allows `AggregateExpr` to be compared without considering
 /// the `name` field in the underlying `HirScalarExpr`s.
+///
+#[derive(Eq)]
 pub struct NamelessAggregateExpr<'a>(pub &'a AggregateExpr);
 
 impl<'a> PartialEq for NamelessAggregateExpr<'a> {
